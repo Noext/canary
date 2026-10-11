@@ -1,0 +1,12 @@
+.git
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+**/.astro
+.env
+.env.*
+!.env.example
+qa-data
+coverage
+*.log

@@ -1,0 +1,16 @@
+{
+  "runId": "b19c2e3e-5b57-4cbd-931a-72eff954aaf6",
+  "sha": "1111111111111111111111111111111111111111",
+  "outcome": "failed",
+  "assertions": [
+    {
+      "id": "saved",
+      "passed": false,
+      "actual": "Wrong output"
+    }
+  ],
+  "video": "failed.webm",
+  "screenshot": "failed.png",
+  "fixtureApis": true,
+  "realChromium": true
+}

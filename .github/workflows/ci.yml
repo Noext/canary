@@ -29,3 +29,9 @@ jobs:
         run: pnpm --filter @usecanary/daemon exec playwright install --with-deps chromium
 
       - run: pnpm check
+
+      - name: Install embedded Canary runtime
+        run: node apps/canary/dist/cli.js install
+
+      - name: Autonomous PR QA E2E (real Chromium, fixture GitHub and AI APIs)
+        run: pnpm --filter @usecanary/pr-qa test:e2e
