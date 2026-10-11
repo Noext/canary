@@ -37,6 +37,8 @@ Templates accept `{sha}` and `{pr}`. `PREVIEW_ALLOWED_HOSTS` requires exact host
 
 ## VPS with Docker Compose
 
+AI agents deploying to a VPS must follow the [production runbook in the root AGENTS.md](../../AGENTS.md#instructions-aux-agents--déploiement-pr-qa-en-production-sur-vps), including real-run acceptance, backups, updates and rollback. Do not treat the healthcheck alone as end-to-end validation.
+
 ```bash
 cp .env.example .env
 # Set a reachable model URL, allowed repos/preview hosts, PAT and random QA_API_TOKEN.
@@ -58,6 +60,10 @@ curl http://127.0.0.1:8787/runs/RUN_ID -H "Authorization: Bearer $QA_API_TOKEN"
 Jobs run serially, with a bounded queue, and are persisted under `QA_DATA_DIR`. After a service restart, incomplete jobs are marked `interrupted` and require explicit resubmission; browser side effects are not silently replayed. `GET /health` is unauthenticated. All job actions require the API bearer token. `GITHUB_ALLOWED_REPOS` is mandatory in service mode.
 
 Set `ARTIFACT_BASE_URL=https://qa.example.com` to include report links in GitHub comments and statuses. With `ARTIFACT_PUBLIC=false`, artifacts require bearer authentication: download them using curl with the Authorization header or configure authentication at your reverse proxy. With `true`, UUID report/video URLs are accessible without the API token. These may expose test data, screenshots and cookies in HAR/traces: use only suitable test accounts. No browser profile directory is exported. Reports are preserved in `qa-data` and full native sessions remain in `~/.canary/sessions`; use `canary ui` to browse them with the original UI.
+
+### Dashboard and live observability: current scope
+
+The existing Canary UI is a **recorded session viewer**, with videos, console logs, network requests and steps. It is not included in the PR QA Docker image or Compose service. The PR QA service currently exposes per-run status polling (`GET /runs/:id`), queue/busy health information (`GET /health`), structured service logs (`docker compose logs -f pr-qa`) and reports saved after planning and each completed scenario. It has no central runs dashboard/listing endpoint, live per-action event stream, browser video streaming, Prometheus metrics or model token/cost tracking. A Docker deployment of the current image does not expose a dashboard URL.
 
 ## Workflow and architecture
 
