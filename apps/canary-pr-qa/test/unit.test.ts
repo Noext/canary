@@ -10,6 +10,7 @@ import {
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
+import { runScope } from "../src/run-scope.js";
 import { runQa } from "../src/runner.js";
 import { DecisionSchema, PlanSchema } from "../src/schema.js";
 import { BASE_SHA, fixture, PR_URL, plan, SHA } from "./fixture.js";
@@ -268,4 +269,61 @@ describe("runner false-green regressions", () => {
       ).outcome
     ).toBe("blocked");
   });
+});
+
+it("closes an interrupted pinned GitHub check without publishing success", async () => {
+  const f = await setup();
+  fakeBrowser();
+  const controller = new AbortController();
+  vi.spyOn(Canary.prototype, "act").mockImplementation(async () => {
+    controller.abort(new Error("Cancelled by operator"));
+    controller.signal.throwIfAborted();
+    throw new Error("unreachable");
+  });
+  vi.spyOn(Canary.prototype, "abort").mockResolvedValue(undefined);
+  const result = await runScope.run(
+    {
+      id: "cancel-check",
+      signal: controller.signal,
+      tokens: 0,
+      calls: 0,
+      costUsd: 0,
+      maxTokens: 100_000,
+      maxCostUsd: 10,
+    },
+    () => runQa({ prUrl: PR_URL, previewUrl: f.baseUrl }, f.config)
+  );
+  expect(result.outcome).toBe("blocked");
+  expect(f.outgoing.map((r) => r.payload.state).filter(Boolean)).toEqual([
+    "pending",
+    "error",
+  ]);
+});
+it("rejects publication when worker ownership cannot be verified, even after passing assertions", async () => {
+  const f = await setup();
+  fakeBrowser();
+  const controller = new AbortController();
+  const result = await runScope.run(
+    {
+      id: "lease-check",
+      signal: controller.signal,
+      tokens: 0,
+      calls: 0,
+      costUsd: 0,
+      maxTokens: 100_000,
+      maxCostUsd: 10,
+      verifyOwnership: async () => {
+        throw new Error("Lease expired before publication");
+      },
+    },
+    () => runQa({ prUrl: PR_URL, previewUrl: f.baseUrl }, f.config)
+  );
+  expect(result.scenarios[0]?.outcome).toBe("passed");
+  expect(result.outcome).toBe("blocked");
+  expect(result.error).toContain("Lease expired");
+  expect(f.outgoing.map((r) => r.payload.state).filter(Boolean)).toEqual([
+    "pending",
+    "error",
+  ]);
+  expect(f.outgoing.some((r) => r.path.endsWith("/comments"))).toBe(false);
 });

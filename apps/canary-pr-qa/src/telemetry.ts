@@ -1,5 +1,9 @@
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import {
+  defaultResource,
+  resourceFromAttributes,
+} from "@opentelemetry/resources";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import {
@@ -34,6 +38,11 @@ export function initializeTracing() {
     return;
   }
   const provider = new NodeTracerProvider({
+    resource: defaultResource().merge(
+      resourceFromAttributes({
+        "service.name": process.env.OTEL_SERVICE_NAME || "canary-pr-qa",
+      })
+    ),
     spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter())],
   });
   provider.register();

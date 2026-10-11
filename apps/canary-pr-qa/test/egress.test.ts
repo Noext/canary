@@ -85,3 +85,36 @@ it("rejects DNS aliases to metadata even when private previews are enabled", asy
     )
   ).toBe(false);
 });
+
+it("delegates hostname DNS to the isolated egress proxy but still denies metadata literals", async () => {
+  vi.spyOn(dns, "lookup").mockRejectedValue(
+    new Error("External DNS unavailable in browser")
+  );
+  expect(
+    await networkAllowed(
+      "https://preview.example/a",
+      ["preview.example"],
+      false,
+      true
+    )
+  ).toBe(true);
+  expect(
+    await networkAllowed(
+      "http://169.254.169.254/",
+      ["169.254.169.254"],
+      true,
+      true
+    )
+  ).toBe(false);
+  expect(
+    await networkAllowed(
+      "http://[fd00:ec2::254]/",
+      ["[fd00:ec2::254]"],
+      true,
+      true
+    )
+  ).toBe(false);
+  expect(
+    await networkAllowed("http://127.0.0.1/", ["127.0.0.1"], false, true)
+  ).toBe(false);
+});

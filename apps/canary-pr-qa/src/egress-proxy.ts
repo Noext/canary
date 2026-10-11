@@ -1,12 +1,23 @@
 import dns from "node:dns/promises";
 import { createServer, request } from "node:http";
 import { connect, type Socket } from "node:net";
+import { createLogger } from "@usecanary/logger";
 import {
   metadataAddress,
   privateAddress,
 } from "../../canary-daemon/src/network-policy.js";
 import type { Config } from "./config.js";
 
+const logger = createLogger({ name: "qa-egress" });
+function denied(error: unknown) {
+  logger.warn(
+    {
+      code: "EGRESS_POLICY_DENIED",
+      reason: error instanceof Error ? error.message : "Unknown egress failure",
+    },
+    "Request blocked; inspect PREVIEW_ALLOWED_HOSTS, private-preview policy and DNS"
+  );
+}
 async function target(input: string, config: Config) {
   const url = new URL(input);
   if (
@@ -39,6 +50,11 @@ async function target(input: string, config: Config) {
 }
 export async function startEgressProxy(config: Config) {
   const server = createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/health") {
+      res.setHeader("Content-Type", "application/json");
+      res.end('{"ok":true}');
+      return;
+    }
     void target(req.url ?? "", config)
       .then(({ url, address }) => {
         const upstream = request(
@@ -73,7 +89,8 @@ export async function startEgressProxy(config: Config) {
         res.on("close", () => upstream.destroy());
         req.pipe(upstream);
       })
-      .catch(() => {
+      .catch((error) => {
+        denied(error);
         res.writeHead(403);
         res.end("Egress policy denied");
       });
@@ -94,7 +111,10 @@ export async function startEgressProxy(config: Config) {
         );
         tunnel(socket as Socket, upstream);
       })
-      .catch(() => socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"));
+      .catch((error) => {
+        denied(error);
+        socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      });
   });
   server.on("upgrade", (req, socket, head) => {
     void target(req.url ?? "", config)
@@ -114,7 +134,10 @@ export async function startEgressProxy(config: Config) {
         );
         tunnel(socket as Socket, upstream);
       })
-      .catch(() => socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"));
+      .catch((error) => {
+        denied(error);
+        socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

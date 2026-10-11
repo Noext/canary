@@ -264,3 +264,26 @@ par digest. Le workflow de release QA construit l'image, scanne ses vulnérabili
 produit SBOM/provenance et attestation. Son exécution et la protection de branche
 GitHub doivent être constatées sur votre fork ; leur présence dans le code ne
 prouve pas leur activation.
+
+### Contrôles supplémentaires de livraison
+
+Le navigateur du réseau `control` ne résout pas les domaines externes : le proxy
+`egress` résout, vérifie et épingle les IP. Sa santé est vérifiée avant le démarrage
+du browser. Les refus ont le code structuré `EGRESS_POLICY_DENIED` dans
+`docker compose logs egress`. Les adresses de métadonnées restent interdites même
+avec `QA_ALLOW_PRIVATE_PREVIEWS=true`.
+
+Une expiration de lease est irréversible : le worker ne peut ni la renouveler ni
+terminer le job expiré. Il revérifie la propriété avant publication ; une annulation
+ferme le check du SHA épinglé avec `error`, jamais `success`. Une panne de publication
+rend le run `blocked` et conserve les preuves locales.
+
+Les rapports HTML natifs imbriqués, logs, HAR et ZIP sont des preuves brutes,
+interdites par défaut via HTTP. Le rapport principal et ses vidéos/images restent
+accessibles aux utilisateurs autorisés. N'activez `QA_RAW_EVIDENCE` qu'après avoir
+vérifié les données de test. Les clés PEM, états d'authentification et configurations
+montées sont exclus du contexte Docker.
+
+Le check CI audite les dépendances de production. Les mises à jour OpenTelemetry
+sont verrouillées et l'export réel `/v1/traces`, le nom de service et la corrélation
+avec `progress.json` sont vérifiés par un collecteur HTTP de test.

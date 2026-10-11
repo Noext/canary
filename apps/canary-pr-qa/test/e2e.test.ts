@@ -2,17 +2,24 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import net from "node:net";
 import { join } from "node:path";
+import { PGlite } from "@electric-sql/pglite";
+import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary, compileAction } from "../src/canary.js";
 import { doctor } from "../src/doctor.js";
 import { executeScenario } from "../src/executor.js";
 import { Model } from "../src/model.js";
+import { startProductionServer } from "../src/production-server.js";
+import { Queue } from "../src/queue.js";
 import { runQa } from "../src/runner.js";
 import { fixture, PR_URL, plan, SHA } from "./fixture.js";
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  await Promise.all(closers.splice(0).map((close) => close()));
+  for (const close of closers.splice(0).reverse()) {
+    await close();
+  }
+  vi.restoreAllMocks();
 });
 describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
   it("runs the installation doctor through actual Chromium, REST/model and SHA probes without publishing", async () => {
@@ -389,4 +396,145 @@ it("compares real screenshots with a trusted baseline and rejects a changed imag
     "fixture/app"
   );
   expect(broken.outcome, broken.error).toBe("failed");
+}, 180_000);
+
+it("uses the actual dashboard in Chromium: login, project list, live SSE and cancellation", async () => {
+  const db = await PGlite.create();
+  closers.push(() => db.close());
+  const query = async (text: string, values?: unknown[]) => {
+    if (!values && text.includes("CREATE TABLE")) {
+      await db.exec(text);
+      return { rows: [], rowCount: 0 };
+    }
+    const result = await db.query(text, values);
+    return {
+      rows: result.rows,
+      rowCount: result.affectedRows ?? result.rows.length,
+    };
+  };
+  vi.spyOn(pg, "Pool").mockImplementation(
+    class {
+      query = query;
+      connect = async () => ({ query, release: () => undefined });
+      end = async () => undefined;
+      on = () => undefined;
+    } as unknown as typeof pg.Pool
+  );
+  const f = await fixture();
+  closers.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  closers.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const queue = new Queue(config.DATABASE_URL);
+  const job = await queue.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "tester",
+    { prUrl: PR_URL },
+    "dashboard-test"
+  );
+  const canary = new Canary({
+    ...config,
+    allowedHosts: [...config.allowedHosts, new URL(url).host],
+    PREVIEW_ALLOWED_HOSTS: [...config.allowedHosts, new URL(url).host].join(
+      ","
+    ),
+  });
+  const id = await canary.start("Dashboard UI verification");
+  async function act(
+    label: string,
+    action: Parameters<typeof compileAction>[0],
+    assertion?: Parameters<typeof compileAction>[2]
+  ) {
+    return canary.act(id, label, compileAction(action, url, assertion));
+  }
+  try {
+    await act("open-dashboard", { type: "goto", path: "/" });
+    await act("enter-token", {
+      type: "fill",
+      locator: { by: "css", value: "#token" },
+      value: config.QA_API_TOKEN,
+    });
+    await act("login", {
+      type: "click",
+      locator: { by: "role", value: "button", name: "Se connecter" },
+    });
+    const listed = await act(
+      "list",
+      {
+        type: "assert",
+        assertionId: "list",
+        locator: { by: "css", value: "#runs" },
+      },
+      {
+        id: "list",
+        description: "Project visible",
+        kind: "text",
+        expected: "fixture/app #1",
+        verification: "state",
+        afterStep: "login",
+      }
+    );
+    expect(listed.actual).toContain("fixture/app #1");
+    await act("open-run", {
+      type: "click",
+      locator: { by: "role", value: "link", name: "fixture/app #1" },
+    });
+    const stream = await act(
+      "live",
+      {
+        type: "assert",
+        assertionId: "live",
+        locator: { by: "css", value: "#connection" },
+      },
+      {
+        id: "live",
+        description: "SSE connected",
+        kind: "text",
+        expected: "Flux live connecté",
+        verification: "state",
+        afterStep: "open",
+      }
+    );
+    expect(stream.actual).toBe("Flux live connecté");
+    await queue.claim("dashboard-worker");
+    const running = await act(
+      "running",
+      {
+        type: "assert",
+        assertionId: "running",
+        locator: { by: "css", value: "#provenance" },
+      },
+      {
+        id: "running",
+        description: "Running update delivered",
+        kind: "text",
+        expected: "running",
+        verification: "state",
+        afterStep: "open",
+      }
+    );
+    expect(running.actual).toContain("running");
+    await act("cancel", {
+      type: "click",
+      locator: { by: "role", value: "button", name: "Annuler" },
+    });
+    for (
+      let i = 0;
+      i < 20 && !(await queue.get(job.id))?.cancel_requested;
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect((await queue.get(job.id))?.cancel_requested).toBe(true);
+    await canary.end(id, join(f.dataDir, "dashboard-evidence"));
+  } finally {
+    await canary.abort(id);
+  }
 }, 180_000);

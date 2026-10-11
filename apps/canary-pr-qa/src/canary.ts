@@ -16,6 +16,7 @@ const observationSchema = z.object({
   url: z.string(),
   snapshot: z.string(),
   actual: z.unknown().optional(),
+  provenanceUrls: z.array(z.string().url()).max(5).optional(),
 });
 export type Observation = z.infer<typeof observationSchema>;
 
@@ -156,7 +157,7 @@ export function compileAction(
   } else if (action.type === "download") {
     command = `const waiting = page.waitForEvent("download", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const download = await waiting; if(await download.failure())throw new Error("Download failed"); actual=download.suggestedFilename();`;
   } else if (action.type === "popup") {
-    command = `const waiting = page.waitForEvent("popup", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const popup = await waiting; await popup.waitForLoadState("domcontentloaded"); actual=popup.url(); if(!actual.startsWith(${JSON.stringify(`${preview.origin}/`)}))throw new Error("Popup left approved origin"); await popup.close();`;
+    command = `const waiting = page.waitForEvent("popup", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const popup = await waiting; await popup.waitForLoadState("domcontentloaded"); actual=popup.url(); provenanceUrls.push(actual); if(!actual.startsWith(${JSON.stringify(`${preview.origin}/`)}))throw new Error("Popup left approved origin"); await popup.close();`;
   } else if (action.type === "assert") {
     command = compileAssertion(action, assertion);
   } else if (action.type !== "observe") {
@@ -164,10 +165,11 @@ export function compileAction(
   }
   return `const page = await browser.getPage("qa");
 let actual;
+const provenanceUrls = [];
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
-console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: (await page.snapshotForAI({ depth: 12 })).full.slice(0, 14000), actual }));`;
+console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: (await page.snapshotForAI({ depth: 12 })).full.slice(0, 14000), actual, provenanceUrls }));`;
 }
 
 export class Canary {
@@ -320,8 +322,15 @@ export class Canary {
       JSON.parse(line.slice(MARKER.length))
     );
     const sha = runScope.getStore()?.previewSha;
-    if (sha && observation.url.startsWith("http")) {
-      await verifyPreviewUrl(observation.url, sha, this.config);
+    if (sha) {
+      for (const url of new Set([
+        observation.url,
+        ...(observation.provenanceUrls ?? []),
+      ])) {
+        if (url.startsWith("http")) {
+          await verifyPreviewUrl(url, sha, this.config);
+        }
+      }
     }
     return observation;
   }

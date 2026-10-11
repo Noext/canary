@@ -10,6 +10,7 @@ export interface RunScope {
   previewSha?: string;
   signal: AbortSignal;
   tokens: number;
+  verifyOwnership?: () => Promise<void>;
 }
 export const runScope = new AsyncLocalStorage<RunScope>();
 export function checkBudget(reserveTokens = 0) {

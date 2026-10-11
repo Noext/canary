@@ -522,7 +522,8 @@ export class BrowserManager {
         context,
         hosts.map((host) => host.trim().toLowerCase()),
         options.networkPolicy?.allowPrivate ??
-          process.env.CANARY_NETWORK_ALLOW_PRIVATE === "true"
+          process.env.CANARY_NETWORK_ALLOW_PRIVATE === "true",
+        Boolean(process.env.CANARY_EGRESS_PROXY)
       );
     }
     if (options.auth) {

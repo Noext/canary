@@ -72,6 +72,17 @@ export async function startWorker(
             calls: 0,
             maxTokens: config.QA_RUN_MAX_TOKENS,
             maxCostUsd: config.QA_RUN_MAX_COST_USD,
+            verifyOwnership: async () => {
+              controller.signal.throwIfAborted();
+              if (!(await queue.heartbeat(job.id, worker))) {
+                controller.abort(
+                  new Error(
+                    "Run cancelled or worker lease lost before publication"
+                  )
+                );
+                controller.signal.throwIfAborted();
+              }
+            },
           },
           () => runQa({ ...job.input, id: job.id }, config)
         );

@@ -85,7 +85,8 @@ services:
       PREVIEW_ALLOWED_HOSTS: ${PREVIEW_ALLOWED_HOSTS}
       QA_ALLOW_PRIVATE_PREVIEWS: ${QA_ALLOW_PRIVATE_PREVIEWS:-false}
       CANARY_EGRESS_PROXY: http://egress:3128
-    depends_on: [egress]
+    depends_on:
+      egress: {condition: service_healthy}
     networks: [control]
     volumes:
       - canary-sessions:/home/node/.canary/sessions
@@ -115,6 +116,11 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     cpus: 0.5
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3128/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     logging: *logging

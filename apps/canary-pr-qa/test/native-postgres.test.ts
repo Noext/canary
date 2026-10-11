@@ -39,6 +39,10 @@ describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
           "UPDATE qa_jobs SET lease_until=now()-interval '1 minute' WHERE id=$1",
           [victim.id]
         );
+        expect(await q.heartbeat(victim.id, victim.worker!)).toBe(false);
+        await expect(
+          q.complete(victim.id, victim.worker!, "passed")
+        ).rejects.toThrow();
         await q.claim(namespace);
         expect((await q.get(victim.id))?.status).toBe("interrupted");
         await expect(

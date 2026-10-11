@@ -276,12 +276,14 @@ async function publish(
   reportUrl?: string
 ) {
   try {
+    await runScope.getStore()?.verifyOwnership?.();
     const commentUrl = await github.comment(
       context,
       reportMarkdown(result, reportUrl)
     );
     result.publication = { commentUrl, status: "pending" };
     const status = statusFor(result.outcome);
+    await runScope.getStore()?.verifyOwnership?.();
     await github.status(
       context,
       status,
@@ -291,14 +293,17 @@ async function publish(
     result.publication.status = status;
   } catch (error) {
     result.diagnostic = diagnose(error, config);
+    result.outcome = "blocked";
     result.error =
       `${result.error ?? ""} GitHub publication failed: ${result.diagnostic.message}`.trim();
-    await github
-      .status(
-        context,
-        "error",
-        "QA completed but publication failed",
-        reportUrl
+    await runScope
+      .exit(() =>
+        github.status(
+          context,
+          "error",
+          "QA completed but publication failed",
+          reportUrl
+        )
       )
       .catch(() => undefined);
   }
@@ -415,6 +420,28 @@ async function runUnscoped(
     await progress.record({ phase: "publication" });
     await publish(result, context, github, config, reportUrl);
     await saveReport(root, result);
+  } else if (
+    context &&
+    options.publish !== false &&
+    runScope.getStore()?.signal.aborted
+  ) {
+    const pinnedContext = context;
+    // Only close the check for the pinned historical SHA. Aborted runs can never publish success.
+    await runScope
+      .exit(() =>
+        github.status(
+          pinnedContext,
+          "error",
+          "QA interrupted or cancelled; no successful verdict",
+          reportUrl
+        )
+      )
+      .catch((error) => {
+        logger.warn(
+          { runId: id, diagnostic: diagnose(error, config) },
+          "Could not close interrupted GitHub check"
+        );
+      });
   }
   await progress.record({
     phase: "done",

@@ -212,7 +212,9 @@ export async function startProductionServer(config: Config) {
     }
     if (
       config.QA_RAW_EVIDENCE !== "true" &&
-      /\.(har|zip)$|\/results\.json$|console|network/i.test(path)
+      /\.(har|zip|log)$|\/results\.json$|\/report\.html$|console|network/i.test(
+        path
+      )
     ) {
       json(res, 403, { error: "Raw evidence disabled by data policy" });
       return;

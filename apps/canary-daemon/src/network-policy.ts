@@ -4,9 +4,14 @@ import type { BrowserContext } from "playwright";
 export function metadataAddress(input: string): boolean {
   const ip = input.replace(/^\[|\]$/g, "").toLowerCase();
   return (
-    ["169.254.169.254", "169.254.170.2", "metadata.google.internal"].includes(
-      ip
-    ) ||
+    [
+      "169.254.169.254",
+      "169.254.170.2",
+      "metadata.google.internal",
+      "100.100.100.200",
+      "fd00:ec2::254",
+    ].includes(ip) ||
+    ip.startsWith("64:ff9b:") ||
     ip === "::ffff:a9fe:a9fe" ||
     ip === "::ffff:a9fe:aa02" ||
     (ip.startsWith("::ffff:") && metadataAddress(ip.slice(7)))
@@ -63,7 +68,8 @@ export function privateAddress(input: string): boolean {
 export async function networkAllowed(
   input: string,
   hosts: string[],
-  allowPrivate = false
+  allowPrivate = false,
+  dnsAtProxy = false
 ): Promise<boolean> {
   const url = new URL(input);
   if (
@@ -86,6 +92,11 @@ export async function networkAllowed(
   if (metadataAddress(hostname)) {
     return false;
   }
+  // The isolated browser has no external DNS. The configured egress proxy resolves,
+  // validates and pins the actual address; still validate literal IPs here.
+  if (dnsAtProxy && !isIP(hostname)) {
+    return true;
+  }
   const addresses = isIP(hostname)
     ? [{ address: hostname }]
     : await dns.lookup(hostname, { all: true });
@@ -101,13 +112,17 @@ export async function networkAllowed(
 export async function installNetworkPolicy(
   context: BrowserContext,
   hosts: string[],
-  allowPrivate: boolean
+  allowPrivate: boolean,
+  dnsAtProxy = false
 ) {
   await context.route("**/*", async (route) => {
     if (
-      await networkAllowed(route.request().url(), hosts, allowPrivate).catch(
-        () => false
-      )
+      await networkAllowed(
+        route.request().url(),
+        hosts,
+        allowPrivate,
+        dnsAtProxy
+      ).catch(() => false)
     ) {
       await route.continue();
     } else {
@@ -116,7 +131,9 @@ export async function installNetworkPolicy(
   });
   await context.routeWebSocket("**/*", async (socket) => {
     if (
-      await networkAllowed(socket.url(), hosts, allowPrivate).catch(() => false)
+      await networkAllowed(socket.url(), hosts, allowPrivate, dnsAtProxy).catch(
+        () => false
+      )
     ) {
       socket.connectToServer();
     } else {
