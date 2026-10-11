@@ -3,20 +3,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.pr-qa
-    env_file: .env
+    env_file: ${QA_ENV_FILE:-.env}
     environment:
       QA_DATA_DIR: /data
       QA_HOST: 0.0.0.0
     ports:
-      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:${QA_PORT:-8787}:${QA_PORT:-8787}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - qa-data:/data
       - canary-sessions:/home/node/.canary/sessions
     init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     shm_size: 1gb
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.QA_PORT||8787)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

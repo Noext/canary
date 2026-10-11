@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -11,6 +11,7 @@ vi.mock("../src/runner.js", () => ({ runQa: vi.fn() }));
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.resetAllMocks();
+  vi.restoreAllMocks();
   await Promise.all(closers.splice(0).map((fn) => fn()));
 });
 async function service() {
@@ -39,6 +40,152 @@ async function service() {
   };
 }
 describe("persistent authenticated job service", () => {
+  it("returns actionable errors for oversized or malformed JSON without echoing submitted data", async () => {
+    const s = await service();
+    const huge = await fetch(`${s.url}/runs`, {
+      method: "POST",
+      headers: s.headers,
+      body: JSON.stringify({ prUrl: PR_URL, extra: "x".repeat(20_000) }),
+    });
+    expect(huge.status).toBe(413);
+    expect(await huge.json()).toMatchObject({ code: "REQUEST_TOO_LARGE" });
+    const malformed = await fetch(`${s.url}/runs`, {
+      method: "POST",
+      headers: s.headers,
+      body: '{"secret": "private-malformed-value',
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.text()).not.toContain("private-malformed-value");
+    expect(runQa).not.toHaveBeenCalled();
+  });
+  it("rejects a port conflict as a diagnosable startup error", async () => {
+    const s = await service();
+    const port = (s.server.address() as { port: number }).port;
+    await expect(
+      startServer({ ...s.config, QA_PORT: port })
+    ).rejects.toMatchObject({ code: "EADDRINUSE" });
+  });
+  it("bounds the queue even during simultaneous submissions", async () => {
+    const s = await service();
+    let release!: () => void;
+    const pending = new Promise<void>((done) => {
+      release = done;
+    });
+    vi.mocked(runQa).mockImplementation(async () => {
+      await pending;
+      return {
+        id: "fixture",
+        prUrl: PR_URL,
+        outcome: "passed",
+        startedAt: "now",
+        scenarios: [],
+      };
+    });
+    const responses = await Promise.all(
+      Array.from({ length: 45 }, () =>
+        fetch(`${s.url}/runs`, {
+          method: "POST",
+          headers: s.headers,
+          body: JSON.stringify({ prUrl: PR_URL }),
+        })
+      )
+    );
+    expect(
+      responses.filter((r) => r.status === 202).length
+    ).toBeLessThanOrEqual(21);
+    expect(responses.some((r) => r.status === 429)).toBe(true);
+    const health = (await (await fetch(`${s.url}/health`)).json()) as {
+      queued: number;
+    };
+    expect(health.queued).toBeLessThanOrEqual(20);
+    const stopped = s.server.shutdown();
+    release();
+    await stopped;
+    expect(runQa).toHaveBeenCalledTimes(1);
+  });
+  it("reports failed persistence through health and refuses more jobs", async () => {
+    const s = await service();
+    const reports = await import("../src/report.js");
+    const original = reports.writeJson;
+    let writes = 0;
+    vi.spyOn(reports, "writeJson").mockImplementation(async (path, value) => {
+      if (path.endsWith("job.json") && ++writes > 1) {
+        throw Object.assign(new Error("simulated full disk"), {
+          code: "ENOSPC",
+        });
+      }
+      await original(path, value);
+    });
+    const submitted = await fetch(`${s.url}/runs`, {
+      method: "POST",
+      headers: s.headers,
+      body: JSON.stringify({ prUrl: PR_URL }),
+    });
+    expect(submitted.status).toBe(202);
+    let health: Response | undefined;
+    for (let i = 0; i < 50; i++) {
+      health = await fetch(`${s.url}/health`);
+      if (health.status === 503) {
+        break;
+      }
+      await delay(10);
+    }
+    expect(health?.status).toBe(503);
+    expect(await health?.json()).toMatchObject({
+      ok: false,
+      diagnostic: { code: "ENOSPC" },
+    });
+    expect(
+      (
+        await fetch(`${s.url}/runs`, {
+          method: "POST",
+          headers: s.headers,
+          body: JSON.stringify({ prUrl: PR_URL }),
+        })
+      ).status
+    ).toBe(503);
+  });
+  it("exposes persisted live action progress and returns 404 for an unknown run", async () => {
+    const s = await service();
+    const id = "12345678-1234-1234-1234-123456789012";
+    await mkdir(join(s.dataDir, id));
+    await writeFile(
+      join(s.dataDir, id, "job.json"),
+      JSON.stringify({ id, status: "running" })
+    );
+    await writeFile(
+      join(s.dataDir, id, "progress.json"),
+      JSON.stringify({ phase: "execution", step: 3, action: "assert" })
+    );
+    expect(
+      await (await fetch(`${s.url}/runs/${id}`, { headers: s.headers })).json()
+    ).toMatchObject({
+      status: "running",
+      progress: { step: 3, action: "assert" },
+    });
+    const response = await fetch(
+      `${s.url}/runs/87654321-1234-1234-1234-123456789012`,
+      { headers: s.headers }
+    );
+    expect(response.status).toBe(404);
+    expect(response.headers.get("X-Request-ID")).toBeTruthy();
+    expect(await response.json()).toHaveProperty("hint");
+  });
+  it("blocks a symlink to an artifact outside its run", async () => {
+    const s = await service();
+    const id = "12345678-1234-1234-1234-123456789012";
+    await mkdir(join(s.dataDir, id));
+    await writeFile(join(s.dataDir, "outside.html"), "private data");
+    await symlink(
+      join(s.dataDir, "outside.html"),
+      join(s.dataDir, id, "report.html")
+    );
+    const response = await fetch(`${s.url}/artifacts/${id}/report.html`, {
+      headers: s.headers,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).not.toContain("private data");
+  });
   it("requires strong API auth and an explicit repository allowlist", async () => {
     const f = await fixture();
     closers.push(f.close);

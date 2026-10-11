@@ -12,6 +12,9 @@ export function parsePrUrl(input: string) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
     throw new Error("Invalid repository name");
   }
+  if (!Number.isSafeInteger(Number(match[3]))) {
+    throw new Error("Invalid PR number");
+  }
   return {
     repo,
     number: Number(match[3]),
@@ -98,7 +101,7 @@ export class GitHub {
     }
     if (data.changed_files > 1000) {
       throw new Error(
-        "PR exceeds GitHub's 1000-file API limit; refusing incomplete analysis"
+        "PR exceeds the supported 1000-file analysis limit; refusing incomplete analysis"
       );
     }
     const files: z.infer<typeof fileSchema>[] = [];

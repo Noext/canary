@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Diagnostic } from "./diagnostics.js";
 
 const text = z.string().trim().min(1).max(2000);
 const locator = z.discriminatedUnion("by", [
@@ -116,6 +117,7 @@ export interface StepResult {
 export interface ScenarioResult {
   artifacts: string[];
   assertions: { id: string; passed: boolean; actual: unknown }[];
+  diagnostic?: Diagnostic;
   error?: string;
   outcome: Outcome;
   scenario: Scenario;
@@ -123,6 +125,7 @@ export interface ScenarioResult {
   steps: StepResult[];
 }
 export interface RunResult {
+  diagnostic?: Diagnostic;
   endedAt?: string;
   error?: string;
   id: string;

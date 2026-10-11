@@ -55,9 +55,12 @@ export async function fixture(
     updatedSha?: boolean;
     earlyFinish?: boolean;
     noScenarios?: boolean;
+    listenHost?: string;
+    missingDiffAndContext?: boolean;
   } = {}
 ) {
   const outgoing: { path: string; payload: Record<string, unknown> }[] = [];
+  const modelRequests: Record<string, unknown>[] = [];
   let actions = 0;
   let prReads = 0;
   const server = createServer((req, res) => {
@@ -68,6 +71,32 @@ export async function fixture(
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Test fixture deliberately dispatches all local protocol endpoints in one place.
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const path = req.url ?? "/";
+    if (
+      path === "/repos/fixture/app" ||
+      path === "/repos/fixture/app/contents"
+    ) {
+      json(res, {
+        full_name: "fixture/app",
+        permissions: { pull: true, push: true },
+      });
+      return;
+    }
+    if (path === "/repos/fixture/app/deployments?per_page=1") {
+      json(res, []);
+      return;
+    }
+    if (path.startsWith("/http-")) {
+      res.setHeader("x-github-request-id", "fixture-request-42");
+      json(
+        res,
+        { error: "Do not echo fixture-token in diagnostics" },
+        Number(path.slice(6))
+      );
+      return;
+    }
+    if (path === "/slow") {
+      return;
+    }
     if (path === "/") {
       res.writeHead(200, {
         "Content-Type": "text/html",
@@ -87,7 +116,9 @@ export async function fixture(
         {
           filename: "src/form.ts",
           status: "modified",
-          patch: "- show('Hello')\n+ show('Welcome '+name)",
+          ...(options.missingDiffAndContext
+            ? {}
+            : { patch: "- show('Hello')\n+ show('Welcome '+name)" }),
         },
       ]);
       return;
@@ -108,6 +139,10 @@ export async function fixture(
       return;
     }
     if (path.includes("/contents/")) {
+      if (options.missingDiffAndContext) {
+        json(res, { message: "Not Found" }, 404);
+        return;
+      }
       json(res, {
         encoding: "base64",
         content: Buffer.from(
@@ -126,9 +161,12 @@ export async function fixture(
     }
     if (path === "/v1/chat/completions") {
       const payload = await body(req);
+      modelRequests.push(payload);
       const messages = payload.messages as { role: string; content: string }[];
       let value: unknown;
-      if (messages[0]?.content.startsWith("You plan")) {
+      if (messages[0]?.content.startsWith("You are a connection diagnostic")) {
+        value = { ok: true };
+      } else if (messages[0]?.content.startsWith("You plan")) {
         value = options.noScenarios
           ? {
               summary: "No browser changes",
@@ -192,7 +230,9 @@ export async function fixture(
     }
     json(res, { error: `Unknown fixture path ${path}` }, 404);
   }
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  await new Promise<void>((done) =>
+    server.listen(0, options.listenHost ?? "127.0.0.1", done)
+  );
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("No fixture address");
@@ -213,6 +253,7 @@ export async function fixture(
     config,
     baseUrl,
     outgoing,
+    modelRequests,
     dataDir,
     close: () =>
       new Promise<void>((done) => {

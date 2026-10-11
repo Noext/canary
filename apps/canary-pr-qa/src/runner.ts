@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { Canary, compileAction, type Observation } from "./canary.js";
-import type { Config } from "./config.js";
+import { type Config, validateConfiguration } from "./config.js";
+import { diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import { GitHub, type PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { resolvePreview } from "./preview.js";
+import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
 import {
   type Outcome,
@@ -18,9 +20,6 @@ import {
 } from "./schema.js";
 
 const logger = createLogger({ name: "canary-pr-qa" });
-function message(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 export interface RunOptions {
   id?: string;
   previewUrl?: string;
@@ -54,6 +53,38 @@ async function discover(
   }
   return observation;
 }
+function completeSource(context: PrContext, path: string, ref: string) {
+  return context.context.some(
+    (item) =>
+      item.path === path &&
+      item.ref === ref &&
+      !context.contextWarnings.includes(
+        `Truncated context: ${item.path} at ${item.ref}`
+      )
+  );
+}
+function validateSourceEvidence(
+  context: PrContext,
+  scenarioId: string,
+  path: string
+) {
+  const file = context.files.find((item) => item.filename === path);
+  if (file?.patch) {
+    return;
+  }
+  const headAvailable =
+    file?.status === "removed" || completeSource(context, path, context.sha);
+  const baseAvailable =
+    file?.status === "added" ||
+    completeSource(context, file?.previous_filename ?? path, context.baseSha);
+  if (!(headAvailable && baseAvailable)) {
+    throw new QaError(
+      "CONTEXT_INCOMPLETE",
+      `Scenario ${scenarioId} cites ${path} without a textual diff or complete head/base source`,
+      "Check GitHub Contents permissions and context budget. Unsupported/binary changes must be explicitly skipped; never infer a tested change from the page alone."
+    );
+  }
+}
 function validatePlan(plan: Plan, context: PrContext, config: Config) {
   if (plan.scenarios.length > config.QA_MAX_SCENARIOS) {
     throw new Error("AI plan exceeds QA_MAX_SCENARIOS");
@@ -66,6 +97,12 @@ function validatePlan(plan: Plan, context: PrContext, config: Config) {
     if (scenario.sourceFiles.some((file) => !changed.has(file))) {
       throw new Error("AI plan cites a file outside the PR diff");
     }
+    for (const path of scenario.sourceFiles) {
+      validateSourceEvidence(context, scenario.id, path);
+    }
+  }
+  if (plan.skipped.some((item) => !changed.has(item.sourceFile))) {
+    throw new Error("AI plan skips a file outside the PR diff");
   }
   for (const file of changed) {
     if (
@@ -97,8 +134,10 @@ async function executePlan(
   root: string,
   config: Config,
   canary: Canary,
-  model: Model
+  model: Model,
+  progress: Progress
 ) {
+  await progress.record({ phase: "discovery" });
   const initialPage = await discover(context, preview, root, canary);
   const payload = {
     pr: context,
@@ -111,6 +150,7 @@ async function executePlan(
       "PR context exceeds model budget; refusing partial diff analysis"
     );
   }
+  await progress.record({ phase: "planning" });
   result.plan = await model.json(PLANNER_PROMPT, payload, PlanSchema);
   validatePlan(result.plan, context, config);
   await saveReport(root, result);
@@ -120,7 +160,15 @@ async function executePlan(
       "Executing scenario"
     );
     result.scenarios.push(
-      await executeScenario(scenario, preview.url, root, config, canary, model)
+      await executeScenario(
+        scenario,
+        preview.url,
+        root,
+        config,
+        canary,
+        model,
+        (event) => progress.record(event)
+      )
     );
     await saveReport(root, result);
   }
@@ -172,6 +220,7 @@ async function publish(
   result: RunResult,
   context: PrContext,
   github: GitHub,
+  config: Config,
   reportUrl?: string
 ) {
   try {
@@ -189,8 +238,9 @@ async function publish(
     );
     result.publication.status = status;
   } catch (error) {
+    result.diagnostic = diagnose(error, config);
     result.error =
-      `${result.error ?? ""} GitHub publication failed: ${message(error)}`.trim();
+      `${result.error ?? ""} GitHub publication failed: ${result.diagnostic.message}`.trim();
     await github
       .status(
         context,
@@ -220,11 +270,14 @@ export async function runQa(
   const github = new GitHub(config);
   const canary = new Canary(config);
   const model = new Model(config);
+  const progress = new Progress(root, id);
   let context: PrContext | undefined;
   const reportUrl = config.ARTIFACT_BASE_URL
     ? `${config.ARTIFACT_BASE_URL.replace(/\/$/, "")}/artifacts/${id}/report.html`
     : undefined;
   try {
+    await progress.record({ phase: "context" });
+    validateConfiguration(config);
     if (options.publish !== false && !config.GITHUB_TOKEN) {
       throw new Error(
         "GITHUB_TOKEN is required to publish. Use --no-publish for local verification."
@@ -244,6 +297,7 @@ export async function runQa(
         reportUrl
       );
     }
+    await progress.record({ phase: "preview" });
     result.preview = await resolvePreview(
       context,
       github,
@@ -257,19 +311,28 @@ export async function runQa(
       root,
       config,
       canary,
-      model
+      model,
+      progress
     );
+    await progress.record({ phase: "verification" });
     await recheck(result, context, result.preview, options, github, config);
   } catch (error) {
-    result.error = message(error);
+    result.diagnostic = diagnose(error, config);
+    result.error = result.diagnostic.message;
     result.outcome = "blocked";
     logger.warn({ runId: id, error: result.error }, "QA blocked");
   }
   result.endedAt = new Date().toISOString();
   await saveReport(root, result);
   if (context && options.publish !== false) {
-    await publish(result, context, github, reportUrl);
+    await progress.record({ phase: "publication" });
+    await publish(result, context, github, config, reportUrl);
     await saveReport(root, result);
   }
+  await progress.record({
+    phase: "done",
+    outcome: result.outcome,
+    diagnostic: result.diagnostic,
+  });
   return result;
 }

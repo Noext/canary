@@ -1,4 +1,5 @@
 import { type Config, validatePreviewUrl } from "./config.js";
+import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
 import { fetchText } from "./http.js";
 import type { Preview } from "./schema.js";
@@ -28,8 +29,10 @@ export async function verifyPreviewUrl(
         : null;
   }
   if (actual !== expectedSha) {
-    throw new Error(
-      `Preview SHA mismatch or missing provenance (expected ${expectedSha})`
+    throw new QaError(
+      "PREVIEW_SHA_MISMATCH",
+      `Preview SHA mismatch or missing provenance (expected ${expectedSha}, received ${actual ?? "missing"})`,
+      "Deploy the PR head commit and expose its full SHA in the configured header or PREVIEW_SHA_PATH JSON. Check that the preview URL is immutable and does not redirect."
     );
   }
   return {
@@ -58,8 +61,10 @@ export async function resolvePreview(
   }
   const deployment = await github.deployments(context);
   if (!deployment) {
-    throw new Error(
-      "No successful preview deployment for the exact PR SHA. Supply --preview with SHA provenance."
+    throw new QaError(
+      "PREVIEW_NOT_FOUND",
+      "No successful preview deployment for the exact PR SHA. Supply --preview with SHA provenance.",
+      "Check PREVIEW_ENVIRONMENT and GitHub deployment metadata, or supply an explicit preview with a full SHA header/JSON proof."
     );
   }
   validatePreviewUrl(deployment.url, config);

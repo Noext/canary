@@ -201,6 +201,18 @@ describe("preview and PR provenance", () => {
 });
 
 describe("runner false-green regressions", () => {
+  it("blocks a scenario with no readable diff or source versions", async () => {
+    const f = await setup({ missingDiffAndContext: true });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("CONTEXT_INCOMPLETE");
+    expect(f.outgoing.at(-1)?.payload.state).toBe("error");
+    expect(result.scenarios).toEqual([]);
+  });
   it("blocks self-declared success without executing planned assertions", async () => {
     const f = await setup({ earlyFinish: true });
     fakeBrowser();

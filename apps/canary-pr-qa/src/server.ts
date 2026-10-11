@@ -1,15 +1,21 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, stat } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
 import { extname, join, relative, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
-import type { Config } from "./config.js";
+import {
+  type Config,
+  validateConfiguration,
+  validatePreviewUrl,
+} from "./config.js";
+import { type Diagnostic, diagnose, QaError, redact } from "./diagnostics.js";
 import { parsePrUrl } from "./github.js";
 import { writeJson } from "./report.js";
 import { runQa } from "./runner.js";
@@ -38,15 +44,56 @@ function send(res: ServerResponse, status: number, value: unknown) {
 async function readBody(req: IncomingMessage) {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     const bytes = Buffer.from(chunk);
     size += bytes.length;
     if (size > 16_384) {
-      throw new Error("Request body too large");
+      req.resume();
+      throw new QaError(
+        "REQUEST_TOO_LARGE",
+        "Request body exceeds 16384 bytes",
+        "Submit only the PR URL, optional preview URL and publish flag; do not send source code or credentials in the body."
+      );
     }
     chunks.push(bytes);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new QaError(
+      "REQUEST_JSON_INVALID",
+      "Request body is not valid JSON",
+      "Send application/json with prUrl, optional previewUrl and publish. The rejected body is not echoed into diagnostics."
+    );
+  }
+}
+function errorStatus(code: string) {
+  if (code === "REQUEST_TOO_LARGE") {
+    return 413;
+  }
+  if (code === "ENOENT") {
+    return 404;
+  }
+  if (["EACCES", "ENOSPC", "EIO"].includes(code)) {
+    return 500;
+  }
+  return 400;
+}
+async function readStatus(config: Config, id: string) {
+  const job = JSON.parse(
+    await readFile(join(config.QA_DATA_DIR, id, "job.json"), "utf8")
+  );
+  try {
+    const progress = JSON.parse(
+      await readFile(join(config.QA_DATA_DIR, id, "progress.json"), "utf8")
+    );
+    return { ...job, progress };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return job;
+  }
 }
 
 async function serveArtifact(
@@ -74,6 +121,17 @@ async function serveArtifact(
   ) {
     throw new Error("Artifact path is not allowed");
   }
+  const [dataRoot, actualRoot, actualPath] = await Promise.all([
+    realpath(config.QA_DATA_DIR),
+    realpath(root),
+    realpath(path),
+  ]);
+  if (
+    relative(dataRoot, actualRoot).startsWith("..") ||
+    relative(actualRoot, actualPath).startsWith("..")
+  ) {
+    throw new Error("Artifact symlinks outside the run are not allowed");
+  }
   const info = await stat(path);
   if (!info.isFile()) {
     throw new Error("Not a file");
@@ -98,15 +156,14 @@ async function serveArtifact(
 }
 
 export async function startServer(config: Config) {
-  if (config.QA_API_TOKEN.length < 24) {
-    throw new Error("Set a QA_API_TOKEN of at least 24 characters");
-  }
-  if (!config.allowedRepos.length) {
-    throw new Error("Set GITHUB_ALLOWED_REPOS before serving jobs");
-  }
+  validateConfiguration(config, true);
   await mkdir(config.QA_DATA_DIR, { recursive: true });
   const queue: { id: string; input: z.infer<typeof requestSchema> }[] = [];
   let busy = false;
+  let reservations = 0;
+  let stopping = false;
+  let degraded: Diagnostic | undefined;
+  let activeDrain: Promise<void> = Promise.resolve();
   // Explicitly mark interrupted jobs. Never replay side-effecting scenarios after a crash.
   for (const id of await readdir(config.QA_DATA_DIR)) {
     if (!ID.test(id)) {
@@ -133,7 +190,11 @@ export async function startServer(config: Config) {
     }
     busy = true;
     try {
-      for (let job = queue.shift(); job; job = queue.shift()) {
+      for (
+        let job = stopping ? undefined : queue.shift();
+        job;
+        job = stopping ? undefined : queue.shift()
+      ) {
         const path = join(config.QA_DATA_DIR, job.id, "job.json");
         try {
           await writeJson(path, {
@@ -149,11 +210,13 @@ export async function startServer(config: Config) {
             input: job.input,
           });
         } catch (error) {
-          logger.error({ err: error, runId: job.id }, "Job failed");
+          const diagnostic = diagnose(error, config);
+          logger.error({ diagnostic, runId: job.id }, "Job failed");
           await writeJson(path, {
             id: job.id,
             status: "failed",
-            error: "Internal failure; inspect service logs",
+            error: diagnostic.message,
+            diagnostic,
             input: job.input,
           });
         }
@@ -163,46 +226,88 @@ export async function startServer(config: Config) {
     }
   };
   const server = createServer((req, res) => {
+    const requestId = randomUUID();
+    const started = Date.now();
+    res.setHeader("X-Request-ID", requestId);
+    res.once("finish", () =>
+      logger.info(
+        {
+          requestId,
+          method: req.method,
+          path: redact(req.url?.split("?")[0] ?? "", config),
+          status: res.statusCode,
+          durationMs: Date.now() - started,
+        },
+        "API request"
+      )
+    );
     void handle(req, res).catch((error) => {
-      logger.warn({ err: error }, "Request failed");
+      const diagnostic = diagnose(error, config);
+      logger.warn({ diagnostic, requestId }, "Request failed");
       if (res.headersSent) {
         res.destroy();
       } else {
-        send(res, 400, {
-          error: error instanceof Error ? error.message : "Bad request",
+        send(res, errorStatus(diagnostic.code), {
+          error: diagnostic.message,
+          code: diagnostic.code,
+          hint: diagnostic.hint,
+          requestId,
         });
       }
     });
   });
   async function enqueue(req: IncomingMessage, res: ServerResponse) {
-    if (queue.length >= 20) {
+    if (stopping || degraded) {
+      send(res, 503, {
+        error: "Service is shutting down or storage is degraded",
+        diagnostic: degraded,
+      });
+      return;
+    }
+    if (queue.length + reservations >= 20) {
       send(res, 429, { error: "Job queue is full" });
       return;
     }
-    const input = requestSchema.parse(await readBody(req));
-    const ref = parsePrUrl(input.prUrl);
-    if (!config.allowedRepos.includes(ref.repo.toLowerCase())) {
-      throw new Error("Repository is not allowed");
+    reservations++;
+    try {
+      const input = requestSchema.parse(await readBody(req));
+      const ref = parsePrUrl(input.prUrl);
+      if (!config.allowedRepos.includes(ref.repo.toLowerCase())) {
+        throw new Error("Repository is not allowed");
+      }
+      if (input.previewUrl) {
+        validatePreviewUrl(input.previewUrl, config);
+      }
+      const id = randomUUID();
+      await mkdir(join(config.QA_DATA_DIR, id));
+      await writeJson(join(config.QA_DATA_DIR, id, "job.json"), {
+        id,
+        status: "queued",
+        input,
+      });
+      queue.push({ id, input });
+      send(res, 202, {
+        id,
+        statusUrl: `/runs/${id}`,
+        reportUrl: `/artifacts/${id}/report.html`,
+      });
+      if (!busy) {
+        activeDrain = drain().catch((error) => {
+          degraded = diagnose(error, config);
+          logger.error(
+            { diagnostic: degraded },
+            "Job persistence failed; service degraded"
+          );
+        });
+      }
+    } finally {
+      reservations--;
     }
-    const id = randomUUID();
-    await mkdir(join(config.QA_DATA_DIR, id));
-    await writeJson(join(config.QA_DATA_DIR, id, "job.json"), {
-      id,
-      status: "queued",
-      input,
-    });
-    queue.push({ id, input });
-    send(res, 202, {
-      id,
-      statusUrl: `/runs/${id}`,
-      reportUrl: `/artifacts/${id}/report.html`,
-    });
-    void drain();
   }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (req.method === "GET" && url.pathname === "/health") {
-      send(res, 200, { ok: true, busy, queued: queue.length });
+      sendHealth(res);
       return;
     }
     const artifact = /^\/artifacts\/([0-9a-f-]{36})\/(.+)$/.exec(url.pathname);
@@ -221,10 +326,7 @@ export async function startServer(config: Config) {
     }
     const run = /^\/runs\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (req.method === "GET" && run?.[1]) {
-      const job = JSON.parse(
-        await readFile(join(config.QA_DATA_DIR, run[1], "job.json"), "utf8")
-      );
-      send(res, 200, job);
+      send(res, 200, await readStatus(config, run[1]));
       return;
     }
     if (req.method === "GET" && artifact?.[1] && artifact[2]) {
@@ -233,12 +335,50 @@ export async function startServer(config: Config) {
     }
     send(res, 404, { error: "Not found" });
   }
-  await new Promise<void>((done) =>
-    server.listen(config.QA_PORT, config.QA_HOST, done)
-  );
+  function sendHealth(res: ServerResponse) {
+    send(res, degraded || stopping ? 503 : 200, {
+      ok: !(degraded || stopping),
+      busy,
+      queued: queue.length,
+      ...(degraded ? { diagnostic: degraded } : {}),
+    });
+  }
+  server.requestTimeout = 30_000;
+  server.headersTimeout = 15_000;
+  server.on("close", () => {
+    stopping = true;
+  });
+  await new Promise<void>((done, reject) => {
+    server.once("error", reject);
+    server.listen(config.QA_PORT, config.QA_HOST, () => {
+      server.off("error", reject);
+      done();
+    });
+  });
+  server.on("error", (error) => {
+    degraded = diagnose(error, config);
+    logger.error({ diagnostic: degraded }, "API server error");
+  });
   logger.info(
     { host: config.QA_HOST, port: config.QA_PORT },
     "PR QA server listening"
   );
-  return server;
+  return Object.assign(server, {
+    async shutdown() {
+      stopping = true;
+      logger.info(
+        { busy, queued: queue.length },
+        "Shutting down; pending jobs will be interrupted on restart"
+      );
+      const closed = new Promise<void>((done) => {
+        server.close(() => done());
+        server.closeIdleConnections();
+      });
+      await Promise.race([
+        Promise.all([closed, activeDrain]),
+        delay(25_000, undefined, { ref: false }),
+      ]);
+      server.closeAllConnections();
+    },
+  });
 }

@@ -6,7 +6,9 @@ import {
   type Observation,
 } from "./canary.js";
 import type { Config } from "./config.js";
+import { diagnose } from "./diagnostics.js";
 import { EXECUTOR_PROMPT, type Model } from "./model.js";
+import type { ProgressEvent } from "./progress.js";
 import {
   type Decision,
   DecisionSchema,
@@ -14,9 +16,6 @@ import {
   type ScenarioResult,
 } from "./schema.js";
 
-function message(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 function finish(result: ScenarioResult) {
   if (
     !result.scenario.assertions.every((a) =>
@@ -81,7 +80,8 @@ async function driveScenario(
   preview: string,
   config: Config,
   canary: Canary,
-  model: Model
+  model: Model,
+  record: (event: ProgressEvent) => Promise<void>
 ) {
   let observation: Observation = await canary.act(
     sessionId,
@@ -90,6 +90,13 @@ async function driveScenario(
   );
   let errors = 0;
   for (let index = 1; index <= config.QA_MAX_STEPS; index++) {
+    const started = Date.now();
+    await record({
+      phase: "execution",
+      scenarioId: result.scenario.id,
+      step: index,
+      action: "model-decision",
+    });
     const decision = await model.json(
       EXECUTOR_PROMPT,
       {
@@ -104,16 +111,29 @@ async function driveScenario(
         remainingSteps: config.QA_MAX_STEPS - index + 1,
       },
       DecisionSchema,
-      1800
+      config.QA_ACTION_MAX_TOKENS
     );
     if (decision.action.type === "blocked") {
       result.error = decision.action.explanation;
+      await record({
+        phase: "execution",
+        scenarioId: result.scenario.id,
+        step: index,
+        action: "blocked",
+        outcome: "blocked",
+      });
       return;
     }
     if (decision.action.type === "finish") {
       finish(result);
       return;
     }
+    await record({
+      phase: "execution",
+      scenarioId: result.scenario.id,
+      step: index,
+      action: decision.action.type,
+    });
     try {
       observation = await performDecision(
         sessionId,
@@ -124,12 +144,29 @@ async function driveScenario(
         canary
       );
       errors = 0;
+      await record({
+        phase: "execution",
+        scenarioId: result.scenario.id,
+        step: index,
+        action: decision.action.type,
+        outcome: result.outcome === "failed" ? "failed" : "ok",
+        durationMs: Date.now() - started,
+      });
     } catch (error) {
+      const diagnostic = diagnose(error, config);
       result.steps.push({
         index,
         ...decision,
         ok: false,
-        observation: message(error),
+        observation: diagnostic.message,
+      });
+      await record({
+        phase: "execution",
+        scenarioId: result.scenario.id,
+        step: index,
+        action: decision.action.type,
+        outcome: "error",
+        diagnostic,
       });
       errors++;
       if (decision.action.type === "assert" || errors >= 3) {
@@ -154,7 +191,9 @@ export async function executeScenario(
   root: string,
   config: Config,
   canary: Canary,
-  model: Model
+  model: Model,
+  record: (event: ProgressEvent) => Promise<void> = async () =>
+    Promise.resolve()
 ): Promise<ScenarioResult> {
   const result: ScenarioResult = {
     scenario,
@@ -171,23 +210,33 @@ export async function executeScenario(
       preview,
       config,
       canary,
-      model
+      model,
+      record
     );
   } catch (error) {
-    result.error = message(error);
+    result.diagnostic = diagnose(error, config);
+    result.error = result.diagnostic.message;
   } finally {
     if (result.sessionId) {
       try {
+        await record({ phase: "evidence", scenarioId: scenario.id });
         result.artifacts = await canary.end(
           result.sessionId,
           join(root, scenario.id)
         );
       } catch (error) {
         result.outcome = "blocked";
-        result.error = `${result.error ?? ""} Evidence finalization: ${message(error)}`;
+        result.diagnostic = diagnose(error, config);
+        result.error = `${result.error ?? ""} Evidence finalization: ${result.diagnostic.message}`;
         await canary.abort(result.sessionId);
       }
     }
   }
+  await record({
+    phase: "execution",
+    scenarioId: scenario.id,
+    outcome: result.outcome,
+    diagnostic: result.diagnostic,
+  });
   return result;
 }

@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import net from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { doctor } from "../src/doctor.js";
 import { runQa } from "../src/runner.js";
 import { fixture, PR_URL, SHA } from "./fixture.js";
 
@@ -10,6 +11,20 @@ afterEach(async () => {
   await Promise.all(closers.splice(0).map((close) => close()));
 });
 describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
+  it("runs the installation doctor through actual Chromium, REST/model and SHA probes without publishing", async () => {
+    const f = await fixture();
+    closers.push(f.close);
+    const result = await doctor(f.config, {
+      prUrl: PR_URL,
+      previewUrl: f.baseUrl,
+    });
+    expect(result.healthy, JSON.stringify(result.checks)).toBe(true);
+    expect(result.checks.filter((check) => check.status !== "passed")).toEqual(
+      []
+    );
+    expect(f.outgoing).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(f.config.GITHUB_TOKEN);
+  }, 180_000);
   it("plays the form test, records video/trace/screenshots and publishes passed results", async () => {
     const f = await fixture();
     closers.push(f.close);

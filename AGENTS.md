@@ -116,7 +116,7 @@ L'application à tester et l'endpoint IA sont des services externes, déjà acce
 - Si Docker manque, suivre le dépôt officiel adapté au système :
   [Ubuntu](https://docs.docker.com/engine/install/ubuntu/) ou
   [Debian](https://docs.docker.com/engine/install/debian/). Installer également le
-  plugin Compose. Ne pas remplacer une installation Docker existante utilisée par
+  plugin Compose 2.20 ou plus récent. Ne pas remplacer une installation Docker existante utilisée par
   d'autres applications, ni utiliser le script de commodité destiné aux tests.
 - Conserver les développements et PR dans `Noext/canary`. Ne jamais pousser vers
   `0xnyn/canary`, ouvrir une PR upstream, forcer un push ou modifier d'autres dépôts.
@@ -153,8 +153,7 @@ openssl rand -hex 32
 Utiliser la valeur aléatoire comme `QA_API_TOKEN`. Ne jamais committer `.env`,
 afficher les secrets dans les logs/rapports, envoyer les tokens au modèle ou au
 navigateur, ni supposer que la connexion GitHub de ChatGPT fournit un token au VPS.
-Le placeholder de `.env.example` doit être remplacé, même s'il satisfait la longueur
-minimale. Modifier les valeurs à partir des secrets et paramètres fournis :
+La valeur `QA_API_TOKEN` vide de `.env.example` doit être renseignée. Modifier les valeurs à partir des secrets et paramètres fournis :
 
 | Variable | Configuration de production |
 | --- | --- |
@@ -162,31 +161,27 @@ minimale. Modifier les valeurs à partir des secrets et paramètres fournis :
 | `GITHUB_ALLOWED_REPOS` | Dépôts à tester, séparés par des virgules, au format `owner/repo` ; obligatoire pour le serveur |
 | `OPENAI_BASE_URL` | Endpoint compatible OpenAI, avec `/v1` si nécessaire ; le client ajoute `/chat/completions` |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Clé du fournisseur et identifiant exact du modèle ; ne pas inventer ces valeurs |
+| `OPENAI_TOKEN_PARAMETER` | `max_tokens` par défaut ; `max_completion_tokens` pour les fournisseurs qui l’exigent |
+| `OPENAI_TEMPERATURE` | Vide par défaut : omise de la requête ; renseigner seulement si le modèle l’accepte |
+| `QA_PLAN_MAX_TOKENS`, `QA_ACTION_MAX_TOKENS` | Budgets de sortie : 8000 et 4096 par défaut ; augmenter si le JSON est tronqué |
 | `OPENAI_JSON_MODE` | `true` par défaut ; `false` seulement si l'endpoint ne prend pas en charge `response_format: json_object` |
 | `PREVIEW_ALLOWED_HOSTS` | Hôtes exacts, ports inclus si nécessaires ; aucun joker |
 | `PREVIEW_ENVIRONMENT` | Environnement des déploiements GitHub à résoudre, `preview` par défaut |
 | `PREVIEW_URL_TEMPLATE` | Facultatif, avec `{sha}` et/ou `{pr}` ; laisser vide pour résoudre les déploiements GitHub |
 | `PREVIEW_SHA_HEADER`, `PREVIEW_SHA_PATH` | Header `x-commit-sha` par défaut, ou chemin JSON renvoyant `{"sha":"<SHA complet>"}` |
 | `QA_API_TOKEN` | Secret aléatoire d'au moins 24 caractères, utilisé comme bearer sur l'API |
-| `QA_PORT` | Garder `8787` avec le Compose fourni ; sinon adapter également ports et healthcheck |
+| `QA_PORT` | `8787` par défaut ; Compose adapte automatiquement le port local et le healthcheck |
 | `ARTIFACT_BASE_URL` | Origine publique HTTPS du service si les commentaires GitHub doivent contenir des liens de rapport |
 | `ARTIFACT_PUBLIC` | `false` par défaut ; `true` rend les liens UUID de rapports/vidéos accessibles sans bearer |
 
 Compose impose `QA_DATA_DIR=/data` et `QA_HOST=0.0.0.0` **dans le conteneur**,
-mais publie uniquement `127.0.0.1:8787` sur le VPS. Garder le transport natif du
+mais publie uniquement `127.0.0.1:${QA_PORT:-8787}` sur le VPS. Garder le transport natif du
 daemon ; `CANARY_DAEMON_PORT` et `CANARY_DAEMON_TOKEN` servent aux environnements de
 développement sans sockets Unix et ne doivent pas ouvrir un port public.
 
 `localhost` dans Docker désigne le conteneur. Si l'IA tourne sur le VPS, configurer
-une adresse joignable depuis Docker. Pour utiliser `host.docker.internal` sur Linux,
-ajouter au service `pr-qa` dans un fichier `docker-compose.override.yml` :
-
-```yaml
-services:
-  pr-qa:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-```
+une adresse joignable depuis Docker. Le Compose fourni définit déjà
+`host.docker.internal:host-gateway` sur Linux.
 
 L'endpoint de l'hôte doit écouter sur une interface accessible au conteneur ; le
 mapping DNS ne rend pas un service lié uniquement à `127.0.0.1` accessible.
@@ -195,13 +190,18 @@ Vérifier aussi la résolution DNS, le réseau et l'accès de Chromium aux previ
 ### 3. Construire et démarrer
 
 ```bash
-docker compose config --quiet
-docker compose build pr-qa
-docker compose up -d pr-qa
-docker compose ps
-docker compose logs --tail=100 pr-qa
-curl --fail --silent --show-error http://127.0.0.1:8787/health
+./scripts/pr-qa up
+./scripts/pr-qa status
+./scripts/pr-qa doctor --pr https://github.com/OWNER/REPO/pull/123 --preview https://preview.example.com
 ```
+
+Le wrapper valide Compose et la configuration avant le démarrage, attend le
+healthcheck, puis lance `doctor` : stockage, moteur Chromium réel et création des
+preuves, accès GitHub et endpoint IA. Le test de preview reste optionnel tant
+qu'aucune PR/URL réelle n'est fournie. Une erreur de diagnostic arrête la commande
+avec un code non nul et une action corrective. Lire
+[`docs/pr-qa-operations.md`](docs/pr-qa-operations.md) pour le dépannage.
+
 
 `config --quiet` valide la configuration sans imprimer l'environnement contenant
 les secrets. Le Dockerfile installe les dépendances du monorepo avec le lockfile,
@@ -249,14 +249,14 @@ curl --fail --silent --show-error \
   "http://127.0.0.1:8787/runs/$QA_RUN_ID" \
   -H "Authorization: Bearer $QA_REQUEST_TOKEN"
 curl --fail --silent --show-error \
-  "http://127.0.0.1:8787/artifacts/$QA_RUN_ID/results.json" \
+  "http://127.0.0.1:8787/artifacts/$QA_RUN_ID/result.json" \
   -H "Authorization: Bearer $QA_REQUEST_TOKEN"
 unset QA_REQUEST_TOKEN
 ```
 
 Répéter la lecture du statut jusqu'à un état terminal. `completed` signifie que le
 runner a terminé, **pas que les assertions ont réussi** : inspecter `outcome`, les
-scénarios, les fichiers ignorés, `error` et `publication` dans `results.json`.
+scénarios, les fichiers ignorés, `error` et `publication` dans `result.json`.
 Vérifier les vidéos WebM non vides, captures, traces, HAR et rapports, ainsi que le
 commentaire et le statut du commit réellement publiés sur la PR. Les artefacts
 peuvent ne pas encore exister pendant la découverte ; ce n'est pas une preuve de
@@ -287,11 +287,13 @@ configuration. Les artefacts peuvent contenir des données sensibles de test.
 | --- | --- |
 | État de service et taille de file | `GET /health` : `ok`, `busy`, `queued` |
 | État d'un run connu | `GET /runs/:id` authentifié : queued/running/completed/failed/interrupted et outcome final |
-| Diagnostic en cours | `docker compose logs --follow --tail=100 pr-qa` ; logs du service et début des scénarios |
-| Progression des résultats | `results.json` et `report.html` sauvegardés après planification et chaque scénario terminé ; pas un flux par action |
+| Diagnostic en cours | `./scripts/pr-qa logs` ; événements structurés avec run ID, phase, action et diagnostic |
+| Progression par action | `GET /runs/:id` inclut `progress` ; `progress.json` et `events.jsonl` persistent les phases/actions ; consultation par polling |
+| Résultats | `result.json` et `report.html` sauvegardés après planification et chaque scénario terminé |
+| Résumé de support | `./scripts/pr-qa diagnose RUN_ID` : résumé sans secrets ni valeurs saisies |
 | Preuves et consultation des sessions | Rapports HTML et viewer existant `apps/canary-ui` pour vidéos, console, réseau et étapes enregistrées |
 | Dashboard PR QA centralisé | Non implémenté : pas de page de liste des runs, ni de `GET /runs` de listing |
-| Observabilité live par action | Non implémentée : pas de SSE/WebSocket, streaming du navigateur, métriques Prometheus ou suivi des tokens/coûts IA |
+| Flux poussé et métriques | Pas de SSE/WebSocket, streaming du navigateur, métriques Prometheus ou suivi des tokens/coûts IA |
 
 Le viewer natif se lance avec `canary ui` dans un checkout où `@usecanary/ui` est
 construit. Il n'est **pas construit/copié dans `Dockerfile.pr-qa`**, ni servi par le
@@ -328,9 +330,8 @@ de poursuivre. Pour mettre à jour un checkout propre sur la branche de déploie
 
 ```bash
 git pull --ff-only origin feat/autonomous-pr-qa
-docker compose build pr-qa
-docker compose up -d pr-qa
-curl --fail --silent --show-error http://127.0.0.1:8787/health
+./scripts/pr-qa up
+./scripts/pr-qa status
 ```
 
 Si la nouvelle révision échoue, reconstruire l'ancienne révision sans réécrire
@@ -338,8 +339,7 @@ l'historique distant :
 
 ```bash
 git switch --detach "$QA_PREVIOUS_REV"
-docker compose build pr-qa
-docker compose up -d pr-qa
+./scripts/pr-qa up
 ```
 
 Contrôler à nouveau la santé et un vrai run. Au redémarrage, les jobs précédemment
@@ -352,7 +352,8 @@ l'utilisateur `node` ; ne pas restaurer sur un run actif.
 ### 7. État de validation à respecter
 
 Les tests locaux et E2E Chromium sont décrits dans
-[`docs/pr-qa-validation.md`](docs/pr-qa-validation.md). À cette livraison, ils
+[`docs/pr-qa-validation.md`](docs/pr-qa-validation.md) et
+[`docs/pr-qa-hardening.md`](docs/pr-qa-hardening.md). À cette livraison, ils
 utilisent des API GitHub/IA de fixture. Le build/exécution Docker sur VPS et un run
 avec un vrai endpoint IA et une vraie preview n'ont pas encore été validés dans
 l'environnement de développement. Ces étapes doivent être réellement exécutées

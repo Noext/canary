@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { Config } from "./config.js";
+import { QaError } from "./diagnostics.js";
 import { fetchText } from "./http.js";
 
 export class Model {
@@ -11,7 +12,7 @@ export class Model {
     system: string,
     payload: unknown,
     schema: z.ZodType<T>,
-    maxTokens = 8000
+    maxTokens = this.config.QA_PLAN_MAX_TOKENS
   ): Promise<T> {
     const messages = [
       { role: "system", content: system },
@@ -31,8 +32,10 @@ export class Model {
           body: JSON.stringify({
             model: this.config.OPENAI_MODEL,
             messages,
-            temperature: 0,
-            max_tokens: maxTokens,
+            ...(this.config.OPENAI_TEMPERATURE === ""
+              ? {}
+              : { temperature: this.config.OPENAI_TEMPERATURE }),
+            [this.config.OPENAI_TOKEN_PARAMETER]: maxTokens,
             ...(this.config.OPENAI_JSON_MODE === "true"
               ? { response_format: { type: "json_object" } }
               : {}),
@@ -46,7 +49,11 @@ export class Model {
       const choice = response.choices?.[0];
       const content = choice?.message?.content;
       if (!content || choice?.finish_reason === "length") {
-        throw new Error("AI returned an empty or truncated response");
+        throw new QaError(
+          "MODEL_OUTPUT_INCOMPLETE",
+          "AI returned an empty or truncated response",
+          "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_ACTION_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint."
+        );
       }
       try {
         return schema.parse(JSON.parse(content));
@@ -59,7 +66,11 @@ export class Model {
         });
       }
     }
-    throw new Error("AI returned invalid structured output twice");
+    throw new QaError(
+      "MODEL_JSON_INVALID",
+      "AI returned invalid structured output twice",
+      "Use a model that can follow the documented JSON schema. Check OPENAI_JSON_MODE and inspect the original run plan; never weaken assertions to obtain a pass."
+    );
   }
 }
 

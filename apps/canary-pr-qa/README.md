@@ -2,7 +2,7 @@
 
 This app takes a GitHub PR URL, reads its description and changed files at immutable commits, plans functional scenarios with an OpenAI-compatible model, then executes them in **the existing Canary Chromium engine**. Each scenario gets its own headless session, video, trace, HAR, console log, step screenshots and Canary report. The runner evaluates assertions independently of the model and publishes a PR comment and commit status.
 
-## Quick start (Node 22+, Linux/macOS)
+## Quick start (Node 22.12+, Linux/macOS)
 
 ```bash
 git clone https://github.com/Noext/canary.git
@@ -18,6 +18,7 @@ node apps/canary/dist/cli.js install
 corepack pnpm --filter @usecanary/daemon exec playwright install-deps chromium
 cp .env.example .env
 # Edit .env: GitHub PAT, model endpoint/name, preview hosts and API token.
+node --env-file=.env apps/canary-pr-qa/dist/cli.js doctor
 node --env-file=.env apps/canary-pr-qa/dist/cli.js run https://github.com/OWNER/REPO/pull/123
 ```
 
@@ -42,11 +43,13 @@ AI agents deploying to a VPS must follow the [production runbook in the root AGE
 ```bash
 cp .env.example .env
 # Set a reachable model URL, allowed repos/preview hosts, PAT and random QA_API_TOKEN.
-docker compose up -d --build
-curl http://127.0.0.1:8787/health
+chmod 600 .env
+./scripts/pr-qa up
+./scripts/pr-qa status
+./scripts/pr-qa doctor --pr https://github.com/OWNER/REPO/pull/123 --preview https://preview.example.com
 ```
 
-Chromium and Canary run together in one container; no Kubernetes or external browser server. The service listens on localhost on the VPS. Put a TLS reverse proxy in front of it if remote access is needed. For a model on the VPS itself, use a Docker-reachable address; `localhost` inside the container is the container. Linux Docker does not automatically define `host.docker.internal`; use an IP reachable from the container or add `extra_hosts: ["host.docker.internal:host-gateway"]` to compose. Preview hosts must also be reachable from the container.
+Requires Docker Engine and Compose 2.20+. Chromium and Canary run together in one container; no Kubernetes or external browser server. The service listens on localhost on the VPS. Put a TLS reverse proxy in front of it if remote access is needed. For a model on the VPS itself, use a Docker-reachable address; `localhost` inside the container is the container. The supplied Compose file maps `host.docker.internal` to the Linux host gateway. The host model service must listen on an interface reachable from Docker; a loopback-only listener remains unreachable. Preview hosts must also be reachable from the container.
 
 ```bash
 curl -X POST http://127.0.0.1:8787/runs \
@@ -63,7 +66,20 @@ Set `ARTIFACT_BASE_URL=https://qa.example.com` to include report links in GitHub
 
 ### Dashboard and live observability: current scope
 
-The existing Canary UI is a **recorded session viewer**, with videos, console logs, network requests and steps. It is not included in the PR QA Docker image or Compose service. The PR QA service currently exposes per-run status polling (`GET /runs/:id`), queue/busy health information (`GET /health`), structured service logs (`docker compose logs -f pr-qa`) and reports saved after planning and each completed scenario. It has no central runs dashboard/listing endpoint, live per-action event stream, browser video streaming, Prometheus metrics or model token/cost tracking. A Docker deployment of the current image does not expose a dashboard URL.
+The existing Canary UI is a **recorded session viewer**, with videos, console logs, network requests and steps. It is not included in the PR QA Docker image or Compose service. The PR QA service exposes per-run status polling (`GET /runs/:id`) including the current phase/action, queue/busy health (`GET /health`), structured logs (`./scripts/pr-qa logs`), a persisted action timeline (`events.jsonl` / `progress.json`) and reports saved after planning and each completed scenario. It has no central runs dashboard/listing endpoint, SSE/WebSocket push stream, browser video streaming, Prometheus metrics or model token/cost tracking. A Docker deployment of the current image does not expose a dashboard URL.
+
+## Diagnostics and troubleshooting
+
+```bash
+./scripts/pr-qa doctor                       # real browser, storage, GitHub and model
+./scripts/pr-qa diagnose RUN_ID              # redacted support summary
+./scripts/pr-qa logs                         # run/phase/action IDs and corrective hints
+./scripts/pr-qa doctor --offline             # explicitly skip remote services
+```
+
+`doctor` exits 2 on a failed check; skipped checks remain explicit. `diagnose` excludes raw DOM, typed values, HAR and secrets. Full evidence may contain test data; share the support summary first. See the [operations guide](../../docs/pr-qa-operations.md) for error codes, daemon logs and recovery.
+
+The aggregate QA file is **`result.json`**; Canary's original per-session file remains **`results.json`**. Configure `OPENAI_TOKEN_PARAMETER=max_completion_tokens` if your provider requires it. Temperature is omitted unless `OPENAI_TEMPERATURE` is set. `QA_PLAN_MAX_TOKENS`, `QA_ACTION_MAX_TOKENS` and `QA_DOCTOR_MAX_TOKENS` control output budgets; a truncated model response is a diagnostic failure.
 
 ## Workflow and architecture
 
@@ -75,6 +91,8 @@ The existing Canary UI is a **recorded session viewer**, with videos, console lo
 | `canary.ts` | Adapter to the fork's built Canary CLI; deterministic scripts from typed actions; native session artifacts |
 | `runner.ts` | Discovery, scenario execution, immutable assertions, final SHA recheck and publication |
 | `server.ts` | Authenticated job submission, persistent status, queue and artifact serving |
+| `doctor.ts` + `diagnostics.ts` | Startup checks, error codes, secret redaction and support summaries |
+| `progress.ts` | Persisted phase/action timeline and structured logs |
 | `report.ts` | JSON, Markdown and HTML run report linking each native Canary session |
 
 The planner sees the PR diff, relevant head/base files, README/package conventions and an actual initial page snapshot. Plans cite changed files and explicitly account for files that are not browser-testable. Large/incomplete diffs fail closed rather than produce a silent partial pass. Only an original plan's assertions can be executed; their expected values cannot be changed during execution. The executor selects one typed action per turn (observe, navigate, click, fill, press, select, check, assert, finish or blocked). It does not generate arbitrary executable JavaScript. Actions are compiled to sandboxed Canary scripts, recorded as steps, and observations from the actual browser are returned to the model. A mismatched assertion is terminal. Failed selectors can be repaired from new observations, within action/time/error budgets.
@@ -91,9 +109,12 @@ corepack pnpm --filter @usecanary/pr-qa... build
 node apps/canary/dist/cli.js install
 corepack pnpm --filter @usecanary/pr-qa test:e2e
 corepack pnpm check
+# Requires Docker; these tests use fresh volumes and real Chromium in the image:
+docker build -f Dockerfile.pr-qa -t canary-pr-qa:test .
+CANARY_DOCKER_IMAGE=canary-pr-qa:test corepack pnpm --filter @usecanary/pr-qa test:container
 ```
 
-The E2E test uses a local GitHub REST fixture and scripted OpenAI-compatible responses **with real Canary Chromium sessions**. It verifies actual form interaction, positive and failing assertions, non-empty WebM/trace/screenshot artifacts, and the outgoing GitHub comment/status requests. It does not claim to evaluate a real LLM's reasoning quality or live GitHub authorization. CI runs it separately after installing the real runtime. Runtime configuration can switch to your real API without code changes.
+The E2E test uses a local GitHub REST fixture and scripted OpenAI-compatible responses **with real Canary Chromium sessions**. It verifies actual form interaction, positive and failing assertions, non-empty WebM/trace/screenshot artifacts, and the outgoing GitHub comment/status requests. It does not claim to evaluate a real LLM's reasoning quality or live GitHub authorization. CI runs it separately after installing the real runtime. CI also builds the Docker image and runs Compose tests with fresh volumes, doctor, positive/negative browser scenarios and restart persistence. See [verification evidence and limits](../../docs/pr-qa-hardening.md). Runtime configuration can switch to your real API without code changes.
 
 If Unix sockets are unavailable in your development environment, set `CANARY_DAEMON_PORT=18473` and a `CANARY_DAEMON_TOKEN` of at least 32 random characters for both the CLI and its spawned daemon. This opt-in transport binds only to `127.0.0.1` and authenticates every request; it never publishes the daemon port in Docker Compose. Normal VPS operation keeps Canary's native socket transport. Stop the daemon before switching transports. The sandbox bundle build uses `node --import tsx` so it does not require tsx's extra IPC socket.
 

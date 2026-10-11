@@ -3,6 +3,7 @@ import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { z } from "zod";
 import type { Config } from "./config.js";
+import { QaError } from "./diagnostics.js";
 import type { Action, Assertion, Locator } from "./schema.js";
 
 const MARKER = "CANARY_PR_QA_OBSERVATION:";
@@ -189,7 +190,11 @@ export class Canary {
         clearTimeout(timer);
         if (exceeded) {
           reject(
-            new Error("Canary command timed out or exceeded output budget")
+            new QaError(
+              "CANARY_COMMAND_LIMIT",
+              "Canary command timed out or exceeded output budget",
+              "Run doctor and inspect ~/.canary/daemon.log. Check Chromium resources and timeout settings before increasing limits."
+            )
           );
         } else {
           resolve({ code: code ?? 1, stdout, stderr });
@@ -207,8 +212,10 @@ export class Canary {
       name.slice(0, 180),
     ]);
     if (result.code !== 0) {
-      throw new Error(
-        `Canary session start failed: ${result.stderr.slice(-2000)}`
+      throw new QaError(
+        "CANARY_START_FAILED",
+        `Canary session start failed: ${result.stderr.slice(-2000)}`,
+        "Run doctor, inspect ~/.canary/daemon.log and verify the installed Chromium/runtime, its system libraries and session volume permissions. Rebuild the supplied image for missing dependencies."
       );
     }
     return z.object({ sessionId: z.string() }).parse(JSON.parse(result.stdout))
@@ -260,8 +267,10 @@ export class Canary {
       (artifact) => artifact.kind === "video" && artifact.bytes > 0
     );
     if (!videos.length) {
-      throw new Error(
-        "Canary produced no non-empty video; evidence is incomplete"
+      throw new QaError(
+        "EVIDENCE_VIDEO_MISSING",
+        "Canary produced no non-empty video; evidence is incomplete",
+        "Check daemon.log, free space, ffmpeg/browser installation and session finalization. This run cannot be passed without a recorded video."
       );
     }
     if (
