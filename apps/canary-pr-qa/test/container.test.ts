@@ -39,6 +39,9 @@ async function container(broken = false) {
   const inside = `http://host.docker.internal:${new URL(f.baseUrl).port}`;
   const values = {
     ...f.config,
+    QA_DB_PASSWORD: "container-fixture-db-password-012345",
+    QA_BROWSER_SERVICE_TOKEN: "container-fixture-browser-token-0123456789",
+    QA_IMAGE: image,
     GITHUB_API_URL: inside,
     OPENAI_BASE_URL: `${inside}/v1`,
     PREVIEW_ALLOWED_HOSTS: new URL(inside).host,

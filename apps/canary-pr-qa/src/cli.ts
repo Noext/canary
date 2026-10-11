@@ -1,9 +1,14 @@
 import { parseArgs } from "node:util";
-import { loadConfig } from "./config.js";
+import { startBrowserService } from "./browser-service.js";
+import { type Config, loadConfig } from "./config.js";
 import { diagnose } from "./diagnostics.js";
 import { doctor, supportSummary } from "./doctor.js";
+import { startEgressProxy } from "./egress-proxy.js";
+import { startProductionServer } from "./production-server.js";
 import { runQa } from "./runner.js";
 import { startServer } from "./server.js";
+import { initializeTracing } from "./telemetry.js";
+import { startWorker } from "./worker.js";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -26,6 +31,11 @@ async function main() {
     return;
   }
   const config = loadConfig();
+  const stopTracing = initializeTracing();
+  process.once("beforeExit", () => void stopTracing?.());
+  if (await serviceCommand(command, config)) {
+    return;
+  }
   if (command === "doctor" && positionals.length === 1) {
     const result = await doctor(config, {
       offline: values.offline,
@@ -53,7 +63,9 @@ async function main() {
     return;
   }
   if (command === "serve" && positionals.length === 1) {
-    const server = await startServer(config);
+    const server = config.DATABASE_URL
+      ? await startProductionServer(config)
+      : await startServer(config);
     let stopping = false;
     const shutdown = () => {
       if (stopping) {
@@ -98,3 +110,19 @@ main().catch((error) => {
   );
   process.exitCode = 2;
 });
+
+async function serviceCommand(command: string | undefined, config: Config) {
+  if (command === "egress-proxy") {
+    await startEgressProxy(config);
+    return true;
+  }
+  if (command === "worker") {
+    await startWorker(config);
+    return true;
+  }
+  if (command === "browser-service") {
+    await startBrowserService(config);
+    return true;
+  }
+  return false;
+}

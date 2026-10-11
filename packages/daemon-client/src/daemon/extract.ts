@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
   DAEMON_RUNTIME_DEPENDENCIES,
   EMBEDDED_PACKAGE_JSON,
+  EMBEDDED_RUNTIME_LOCK,
 } from "@usecanary/protocol";
 import { DAEMON_BUNDLE, SANDBOX_CLIENT } from "../assets/embedded.generated.js";
 import {
@@ -29,6 +30,7 @@ export async function ensureDaemonExtracted(): Promise<string> {
     syncTextFile(daemonPath, DAEMON_BUNDLE_TEXT),
     syncTextFile(sandboxPath, SANDBOX_CLIENT_TEXT),
     syncTextFile(pkgPath, PACKAGE_JSON_TEXT),
+    syncTextFile(`${dir}/package-lock.json`, EMBEDDED_RUNTIME_LOCK),
   ]);
 
   return daemonPath;

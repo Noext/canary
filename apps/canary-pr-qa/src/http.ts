@@ -1,4 +1,5 @@
 import { diagnose, QaError } from "./diagnostics.js";
+import { requestSignal } from "./run-scope.js";
 
 export async function fetchText(
   url: string | URL,
@@ -8,7 +9,7 @@ export async function fetchText(
 ): Promise<{ response: Response; text: string }> {
   const response = await fetch(url, {
     ...init,
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: requestSignal(timeoutMs),
     redirect: "error",
   }).catch((error: unknown) => {
     const diagnostic = diagnose(error);

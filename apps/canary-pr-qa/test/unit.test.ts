@@ -243,7 +243,8 @@ describe("runner false-green regressions", () => {
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    expect(result.outcome).toBe("skipped");
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("CRITICAL_COVERAGE_MISSING");
     expect(f.outgoing.at(-1)?.payload.state).toBe("error");
     expect(
       (await stat(join(f.dataDir, result.id, "report.html"))).size

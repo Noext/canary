@@ -100,9 +100,28 @@ Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the 
 
 Ces instructions concernent le système de QA des PR de **ce fork**. Lire également
 [`apps/canary-pr-qa/README.md`](apps/canary-pr-qa/README.md), `.env.example`,
-`Dockerfile.pr-qa` et `docker-compose.yml` avant d'agir. Le déploiement comporte un
-seul service Docker : API PR QA, moteur Canary et Chromium dans le même conteneur.
-L'application à tester et l'endpoint IA sont des services externes, déjà accessibles.
+`Dockerfile.pr-qa` et `docker-compose.yml` avant d'agir. Le déploiement utilise cinq services : API/dashboard, worker, moteur Canary/Chromium
+isolé, proxy egress et PostgreSQL. Le README de l'application décrit le contrat
+actuel ; suivre ce document lorsque les sections historiques ci-dessous divergent.
+
+### Mise à jour des instructions de production
+
+- Configurer trois secrets distincts : `QA_API_TOKEN`, `QA_DB_PASSWORD` (hex),
+  `QA_BROWSER_SERVICE_TOKEN`. Le navigateur ne reçoit aucune clé IA/GitHub.
+- Démarrer tout le Compose avec `./scripts/pr-qa up`, conserver ses trois volumes.
+- Le dashboard est réellement servi à `/` par le serveur SQL ; SSE à
+  `/runs/:id/events`. Les vidéos sont finalisées, pas diffusées en direct.
+- Vérifier le SHA live de toutes les previews, y compris les déploiements GitHub.
+- Placer clés App, identités et fixtures dans `config/`, monté read-only. Consulter
+  les exemples et les variables du README ; ne jamais committer les secrets.
+- API et worker utilisent la file PostgreSQL. Les leases expirées sont interrompues,
+  jamais rejouées. Les fichiers legacy sont importés sans relancer leurs scénarios.
+- Les tests locaux PGlite ne valident pas la concurrence native PostgreSQL ;
+  exécuter la suite native avec `QA_TEST_DATABASE_URL` et la suite Compose avant
+  d'affirmer qu'une installation Docker est validée.
+- L'accès GitHub App, l'endpoint IA réel, les secrets, l'IdP et la disponibilité des
+  previews restent à configurer par l'opérateur. Lire le journal de validation.
+- Ne pas désactiver les contrôles de contrat/couverture/provenance pour obtenir un vert.
 
 ### 1. Identifier l'hôte et la révision
 
@@ -140,221 +159,32 @@ ses fichiers `.env` et ne pas écraser ses modifications. Utiliser un projet Com
 distinct sur un VPS qui héberge déjà d'autres services. Lancer toutes les commandes
 Compose depuis ce même répertoire, avec le même nom de projet si `-p` est utilisé.
 
-### 2. Configurer les secrets et les services accessibles
+### 2. Installer et diagnostiquer
 
-Créer `.env` seulement s'il n'existe pas, puis restreindre ses permissions :
-
-```bash
-test -f .env || cp .env.example .env
-chmod 600 .env
-openssl rand -hex 32
-```
-
-Utiliser la valeur aléatoire comme `QA_API_TOKEN`. Ne jamais committer `.env`,
-afficher les secrets dans les logs/rapports, envoyer les tokens au modèle ou au
-navigateur, ni supposer que la connexion GitHub de ChatGPT fournit un token au VPS.
-La valeur `QA_API_TOKEN` vide de `.env.example` doit être renseignée. Modifier les valeurs à partir des secrets et paramètres fournis :
-
-| Variable | Configuration de production |
-| --- | --- |
-| `GITHUB_TOKEN` | PAT finement limité ou token d'installation : Contents, Metadata et Deployments en lecture ; Pull requests et Commit statuses en écriture |
-| `GITHUB_ALLOWED_REPOS` | Dépôts à tester, séparés par des virgules, au format `owner/repo` ; obligatoire pour le serveur |
-| `OPENAI_BASE_URL` | Endpoint compatible OpenAI, avec `/v1` si nécessaire ; le client ajoute `/chat/completions` |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | Clé du fournisseur et identifiant exact du modèle ; ne pas inventer ces valeurs |
-| `OPENAI_TOKEN_PARAMETER` | `max_tokens` par défaut ; `max_completion_tokens` pour les fournisseurs qui l’exigent |
-| `OPENAI_TEMPERATURE` | Vide par défaut : omise de la requête ; renseigner seulement si le modèle l’accepte |
-| `QA_PLAN_MAX_TOKENS`, `QA_ACTION_MAX_TOKENS` | Budgets de sortie : 8000 et 4096 par défaut ; augmenter si le JSON est tronqué |
-| `OPENAI_JSON_MODE` | `true` par défaut ; `false` seulement si l'endpoint ne prend pas en charge `response_format: json_object` |
-| `PREVIEW_ALLOWED_HOSTS` | Hôtes exacts, ports inclus si nécessaires ; aucun joker |
-| `PREVIEW_ENVIRONMENT` | Environnement des déploiements GitHub à résoudre, `preview` par défaut |
-| `PREVIEW_URL_TEMPLATE` | Facultatif, avec `{sha}` et/ou `{pr}` ; laisser vide pour résoudre les déploiements GitHub |
-| `PREVIEW_SHA_HEADER`, `PREVIEW_SHA_PATH` | Header `x-commit-sha` par défaut, ou chemin JSON renvoyant `{"sha":"<SHA complet>"}` |
-| `QA_API_TOKEN` | Secret aléatoire d'au moins 24 caractères, utilisé comme bearer sur l'API |
-| `QA_PORT` | `8787` par défaut ; Compose adapte automatiquement le port local et le healthcheck |
-| `ARTIFACT_BASE_URL` | Origine publique HTTPS du service si les commentaires GitHub doivent contenir des liens de rapport |
-| `ARTIFACT_PUBLIC` | `false` par défaut ; `true` rend les liens UUID de rapports/vidéos accessibles sans bearer |
-
-Compose impose `QA_DATA_DIR=/data` et `QA_HOST=0.0.0.0` **dans le conteneur**,
-mais publie uniquement `127.0.0.1:${QA_PORT:-8787}` sur le VPS. Garder le transport natif du
-daemon ; `CANARY_DAEMON_PORT` et `CANARY_DAEMON_TOKEN` servent aux environnements de
-développement sans sockets Unix et ne doivent pas ouvrir un port public.
-
-`localhost` dans Docker désigne le conteneur. Si l'IA tourne sur le VPS, configurer
-une adresse joignable depuis Docker. Le Compose fourni définit déjà
-`host.docker.internal:host-gateway` sur Linux.
-
-L'endpoint de l'hôte doit écouter sur une interface accessible au conteneur ; le
-mapping DNS ne rend pas un service lié uniquement à `127.0.0.1` accessible.
-Vérifier aussi la résolution DNS, le réseau et l'accès de Chromium aux previews.
-
-### 3. Construire et démarrer
+Suivre intégralement [`apps/canary-pr-qa/README.md`](apps/canary-pr-qa/README.md),
+[`docs/pr-qa-operations.md`](docs/pr-qa-operations.md) et `.env.example`.
+Les commandes de référence :
 
 ```bash
 ./scripts/pr-qa up
 ./scripts/pr-qa status
 ./scripts/pr-qa doctor --pr https://github.com/OWNER/REPO/pull/123 --preview https://preview.example.com
+./scripts/pr-qa logs
+./scripts/pr-qa diagnose RUN_ID
 ```
 
-Le wrapper valide Compose et la configuration avant le démarrage, attend le
-healthcheck, puis lance `doctor` : stockage, moteur Chromium réel et création des
-preuves, accès GitHub et endpoint IA. Le test de preview reste optionnel tant
-qu'aucune PR/URL réelle n'est fournie. Une erreur de diagnostic arrête la commande
-avec un code non nul et une action corrective. Lire
-[`docs/pr-qa-operations.md`](docs/pr-qa-operations.md) pour le dépannage.
+Le doctor teste l'accès aux dépendances et un navigateur réel ; il ne prouve pas
+que toutes les fonctionnalités de la PR ont été testées. Inspecter le contrat,
+les omissions, l'outcome, les preuves et la publication réelle sur GitHub.
+Remettre la révision déployée, les services sains, la PR/son SHA, le run ID et les
+liens vérifiés. En cas de panne, conserver les journaux et volumes, masquer les
+secrets ; ne pas lancer de purge Docker globale ni `down -v`.
 
+### 3. Garanties et limites à respecter
 
-`config --quiet` valide la configuration sans imprimer l'environnement contenant
-les secrets. Le Dockerfile installe les dépendances du monorepo avec le lockfile,
-construit le CLI Canary et l'app PR QA, puis installe le runtime Chromium ; ne pas
-installer Node/pnpm sur l'hôte pour contourner ce workflow. Le service est exécuté
-sous l'utilisateur `node`, avec `init`, redémarrage automatique et `shm_size: 1gb`.
-
-Attendre un conteneur sain et une réponse `{ "ok": true, ... }`. Le healthcheck
-vérifie que l'API répond ; il ne vérifie ni les identifiants IA/GitHub, ni une preview,
-ni un scénario Chromium. Si le build ou le démarrage échoue, garder les erreurs
-utiles en masquant les secrets et ne pas déclarer la production validée.
-
-### 4. Valider un vrai run avant de conclure
-
-Choisir une PR ouverte autorisée et une preview correspondant **exactement** à son
-SHA head complet. Les tests interagissent réellement avec l'application ; utiliser
-des données et comptes de test adaptés.
-
-- Résolution automatique : le dernier statut d'un déploiement GitHub pour ce SHA et
-  l'environnement configuré doit être `success`, avec `environment_url`.
-- URL explicite ou template : la preview doit exposer le SHA dans le header configuré
-  ou via `PREVIEW_SHA_PATH`. Une URL générique de staging sans provenance est refusée.
-- La PR, son SHA/base et la preview sont recontrôlés en fin d'exécution. Ne pas
-  désactiver ces contrôles pour obtenir un résultat vert.
-
-Depuis un shell Bash sur le VPS, saisir le bearer sans l'inscrire dans l'historique
-et envoyer la requête. Remplacer l'URL d'exemple ; `previewUrl` est facultatif si
-GitHub fournit un déploiement correspondant :
-
-```bash
-read -r -s -p 'QA API token: ' QA_REQUEST_TOKEN
-printf '\n'
-curl --fail-with-body --silent --show-error \
-  -X POST http://127.0.0.1:8787/runs \
-  -H "Authorization: Bearer $QA_REQUEST_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"prUrl":"https://github.com/OWNER/REPO/pull/123","previewUrl":"https://preview.example.com","publish":true}'
-```
-
-Conserver l'`id`, le `statusUrl` et le `reportUrl` retournés. Puis :
-
-```bash
-QA_RUN_ID='UUID_RETOURNE'
-curl --fail --silent --show-error \
-  "http://127.0.0.1:8787/runs/$QA_RUN_ID" \
-  -H "Authorization: Bearer $QA_REQUEST_TOKEN"
-curl --fail --silent --show-error \
-  "http://127.0.0.1:8787/artifacts/$QA_RUN_ID/result.json" \
-  -H "Authorization: Bearer $QA_REQUEST_TOKEN"
-unset QA_REQUEST_TOKEN
-```
-
-Répéter la lecture du statut jusqu'à un état terminal. `completed` signifie que le
-runner a terminé, **pas que les assertions ont réussi** : inspecter `outcome`, les
-scénarios, les fichiers ignorés, `error` et `publication` dans `result.json`.
-Vérifier les vidéos WebM non vides, captures, traces, HAR et rapports, ainsi que le
-commentaire et le statut du commit réellement publiés sur la PR. Les artefacts
-peuvent ne pas encore exister pendant la découverte ; ce n'est pas une preuve de
-réussite. Les fichiers ignorés et les résultats `blocked`, `stale`, `skipped` ou
-`failed` doivent être explicitement rapportés.
-
-Un agent doit remettre la révision déployée, l'état du conteneur, l'URL et le SHA de
-la PR testée, le run ID, les résultats et liens GitHub constatés. Distinguer un vrai
-endpoint IA/GitHub/preview d'une fixture et l'analyse YAML d'un déploiement exécuté.
-
-### 5. Accès distant et suivi des runs : capacités actuelles
-
-Pour un accès privé sans proxy, établir un tunnel depuis la machine cliente :
-
-```bash
-ssh -N -L 8787:127.0.0.1:8787 deploy@VPS
-```
-
-Pour des liens HTTPS distants, placer un reverse proxy TLS devant
-`127.0.0.1:8787`, avec le domaine indiqué dans `ARTIFACT_BASE_URL`. Préserver le
-header `Authorization`. Avec `ARTIFACT_PUBLIC=false`, ouvrir un lien GitHub dans
-un navigateur ne fournit pas automatiquement le bearer : prévoir une
-authentification au proxy qui le transmet, ou télécharger les artefacts avec curl.
-Ne pas prétendre que les rapports privés sont accessibles depuis GitHub sans cette
-configuration. Les artefacts peuvent contenir des données sensibles de test.
-
-| Besoin | Disponible actuellement |
-| --- | --- |
-| État de service et taille de file | `GET /health` : `ok`, `busy`, `queued` |
-| État d'un run connu | `GET /runs/:id` authentifié : queued/running/completed/failed/interrupted et outcome final |
-| Diagnostic en cours | `./scripts/pr-qa logs` ; événements structurés avec run ID, phase, action et diagnostic |
-| Progression par action | `GET /runs/:id` inclut `progress` ; `progress.json` et `events.jsonl` persistent les phases/actions ; consultation par polling |
-| Résultats | `result.json` et `report.html` sauvegardés après planification et chaque scénario terminé |
-| Résumé de support | `./scripts/pr-qa diagnose RUN_ID` : résumé sans secrets ni valeurs saisies |
-| Preuves et consultation des sessions | Rapports HTML et viewer existant `apps/canary-ui` pour vidéos, console, réseau et étapes enregistrées |
-| Dashboard PR QA centralisé | Non implémenté : pas de page de liste des runs, ni de `GET /runs` de listing |
-| Flux poussé et métriques | Pas de SSE/WebSocket, streaming du navigateur, métriques Prometheus ou suivi des tokens/coûts IA |
-
-Le viewer natif se lance avec `canary ui` dans un checkout où `@usecanary/ui` est
-construit. Il n'est **pas construit/copié dans `Dockerfile.pr-qa`**, ni servi par le
-Compose actuel. Ne pas annoncer de dashboard Docker accessible à une URL inventée.
-Conserver cette limite tant qu'une intégration UI dédiée n'a pas été implémentée et
-testée. Les vidéos sont des enregistrements, pas un streaming du navigateur.
-
-### 6. Persistance, mises à jour et récupération
-
-Deux volumes nommés doivent être conservés : `qa-data` contient les jobs/rapports et
-`canary-sessions` les sessions originales. Ne pas lancer `docker compose down -v`
-ni purger globalement Docker. Il n'existe pas encore de politique automatique de
-rétention ; surveiller `df -h` et `docker system df`, puis appliquer une politique
-de conservation explicite aux seuls artefacts de ce projet.
-
-Avant une mise à jour, suspendre les nouvelles soumissions et vérifier
-`busy=false`, `queued=0` sur `/health`. Sauvegarder les volumes sans exécution en
-cours ; voici une sauvegarde avec l'image déjà construite :
-
-```bash
-umask 077
-QA_PREVIOUS_REV=$(git rev-parse HEAD)
-QA_BACKUP_DIR="$PWD/../canary-pr-qa-backups"
-mkdir -p "$QA_BACKUP_DIR"
-docker compose stop pr-qa
-docker compose run --rm --no-deps -T --entrypoint sh pr-qa \
-  -c 'tar -czf - -C / data home/node/.canary/sessions' \
-  > "$QA_BACKUP_DIR/canary-pr-qa-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
-```
-
-Conserver la sauvegarde et une copie sécurisée de `.env` en dehors du dépôt ; ne
-pas joindre les secrets à la PR. Contrôler le code retour de la sauvegarde avant
-de poursuivre. Pour mettre à jour un checkout propre sur la branche de déploiement :
-
-```bash
-git pull --ff-only origin feat/autonomous-pr-qa
-./scripts/pr-qa up
-./scripts/pr-qa status
-```
-
-Si la nouvelle révision échoue, reconstruire l'ancienne révision sans réécrire
-l'historique distant :
-
-```bash
-git switch --detach "$QA_PREVIOUS_REV"
-./scripts/pr-qa up
-```
-
-Contrôler à nouveau la santé et un vrai run. Au redémarrage, les jobs précédemment
-queued/running sont marqués `interrupted` ; ils ne sont pas rejoués automatiquement.
-Après inspection de leurs effets, les soumettre explicitement de nouveau si
-nécessaire. Si une restauration des volumes est requise, arrêter le service et
-restaurer la sauvegarde dans les mêmes volumes, en conservant les droits de
-l'utilisateur `node` ; ne pas restaurer sur un run actif.
-
-### 7. État de validation à respecter
-
-Les tests locaux et E2E Chromium sont décrits dans
-[`docs/pr-qa-validation.md`](docs/pr-qa-validation.md) et
-[`docs/pr-qa-hardening.md`](docs/pr-qa-hardening.md). À cette livraison, ils
-utilisent des API GitHub/IA de fixture. Le build/exécution Docker sur VPS et un run
-avec un vrai endpoint IA et une vraie preview n'ont pas encore été validés dans
-l'environnement de développement. Ces étapes doivent être réellement exécutées
-sur le VPS avant d'affirmer « installé et validé en production ».
+La mission nécessite des vérifications concrètes. Ne jamais déclarer comme réussis
+un build Docker, un déploiement VPS, une évaluation IA réelle ou une CI distante
+non exécutés. Lire [`docs/pr-qa-validation.md`](docs/pr-qa-validation.md).
+Conserver la branche du fork et la PR vers son propre `main` ; ne jamais publier
+sur upstream ni modifier un autre repository. Les mises à jour du moteur restent
+compatibles avec l'architecture Canary et nécessitent des tests de non-régression.

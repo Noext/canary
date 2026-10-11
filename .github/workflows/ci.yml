@@ -13,14 +13,25 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        env:
+          POSTGRES_USER: canary
+          POSTGRES_PASSWORD: ci-disposable-password
+          POSTGRES_DB: canary
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U canary" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      QA_TEST_DATABASE_URL: postgresql://canary:ci-disposable-password@127.0.0.1:5432/canary
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 9.15.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
@@ -51,7 +62,7 @@ jobs:
 
       - name: Preserve container diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pr-qa-container-logs
           path: /tmp/canary-container-*/service.log

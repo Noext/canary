@@ -13,8 +13,20 @@ const locator = z.discriminatedUnion("by", [
 const assertionBase = {
   id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
   description: text,
+  target: locator.optional(),
+  afterStep: text.optional(),
+  verification: z.enum(["state", "transition", "persisted"]).default("state"),
 };
 export const AssertionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({ ...assertionBase, kind: z.literal("visual"), expected: text })
+    .strict(),
+  z
+    .object({ ...assertionBase, kind: z.literal("download"), expected: text })
+    .strict(),
+  z
+    .object({ ...assertionBase, kind: z.literal("popup"), expected: text })
+    .strict(),
   z
     .object({ ...assertionBase, kind: z.literal("text"), expected: text })
     .strict(),
@@ -38,41 +50,12 @@ export const AssertionSchema = z.discriminatedUnion("kind", [
   z.object({ ...assertionBase, kind: z.literal("visible") }).strict(),
   z.object({ ...assertionBase, kind: z.literal("hidden") }).strict(),
 ]);
-export const ScenarioSchema = z
-  .object({
-    id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
-    title: text,
-    rationale: text,
-    kind: z.enum(["happy_path", "edge_case", "regression"]),
-    sourceFiles: z.array(text).min(1).max(30),
-    preconditions: z.array(text).max(10),
-    steps: z.array(text).min(1).max(20),
-    assertions: z.array(AssertionSchema).min(1).max(10),
-  })
-  .strict();
-export const PlanSchema = z
-  .object({
-    summary: text,
-    scenarios: z.array(ScenarioSchema).max(20),
-    skipped: z
-      .array(z.object({ sourceFile: text, reason: text }).strict())
-      .max(100),
-  })
-  .strict()
-  .superRefine((plan, ctx) => {
-    const ids = plan.scenarios.map((scenario) => scenario.id);
-    if (new Set(ids).size !== ids.length) {
-      ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
-    }
-    for (const scenario of plan.scenarios) {
-      const assertionIds = scenario.assertions.map((assertion) => assertion.id);
-      if (new Set(assertionIds).size !== assertionIds.length) {
-        ctx.addIssue({ code: "custom", message: "Duplicate assertion ids" });
-      }
-    }
-  });
-const action = z.discriminatedUnion("type", [
+export const ActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("observe") }).strict(),
+  z
+    .object({ type: z.literal("download"), locator, assertionId: text })
+    .strict(),
+  z.object({ type: z.literal("popup"), locator, assertionId: text }).strict(),
   z.object({ type: z.literal("goto"), path: text }).strict(),
   z.object({ type: z.literal("click"), locator }).strict(),
   z
@@ -93,11 +76,154 @@ const action = z.discriminatedUnion("type", [
   z.object({ type: z.literal("finish") }).strict(),
   z.object({ type: z.literal("blocked"), explanation: text }).strict(),
 ]);
-export const DecisionSchema = z.object({ reason: text, action }).strict();
+export const ScenarioSchema = z
+  .object({
+    id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
+    title: text,
+    rationale: text,
+    kind: z.enum(["happy_path", "edge_case", "regression"]),
+    sourceFiles: z.array(text).min(1).max(30),
+    preconditions: z.array(text).max(10),
+    steps: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
+            description: text,
+            action: ActionSchema,
+          })
+          .strict()
+      )
+      .min(1)
+      .max(40),
+    requirements: z
+      .array(
+        z
+          .object({
+            sourceFile: text,
+            quote: z.string().min(8).max(1000),
+            behavior: text,
+          })
+          .strict()
+      )
+      .min(1)
+      .max(20),
+    assertions: z.array(AssertionSchema).min(1).max(10),
+  })
+  .strict();
+export const PlanSchema = z
+  .object({
+    summary: text,
+    scenarios: z.array(ScenarioSchema).max(20),
+    skipped: z
+      .array(z.object({ sourceFile: text, reason: text }).strict())
+      .max(100),
+  })
+  .strict()
+  .superRefine((plan, ctx) => {
+    const ids = plan.scenarios.map((scenario) => scenario.id);
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
+    }
+    for (const scenario of plan.scenarios) {
+      validateScenarioContract(scenario, ctx);
+    }
+  });
+function validateContractAssertion(
+  scenario: z.infer<typeof ScenarioSchema>,
+  index: number,
+  ctx: z.RefinementCtx
+): string | undefined {
+  const step = scenario.steps[index];
+  if (
+    !(
+      step?.action.type === "assert" ||
+      step?.action.type === "download" ||
+      step?.action.type === "popup"
+    )
+  ) {
+    return;
+  }
+  const { assertionId } = step.action;
+  const assertion = scenario.assertions.find((item) => item.id === assertionId);
+  const issue = (message: string) => ctx.addIssue({ code: "custom", message });
+  if (!assertion) {
+    issue("Unknown contract assertion");
+    return;
+  }
+  if (
+    !(["url", "download", "popup"].includes(assertion.kind) || assertion.target)
+  ) {
+    issue("Assertion requires a frozen target");
+  }
+  if (step.action.type === "assert" && step.action.locator) {
+    issue(
+      "Assertion targets belong to the original contract, never executor actions"
+    );
+  }
+  if (
+    ["visual", "popup", "download"].includes(assertion.kind) &&
+    assertion.verification !== "state"
+  ) {
+    issue("Visual, popup and download assertions require state verification");
+  }
+  const preceding = scenario.steps.slice(0, index);
+  const dependency = preceding.find((item) => item.id === assertion.afterStep);
+  if (!dependency) {
+    issue("Assertion must reference an earlier required step");
+  }
+  if (
+    assertion.verification !== "state" &&
+    !(
+      dependency &&
+      ["click", "fill", "press", "select", "check"].includes(
+        dependency.action.type
+      )
+    )
+  ) {
+    issue(
+      "Transition/persistence verification requires a preceding interaction"
+    );
+  }
+  return assertion.id;
+}
+function validateScenarioContract(
+  scenario: z.infer<typeof ScenarioSchema>,
+  ctx: z.RefinementCtx
+) {
+  const issue = (message: string) => ctx.addIssue({ code: "custom", message });
+  const stepIds = scenario.steps.map((step) => step.id);
+  if (new Set(stepIds).size !== stepIds.length) {
+    issue("Duplicate contract step ids");
+  }
+  const evaluated: string[] = [];
+  for (const [index, step] of scenario.steps.entries()) {
+    if (["finish", "blocked"].includes(step.action.type)) {
+      issue("Finish/blocked cannot be a contract step");
+    }
+    const id = validateContractAssertion(scenario, index, ctx);
+    if (id) {
+      evaluated.push(id);
+    }
+  }
+  if (new Set(evaluated).size !== evaluated.length) {
+    issue("Repeated contract assertion");
+  }
+  if (evaluated.length !== scenario.assertions.length) {
+    issue("Every assertion requires one ordered contract step");
+  }
+  const ids = scenario.assertions.map((item) => item.id);
+  if (new Set(ids).size !== ids.length) {
+    issue("Duplicate assertion ids");
+  }
+}
+export const DecisionSchema = z
+  .object({ reason: text, stepId: text, action: ActionSchema })
+  .strict();
 export type Plan = z.infer<typeof PlanSchema>;
 export type Scenario = z.infer<typeof ScenarioSchema>;
-export type Assertion = z.infer<typeof AssertionSchema>;
-export type Action = z.infer<typeof action>;
+export type Assertion = z.input<typeof AssertionSchema>;
+export type Action = z.infer<typeof ActionSchema>;
 export type Locator = z.infer<typeof locator>;
 export type Decision = z.infer<typeof DecisionSchema>;
 export type Outcome = "passed" | "failed" | "blocked" | "skipped" | "stale";
@@ -116,7 +242,14 @@ export interface StepResult {
 }
 export interface ScenarioResult {
   artifacts: string[];
-  assertions: { id: string; passed: boolean; actual: unknown }[];
+  assertions: {
+    id: string;
+    passed: boolean;
+    actual: unknown;
+    baseline?: unknown;
+    persisted?: unknown;
+  }[];
+  contract?: { completedSteps: string[]; totalSteps: number; hash: string };
   diagnostic?: Diagnostic;
   error?: string;
   outcome: Outcome;
@@ -125,6 +258,13 @@ export interface ScenarioResult {
   steps: StepResult[];
 }
 export interface RunResult {
+  baseline?: { sha: string; url: string; scenarios: ScenarioResult[] };
+  coverage?: {
+    covered: string[];
+    skipped: Plan["skipped"];
+    policyRef: string;
+    gate: string;
+  };
   diagnostic?: Diagnostic;
   endedAt?: string;
   error?: string;
@@ -137,4 +277,12 @@ export interface RunResult {
   scenarios: ScenarioResult[];
   sha?: string;
   startedAt: string;
+  usage?: {
+    tokens: number;
+    costUsd: number;
+    calls: number;
+    model?: string;
+    estimated?: boolean;
+    pricingConfigured?: boolean;
+  };
 }

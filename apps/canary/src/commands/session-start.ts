@@ -1,7 +1,9 @@
 import { requestId } from "@usecanary/cli-kit";
 import { ensureDaemonRunning, sendRequest } from "@usecanary/daemon-client";
 import type {
+  BrowserAuth,
   CaptureOptions,
+  NetworkPolicy,
   SessionEndRequest,
   SessionStartRequest,
   SessionStartResult,
@@ -14,10 +16,12 @@ import {
 import { generateSessionId } from "../util/session-id.js";
 
 interface SessionStartArgs {
+  auth?: BrowserAuth;
   capture: CaptureOptions;
   headless: boolean;
   json: boolean;
   name?: string;
+  networkPolicy?: NetworkPolicy;
 }
 
 export async function sessionStart(args: SessionStartArgs): Promise<number> {
@@ -27,6 +31,8 @@ export async function sessionStart(args: SessionStartArgs): Promise<number> {
   const request: SessionStartRequest = {
     id: requestId("session-start"),
     type: "session-start",
+    networkPolicy: args.networkPolicy,
+    auth: args.auth,
     sessionId: id,
     name: args.name,
     headless: args.headless,

@@ -43,3 +43,28 @@ These synthetic test fixtures contain no user credentials. The metadata marks th
 - A real LLM endpoint and real application preview: no model credentials or target preview were provided. Configure `.env` and run a real PR to assess generated scenario quality.
 - Docker image build/container execution: Docker is not installed here. The Dockerfile and Compose file are supplied, with the configuration inspected; a YAML parse is not a deployment test.
 - Native Unix socket execution here: prohibited by this environment. CI on a standard runner is configured to use the native transport and run the E2E suite.
+
+## Extension entreprise — 11 octobre 2026
+
+Sur le checkout local de la branche du fork :
+
+- Suite `pnpm check` exécutée avec Node 22.23.3 : **291 tests passent** ; une suite
+  de concurrence PostgreSQL native est explicitement ignorée faute de
+  `QA_TEST_DATABASE_URL`. Lint, TypeScript et synchronisation des snippets passent.
+- **8 E2E Chromium** passent : doctor, scénario sain, régression réelle,
+  authentification daemon, refus d'un état statique, persistance/reload sain et
+  défectueux, sous-requête réseau refusée, cookies de rôle installés sans secret IA.
+- Tests SQL : production SQL exécuté dans PostgreSQL WASM/PGlite, incluant
+  idempotence, leases, annulation, interruption et routes dashboard/SSE/auth.
+  Cela ne valide pas les locks multi-process de PostgreSQL natif.
+- Proxy egress : HTTP réel autorisé, destination hors liste refusée. La topologie
+  réseau Docker et l'installation Compose restent à exécuter par la CI Docker.
+- Aucun VPS, serveur PostgreSQL natif, GitHub App réelle, modèle IA réel ou IdP
+  n'est accessible dans cette session. Aucun résultat correspondant n'est annoncé.
+- Les workflows CI/release sont implémentés ; leur exécution distante et les
+  protections de branche ne sont pas attestées par leur présence dans Git.
+
+Les valeurs `NODE_USE_ENV_PROXY=0`, `CANARY_TEST_TCP=1` et le transport daemon
+loopback authentifié ont servi uniquement aux contraintes de l'environnement
+local (sockets Unix interdits). Les probes E2E sont réelles, mais leurs services
+GitHub/IA sont des fixtures REST.

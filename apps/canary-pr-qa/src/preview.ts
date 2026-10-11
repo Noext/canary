@@ -68,9 +68,6 @@ export async function resolvePreview(
     );
   }
   validatePreviewUrl(deployment.url, config);
-  // If configured, also verify the actual server, rather than just GitHub's deployment metadata.
-  if (config.PREVIEW_SHA_PATH) {
-    return await verifyPreviewUrl(deployment.url, context.sha, config);
-  }
-  return deployment;
+  const live = await verifyPreviewUrl(deployment.url, context.sha, config);
+  return { ...live, evidence: `${deployment.evidence}; ${live.evidence}` };
 }

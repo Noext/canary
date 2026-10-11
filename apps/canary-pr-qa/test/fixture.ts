@@ -22,13 +22,46 @@ export const plan: Plan = {
       rationale: "PR changes form submission",
       sourceFiles: ["src/form.ts"],
       preconditions: [],
-      steps: ["Enter Ada", "Submit", "Verify welcome message"],
+      requirements: [
+        {
+          sourceFile: "src/form.ts",
+          quote: "show('Welcome '+name)",
+          behavior: "Save the name via the form",
+        },
+      ],
+      steps: [
+        {
+          id: "enter",
+          description: "Enter Ada",
+          action: {
+            type: "fill",
+            locator: { by: "label", value: "Name" },
+            value: "Ada",
+          },
+        },
+        {
+          id: "save",
+          description: "Submit",
+          action: {
+            type: "click",
+            locator: { by: "role", value: "button", name: "Save" },
+          },
+        },
+        {
+          id: "verify",
+          description: "Verify welcome message",
+          action: { type: "assert", assertionId: "saved" },
+        },
+      ],
       assertions: [
         {
           id: "saved",
           description: "Saved output welcomes Ada",
           kind: "text",
           expected: "Welcome Ada",
+          target: { by: "css", value: "#saved" },
+          afterStep: "save",
+          verification: "transition",
         },
       ],
     },
@@ -57,11 +90,17 @@ export async function fixture(
     noScenarios?: boolean;
     listenHost?: string;
     missingDiffAndContext?: boolean;
+    decoy?: boolean;
+    unchangedState?: boolean;
+    persistent?: boolean;
+    persistenceBroken?: boolean;
+    maliciousUrl?: string;
+    requireCookie?: boolean;
   } = {}
 ) {
   const outgoing: { path: string; payload: Record<string, unknown> }[] = [];
   const modelRequests: Record<string, unknown>[] = [];
-  let actions = 0;
+
   let prReads = 0;
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) =>
@@ -102,8 +141,15 @@ export async function fixture(
         "Content-Type": "text/html",
         ...(options.noSha ? {} : { "x-commit-sha": SHA }),
       });
+      if (
+        options.requireCookie &&
+        !req.headers.cookie?.includes("qa_role=test-member-secret")
+      ) {
+        res.end("<!doctype html><h1>Sign in required</h1>");
+        return;
+      }
       res.end(
-        `<!doctype html><html lang="en"><title>QA form fixture</title><h1>Welcome form</h1><form><label for="name">Name</label><input id="name" name="name"><button type="submit">Save</button></form><p role="status" id="saved"></p><script>document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();document.querySelector('#saved').textContent=${options.broken ? "'Wrong output'" : "'Welcome '+document.querySelector('#name').value"}})</script></html>`
+        `<!doctype html><html lang="en"><title>QA form fixture</title><h1>Welcome form</h1><form><label for="name">Name</label><input id="name" name="name"><button type="submit">Save</button></form><p role="status" id="saved">${options.unchangedState ? "Welcome Ada" : ""}</p>${options.decoy ? "<aside id=decoy>Welcome Ada</aside>" : ""}<script>${options.maliciousUrl ? `fetch(${JSON.stringify(options.maliciousUrl)}).catch(()=>{});` : ""}${options.persistent ? `document.querySelector('#saved').textContent=localStorage.getItem('saved')||'';` : ""}document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();document.querySelector('#saved').textContent=${options.broken ? "'Wrong output'" : "'Welcome '+document.querySelector('#name').value"}${options.persistent && !options.persistenceBroken ? `;localStorage.setItem('saved',document.querySelector('#saved').textContent)` : ""}})</script></html>`
       );
       return;
     }
@@ -136,6 +182,10 @@ export async function fixture(
         },
         base: { sha: BASE_SHA, repo: { full_name: "fixture/app" } },
       });
+      return;
+    }
+    if (path.includes("/contents/.canary/qa.json")) {
+      json(res, { message: "Not Found" }, 404);
       return;
     }
     if (path.includes("/contents/")) {
@@ -175,34 +225,14 @@ export async function fixture(
             }
           : plan;
       } else {
-        const decisions = [
-          {
-            type: "fill",
-            locator: { by: "label", value: "Name" },
-            value: "Ada",
-          },
-          {
-            type: "click",
-            locator: { by: "role", value: "button", name: "Save" },
-          },
-          {
-            type: "assert",
-            assertionId: "saved",
-            locator: { by: "role", value: "status", name: "" },
-          },
-          { type: "finish" },
-        ];
-        // Use CSS for the empty-name status: schema requires non-empty names for semantic locators.
-        decisions[2] = {
-          type: "assert",
-          assertionId: "saved",
-          locator: { by: "css", value: "#saved" },
-        } as (typeof decisions)[number];
+        const request = JSON.parse(messages[1]?.content ?? "{}");
+        const next = request.nextRequiredStep;
         value = {
           reason: "Execute planned form test",
+          stepId: options.earlyFinish ? "$finish" : (next?.id ?? "$finish"),
           action: options.earlyFinish
             ? { type: "finish" }
-            : (decisions[actions++] ?? { type: "finish" }),
+            : (next?.action ?? { type: "finish" }),
         };
       }
       json(res, {
@@ -213,6 +243,10 @@ export async function fixture(
           },
         ],
       });
+      return;
+    }
+    if (req.method === "GET" && path.includes("/comments?")) {
+      json(res, []);
       return;
     }
     if (
@@ -240,6 +274,7 @@ export async function fixture(
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const dataDir = await mkdtemp(join(tmpdir(), "canary-pr-qa-test-"));
   const config = loadConfig({
+    QA_ALLOW_PRIVATE_PREVIEWS: "true",
     GITHUB_API_URL: baseUrl,
     GITHUB_TOKEN: "fixture-token",
     GITHUB_ALLOWED_REPOS: "fixture/app",

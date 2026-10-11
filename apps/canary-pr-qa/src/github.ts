@@ -1,5 +1,7 @@
+import { posix } from "node:path";
 import { z } from "zod";
 import type { Config } from "./config.js";
+import { githubToken } from "./github-app.js";
 import { fetchText } from "./http.js";
 
 export function parsePrUrl(input: string) {
@@ -59,6 +61,7 @@ export class GitHub {
     method = "GET",
     body?: unknown
   ): Promise<unknown> {
+    const token = await githubToken(this.config);
     const result = await fetchText(
       `${this.config.GITHUB_API_URL.replace(/\/$/, "")}${path}`,
       {
@@ -66,15 +69,35 @@ export class GitHub {
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          ...(this.config.GITHUB_TOKEN
-            ? { Authorization: `Bearer ${this.config.GITHUB_TOKEN}` }
-            : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       }
     );
     return JSON.parse(result.text);
+  }
+
+  async optionalFile(
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | undefined> {
+    try {
+      const content = z
+        .object({ encoding: z.literal("base64"), content: z.string() })
+        .parse(
+          await this.request(
+            `/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${ref}`
+          )
+        );
+      return Buffer.from(content.content, "base64").toString("utf8");
+    } catch (error) {
+      if (error instanceof Error && /HTTP 404/.test(error.message)) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async pr(input: string) {
@@ -123,9 +146,6 @@ export class GitHub {
         "PR changed while reading files, or GitHub returned an incomplete diff"
       );
     }
-    const context: PrContext["context"] = [];
-    const contextWarnings: string[] = [];
-    let remaining = this.config.QA_CONTEXT_CHARS;
     const headRepo = data.head.repo?.full_name ?? ref.repo;
     // Read only immutable refs. Include both versions of relevant files and repo conventions.
     const candidates = [
@@ -135,7 +155,6 @@ export class GitHub {
             file.filename
           )
         )
-        .slice(0, 12)
         .flatMap((file) => [
           { repo: headRepo, path: file.filename, ref: data.head.sha },
           {
@@ -145,12 +164,58 @@ export class GitHub {
           },
         ]),
       ...["README.md", "package.json", "AGENTS.md"].map((path) => ({
-        repo: headRepo,
+        repo: ref.repo,
         path,
-        ref: data.head.sha,
+        ref: data.base.sha,
       })),
     ];
+    const { context, contextWarnings } = await this.collectContext(
+      candidates,
+      files
+    );
+    for (const file of files) {
+      if (!file.patch) {
+        contextWarnings.push(`No textual patch for ${file.filename}`);
+      }
+    }
+    const current = await this.pr(input);
+    if (
+      current.data.head.sha !== data.head.sha ||
+      current.data.base.sha !== data.base.sha
+    ) {
+      throw new Error("PR changed during context collection; run again");
+    }
+    return {
+      ref,
+      sha: data.head.sha,
+      baseSha: data.base.sha,
+      headRepo,
+      title: data.title,
+      body: data.body ?? "",
+      files,
+      context,
+      contextWarnings,
+    };
+  }
+
+  private async collectContext(
+    candidates: { repo: string; path: string; ref: string }[],
+    files: PrContext["files"]
+  ) {
+    const context: PrContext["context"] = [];
+    const contextWarnings: string[] = [];
+    let remaining = this.config.QA_CONTEXT_CHARS;
+    const visited = new Set<string>();
     for (const candidate of candidates) {
+      const key = `${candidate.repo}:${candidate.ref}:${candidate.path}`;
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      if (visited.size > 256) {
+        contextWarnings.push("Dependency context limit (256) exhausted");
+        break;
+      }
       if (remaining <= 0) {
         contextWarnings.push("Repository context budget exhausted");
         break;
@@ -176,35 +241,19 @@ export class GitHub {
           content: selected,
         });
         remaining -= selected.length;
+        // One-hop imports and adjacent tests connect changed routes/components to their implementation.
+        if (files.some((f) => f.filename === candidate.path)) {
+          for (const imported of dependencyPaths(candidate.path, selected)) {
+            candidates.push({ ...candidate, path: imported });
+          }
+        }
       } catch {
         contextWarnings.push(
           `Unavailable context: ${candidate.path} at ${candidate.ref}`
         );
       }
     }
-    for (const file of files) {
-      if (!file.patch) {
-        contextWarnings.push(`No textual patch for ${file.filename}`);
-      }
-    }
-    const current = await this.pr(input);
-    if (
-      current.data.head.sha !== data.head.sha ||
-      current.data.base.sha !== data.base.sha
-    ) {
-      throw new Error("PR changed during context collection; run again");
-    }
-    return {
-      ref,
-      sha: data.head.sha,
-      baseSha: data.base.sha,
-      headRepo,
-      title: data.title,
-      body: data.body ?? "",
-      files,
-      context,
-      contextWarnings,
-    };
+    return { context, contextWarnings };
   }
 
   async deployments(
@@ -267,6 +316,37 @@ export class GitHub {
     description: string,
     targetUrl?: string
   ) {
+    if (this.config.GITHUB_APP_ID) {
+      const existing = z
+        .object({
+          check_runs: z.array(
+            z.object({ id: z.number(), app: z.object({ id: z.number() }) })
+          ),
+        })
+        .parse(
+          await this.request(
+            `/repos/${context.ref.repo}/commits/${context.sha}/check-runs?check_name=canary%2Fpr-qa&filter=latest`
+          )
+        )
+        .check_runs.find((c) => String(c.app.id) === this.config.GITHUB_APP_ID);
+      await this.request(
+        `/repos/${context.ref.repo}/check-runs${existing ? `/${existing.id}` : ""}`,
+        existing ? "PATCH" : "POST",
+        {
+          name: "canary/pr-qa",
+          head_sha: context.sha,
+          status: state === "pending" ? "in_progress" : "completed",
+          ...(state === "pending"
+            ? {}
+            : {
+                conclusion: checkConclusion(state),
+                completed_at: new Date().toISOString(),
+              }),
+          output: { title: description.slice(0, 140), summary: description },
+          ...(targetUrl ? { details_url: targetUrl } : {}),
+        }
+      );
+    }
     await this.request(
       `/repos/${context.ref.repo}/statuses/${context.sha}`,
       "POST",
@@ -280,15 +360,66 @@ export class GitHub {
   }
 
   async comment(context: PrContext, body: string): Promise<string> {
+    const marker = "<!-- canary-pr-qa -->";
+    const comments = z
+      .array(
+        z.object({
+          id: z.number(),
+          body: z.string(),
+          user: z.object({ type: z.string() }).optional(),
+        })
+      )
+      .parse(
+        await this.request(
+          `/repos/${context.ref.repo}/issues/${context.ref.number}/comments?per_page=100`
+        )
+      );
+    const existing = comments.find(
+      (c) => c.body.startsWith(marker) && c.user?.type === "Bot"
+    );
     const result = z
       .object({ html_url: z.string().url() })
       .parse(
         await this.request(
-          `/repos/${context.ref.repo}/issues/${context.ref.number}/comments`,
-          "POST",
-          { body }
+          existing
+            ? `/repos/${context.ref.repo}/issues/comments/${existing.id}`
+            : `/repos/${context.ref.repo}/issues/${context.ref.number}/comments`,
+          existing ? "PATCH" : "POST",
+          { body: `${marker}\n${body}` }
         )
       );
     return result.html_url;
   }
+}
+
+function checkConclusion(state: "success" | "failure" | "error" | "pending") {
+  if (state === "success") {
+    return "success";
+  }
+  if (state === "failure") {
+    return "failure";
+  }
+  return "action_required";
+}
+
+function dependencyPaths(path: string, source: string) {
+  const paths = new Set<string>();
+  for (const match of source.matchAll(
+    /(?:from\s*|require\s*\(\s*)["'](\.[^"']+)["']/g
+  )) {
+    const imported = posix.normalize(
+      posix.join(posix.dirname(path), match[1] ?? "")
+    );
+    if (imported.startsWith("..")) {
+      continue;
+    }
+    for (const suffix of ["", ".ts", ".tsx", "/index.ts", "/index.tsx"]) {
+      paths.add(imported + suffix);
+    }
+  }
+  const stem = path.replace(/\.(tsx?|jsx?)$/, "");
+  for (const suffix of [".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"]) {
+    paths.add(stem + suffix);
+  }
+  return [...paths];
 }

@@ -50,7 +50,7 @@ describe.skipIf(process.platform === "win32")(
         )
       );
       const up = lines.findIndex((line) =>
-        line.endsWith("up -d --wait --wait-timeout 120 pr-qa")
+        line.endsWith("up -d --wait --wait-timeout 180")
       );
       expect(build).toBeGreaterThanOrEqual(0);
       expect(preflight).toBeGreaterThan(build);
@@ -71,7 +71,7 @@ describe.skipIf(process.platform === "win32")(
       expect(log).toContain(
         "canary-pr-qa diagnose 12345678-1234-1234-1234-123456789012"
       );
-      expect(log).toContain("stop pr-qa");
+      expect(log).toContain("stop worker pr-qa browser egress db");
       expect(log).not.toContain("--volumes");
     });
   }

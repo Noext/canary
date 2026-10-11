@@ -18,7 +18,15 @@
     },
     "test": {
       "dependsOn": ["^build", "build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "env": [
+        "CANARY_TEST_TCP",
+        "CANARY_DAEMON_PORT",
+        "CANARY_DAEMON_TOKEN",
+        "QA_TEST_DATABASE_URL",
+        "NODE_USE_ENV_PROXY"
+      ],
+      "cache": false
     },
     "compile": {
       "dependsOn": ["^build"],

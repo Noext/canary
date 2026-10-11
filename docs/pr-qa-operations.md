@@ -70,3 +70,22 @@ Le message de démarrage précise le chemin effectif. Les sessions natives reste
 Suspendre les nouvelles soumissions avant une mise à jour. Attendre `busy=false` et `queued=0`, sauvegarder les deux volumes et `.env`, puis utiliser `./scripts/pr-qa up`. `./scripts/pr-qa stop` conserve les volumes. L'arrêt accorde 25 secondes au run actif ; un travail interrompu au redémarrage demande une nouvelle soumission explicite. Le service ne rejoue pas automatiquement les effets dans le navigateur ou sur GitHub. Ne pas utiliser `down -v` sur les volumes de production.
 
 Il n'existe pas de dashboard central, de flux SSE/WebSocket, de streaming vidéo live, de métriques Prometheus ou de suivi des coûts IA. Les événements persistés et l'API permettent le suivi par polling ; le viewer Canary existant consulte les sessions enregistrées et n'est pas inclus dans l'image PR QA.
+
+## Topologie entreprise actuelle
+
+Le [README de l'application](../apps/canary-pr-qa/README.md) remplace les hypothèses
+historiques de service unique de ce guide. L'installation actuelle utilise
+`pr-qa`, `worker`, `browser`, `egress` et `db`. Le doctor/diagnose se lancent depuis
+le worker ; `logs` affiche tous les services. Trois volumes sont à sauvegarder.
+
+Pour un incident : identifier le run et son dernier événement SSE/progress ;
+vérifier SQL (`db`), acquisition de lease (`worker`), accès IA/GitHub, démarrage
+Chromium (`browser`) puis refus réseau (`egress`). Les codes
+`CONTRACT_VIOLATION`, `CRITICAL_COVERAGE_MISSING`, `PREVIEW_SHA_MISMATCH`,
+`PRECONDITION_UNVERIFIED` et `RUN_BUDGET_EXCEEDED` indiquent des blocages explicites,
+pas des succès. Ne pas désactiver leurs contrôles pour débloquer artificiellement
+une publication verte.
+
+Le dashboard `/` permet de consulter les runs, phases et résultats ; un JWT SSO
+ou un token individuel permet une session HttpOnly. Le SSE montre la progression,
+pas une vidéo en direct. Une lease expirée est interrompue sans replay.

@@ -9,6 +9,8 @@
 // CI drift-check. The extraction here eliminates that class of bug entirely.
 
 import { z } from "zod";
+import runtimeLock from "./runtime-lock.json" with { type: "json" };
+export const EMBEDDED_RUNTIME_LOCK = JSON.stringify(runtimeLock, null, 2);
 
 // ---------- Requests ----------
 
@@ -97,8 +99,47 @@ const SessionIdSchema = z
   .max(128)
   .regex(/^(?!.*\.\.)[A-Za-z0-9._-]+$/, "invalid session id");
 
+export const BrowserAuthSchema = z.object({
+  cookies: z
+    .array(
+      z.object({
+        name: z.string(),
+        value: z.string(),
+        domain: z.string(),
+        path: z.string(),
+        expires: z.number().default(-1),
+        httpOnly: z.boolean().default(true),
+        secure: z.boolean().default(true),
+        sameSite: z.enum(["Strict", "Lax", "None"]).default("Lax"),
+      })
+    )
+    .max(100)
+    .default([]),
+  origins: z
+    .array(
+      z.object({
+        origin: z.string().url(),
+        localStorage: z
+          .array(z.object({ name: z.string(), value: z.string() }))
+          .max(100),
+      })
+    )
+    .max(20)
+    .default([]),
+});
+export type BrowserAuth = z.infer<typeof BrowserAuthSchema>;
+export const NetworkPolicySchema = z
+  .object({
+    hosts: z.array(z.string().min(1)).min(1).max(100),
+    allowPrivate: z.boolean().default(false),
+  })
+  .strict();
+export type NetworkPolicy = z.infer<typeof NetworkPolicySchema>;
+
 export const SessionStartRequestSchema = RequestBaseSchema.extend({
   type: z.literal("session-start"),
+  networkPolicy: NetworkPolicySchema.optional(),
+  auth: BrowserAuthSchema.optional(),
   sessionId: SessionIdSchema,
   name: z.string().min(1).max(200).optional(),
   headless: z.boolean().optional(),

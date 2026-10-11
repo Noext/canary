@@ -1,6 +1,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Diagnostic } from "./diagnostics.js";
+import { redact } from "./diagnostics.js";
 import type { RunResult } from "./schema.js";
 
 export async function writeJson(path: string, data: unknown) {
@@ -61,7 +62,8 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
     "Assertions were evaluated by the runner against the original plan. A browser-only pass does not cover explicitly skipped changes.",
   ].join("\n\n");
 }
-export async function saveReport(root: string, result: RunResult) {
+export async function saveReport(root: string, original: RunResult) {
+  const result: RunResult = JSON.parse(redact(JSON.stringify(original)));
   await mkdir(root, { recursive: true });
   await writeJson(join(root, "result.json"), result);
   await writeFile(join(root, "report.md"), reportMarkdown(result));

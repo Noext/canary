@@ -6,6 +6,7 @@ import { createLogger } from "@usecanary/logger";
 import {
   daemonTcpConfig,
   EMBEDDED_PACKAGE_JSON,
+  EMBEDDED_RUNTIME_LOCK,
   type ExecuteRequest,
   parseRequest,
   type Response,
@@ -318,14 +319,18 @@ async function handleInstall(
         path.join(BASE_DIR, "package.json"),
         EMBEDDED_PACKAGE_JSON
       );
+      await writeFile(
+        path.join(BASE_DIR, "package-lock.json"),
+        EMBEDDED_RUNTIME_LOCK
+      );
       const npmProgram = "npm";
       await runInstallCommand(
         output,
         request.id,
         npmProgram,
-        ["install"],
+        ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
         BASE_DIR,
-        "npm install"
+        "npm ci"
       );
       await runInstallCommand(
         output,

@@ -34,26 +34,26 @@ fi
 case "$QA_COMMAND" in
   up)
     if [[ -n "$("${QA_COMPOSE[@]}" ps --status running -q pr-qa)" ]]; then
-      "${QA_COMPOSE[@]}" exec -T pr-qa node -e 'fetch("http://127.0.0.1:"+(process.env.QA_PORT||8787)+"/health").then(r=>r.json()).then(s=>{if(s.busy||s.queued){process.stderr.write("Runs are active/queued. Pause submissions and wait before updating.\n");process.exit(2)}}).catch(()=>process.exit(2))'
+      "${QA_COMPOSE[@]}" exec -T pr-qa node -e 'fetch("http://127.0.0.1:"+(process.env.QA_PORT||8787)+"/health").then(r=>r.json()).then(s=>{if(s.busy||s.queued||s.jobs?.some(j=>j.count>0)){process.stderr.write("Runs are active/queued. Pause submissions and wait before updating.\n");process.exit(2)}}).catch(()=>process.exit(2))'
     fi
     "${QA_COMPOSE[@]}" config --quiet
     "${QA_COMPOSE[@]}" build pr-qa
     "${QA_COMPOSE[@]}" run --rm --no-deps -T pr-qa doctor --offline --skip-browser
-    "${QA_COMPOSE[@]}" up -d --wait --wait-timeout 120 pr-qa
-    "${QA_COMPOSE[@]}" exec -T pr-qa canary-pr-qa doctor "$@"
+    "${QA_COMPOSE[@]}" up -d --wait --wait-timeout 180
+    "${QA_COMPOSE[@]}" exec -T worker canary-pr-qa doctor "$@"
     ;;
   doctor|diagnose)
-    "${QA_COMPOSE[@]}" exec -T pr-qa canary-pr-qa "$QA_COMMAND" "$@"
+    "${QA_COMPOSE[@]}" exec -T worker canary-pr-qa "$QA_COMMAND" "$@"
     ;;
   logs)
-    "${QA_COMPOSE[@]}" logs --follow --tail=100 pr-qa
+    "${QA_COMPOSE[@]}" logs --follow --tail=100
     ;;
   status)
     "${QA_COMPOSE[@]}" ps
     "${QA_COMPOSE[@]}" exec -T pr-qa node -e 'fetch("http://127.0.0.1:"+(process.env.QA_PORT||8787)+"/health").then(async r=>{process.stdout.write(JSON.stringify(await r.json(),null,2)+"\n");process.exit(r.ok?0:2)}).catch(e=>{process.stderr.write(e.message+"\n");process.exit(2)})'
     ;;
   stop)
-    "${QA_COMPOSE[@]}" stop pr-qa
+    "${QA_COMPOSE[@]}" stop worker pr-qa browser egress db
     ;;
   *)
     printf 'Unknown command: %s. Use ./scripts/pr-qa help.\n' "$QA_COMMAND" >&2

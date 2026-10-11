@@ -22,6 +22,14 @@ export function redact(value: string, config?: Config): string {
     config?.OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
     config?.QA_API_TOKEN ?? process.env.QA_API_TOKEN,
     process.env.CANARY_DAEMON_TOKEN,
+    config?.QA_BROWSER_SERVICE_TOKEN,
+    config?.GITHUB_WEBHOOK_SECRET,
+    config?.DATABASE_URL,
+    ...Object.entries(process.env)
+      .filter(([key]) =>
+        /TOKEN|SECRET|PASSWORD|STORAGE_STATE|API_KEY/.test(key)
+      )
+      .map(([, value]) => value),
   ]) {
     if (secret) {
       safe = safe.replaceAll(secret, "[REDACTED]");

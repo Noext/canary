@@ -1,9 +1,14 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { cp, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join, relative } from "node:path";
+import type { BrowserAuth } from "@usecanary/protocol";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
+import { fetchText } from "./http.js";
+import { verifyPreviewUrl } from "./preview.js";
+import { checkBudget, runScope } from "./run-scope.js";
 import type { Action, Assertion, Locator } from "./schema.js";
 
 const MARKER = "CANARY_PR_QA_OBSERVATION:";
@@ -57,6 +62,12 @@ export function assertionMatches(
 }
 
 function readAssertion(assertion: Assertion, locator?: Locator): string {
+  if (assertion.kind === "visual") {
+    if (!locator) {
+      throw new Error("Visual assertion requires target");
+    }
+    return `Buffer.from(await ${locatorExpression(locator)}.screenshot({ animations: "disabled", timeout: 5000 })).toString("base64")`;
+  }
   if (assertion.kind === "url") {
     return "page.url()";
   }
@@ -83,6 +94,9 @@ function compileAssertion(
     throw new Error("Unknown planned assertion");
   }
   const read = readAssertion(assertion, action.locator);
+  if (assertion.kind === "visual") {
+    return `actual = ${read};`;
+  }
   const expected =
     "expected" in assertion ? assertion.expected : assertion.kind === "visible";
   const matches =
@@ -90,6 +104,17 @@ function compileAssertion(
       ? `typeof actual === "string" && actual.replace(/\\s+/g, " ").trim().includes(${JSON.stringify(String(expected).replace(/\s+/g, " ").trim())})`
       : `actual === ${JSON.stringify(expected)}`;
   return `for (let attempt = 0; attempt < 30; attempt++) { actual = ${read}; if (${matches}) break; await page.waitForTimeout(100); }`;
+}
+export function compileProbe(
+  assertion: Assertion,
+  preview: string,
+  reload = false
+): string {
+  const read = readAssertion(assertion, assertion.target);
+  return compileAction({ type: "observe" }, preview).replace(
+    "let actual;",
+    `let actual; ${reload ? 'await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 });' : ""} actual = ${read};`
+  );
 }
 function compileInteraction(action: Action): string {
   if (!("locator" in action && action.locator)) {
@@ -128,6 +153,10 @@ export function compileAction(
       throw new Error("Navigation must remain on the preview origin");
     }
     command = `await page.goto(${JSON.stringify(target.href)}, { waitUntil: "domcontentloaded", timeout: 15000 });`;
+  } else if (action.type === "download") {
+    command = `const waiting = page.waitForEvent("download", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const download = await waiting; if(await download.failure())throw new Error("Download failed"); actual=download.suggestedFilename();`;
+  } else if (action.type === "popup") {
+    command = `const waiting = page.waitForEvent("popup", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const popup = await waiting; await popup.waitForLoadState("domcontentloaded"); actual=popup.url(); if(!actual.startsWith(${JSON.stringify(`${preview.origin}/`)}))throw new Error("Popup left approved origin"); await popup.close();`;
   } else if (action.type === "assert") {
     command = compileAssertion(action, assertion);
   } else if (action.type !== "observe") {
@@ -150,12 +179,44 @@ export class Canary {
     args: string[],
     script?: string
   ): Promise<{ code: number; stdout: string; stderr: string }> {
+    if (
+      args[0] === "session" &&
+      ["end", "abort"].includes(args[1] ?? "") &&
+      runScope.getStore()
+    ) {
+      return runScope.exit(() => this.command(args, script));
+    }
+    checkBudget();
+    if (this.config.QA_BROWSER_SERVICE_URL) {
+      return fetchText(
+        `${this.config.QA_BROWSER_SERVICE_URL}/command`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.config.QA_BROWSER_SERVICE_TOKEN}`,
+          },
+          body: JSON.stringify({ args, script }),
+        },
+        (this.config.QA_STEP_TIMEOUT_SECONDS + 45) * 1000
+      ).then((r) =>
+        z
+          .object({ code: z.number(), stdout: z.string(), stderr: z.string() })
+          .parse(JSON.parse(r.text))
+      );
+    }
     return new Promise((resolve, reject) => {
       const child = spawn(
         process.execPath,
         [this.config.CANARY_CLI_PATH, "--json", ...args],
-        { stdio: ["pipe", "pipe", "pipe"] }
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: browserEnvironment(this.config),
+        }
       );
+      const signal = runScope.getStore()?.signal;
+      const cancel = () => child.kill("SIGKILL");
+      signal?.addEventListener("abort", cancel, { once: true });
       let stdout = "";
       let stderr = "";
       let exceeded = false;
@@ -188,6 +249,7 @@ export class Canary {
       });
       child.on("close", (code) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", cancel);
         if (exceeded) {
           reject(
             new QaError(
@@ -203,14 +265,23 @@ export class Canary {
       child.stdin.end(script);
     });
   }
-  async start(name: string): Promise<string> {
-    const result = await this.command([
-      "session",
-      "start",
-      "--headless",
-      "--name",
-      name.slice(0, 180),
-    ]);
+  async start(name: string, auth?: BrowserAuth): Promise<string> {
+    const result = await this.command(
+      [
+        "session",
+        "start",
+        "--headless",
+        "--name",
+        name.slice(0, 180),
+        "--network-hosts",
+        this.config.PREVIEW_ALLOWED_HOSTS,
+        ...(this.config.QA_ALLOW_PRIVATE_PREVIEWS === "true"
+          ? ["--allow-private"]
+          : []),
+        ...(auth ? ["--auth-stdin"] : []),
+      ],
+      auth ? JSON.stringify(auth) : undefined
+    );
     if (result.code !== 0) {
       throw new QaError(
         "CANARY_START_FAILED",
@@ -245,12 +316,20 @@ export class Canary {
         "Canary returned no observation; refusing unverified action"
       );
     }
-    return observationSchema.parse(JSON.parse(line.slice(MARKER.length)));
+    const observation = observationSchema.parse(
+      JSON.parse(line.slice(MARKER.length))
+    );
+    const sha = runScope.getStore()?.previewSha;
+    if (sha && observation.url.startsWith("http")) {
+      await verifyPreviewUrl(observation.url, sha, this.config);
+    }
+    return observation;
   }
   async end(id: string, destination: string): Promise<string[]> {
     const result = await this.command(["session", "end", id]);
     if (result.code !== 0) {
       await this.command(["session", "abort", id]).catch(() => undefined);
+      await this.purge(id).catch(() => undefined);
       throw new Error(
         `Canary could not finalize evidence: ${result.stderr.slice(-1000)}`
       );
@@ -302,10 +381,29 @@ export class Canary {
       await mkdir(join(destination, file, ".."), { recursive: true });
       await cp(source, join(destination, file));
     }
-    return await listFiles(destination);
+    const copied = await listFiles(destination);
+    await this.purge(id);
+    return copied;
+  }
+  async purge(id: string) {
+    if (!/^(?!.*\.\.)[A-Za-z0-9._-]{1,128}$/.test(id)) {
+      throw new Error("Invalid session ID for purge");
+    }
+    if (this.config.QA_BROWSER_SERVICE_URL) {
+      await runScope.exit(() => this.command(["purge", id]));
+      return;
+    }
+    const root = join(homedir(), ".canary", "sessions");
+    const path = join(root, id);
+    const actual = await realpath(path).catch(() => path);
+    if (relative(root, actual).startsWith("..")) {
+      throw new Error("Session symlink escaped root");
+    }
+    await rm(path, { recursive: true, force: true });
   }
   async abort(id: string) {
     await this.command(["session", "abort", id]).catch(() => undefined);
+    await this.purge(id).catch(() => undefined);
   }
 }
 
@@ -320,4 +418,26 @@ async function listFiles(directory: string, prefix = ""): Promise<string[]> {
     }
   }
   return files;
+}
+
+export function browserEnvironment(config: Config): NodeJS.ProcessEnv {
+  const allowed = [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "NODE_USE_ENV_PROXY",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "CANARY_DAEMON_PORT",
+    "CANARY_DAEMON_TOKEN",
+    "CANARY_LOG_LEVEL",
+    "CANARY_EGRESS_PROXY",
+  ];
+  const env: NodeJS.ProcessEnv = Object.fromEntries(
+    allowed.flatMap((key) =>
+      process.env[key] ? [[key, process.env[key]]] : []
+    )
+  );
+  env.CANARY_NETWORK_ALLOWED_HOSTS = config.PREVIEW_ALLOWED_HOSTS;
+  env.CANARY_NETWORK_ALLOW_PRIVATE = config.QA_ALLOW_PRIVATE_PREVIEWS;
+  return env;
 }

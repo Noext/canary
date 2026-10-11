@@ -155,6 +155,8 @@ export class SessionManager {
       sessionBrowserName(req.sessionId),
       {
         headless: req.headless ?? false,
+        networkPolicy: req.networkPolicy,
+        auth: req.auth,
         ignoreHTTPSErrors: req.ignoreHTTPSErrors ?? false,
         profileDirOverride: profileDir,
         record: {

@@ -1,22 +1,35 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   assertionMatches,
   type Canary,
   compileAction,
+  compileProbe,
   type Observation,
 } from "./canary.js";
 import type { Config } from "./config.js";
-import { diagnose } from "./diagnostics.js";
+import { diagnose, QaError } from "./diagnostics.js";
+import { prepareScenario } from "./fixtures.js";
 import { EXECUTOR_PROMPT, type Model } from "./model.js";
 import type { ProgressEvent } from "./progress.js";
 import {
+  type Assertion,
   type Decision,
   DecisionSchema,
   type Scenario,
   type ScenarioResult,
 } from "./schema.js";
+import { compareVisual } from "./visual.js";
 
 function finish(result: ScenarioResult) {
+  if (result.contract?.completedSteps.length !== result.scenario.steps.length) {
+    throw new QaError(
+      "CONTRACT_INCOMPLETE",
+      "AI attempted to finish before all planned assertions and required steps completed",
+      "Execute the original ordered contract; do not omit actions or weaken assertions."
+    );
+  }
   if (
     !result.scenario.assertions.every((a) =>
       result.assertions.some((item) => item.id === a.id && item.passed)
@@ -34,11 +47,16 @@ async function performDecision(
   index: number,
   result: ScenarioResult,
   preview: string,
-  canary: Canary
+  canary: Canary,
+  baselines: Map<string, unknown>,
+  config: Config,
+  repo: string
 ) {
   const { action } = decision;
   const assertion =
-    action.type === "assert"
+    action.type === "assert" ||
+    action.type === "download" ||
+    action.type === "popup"
       ? result.scenario.assertions.find(
           (item) => item.id === action.assertionId
         )
@@ -52,27 +70,136 @@ async function performDecision(
   const observation = await canary.act(
     sessionId,
     `${index}-${action.type}`,
-    compileAction(action, preview, assertion)
+    compileAction(
+      action.type === "assert"
+        ? {
+            type: "assert",
+            assertionId: action.assertionId,
+            ...(assertion?.target ? { locator: assertion.target } : {}),
+          }
+        : action,
+      preview,
+      assertion
+    )
   );
+
+  if (assertion) {
+    await evaluateAssertion(
+      sessionId,
+      assertion,
+      observation,
+      result,
+      preview,
+      canary,
+      baselines,
+      config,
+      repo
+    );
+  }
   result.steps.push({
     index,
     ...decision,
     ok: true,
     observation: JSON.stringify(observation),
   });
-  if (assertion) {
-    const passed = assertionMatches(assertion, observation.actual);
-    result.assertions.push({
-      id: assertion.id,
-      passed,
-      actual: observation.actual,
-    });
-    if (!passed) {
-      result.outcome = "failed";
-      result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
+  return observation;
+}
+async function evaluateAssertion(
+  sessionId: string,
+  assertion: Assertion,
+  observation: Observation,
+  result: ScenarioResult,
+  preview: string,
+  canary: Canary,
+  baselines: Map<string, unknown>,
+  config: Config,
+  repo: string
+) {
+  const baseline = baselines.get(assertion.id);
+  let persisted: unknown;
+  if (assertion.verification === "persisted") {
+    persisted = (
+      await canary.act(
+        sessionId,
+        `persistence-${assertion.id}`,
+        compileProbe(assertion, preview, true)
+      )
+    ).actual;
+  }
+  const actual =
+    assertion.kind === "visual"
+      ? await compareVisual(
+          observation.actual,
+          assertion.expected,
+          repo,
+          config
+        )
+      : observation.actual;
+  const passed =
+    (assertion.kind === "visual"
+      ? (actual as { passed: boolean }).passed
+      : assertionMatches(assertion, actual)) &&
+    (!["transition", "persisted"].includes(assertion.verification ?? "state") ||
+      (baselines.has(assertion.id) &&
+        !isDeepStrictEqual(baseline, observation.actual))) &&
+    (assertion.verification !== "persisted" ||
+      assertionMatches(assertion, persisted));
+  if (assertion.kind === "visual") {
+    observation.actual = actual;
+  }
+  result.assertions.push({
+    id: assertion.id,
+    passed,
+    actual,
+    baseline,
+    persisted,
+  });
+  if (!passed) {
+    result.outcome = "failed";
+    result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
+  }
+}
+function ensureContractDecision(
+  decision: Decision,
+  required: Scenario["steps"][number] | undefined
+) {
+  if (decision.action.type === "observe") {
+    return;
+  }
+  if (
+    !required ||
+    decision.stepId !== required.id ||
+    !isDeepStrictEqual(decision.action, required.action)
+  ) {
+    throw new QaError(
+      "CONTRACT_VIOLATION",
+      "AI action differs from the next required contract step",
+      "Targets, values, actions and ordering are immutable. A blocked scenario cannot be repaired by selecting unrelated matching text."
+    );
+  }
+}
+async function captureBaselines(
+  sessionId: string,
+  scenario: Scenario,
+  stepId: string | undefined,
+  baselines: Map<string, unknown>,
+  preview: string,
+  canary: Canary
+) {
+  for (const assertion of scenario.assertions) {
+    if (
+      assertion.afterStep === stepId &&
+      ["transition", "persisted"].includes(assertion.verification) &&
+      !baselines.has(assertion.id)
+    ) {
+      const observation = await canary.act(
+        sessionId,
+        `baseline-${assertion.id}`,
+        compileProbe(assertion, preview)
+      );
+      baselines.set(assertion.id, observation.actual);
     }
   }
-  return observation;
 }
 async function driveScenario(
   sessionId: string,
@@ -81,14 +208,15 @@ async function driveScenario(
   config: Config,
   canary: Canary,
   model: Model,
-  record: (event: ProgressEvent) => Promise<void>
+  record: (event: ProgressEvent) => Promise<void>,
+  repo: string
 ) {
   let observation: Observation = await canary.act(
     sessionId,
     "open-preview",
     compileAction({ type: "goto", path: preview }, preview)
   );
-  let errors = 0;
+  const baselines = new Map<string, unknown>();
   for (let index = 1; index <= config.QA_MAX_STEPS; index++) {
     const started = Date.now();
     await record({
@@ -97,10 +225,13 @@ async function driveScenario(
       step: index,
       action: "model-decision",
     });
+    const required =
+      result.scenario.steps[result.contract?.completedSteps.length ?? 0];
     const decision = await model.json(
       EXECUTOR_PROMPT,
       {
         scenario: result.scenario,
+        nextRequiredStep: required ?? null,
         preview,
         observation,
         completedAssertions: result.assertions,
@@ -128,6 +259,15 @@ async function driveScenario(
       finish(result);
       return;
     }
+    ensureContractDecision(decision, required);
+    await captureBaselines(
+      sessionId,
+      result.scenario,
+      decision.action.type === "observe" ? undefined : required?.id,
+      baselines,
+      preview,
+      canary
+    );
     await record({
       phase: "execution",
       scenarioId: result.scenario.id,
@@ -141,9 +281,14 @@ async function driveScenario(
         index,
         result,
         preview,
-        canary
+        canary,
+        baselines,
+        config,
+        repo
       );
-      errors = 0;
+      if (decision.action.type !== "observe" && required) {
+        result.contract?.completedSteps.push(required.id);
+      }
       await record({
         phase: "execution",
         scenarioId: result.scenario.id,
@@ -168,15 +313,7 @@ async function driveScenario(
         outcome: "error",
         diagnostic,
       });
-      errors++;
-      if (decision.action.type === "assert" || errors >= 3) {
-        throw error;
-      }
-      observation = await canary.act(
-        sessionId,
-        `${index}-recover-observation`,
-        compileAction({ type: "observe" }, preview)
-      );
+      throw error;
     }
     if (result.outcome === "failed") {
       return;
@@ -193,7 +330,8 @@ export async function executeScenario(
   canary: Canary,
   model: Model,
   record: (event: ProgressEvent) => Promise<void> = async () =>
-    Promise.resolve()
+    Promise.resolve(),
+  repo = ""
 ): Promise<ScenarioResult> {
   const result: ScenarioResult = {
     scenario,
@@ -201,9 +339,17 @@ export async function executeScenario(
     steps: [],
     assertions: [],
     artifacts: [],
+    contract: {
+      completedSteps: [],
+      totalSteps: scenario.steps.length,
+      hash: createHash("sha256").update(JSON.stringify(scenario)).digest("hex"),
+    },
   };
+  let cleanup: (() => Promise<void>) | undefined;
   try {
-    result.sessionId = await canary.start(scenario.title);
+    const prepared = await prepareScenario(scenario, repo, config);
+    cleanup = prepared.cleanup;
+    result.sessionId = await canary.start(scenario.title, prepared.auth);
     await driveScenario(
       result.sessionId,
       result,
@@ -211,7 +357,8 @@ export async function executeScenario(
       config,
       canary,
       model,
-      record
+      record,
+      repo
     );
   } catch (error) {
     result.diagnostic = diagnose(error, config);
@@ -231,6 +378,13 @@ export async function executeScenario(
         await canary.abort(result.sessionId);
       }
     }
+  }
+  try {
+    await cleanup?.();
+  } catch (error) {
+    result.outcome = "blocked";
+    result.diagnostic = diagnose(error, config);
+    result.error = `Fixture cleanup failed: ${result.diagnostic.message}`;
   }
   await record({
     phase: "execution",

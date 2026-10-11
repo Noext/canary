@@ -4,6 +4,42 @@ import { z } from "zod";
 import { QaError } from "./diagnostics.js";
 
 const envSchema = z.object({
+  QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
+  QA_PREVIEW_WAIT_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(7200)
+    .default(900),
+  QA_BASELINE_URL_TEMPLATE: z.string().default(""),
+  DATABASE_URL: z.string().default(""),
+  QA_RUN_TIMEOUT_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(7200)
+    .default(900),
+  QA_RUN_MAX_TOKENS: z.coerce.number().int().min(1000).default(100_000),
+  QA_RUN_MAX_COST_USD: z.coerce.number().positive().default(10),
+  QA_INPUT_COST_PER_MILLION: z.coerce.number().nonnegative().default(0),
+  QA_OUTPUT_COST_PER_MILLION: z.coerce.number().nonnegative().default(0),
+  QA_USERS_FILE: z.string().default(""),
+  QA_RETENTION_DAYS: z.coerce.number().int().min(1).default(14),
+  QA_STORAGE_MAX_GB: z.coerce.number().positive().default(20),
+  QA_BROWSER_SERVICE_URL: z.string().default(""),
+  QA_BROWSER_SERVICE_TOKEN: z.string().default(""),
+  QA_BROWSER_HOST: z.string().default("127.0.0.1"),
+  QA_BROWSER_PORT: z.coerce.number().int().default(8790),
+  QA_FIXTURES_FILE: z.string().default(""),
+  GITHUB_APP_ID: z.string().default(""),
+  GITHUB_APP_PRIVATE_KEY_FILE: z.string().default(""),
+  GITHUB_INSTALLATION_ID: z.string().default(""),
+  GITHUB_WEBHOOK_SECRET: z.string().default(""),
+  QA_OIDC_ISSUER: z.string().default(""),
+  QA_OIDC_AUDIENCE: z.string().default(""),
+  QA_OIDC_JWKS_URL: z.string().default(""),
+  QA_ALLOWED_PROVIDER_HOSTS: z.string().default(""),
+  QA_RAW_EVIDENCE: z.enum(["true", "false"]).default("false"),
   GITHUB_TOKEN: z.string().default(""),
   GITHUB_API_URL: z.string().url().default("https://api.github.com"),
   GITHUB_ALLOWED_REPOS: z.string().default(""),
@@ -110,7 +146,7 @@ function serviceProblems(config: Config) {
   if (!config.allowedRepos.length) {
     problems.push("Set GITHUB_ALLOWED_REPOS before serving jobs");
   }
-  if (!config.GITHUB_TOKEN) {
+  if (!(config.GITHUB_TOKEN || config.GITHUB_APP_ID)) {
     problems.push(
       "Set GITHUB_TOKEN for the default GitHub publication workflow"
     );

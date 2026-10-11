@@ -1,5 +1,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { context, trace } from "@opentelemetry/api";
 import { createLogger } from "@usecanary/logger";
 import type { Diagnostic } from "./diagnostics.js";
 import { writeJson } from "./report.js";
@@ -35,7 +36,15 @@ export class Progress {
   }
   async record(event: ProgressEvent) {
     this.phase = event.phase;
+    const span = trace.getSpan(context.active());
+    span?.addEvent(event.phase, {
+      runId: this.runId,
+      action: event.action ?? "",
+      scenario: event.scenarioId ?? "",
+    });
     const entry = {
+      traceId: span?.spanContext().traceId,
+      spanId: span?.spanContext().spanId,
       runId: this.runId,
       sequence: ++this.sequence,
       at: new Date().toISOString(),

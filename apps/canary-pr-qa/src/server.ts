@@ -96,7 +96,7 @@ async function readStatus(config: Config, id: string) {
   }
 }
 
-async function serveArtifact(
+export async function serveArtifact(
   res: ServerResponse,
   config: Config,
   id: string,
@@ -147,6 +147,12 @@ async function serveArtifact(
     "Content-Type": mime[extname(path)] ?? "text/plain; charset=utf-8",
     "Content-Length": info.size,
     "X-Content-Type-Options": "nosniff",
+    ...(extname(path) === ".html"
+      ? {
+          "Content-Security-Policy":
+            "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        }
+      : {}),
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
   });

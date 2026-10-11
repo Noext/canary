@@ -1,0 +1,193 @@
+import { randomUUID } from "node:crypto";
+import pg from "pg";
+import type { RunOptions } from "./runner.js";
+export interface Job {
+  cancel_requested: boolean;
+  created_at: string;
+  id: string;
+  input: RunOptions;
+  outcome?: string;
+  owner: string;
+  pr: number;
+  repo: string;
+  sha: string;
+  status:
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  updated_at: string;
+  worker?: string;
+}
+export const MIGRATION = `
+CREATE TABLE IF NOT EXISTS qa_jobs (
+ id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
+ owner text NOT NULL, idempotency_key text NOT NULL UNIQUE,
+ input jsonb NOT NULL, status text NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled','interrupted')),
+ usage jsonb NOT NULL DEFAULT '{}', outcome text, error text, worker text, lease_until timestamptz, cancel_requested boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS qa_claim ON qa_jobs(status,created_at);
+CREATE INDEX IF NOT EXISTS qa_project ON qa_jobs(repo,created_at DESC);
+CREATE TABLE IF NOT EXISTS qa_deliveries (id text PRIMARY KEY, event text NOT NULL, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'pending', retry_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS qa_audit (id bigserial PRIMARY KEY, actor text NOT NULL, action text NOT NULL, run_id uuid, details jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS qa_schema (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+INSERT INTO qa_schema(version) VALUES(1) ON CONFLICT DO NOTHING;
+ALTER TABLE qa_jobs ADD COLUMN IF NOT EXISTS usage jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS retry_at timestamptz NOT NULL DEFAULT now();
+INSERT INTO qa_schema(version) VALUES(2) ON CONFLICT DO NOTHING;
+`;
+export class Queue {
+  readonly pool: pg.Pool;
+  constructor(url: string) {
+    this.pool = new pg.Pool({
+      connectionString: url,
+      max: 10,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 10_000,
+    });
+  }
+  async migrate() {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(9287342)");
+      await client.query(MIGRATION);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async audit(
+    actor: string,
+    action: string,
+    id?: string,
+    details: unknown = {}
+  ) {
+    await this.pool.query(
+      "INSERT INTO qa_audit(actor,action,run_id,details) VALUES($1,$2,$3,$4)",
+      [actor, action, id ?? null, JSON.stringify(details)]
+    );
+  }
+  async enqueue(
+    repo: string,
+    pr: number,
+    sha: string,
+    owner: string,
+    input: RunOptions,
+    key: string
+  ): Promise<Job> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(9287341)");
+      const duplicate = await client.query<Job>(
+        "SELECT * FROM qa_jobs WHERE idempotency_key=$1",
+        [key]
+      );
+      if (duplicate.rows[0]) {
+        await client.query("COMMIT");
+        return duplicate.rows[0];
+      }
+      const count = await client.query(
+        "SELECT count(*)::int AS count FROM qa_jobs WHERE status IN ('queued','running')"
+      );
+      if (count.rows[0].count >= 200) {
+        throw new Error("Job queue is full (200)");
+      }
+      await client.query(
+        "UPDATE qa_jobs SET cancel_requested=true,status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,updated_at=now() WHERE repo=$1 AND pr=$2 AND sha<>$3 AND status IN ('queued','running')",
+        [repo, pr, sha]
+      );
+      const result = await client.query<Job>(
+        "INSERT INTO qa_jobs(id,repo,pr,sha,owner,input,idempotency_key,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued') RETURNING *",
+        [
+          randomUUID(),
+          repo,
+          pr,
+          sha,
+          owner,
+          JSON.stringify({ ...input, expectedSha: sha }),
+          key,
+        ]
+      );
+      const job = result.rows[0];
+      if (!job) {
+        throw new Error("Job insert returned no row");
+      }
+      await client.query(
+        "INSERT INTO qa_audit(actor,action,run_id) VALUES($1,'enqueue',$2)",
+        [owner, job.id]
+      );
+      await client.query("COMMIT");
+      return job;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async claim(worker: string): Promise<Job | undefined> {
+    // Expired running jobs are interrupted, never replayed: browser writes are not generally idempotent.
+    await this.pool.query(
+      "UPDATE qa_jobs SET status='interrupted',error='Worker lease expired; submit an explicit new run',updated_at=now() WHERE status='running' AND lease_until < now()"
+    );
+    const result = await this.pool.query<Job>(
+      `WITH candidate AS (SELECT id FROM qa_jobs WHERE status='queued' AND NOT cancel_requested ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
+      UPDATE qa_jobs j SET status='running',worker=$1,lease_until=now()+interval '45 seconds',updated_at=now() FROM candidate WHERE j.id=candidate.id RETURNING j.*`,
+      [worker]
+    );
+    return result.rows[0];
+  }
+  async heartbeat(id: string, worker: string): Promise<boolean> {
+    const result = await this.pool.query(
+      "UPDATE qa_jobs SET lease_until=now()+interval '45 seconds',updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' AND NOT cancel_requested RETURNING id",
+      [id, worker]
+    );
+    return result.rowCount === 1;
+  }
+  async complete(
+    id: string,
+    worker: string,
+    outcome: string,
+    error?: string,
+    usage: unknown = {}
+  ) {
+    const result = await this.pool.query(
+      "UPDATE qa_jobs SET status=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'completed' END,outcome=$3,error=$4,usage=$5,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' RETURNING id",
+      [id, worker, outcome, error ?? null, JSON.stringify(usage)]
+    );
+    if (!result.rowCount) {
+      throw new Error("Worker lost job ownership; completion rejected");
+    }
+  }
+  async cancel(id: string, actor: string) {
+    await this.pool.query(
+      "UPDATE qa_jobs SET cancel_requested=true,status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,updated_at=now() WHERE id=$1 AND status IN ('queued','running')",
+      [id]
+    );
+    await this.audit(actor, "cancel", id);
+  }
+  async get(id: string): Promise<Job | undefined> {
+    return (
+      await this.pool.query<Job>("SELECT * FROM qa_jobs WHERE id=$1", [id])
+    ).rows[0];
+  }
+  async list(repos: string[], status = "", search = "") {
+    return (
+      await this.pool.query<Job>(
+        "SELECT * FROM qa_jobs WHERE lower(repo)=ANY($1::text[]) AND ($2='' OR status=$2) AND ($3='' OR repo ILIKE '%'||$3||'%' OR sha ILIKE $3||'%') ORDER BY created_at DESC LIMIT 200",
+        [repos, status, search]
+      )
+    ).rows;
+  }
+  async close() {
+    await this.pool.end();
+  }
+}

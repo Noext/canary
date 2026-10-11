@@ -4,13 +4,17 @@ import { ensureDaemonExtracted } from "./extract.js";
 import { npmCommand } from "./npm.js";
 
 // Install Playwright + runtime deps under ~/.canary/. Extracts the
-// embedded daemon bundle, then `npm install` + `playwright install chromium`.
+// embedded daemon bundle, then `npm ci` + `playwright install chromium`.
 // Shared by the `canary` and `canary-browser` CLIs.
 export async function installDaemonRuntime(): Promise<number> {
   const base = canaryDir();
   await ensureDaemonExtracted();
   const npm = npmCommand();
-  await runInstall(npm, ["install"], base);
+  await runInstall(
+    npm,
+    ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+    base
+  );
   await runInstall(
     npm,
     ["exec", "--", "playwright", "install", "chromium"],

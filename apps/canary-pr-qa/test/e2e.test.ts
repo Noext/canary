@@ -1,10 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import net from "node:net";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Canary, compileAction } from "../src/canary.js";
 import { doctor } from "../src/doctor.js";
+import { executeScenario } from "../src/executor.js";
+import { Model } from "../src/model.js";
 import { runQa } from "../src/runner.js";
-import { fixture, PR_URL, SHA } from "./fixture.js";
+import { fixture, PR_URL, plan, SHA } from "./fixture.js";
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -38,7 +42,7 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
     expect(result.sha).toBe(SHA);
     const scenario = result.scenarios[0]!;
     expect(scenario.assertions).toEqual([
-      { id: "saved", passed: true, actual: "Welcome Ada" },
+      { id: "saved", passed: true, actual: "Welcome Ada", baseline: "" },
     ]);
     expect(scenario.steps.map((step) => step.action.type)).toEqual([
       "fill",
@@ -80,7 +84,7 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
       "failed"
     );
     expect(result.scenarios[0]?.assertions).toEqual([
-      { id: "saved", passed: false, actual: "Wrong output" },
+      { id: "saved", passed: false, actual: "Wrong output", baseline: "" },
     ]);
     expect(f.outgoing.at(-1)?.payload.state).toBe("failure");
     expect(
@@ -127,3 +131,114 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
     }
   );
 });
+
+it("rejects static matching output as transition evidence in actual Chromium", async () => {
+  const f = await fixture({ unchangedState: true });
+  closers.push(f.close);
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  expect(result.outcome, result.scenarios[0]?.error).toBe("failed");
+  expect(result.scenarios[0]?.assertions[0]).toMatchObject({
+    baseline: "Welcome Ada",
+    actual: "Welcome Ada",
+    passed: false,
+  });
+}, 180_000);
+it("checks persistence after real reload and fails a missing storage write", async () => {
+  for (const broken of [false, true]) {
+    const f = await fixture({ persistent: true, persistenceBroken: broken });
+    closers.push(f.close);
+    const scenario = structuredClone(plan.scenarios[0]!);
+    scenario.assertions[0]!.verification = "persisted";
+    const result = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      f.config,
+      new Canary(f.config),
+      new Model(f.config)
+    );
+    expect(result.outcome, result.error).toBe(broken ? "failed" : "passed");
+    expect(result.assertions[0]?.persisted).toBe(broken ? "" : "Welcome Ada");
+  }
+}, 180_000);
+it("blocks actual page subrequests outside the approved host and port", async () => {
+  let hits = 0;
+  const sink = createServer((_req, res) => {
+    hits++;
+    res.end("not allowed");
+  });
+  await new Promise<void>((done) => sink.listen(0, "127.0.0.1", done));
+  closers.push(() => new Promise<void>((done) => sink.close(() => done())));
+  const address = sink.address() as { port: number };
+  const f = await fixture({
+    maliciousUrl: `http://127.0.0.1:${address.port}/probe`,
+  });
+  closers.push(f.close);
+  const canary = new Canary(f.config);
+  const id = await canary.start("Network isolation probe");
+  try {
+    await canary.act(
+      id,
+      "open",
+      compileAction({ type: "goto", path: f.baseUrl }, f.baseUrl)
+    );
+    await canary.act(
+      id,
+      "observe",
+      compileAction({ type: "observe" }, f.baseUrl)
+    );
+    expect(hits).toBe(0);
+    await canary.end(id, join(f.dataDir, "network"));
+  } finally {
+    await canary.abort(id);
+  }
+}, 180_000);
+it("installs trusted role cookies before navigation, with no secrets sent to the model", async () => {
+  const f = await fixture({ requireCookie: true });
+  closers.push(f.close);
+  const file = join(f.dataDir, "fixtures.json");
+  await writeFile(
+    file,
+    JSON.stringify({ "fixture/app": { roles: { member: "QA_E2E_ROLE" } } })
+  );
+  vi.stubEnv(
+    "QA_E2E_ROLE",
+    JSON.stringify({
+      cookies: [
+        {
+          name: "qa_role",
+          value: "test-member-secret",
+          domain: "127.0.0.1",
+          path: "/",
+          httpOnly: true,
+          secure: false,
+          sameSite: "Lax",
+          expires: -1,
+        },
+      ],
+      origins: [],
+    })
+  );
+  const config = { ...f.config, QA_FIXTURES_FILE: file };
+  const scenario = structuredClone(plan.scenarios[0]!);
+  scenario.preconditions = ["role:member"];
+  try {
+    const result = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      config,
+      new Canary(config),
+      new Model(config),
+      undefined,
+      "fixture/app"
+    );
+    expect(result.outcome, result.error).toBe("passed");
+    expect(JSON.stringify(f.modelRequests)).not.toContain("test-member-secret");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}, 180_000);
