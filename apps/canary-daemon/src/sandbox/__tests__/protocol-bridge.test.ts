@@ -5,7 +5,9 @@ import {
   createProtocolBridge,
   type ProtocolBridge,
 } from "../protocol-bridge.js";
+import { localPageFixture } from "./local-page-fixture.js";
 
+let fixture: Awaited<ReturnType<typeof localPageFixture>>;
 describe.sequential("protocol bridge", () => {
   let bridge: ProtocolBridge;
   let playwright: PlaywrightClientLike;
@@ -13,11 +15,13 @@ describe.sequential("protocol bridge", () => {
   let page: Page | undefined;
 
   beforeAll(async () => {
+    fixture = await localPageFixture();
     bridge = createProtocolBridge();
     playwright = await bridge.initializePlaywright();
   }, 60_000);
 
   afterAll(async () => {
+    await fixture.close();
     if (page && !page.isClosed()) {
       await page.close();
     }
@@ -37,7 +41,7 @@ describe.sequential("protocol bridge", () => {
     browser = await playwright.chromium.launch({ headless: true });
     page = await browser.newPage();
 
-    await page.goto("https://example.com");
+    await page.goto(fixture.url);
 
     await expect(page.title()).resolves.toBe("Example Domain");
     await expect(page.locator("h1").textContent()).resolves.toBe(

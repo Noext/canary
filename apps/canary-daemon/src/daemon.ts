@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { createLogger } from "@usecanary/logger";
 import {
+  daemonTcpConfig,
   EMBEDDED_PACKAGE_JSON,
   type ExecuteRequest,
   parseRequest,
@@ -24,11 +25,13 @@ import { createKeyedLock, createMutex } from "./lock.js";
 import { runScript } from "./sandbox/script-runner-quickjs.js";
 import { SessionManager, sessionBrowserName } from "./session-manager.js";
 import { ensureCanaryTempDir } from "./temp-files.js";
+import { authenticTransportRequest } from "./transport-auth.js";
 
 const BASE_DIR = getCanaryBaseDir();
 const SOCKET_PATH = getDaemonEndpoint();
 const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
+const TCP_CONFIG = daemonTcpConfig(process.env);
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
 
@@ -407,6 +410,10 @@ async function runInstallCommand(
 }
 
 async function handleRequest(socket: net.Socket, line: string): Promise<void> {
+  if (TCP_CONFIG && !authenticTransportRequest(line, TCP_CONFIG.token)) {
+    socket.destroy();
+    return;
+  }
   const parsed = parseRequest(line);
   if (!parsed.success) {
     await writeMessage(socket, {
@@ -624,7 +631,7 @@ function shutdown(exitCode = 0): Promise<void> {
     );
     await serverClosed;
     const cleanup = [unlinkIfExists(PID_PATH)];
-    if (requiresDaemonEndpointCleanup()) {
+    if (!TCP_CONFIG && requiresDaemonEndpointCleanup()) {
       cleanup.push(unlinkIfExists(SOCKET_PATH));
     }
     await Promise.allSettled(cleanup);
@@ -640,7 +647,7 @@ function shutdown(exitCode = 0): Promise<void> {
 async function start(): Promise<void> {
   await mkdir(BASE_DIR, { recursive: true });
   await ensureCanaryTempDir();
-  if (requiresDaemonEndpointCleanup()) {
+  if (!TCP_CONFIG && requiresDaemonEndpointCleanup()) {
     await unlinkIfExists(SOCKET_PATH);
   }
   await writeFile(PID_PATH, `${process.pid}\n`);
@@ -659,6 +666,10 @@ async function start(): Promise<void> {
 
     socket.on("data", (chunk: string) => {
       buffer += chunk;
+      if (buffer.length > 64 * 1024 * 1024) {
+        socket.destroy();
+        return;
+      }
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
@@ -699,13 +710,22 @@ async function start(): Promise<void> {
 
   await new Promise<void>((resolve, reject) => {
     server?.once("error", reject);
-    server?.listen(SOCKET_PATH, () => {
+    const endpoint = TCP_CONFIG
+      ? { host: TCP_CONFIG.host, port: TCP_CONFIG.port }
+      : { path: SOCKET_PATH };
+    server?.listen(endpoint, () => {
       server?.off("error", reject);
       resolve();
     });
   });
 
-  log.info({ socket: SOCKET_PATH, pid: process.pid }, "daemon ready");
+  log.info(
+    {
+      socket: TCP_CONFIG ? `127.0.0.1:${TCP_CONFIG.port}` : SOCKET_PATH,
+      pid: process.pid,
+    },
+    "daemon ready"
+  );
 }
 
 function registerShutdownHandlers(): void {

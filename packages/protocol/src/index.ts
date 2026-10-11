@@ -14,7 +14,33 @@ import { z } from "zod";
 
 const RequestBaseSchema = z.object({
   id: z.string().min(1),
+  // Optional authenticated loopback transport. Native Unix/named pipes remain the default.
+  transportToken: z.string().optional(),
 });
+
+export function daemonTcpConfig(
+  env: Record<string, string | undefined>
+): { host: "127.0.0.1"; port: number; token: string } | undefined {
+  const value = env.CANARY_DAEMON_PORT;
+  if (!value) {
+    return;
+  }
+  const port = Number(value);
+  if (
+    !(/^\d+$/.test(value) && Number.isInteger(port)) ||
+    port < 1024 ||
+    port > 65_535
+  ) {
+    throw new Error("CANARY_DAEMON_PORT must be 1024-65535");
+  }
+  const token = env.CANARY_DAEMON_TOKEN;
+  if (!token || token.length < 32) {
+    throw new Error(
+      "TCP transport requires CANARY_DAEMON_TOKEN of at least 32 characters"
+    );
+  }
+  return { host: "127.0.0.1", port, token };
+}
 
 export const ExecuteRequestSchema = RequestBaseSchema.extend({
   type: z.literal("execute"),

@@ -65,6 +65,47 @@ export interface CapturingFakeEnv extends FakeEnv {
   request(): Promise<Record<string, unknown> | null>;
 }
 
+const TEST_TCP_TOKEN = "fake-daemon-test-token-with-at-least-32-characters";
+function healthProbe(
+  socket: net.Socket,
+  req: Record<string, unknown>
+): boolean {
+  if (process.env.CANARY_TEST_TCP !== "1") {
+    return false;
+  }
+  if (req.transportToken !== TEST_TCP_TOKEN) {
+    socket.destroy();
+    return true;
+  }
+  if (req.id !== "transport-health") {
+    return false;
+  }
+  socket.end(
+    `${JSON.stringify({ id: req.id, type: "complete", success: true })}\n`
+  );
+  return true;
+}
+async function listenFake(
+  server: net.Server,
+  socketPath: string
+): Promise<NodeJS.ProcessEnv> {
+  const tcp = process.env.CANARY_TEST_TCP === "1";
+  await new Promise<void>((done, reject) => {
+    server.once("error", reject);
+    server.listen(
+      tcp ? { host: "127.0.0.1", port: 0 } : { path: socketPath },
+      done
+    );
+  });
+  const address = server.address();
+  return tcp && address && typeof address !== "string"
+    ? {
+        CANARY_DAEMON_PORT: String(address.port),
+        CANARY_DAEMON_TOKEN: TEST_TCP_TOKEN,
+      }
+    : { CANARY_DAEMON_PORT: "", CANARY_DAEMON_TOKEN: "" };
+}
+
 // Start a fake daemon listening at <tempHome>/.canary/daemon.sock and
 // return an env object pointing the CLI at it. On Windows we skip — CLI's
 // pipe name is process-scoped and can't be redirected this way.
@@ -91,6 +132,9 @@ export async function startFakeDaemon(
       } catch {
         // ignore malformed
       }
+      if (healthProbe(socket, req)) {
+        return;
+      }
       try {
         for await (const message of handler(req)) {
           socket.write(`${JSON.stringify(message)}\n`);
@@ -103,13 +147,10 @@ export async function startFakeDaemon(
     });
     socket.on("error", () => socket.destroy());
   });
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once("error", rejectListen);
-    server.listen(socketPath, () => resolveListen());
-  });
+  const transportEnv = await listenFake(server, socketPath);
 
   return {
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, ...transportEnv },
     home,
     socketPath,
     async close() {
@@ -152,6 +193,9 @@ export async function startFakeDaemonCapturing(
       } catch {
         // ignore malformed
       }
+      if (healthProbe(socket, req)) {
+        return;
+      }
       if (capturedRequest === null) {
         capturedRequest = req;
         resolveCaptured(req);
@@ -168,13 +212,10 @@ export async function startFakeDaemonCapturing(
     });
     socket.on("error", () => socket.destroy());
   });
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once("error", rejectListen);
-    server.listen(socketPath, () => resolveListen());
-  });
+  const transportEnv = await listenFake(server, socketPath);
 
   return {
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, ...transportEnv },
     home,
     socketPath,
     async request() {

@@ -1,6 +1,10 @@
 import net from "node:net";
 import { createInterface } from "node:readline";
-import type { Request, Response } from "@usecanary/protocol";
+import {
+  daemonTcpConfig,
+  type Request,
+  type Response,
+} from "@usecanary/protocol";
 import { daemonEndpoint } from "../paths.js";
 
 // 5s write timeout on the socket.
@@ -22,7 +26,10 @@ export interface DaemonConnection {
 
 export async function connectToDaemon(): Promise<DaemonConnection> {
   const endpoint = daemonEndpoint();
-  const socket = net.createConnection({ path: endpoint });
+  const tcp = daemonTcpConfig(process.env);
+  const socket = net.createConnection(
+    tcp ? { host: tcp.host, port: tcp.port } : { path: endpoint }
+  );
 
   await new Promise<void>((resolve, reject) => {
     const onConnect = () => {
@@ -46,8 +53,29 @@ export async function connectToDaemon(): Promise<DaemonConnection> {
 export async function isDaemonRunning(): Promise<boolean> {
   try {
     const conn = await connectToDaemon();
-    conn.socket.destroy();
-    return true;
+    try {
+      if (!daemonTcpConfig(process.env)) {
+        return true;
+      }
+      conn.socket.setTimeout(1000, () => conn.socket.destroy());
+      // A listening TCP port alone does not prove it is our authenticated daemon.
+      await sendMessage(conn.socket, {
+        id: "transport-health",
+        type: "status",
+      });
+      for await (const line of conn.reader) {
+        const response = JSON.parse(line) as Response;
+        if (response.type === "complete") {
+          return true;
+        }
+        if (response.type === "error") {
+          return false;
+        }
+      }
+      return false;
+    } finally {
+      conn.socket.destroy();
+    }
   } catch {
     return false;
   }
@@ -58,7 +86,10 @@ export async function sendMessage(
   socket: net.Socket,
   message: Request
 ): Promise<void> {
-  const json = JSON.stringify(message);
+  const tcp = daemonTcpConfig(process.env);
+  const json = JSON.stringify(
+    tcp ? { ...message, transportToken: tcp.token } : message
+  );
   await write(socket, json);
   await write(socket, "\n");
 }

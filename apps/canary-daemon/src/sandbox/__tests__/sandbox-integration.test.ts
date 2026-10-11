@@ -1,13 +1,12 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import { BrowserManager } from "../../browser-manager.js";
 import { removeDirectoryWithRetries } from "../../test-cleanup.js";
 import { runScript } from "../script-runner-quickjs.js";
 import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
+import { localPageFixture } from "./local-page-fixture.js";
 
 interface CapturedOutput {
   stderr: string[];
@@ -37,11 +36,13 @@ function createOutput(): CapturedOutput & {
   };
 }
 
+let fixture: Awaited<ReturnType<typeof localPageFixture>>;
 describe.sequential("QuickJS sandbox integration", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 
   beforeAll(async () => {
+    fixture = await localPageFixture();
     await ensureSandboxClientBundle();
 
     browserRootDir = await mkdtemp(path.join(os.tmpdir(), "canary-quickjs-"));
@@ -52,6 +53,7 @@ describe.sequential("QuickJS sandbox integration", () => {
   }, 180_000);
 
   afterAll(async () => {
+    await fixture.close();
     await manager.stopAll();
     await removeDirectoryWithRetries(browserRootDir);
   }, 180_000);
@@ -62,7 +64,7 @@ describe.sequential("QuickJS sandbox integration", () => {
     await runScript(
       `
         const page = await browser.getPage("nav");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(fixture.url)});
         console.log(await page.title());
       `,
       manager,
@@ -83,7 +85,7 @@ describe.sequential("QuickJS sandbox integration", () => {
     await runScript(
       `
         const page = await browser.getPage("locator");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(fixture.url)});
         console.log(await page.locator("h1").textContent());
       `,
       manager,
@@ -103,7 +105,7 @@ describe.sequential("QuickJS sandbox integration", () => {
     await runScript(
       `
         const page = await browser.getPage("evaluate");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(fixture.url)});
         console.log(await page.evaluate(() => document.title));
       `,
       manager,
