@@ -61,3 +61,12 @@ CANARY_DOCKER_IMAGE=canary-pr-qa:test corepack pnpm --filter @usecanary/pr-qa te
 Ces tests démarrent des projets Compose isolés avec de nouveaux volumes, vérifient UID 1000, doctor, authentification, un scénario réel Chromium, une régression, les preuves téléchargées, la publication aux fixtures et la persistance après redémarrage. Ils nettoient uniquement leurs volumes de test. Le workflow CI conserve leurs logs en artefact, y compris en cas d'échec. L'ajout d'un workflow ne constitue pas une exécution réussie : consulter les runs GitHub effectifs.
 
 La recette de production exige ensuite `./scripts/pr-qa up`, un doctor sur les services réels et un run sur une PR/preview au SHA attendu, avec vidéo consultable et commentaire/statut réellement publiés. Il manque ici l'accès au VPS, l'endpoint/modèle réel et une preview déployée. Aucune garantie « première installation certifiée » ne doit être annoncée avant cette recette.
+
+## État après l'extension entreprise
+
+Les nombres et limites ci-dessus décrivent une validation antérieure. L'état courant
+est suivi dans [pr-qa-validation.md](pr-qa-validation.md) et la [PR du fork](https://github.com/Noext/canary/pull/1).
+Le système utilise maintenant PostgreSQL, des workers et un browser/proxy isolés,
+un dashboard privé SSE et les contrôles détaillés dans
+[pr-qa-enterprise.md](pr-qa-enterprise.md). Le doctor en ligne contrôle également
+la connexion PostgreSQL, la version de migration et la lecture des jobs.

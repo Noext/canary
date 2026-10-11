@@ -169,7 +169,7 @@ async function executePlan(
   result.plan = await model.json(PLANNER_PROMPT, payload, PlanSchema);
   validatePlan(result.plan, context, config);
   result.coverage = validateCoverage(result.plan, context, policy, config);
-  await saveReport(root, result);
+  await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
     logger.info(
       { runId: result.id, scenario: scenario.id },
@@ -188,7 +188,7 @@ async function executePlan(
         context.ref.repo
       )
     );
-    await saveReport(root, result);
+    await saveReport(root, result, config);
   }
   result.outcome = aggregate(result.scenarios);
   if (config.QA_BASELINE_URL_TEMPLATE) {
@@ -411,7 +411,7 @@ async function runUnscoped(
     };
   }
   result.endedAt = new Date().toISOString();
-  await saveReport(root, result);
+  await saveReport(root, result, config);
   if (
     context &&
     options.publish !== false &&
@@ -419,7 +419,7 @@ async function runUnscoped(
   ) {
     await progress.record({ phase: "publication" });
     await publish(result, context, github, config, reportUrl);
-    await saveReport(root, result);
+    await saveReport(root, result, config);
   } else if (
     context &&
     options.publish !== false &&

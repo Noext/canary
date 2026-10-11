@@ -15,6 +15,7 @@ import { type Diagnostic, diagnose, QaError, redact } from "./diagnostics.js";
 import { GitHub, type PrContext } from "./github.js";
 import { Model } from "./model.js";
 import { resolvePreview } from "./preview.js";
+import { Queue } from "./queue.js";
 import type { RunResult } from "./schema.js";
 
 interface Check {
@@ -112,6 +113,25 @@ export async function doctor(
     const disk = await statfs(config.QA_DATA_DIR);
     return `Read/write verified; ${Math.floor((disk.bavail * disk.bsize) / 1024 / 1024)} MiB available`;
   });
+  if (config.DATABASE_URL && !options.offline) {
+    await check("postgresql", async () => {
+      const queue = new Queue(config.DATABASE_URL);
+      try {
+        const schema = await queue.pool.query(
+          "SELECT max(version)::int AS version FROM qa_schema"
+        );
+        if (schema.rows[0]?.version !== 2) {
+          throw new Error(
+            "Database schema is not at supported version 2; start the API migration first"
+          );
+        }
+        await queue.pool.query("SELECT count(*)::int AS count FROM qa_jobs");
+        return "PostgreSQL connection, schema version 2 and job-table read verified";
+      } finally {
+        await queue.close();
+      }
+    });
+  }
   const canary = new Canary(config);
   const built = await check("canary-cli", async () => {
     if (!(await stat(config.CANARY_CLI_PATH)).isFile()) {

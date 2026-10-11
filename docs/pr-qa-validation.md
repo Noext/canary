@@ -46,25 +46,49 @@ These synthetic test fixtures contain no user credentials. The metadata marks th
 
 ## Extension entreprise — 11 octobre 2026
 
-Sur le checkout local de la branche du fork :
+### Résultats effectivement exécutés
 
-- Suite `pnpm check` exécutée avec Node 22.23.3 : **291 tests passent** ; une suite
-  de concurrence PostgreSQL native est explicitement ignorée faute de
-  `QA_TEST_DATABASE_URL`. Lint, TypeScript et synchronisation des snippets passent.
-- **8 E2E Chromium** passent : doctor, scénario sain, régression réelle,
-  authentification daemon, refus d'un état statique, persistance/reload sain et
-  défectueux, sous-requête réseau refusée, cookies de rôle installés sans secret IA.
-- Tests SQL : production SQL exécuté dans PostgreSQL WASM/PGlite, incluant
-  idempotence, leases, annulation, interruption et routes dashboard/SSE/auth.
-  Cela ne valide pas les locks multi-process de PostgreSQL natif.
-- Proxy egress : HTTP réel autorisé, destination hors liste refusée. La topologie
-  réseau Docker et l'installation Compose restent à exécuter par la CI Docker.
-- Aucun VPS, serveur PostgreSQL natif, GitHub App réelle, modèle IA réel ou IdP
-  n'est accessible dans cette session. Aucun résultat correspondant n'est annoncé.
-- Les workflows CI/release sont implémentés ; leur exécution distante et les
-  protections de branche ne sont pas attestées par leur présence dans Git.
+- Checkout local Node 22.23.3 : `pnpm check` passe avec **300 tests** ; le test
+  PostgreSQL natif est ignoré localement faute de serveur natif. Lint, compilation
+  TypeScript et snippets synchronisés passent.
+- **11 E2E Chromium locaux passent** : doctor complet, formulaire sain, vraie
+  régression UI, daemon authentifié, refus d'un état statique, persistence/reload,
+  sous-requêtes interdites, rôle cookie, download/popup réels, comparaison visuelle
+  et dashboard interactif avec login/list/SSE/annulation.
+- JWT RSA et renouvellement des tokens App, HMAC et déduplication webhook, attente
+  d'une preview au SHA, SQL PostgreSQL WASM/PGlite, leases et propriété avant
+  publication sont testés. L'export réel OTLP HTTP `/v1/traces` est reçu par un
+  collecteur local ; son nom de service et ses IDs sont corrélés à `progress.json`.
+- Audits des dépendances de production et du lock npm du runtime embarqué :
+  **aucune vulnérabilité connue signalée** après mise à jour OpenTelemetry.
+- La [CI du commit 9b85849](https://github.com/Noext/canary/actions/runs/38175740357)
+  a terminé avec **success** : installation pnpm frozen, audit, lint/compile/tests,
+  PostgreSQL natif avec 50 claims concurrents et injection de panne, E2E Chromium,
+  construction Docker et **deux tests Compose de première installation**.
+  Les tests Compose créent de nouveaux volumes, contrôlent UID 1000, doctor,
+  soumission via l'API et traitement par le worker/broker, preuves non vides,
+  refus HTTP des HAR/ZIP bruts, scénario passant, régression détectée, publication
+  aux fixtures GitHub et persistance du résultat après redémarrage de l'API.
+- Les premiers runs CI ont réellement échoué : accès aux HAR/ZIP contraire à la
+  politique par défaut, puis résolution DNS tentée depuis le navigateur isolé.
+  Les tests et la délégation DNS au proxy ont été corrigés avant le run vert.
 
-Les valeurs `NODE_USE_ENV_PROXY=0`, `CANARY_TEST_TCP=1` et le transport daemon
-loopback authentifié ont servi uniquement aux contraintes de l'environnement
-local (sockets Unix interdits). Les probes E2E sont réelles, mais leurs services
-GitHub/IA sont des fixtures REST.
+### Portée et limites
+
+GitHub et IA sont des fixtures REST dans ces tests ; Chromium, formulaires,
+artefacts, dashboard, PostgreSQL natif, build et containers Docker sont réels.
+Les tests ne mesurent pas la qualité de planification d'un modèle réel.
+
+Aucun endpoint IA réel, GitHub App installée, IdP d'entreprise ou VPS n'a été fourni.
+Le corpus `scripts/evaluate.ts` est exécutable avec un endpoint réel ; aucune
+évaluation live n'est revendiquée. Aucun déploiement VPS, image de release publiée
+ou protection de branche activée n'est annoncé.
+
+Les adaptations locales `NODE_USE_ENV_PROXY=0`, `CANARY_TEST_TCP=1` et le daemon
+loopback authentifié répondent aux contraintes du poste local (sockets Unix
+interdits). La CI utilise le transport natif et ignore le seul test négatif dédié
+au transport TCP lorsque ce transport n'est pas configuré.
+
+Les ajustements doctor PostgreSQL et présentation des liens bruts sont soumis à
+une dernière CI ; la PR contient le résultat du commit final, à consulter avant
+fusion.

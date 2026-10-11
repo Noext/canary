@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Config } from "./config.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { redact } from "./diagnostics.js";
 import type { RunResult } from "./schema.js";
@@ -62,8 +63,14 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
     "Assertions were evaluated by the runner against the original plan. A browser-only pass does not cover explicitly skipped changes.",
   ].join("\n\n");
 }
-export async function saveReport(root: string, original: RunResult) {
-  const result: RunResult = JSON.parse(redact(JSON.stringify(original)));
+export async function saveReport(
+  root: string,
+  original: RunResult,
+  config?: Config
+) {
+  const result: RunResult = JSON.parse(
+    redact(JSON.stringify(original), config)
+  );
   await mkdir(root, { recursive: true });
   await writeJson(join(root, "result.json"), result);
   await writeFile(join(root, "report.md"), reportMarkdown(result));
@@ -72,7 +79,7 @@ export async function saveReport(root: string, original: RunResult) {
       (
         item
       ) => `<section><h2>${escapeHtml(item.scenario.title)} — ${escapeHtml(item.outcome)}</h2><p>${escapeHtml(item.scenario.rationale)}</p><p>${escapeHtml(item.error)}</p>${diagnosticHtml(item.diagnostic)}
-<a href="${escapeHtml(item.scenario.id)}/report.html">Canary session report</a>
+${config?.QA_RAW_EVIDENCE === "true" ? `<a href="${escapeHtml(item.scenario.id)}/report.html">Canary session report</a>` : ""}
 ${item.artifacts
   .filter((file) => file.endsWith(".webm"))
   .map(
