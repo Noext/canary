@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import net from "node:net";
@@ -422,10 +423,24 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
   );
   const f = await fixture();
   closers.push(f.close);
+  const viewerToken = "dashboard-viewer-token-0123456789";
+  const usersFile = join(f.dataDir, "dashboard-users.json");
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "read-only",
+        role: "viewer",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
+      },
+    ])
+  );
   const config = {
     ...f.config,
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
+    QA_USERS_FILE: usersFile,
   };
   const server = await startProductionServer(config);
   closers.push(() => server.shutdown());
@@ -533,6 +548,52 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect((await queue.get(job.id))?.cancel_requested).toBe(true);
+    await act("logout", {
+      type: "click",
+      locator: { by: "role", value: "button", name: "Déconnexion" },
+    });
+    await act("viewer-token", {
+      type: "fill",
+      locator: { by: "css", value: "#token" },
+      value: viewerToken,
+    });
+    await act("viewer-login", {
+      type: "click",
+      locator: { by: "role", value: "button", name: "Se connecter" },
+    });
+    const viewer = await act(
+      "viewer-ready",
+      {
+        type: "assert",
+        assertionId: "viewer",
+        locator: { by: "css", value: "#connection" },
+      },
+      {
+        id: "viewer",
+        description: "Viewer identified",
+        kind: "text",
+        expected: "read-only",
+        verification: "state",
+        afterStep: "login",
+      }
+    );
+    expect(viewer.actual).toContain("read-only");
+    const controls = await act(
+      "viewer-controls",
+      {
+        type: "assert",
+        assertionId: "controls",
+        locator: { by: "css", value: "#runForm" },
+      },
+      {
+        id: "controls",
+        description: "Read-only controls hidden",
+        kind: "hidden",
+        verification: "state",
+        afterStep: "login",
+      }
+    );
+    expect(controls.actual).toBe(false);
     await canary.end(id, join(f.dataDir, "dashboard-evidence"));
   } finally {
     await canary.abort(id);

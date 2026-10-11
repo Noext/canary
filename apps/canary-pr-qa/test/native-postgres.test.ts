@@ -48,15 +48,17 @@ describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
         await expect(
           q.complete(victim.id, victim.worker!, "passed")
         ).rejects.toThrow();
+        // Concurrent claim order is intentionally unspecified: cancel a different job from the expired victim.
+        const updated = jobs.find((job) => job.id !== victim.id)!;
         await q.enqueue(
           repo,
-          2,
+          updated.pr,
           BASE_SHA,
           "ci",
           { prUrl: PR_URL },
           `${namespace}:updated`
         );
-        expect((await q.get(jobs[1]!.id))?.cancel_requested).toBe(true);
+        expect((await q.get(updated.id))?.cancel_requested).toBe(true);
       } finally {
         await q.pool.query("DELETE FROM qa_jobs WHERE repo=$1", [repo]);
         await q.close();
