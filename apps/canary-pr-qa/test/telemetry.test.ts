@@ -23,6 +23,8 @@ it("exports real OTLP HTTP spans and correlates saved progress with the active t
     `http://127.0.0.1:${(collector.address() as { port: number }).port}`
   );
   vi.stubEnv("OTEL_SERVICE_NAME", "canary-trace-fixture");
+  // Export must be deterministic even when the host samples production traces.
+  vi.stubEnv("OTEL_TRACES_SAMPLER", "always_on");
   const stop = initializeTracing()!;
   try {
     const root = await mkdtemp(join(tmpdir(), "canary-otel-"));

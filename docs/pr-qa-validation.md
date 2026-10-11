@@ -89,6 +89,15 @@ loopback authentifié répondent aux contraintes du poste local (sockets Unix
 interdits). La CI utilise le transport natif et ignore le seul test négatif dédié
 au transport TCP lorsque ce transport n'est pas configuré.
 
-Les ajustements doctor PostgreSQL et présentation des liens bruts sont soumis à
-une dernière CI ; la PR contient le résultat du commit final, à consulter avant
-fusion.
+Le [commit 9b7b354](https://github.com/Noext/canary/actions/runs/38176472890)
+a également passé la CI complète : **301 tests**, **10 E2E Chromium** et les
+**2 tests Compose**. Le test de concurrence ne suppose plus l'ordre des claims.
+
+Un contrôle supplémentaire a révélé que la sandbox HTML opaque empêchait
+l'authentification des sous-requêtes vidéo. Le rapport principal statique conserve
+maintenant son origine avec scripts interdits ; les rapports natifs gardent leur
+sandbox opaque. L'E2E étendu contrôle le login, les droits viewer, la lecture réelle
+du WebM après une navigation depuis un autre site et un clic sur les contrôles,
+le refus d'un script injecté et le refus d'une mutation cross-site. Le test OTLP
+force uniquement son sampler de fixture pour ignorer le taux de sampling du poste. Le résultat
+de la CI du commit final est consigné dans la PR.

@@ -12,6 +12,7 @@ import { executeScenario } from "../src/executor.js";
 import { Model } from "../src/model.js";
 import { startProductionServer } from "../src/production-server.js";
 import { Queue } from "../src/queue.js";
+import { saveReport } from "../src/report.js";
 import { runQa } from "../src/runner.js";
 import { fixture, PR_URL, plan, SHA } from "./fixture.js";
 
@@ -457,9 +458,11 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
   const canary = new Canary({
     ...config,
     allowedHosts: [...config.allowedHosts, new URL(url).host],
-    PREVIEW_ALLOWED_HOSTS: [...config.allowedHosts, new URL(url).host].join(
-      ","
-    ),
+    PREVIEW_ALLOWED_HOSTS: [
+      ...config.allowedHosts,
+      new URL(url).host,
+      new URL(url.replace("127.0.0.1", "localhost")).host,
+    ].join(","),
   });
   const id = await canary.start("Dashboard UI verification");
   async function act(
@@ -594,7 +597,87 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       }
     );
     expect(controls.actual).toBe(false);
-    await canary.end(id, join(f.dataDir, "dashboard-evidence"));
+    const reportRoot = join(f.dataDir, job.id);
+    const files = await canary.end(id, join(reportRoot, "dashboard"));
+    await saveReport(
+      reportRoot,
+      {
+        id: job.id,
+        prUrl: PR_URL,
+        sha: SHA,
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        outcome: "passed",
+        scenarios: [
+          {
+            scenario: {
+              ...plan.scenarios[0]!,
+              id: "dashboard",
+              title: "Dashboard test recording",
+            },
+            steps: [],
+            assertions: [],
+            artifacts: files,
+            outcome: "passed",
+          },
+        ],
+      },
+      config
+    );
+    const htmlPath = join(reportRoot, "report.html");
+    await writeFile(
+      htmlPath,
+      `${await readFile(htmlPath, "utf8")}<script>document.documentElement.dataset.qaInjection="executed";</script>`
+    );
+    const login = await fetch(`${url}/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+    });
+    const cookie = login.headers
+      .get("set-cookie")!
+      .split(";")[0]!
+      .slice("qa_session=".length);
+    const reportUrl = `${url.replace("127.0.0.1", "localhost")}/artifacts/${job.id}/report.html`;
+    const player = await canary.start("Authenticated report video playback", {
+      cookies: [
+        {
+          name: "qa_session",
+          value: cookie,
+          domain: "localhost",
+          path: "/",
+          httpOnly: true,
+          secure: false,
+          sameSite: "Lax",
+          expires: -1,
+        },
+      ],
+      origins: [],
+    });
+    try {
+      const playback = await canary.act(
+        player,
+        "playback",
+        `const page = await browser.getPage("qa");
+await page.goto(${JSON.stringify(f.baseUrl)}, {waitUntil:"domcontentloaded"});
+await page.evaluate(href => { const link = document.createElement("a"); link.href = href; link.textContent = "Open QA report"; document.body.append(link); }, ${JSON.stringify(reportUrl)});
+await page.getByRole("link", {name:"Open QA report"}).click();
+await page.waitForURL(${JSON.stringify(reportUrl)});
+await page.locator("video").click();
+await page.waitForTimeout(500);
+const actual = await page.evaluate(() => { const video = document.querySelector("video"); const result = {time:video.currentTime,duration:video.duration,injectedScript:document.documentElement.dataset.qaInjection || null}; video.pause(); return result; });
+console.log("CANARY_PR_QA_OBSERVATION:" + JSON.stringify({url:page.url(),snapshot:"Authenticated HTML report playback",actual}));`
+      );
+      expect((playback.actual as { time: number }).time).toBeGreaterThan(0);
+      expect(
+        (playback.actual as { duration: number }).duration
+      ).toBeGreaterThan(0);
+      expect(
+        (playback.actual as { injectedScript: unknown }).injectedScript
+      ).toBeNull();
+      await canary.end(player, join(f.dataDir, "report-player"));
+    } finally {
+      await canary.abort(player);
+    }
   } finally {
     await canary.abort(id);
   }

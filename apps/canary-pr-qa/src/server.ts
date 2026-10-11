@@ -150,7 +150,9 @@ export async function serveArtifact(
     ...(extname(path) === ".html"
       ? {
           "Content-Security-Policy":
-            "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+            relative(root, path) === "report.html"
+              ? "sandbox allow-same-origin; default-src 'self' data: blob:; script-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+              : "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'",
         }
       : {}),
     "Referrer-Policy": "no-referrer",

@@ -287,3 +287,14 @@ montées sont exclus du contexte Docker.
 Le check CI audite les dépendances de production. Les mises à jour OpenTelemetry
 sont verrouillées et l'export réel `/v1/traces`, le nom de service et la corrélation
 avec `progress.json` sont vérifiés par un collecteur HTTP de test.
+
+La lecture du WebM depuis le rapport principal est testée dans un vrai navigateur
+avec une session authentifiée : clic sur les contrôles et progression du temps de
+lecture. Le rapport principal n'exécute aucun script ; les rapports natifs restent
+isolés. Les tests vérifient également qu'un script injecté dans un artefact HTML
+n'est pas exécuté.
+
+La session utilise un cookie `HttpOnly`, `SameSite=Lax` et `Secure` en HTTPS :
+un lien de rapport ouvert depuis GitHub conserve l'authentification. Les mutations
+avec une origine étrangère sont refusées. L'E2E vérifie cette navigation entre
+sites, la lecture réelle de la vidéo et le refus d'une mutation cross-site.

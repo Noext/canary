@@ -52,7 +52,7 @@ export function sessionCookie(user: Principal, config: Config) {
   const signature = createHmac("sha256", config.QA_API_TOKEN)
     .update(payload)
     .digest("base64url");
-  return `qa_session=${payload}.${signature}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${config.ARTIFACT_BASE_URL.startsWith("https:") ? "; Secure" : ""}`;
+  return `qa_session=${payload}.${signature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600${config.ARTIFACT_BASE_URL.startsWith("https:") ? "; Secure" : ""}`;
 }
 export async function principal(
   req: IncomingMessage,

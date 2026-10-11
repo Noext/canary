@@ -148,6 +148,17 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
   });
   expect(login.status).toBe(200);
   expect(login.headers.get("set-cookie")).toContain("HttpOnly");
+  expect(login.headers.get("set-cookie")).toContain("SameSite=Lax");
+  const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  expect(
+    (
+      await fetch(`${url}/runs/${run.id}/cancel`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: "https://attacker.invalid" },
+      })
+    ).status
+  ).toBe(403);
+  expect((await q.get(run.id))?.cancel_requested).toBe(false);
   const list = await fetch(`${url}/runs`, { headers: admin });
   expect(((await list.json()) as unknown[]).length).toBe(1);
   const stream = await fetch(`${url}/runs/${run.id}/events`, {
