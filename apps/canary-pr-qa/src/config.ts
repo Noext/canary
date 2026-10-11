@@ -151,6 +151,38 @@ function serviceProblems(config: Config) {
       "Set GITHUB_TOKEN for the default GitHub publication workflow"
     );
   }
+  if (
+    config.GITHUB_APP_ID &&
+    !(config.GITHUB_INSTALLATION_ID && config.GITHUB_APP_PRIVATE_KEY_FILE)
+  ) {
+    problems.push(
+      "Set GITHUB_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY_FILE together with GITHUB_APP_ID"
+    );
+  }
+  if (
+    config.GITHUB_WEBHOOK_SECRET &&
+    config.GITHUB_WEBHOOK_SECRET.length < 32
+  ) {
+    problems.push(
+      "GITHUB_WEBHOOK_SECRET must contain at least 32 random characters"
+    );
+  }
+  if (
+    config.QA_BROWSER_SERVICE_URL &&
+    config.QA_BROWSER_SERVICE_TOKEN.length < 32
+  ) {
+    problems.push(
+      "QA_BROWSER_SERVICE_TOKEN must contain at least 32 random characters"
+    );
+  }
+  if (
+    config.QA_OIDC_ISSUER &&
+    !(config.QA_OIDC_AUDIENCE && config.QA_OIDC_JWKS_URL)
+  ) {
+    problems.push(
+      "Set QA_OIDC_AUDIENCE and QA_OIDC_JWKS_URL with QA_OIDC_ISSUER"
+    );
+  }
   return problems;
 }
 export function validateConfiguration(config: Config, service = false) {

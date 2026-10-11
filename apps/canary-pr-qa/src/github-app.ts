@@ -8,7 +8,7 @@ export async function githubToken(config: Config): Promise<string> {
   if (!config.GITHUB_APP_ID) {
     return config.GITHUB_TOKEN;
   }
-  const key = `${config.GITHUB_APP_ID}:${config.GITHUB_INSTALLATION_ID}`;
+  const key = `${config.GITHUB_API_URL}:${config.GITHUB_APP_ID}:${config.GITHUB_INSTALLATION_ID}`;
   const cached = cache.get(key);
   if (cached && cached.expires > Date.now() + 60_000) {
     return cached.token;
@@ -41,7 +41,13 @@ export async function githubToken(config: Config): Promise<string> {
     token: string;
     expires_at: string;
   };
-  if (!(body.token && Number.isFinite(Date.parse(body.expires_at)))) {
+  if (
+    !(
+      body.token &&
+      Number.isFinite(Date.parse(body.expires_at)) &&
+      Date.parse(body.expires_at) > Date.now()
+    )
+  ) {
     throw new Error("GitHub returned invalid installation credentials");
   }
   cache.set(key, { token: body.token, expires: Date.parse(body.expires_at) });

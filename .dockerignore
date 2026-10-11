@@ -10,3 +10,11 @@ node_modules
 qa-data
 coverage
 *.log
+
+# Mounted operator configuration must never enter image layers or build caches.
+config/**
+!config/branch-protection.json
+!config/*.example.json
+**/*.pem
+**/*.key
+**/storage-state*.json

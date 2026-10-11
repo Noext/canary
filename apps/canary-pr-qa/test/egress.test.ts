@@ -1,5 +1,6 @@
+import dns from "node:dns/promises";
 import { createServer, request } from "node:http";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   networkAllowed,
   privateAddress,
@@ -9,6 +10,7 @@ import { fixture } from "./fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const close of cleanup.splice(0).reverse()) {
     await close();
   }
@@ -32,6 +34,10 @@ it("denies non-approved hosts, private IPs and metadata, even with an approved h
     "172.20.1.1",
     "169.254.169.254",
     "fd00::1",
+    "::ffff:7f00:1",
+    "::ffff:a9fe:a9fe",
+    "64:ff9b::a9fe:a9fe",
+    "ff02::1",
   ]) {
     expect(privateAddress(ip)).toBe(true);
   }
@@ -62,4 +68,20 @@ it("forwards approved traffic to a DNS-pinned target and rejects other destinati
   expect((await get(f.baseUrl)).status).toBe(200);
   const address = unauthorized.address() as { port: number };
   expect((await get(`http://127.0.0.1:${address.port}/`)).status).toBe(403);
+});
+
+it("rejects DNS aliases to metadata even when private previews are enabled", async () => {
+  vi.spyOn(dns, "lookup").mockResolvedValue([
+    { address: "169.254.169.254", family: 4 },
+  ] as never);
+  expect(
+    await networkAllowed("http://alias.example/latest", ["alias.example"], true)
+  ).toBe(false);
+  expect(
+    await networkAllowed(
+      "http://[::ffff:a9fe:a9fe]/latest",
+      ["[::ffff:a9fe:a9fe]"],
+      true
+    )
+  ).toBe(false);
 });

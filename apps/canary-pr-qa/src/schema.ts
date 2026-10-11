@@ -167,6 +167,18 @@ function validateContractAssertion(
   ) {
     issue("Visual, popup and download assertions require state verification");
   }
+  if (
+    (step.action.type === "download" || step.action.type === "popup") &&
+    assertion.kind !== step.action.type
+  ) {
+    issue("Event action must use an assertion of the same kind");
+  }
+  if (
+    step.action.type === "assert" &&
+    ["download", "popup"].includes(assertion.kind)
+  ) {
+    issue("Event assertions require their corresponding event action");
+  }
   const preceding = scenario.steps.slice(0, index);
   const dependency = preceding.find((item) => item.id === assertion.afterStep);
   if (!dependency) {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@usecanary/logger";
 import pg from "pg";
 import type { RunOptions } from "./runner.js";
 export interface Job {
@@ -47,6 +48,13 @@ export class Queue {
       max: 10,
       connectionTimeoutMillis: 5000,
       statement_timeout: 10_000,
+    });
+    this.pool.on("error", () => {
+      // Deliberately omit connection details and database error text: both may contain secrets.
+      createLogger({ name: "pr-qa-db" }).error(
+        { code: "DB_POOL_ERROR" },
+        "Idle database connection failed; pool will reconnect on the next request"
+      );
     });
   }
   async migrate() {
@@ -147,7 +155,7 @@ export class Queue {
   }
   async heartbeat(id: string, worker: string): Promise<boolean> {
     const result = await this.pool.query(
-      "UPDATE qa_jobs SET lease_until=now()+interval '45 seconds',updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' AND NOT cancel_requested RETURNING id",
+      "UPDATE qa_jobs SET lease_until=now()+interval '45 seconds',updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' AND lease_until>now() AND NOT cancel_requested RETURNING id",
       [id, worker]
     );
     return result.rowCount === 1;
@@ -160,7 +168,7 @@ export class Queue {
     usage: unknown = {}
   ) {
     const result = await this.pool.query(
-      "UPDATE qa_jobs SET status=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'completed' END,outcome=$3,error=$4,usage=$5,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' RETURNING id",
+      "UPDATE qa_jobs SET status=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'completed' END,outcome=$3,error=$4,usage=$5,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' AND lease_until>now() RETURNING id",
       [id, worker, outcome, error ?? null, JSON.stringify(usage)]
     );
     if (!result.rowCount) {

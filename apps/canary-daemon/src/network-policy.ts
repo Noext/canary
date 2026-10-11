@@ -1,19 +1,51 @@
-import { lookup } from "node:dns/promises";
+import dns from "node:dns/promises";
 import { isIP } from "node:net";
 import type { BrowserContext } from "playwright";
+export function metadataAddress(input: string): boolean {
+  const ip = input.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    ["169.254.169.254", "169.254.170.2", "metadata.google.internal"].includes(
+      ip
+    ) ||
+    ip === "::ffff:a9fe:a9fe" ||
+    ip === "::ffff:a9fe:aa02" ||
+    (ip.startsWith("::ffff:") && metadataAddress(ip.slice(7)))
+  );
+}
 export function privateAddress(input: string): boolean {
   const ip = input.replace(/^\[|\]$/g, "").toLowerCase();
   if (ip.includes(":")) {
     return (
       ip === "::" ||
       ip === "::1" ||
+      ip.startsWith("ff") ||
+      ip.startsWith("fec") ||
+      ip.startsWith("64:ff9b:") ||
       ip.startsWith("fc") ||
       ip.startsWith("fd") ||
       ip.startsWith("fe8") ||
       ip.startsWith("fe9") ||
       ip.startsWith("fea") ||
       ip.startsWith("feb") ||
-      (ip.startsWith("::ffff:") && privateAddress(ip.slice(7)))
+      (ip.startsWith("::ffff:") &&
+        (() => {
+          const tail = ip.slice(7);
+          if (tail.includes(".")) {
+            return privateAddress(tail);
+          }
+          const parts = tail.split(":");
+          if (parts.length !== 2) {
+            return true;
+          }
+          const value =
+            Number.parseInt(parts[0] ?? "", 16) * 65_536 +
+            Number.parseInt(parts[1] ?? "", 16);
+          return privateAddress(
+            [24, 16, 8, 0]
+              .map((shift) => Math.floor(value / 2 ** shift) % 256)
+              .join(".")
+          );
+        })())
     );
   }
   const [a = 0, b = 0] = ip.split(".").map(Number);
@@ -51,21 +83,19 @@ export async function networkAllowed(
   }
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   // Metadata endpoints are forbidden even when private test environments are opted in.
-  if (
-    ["169.254.169.254", "169.254.170.2", "metadata.google.internal"].includes(
-      hostname
-    )
-  ) {
+  if (metadataAddress(hostname)) {
     return false;
-  }
-  if (allowPrivate) {
-    return true;
   }
   const addresses = isIP(hostname)
     ? [{ address: hostname }]
-    : await lookup(hostname, { all: true });
+    : await dns.lookup(hostname, { all: true });
   return (
-    addresses.length > 0 && addresses.every((a) => !privateAddress(a.address))
+    addresses.length > 0 &&
+    addresses.every(
+      (a) =>
+        !metadataAddress(a.address) &&
+        (allowPrivate || !privateAddress(a.address))
+    )
   );
 }
 export async function installNetworkPolicy(

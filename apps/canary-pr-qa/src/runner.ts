@@ -152,6 +152,7 @@ async function executePlan(
     maxScenarios: config.QA_MAX_SCENARIOS,
     fixtures: await fixtureCatalog(config, context.ref.repo).then((c) => ({
       roles: Object.keys(c.roles),
+      visuals: Object.keys(c.visuals),
       fixtures: Object.fromEntries(
         Object.entries(c.fixtures).map(([name, f]) => [name, f.description])
       ),

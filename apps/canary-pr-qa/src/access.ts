@@ -5,6 +5,15 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { z } from "zod";
 import type { Config } from "./config.js";
 
+const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+function keySet(url: string) {
+  let keys = keySets.get(url);
+  if (!keys) {
+    keys = createRemoteJWKSet(new URL(url));
+    keySets.set(url, keys);
+  }
+  return keys;
+}
 const UsersSchema = z.array(
   z
     .object({
@@ -63,15 +72,11 @@ export async function principal(
       return user;
     }
     if (config.QA_OIDC_ISSUER && config.QA_OIDC_JWKS_URL) {
-      const verified = await jwtVerify(
-        token,
-        createRemoteJWKSet(new URL(config.QA_OIDC_JWKS_URL)),
-        {
-          issuer: config.QA_OIDC_ISSUER,
-          audience: config.QA_OIDC_AUDIENCE,
-          algorithms: ["RS256", "ES256"],
-        }
-      ).catch(() => undefined);
+      const verified = await jwtVerify(token, keySet(config.QA_OIDC_JWKS_URL), {
+        issuer: config.QA_OIDC_ISSUER,
+        audience: config.QA_OIDC_AUDIENCE,
+        algorithms: ["RS256", "ES256"],
+      }).catch(() => undefined);
       if (verified) {
         const oidc = records.find(
           (u) => u.oidcSubject === verified.payload.sub

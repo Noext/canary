@@ -85,7 +85,15 @@ async function container(broken = false) {
     );
   closers.push(async () => {
     try {
-      const logs = await compose("logs", "--no-color", "pr-qa");
+      const logs = await compose(
+        "logs",
+        "--no-color",
+        "pr-qa",
+        "worker",
+        "browser",
+        "egress",
+        "db"
+      );
       await writeFile(
         join(directory, "service.log"),
         `${logs.stdout}\n${logs.stderr}`
@@ -201,8 +209,24 @@ describe.skipIf(!image)(
           `${s.url}/artifacts/${accepted.id}/welcome/${file}`,
           { headers: s.headers }
         );
-        expect(artifact.ok).toBe(true);
-        expect((await artifact.arrayBuffer()).byteLength).toBeGreaterThan(0);
+        if ([".zip", ".har"].includes(extension)) {
+          expect(artifact.status).toBe(403);
+          // Raw files must exist, while default project policy prevents HTTP disclosure.
+          const size = await s.compose(
+            "exec",
+            "-T",
+            "pr-qa",
+            "node",
+            "-e",
+            `process.stdout.write(String(require('node:fs').statSync(${JSON.stringify(`/data/${accepted.id}/welcome/${file}`)}).size))`
+          );
+          expect(Number(size.stdout)).toBeGreaterThan(0);
+        } else {
+          expect(artifact.ok, `${extension}: HTTP ${artifact.status}`).toBe(
+            true
+          );
+          expect((await artifact.arrayBuffer()).byteLength).toBeGreaterThan(0);
+        }
       }
       expect(
         s.outgoing.map((request) => request.payload.state).filter(Boolean)

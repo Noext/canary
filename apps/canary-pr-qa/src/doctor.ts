@@ -30,7 +30,7 @@ export function configSummary(config: Config) {
     platform: `${process.platform}/${process.arch}`,
     github: {
       origin: new URL(config.GITHUB_API_URL).origin,
-      tokenConfigured: Boolean(config.GITHUB_TOKEN),
+      tokenConfigured: Boolean(config.GITHUB_TOKEN || config.GITHUB_APP_ID),
       repos: config.allowedRepos,
     },
     model: {

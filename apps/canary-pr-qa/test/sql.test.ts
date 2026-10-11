@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -6,16 +6,14 @@ import pg from "pg";
 import { afterEach, expect, it, vi } from "vitest";
 import { startProductionServer } from "../src/production-server.js";
 import { Queue } from "../src/queue.js";
+import { processDelivery } from "../src/webhook-inbox.js";
 import { BASE_SHA, fixture, PR_URL, SHA } from "./fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  await Promise.all(
-    cleanup
-      .splice(0)
-      .reverse()
-      .map((c) => c())
-  );
+  for (const close of cleanup.splice(0).reverse()) {
+    await close();
+  }
   vi.restoreAllMocks();
 });
 async function sqlDatabase() {
@@ -89,6 +87,10 @@ it("runs migration, idempotent enqueue, ownership leases, cancellation and crash
   await q.pool.query(
     "UPDATE qa_jobs SET lease_until=now()-interval '1 minute' WHERE id=$1",
     [second!.id]
+  );
+  expect(await q.heartbeat(second!.id, "worker-b")).toBe(false);
+  await expect(q.complete(second!.id, "worker-b", "passed")).rejects.toThrow(
+    "lost job ownership"
   );
   expect(await q.claim("worker-c")).toBeUndefined();
   expect((await q.get(second!.id))?.status).toBe("interrupted");
@@ -165,4 +167,67 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
     ).status
   ).toBe(200);
   expect((await q.get(run.id))?.status).toBe("cancelled");
+}, 30_000);
+
+it("accepts only signed webhook bytes, deduplicates deliveries and waits for live SHA provenance before enqueue", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  const secret = "webhook-secret-0123456789-abcdef-123456";
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+    GITHUB_WEBHOOK_SECRET: secret,
+  };
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/github/webhook`;
+  const payload = JSON.stringify({
+    action: "synchronize",
+    repository: { full_name: "fixture/app" },
+    pull_request: {
+      number: 1,
+      html_url: PR_URL,
+      head: { sha: SHA },
+      draft: false,
+    },
+  });
+  const headers = {
+    "x-github-delivery": "delivery-42",
+    "x-github-event": "pull_request",
+    "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`,
+  };
+  expect(
+    (await fetch(url, { method: "POST", headers, body: `${payload} ` })).status
+  ).toBe(401);
+  expect(
+    (await fetch(url, { method: "POST", headers, body: payload })).status
+  ).toBe(202);
+  expect(
+    await (await fetch(url, { method: "POST", headers, body: payload })).json()
+  ).toMatchObject({ duplicate: true });
+  await processDelivery(q, config);
+  expect(await q.list(["fixture/app"])).toEqual([]);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT status FROM qa_deliveries WHERE id='delivery-42'"
+      )
+    ).rows[0].status
+  ).toBe("pending");
+  await q.pool.query(
+    "UPDATE qa_deliveries SET retry_at=now()-interval '1 second'"
+  );
+  await processDelivery(q, { ...config, PREVIEW_URL_TEMPLATE: f.baseUrl });
+  expect((await q.list(["fixture/app"])).length).toBe(1);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT status FROM qa_deliveries WHERE id='delivery-42'"
+      )
+    ).rows[0].status
+  ).toBe("processed");
+  await processDelivery(q, config);
+  expect((await q.list(["fixture/app"])).length).toBe(1);
 }, 30_000);

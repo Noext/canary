@@ -173,6 +173,17 @@ export async function startProductionServer(config: Config) {
       !pr.draft
         ? { repo, number: pr.number, sha: pr.head?.sha, prUrl: pr.html_url }
         : { repo, ignored: true };
+    if (!("ignored" in record)) {
+      const ref = parsePrUrl(record.prUrl);
+      if (
+        ref.repo.toLowerCase() !== repo.toLowerCase() ||
+        ref.number !== record.number ||
+        !/^[a-f0-9]{40}$/.test(record.sha ?? "")
+      ) {
+        json(res, 400, { error: "Invalid pull request metadata" });
+        return;
+      }
+    }
     const saved = await queue.pool.query(
       "INSERT INTO qa_deliveries(id,event,payload) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id",
       [delivery, event, JSON.stringify(record)]
@@ -211,7 +222,11 @@ export async function startProductionServer(config: Config) {
       await queue.audit(user.id, "artifact.read", id, { path });
     }
   }
-  async function streamRun(res: ServerResponse, id: string) {
+  async function streamRun(
+    req: IncomingMessage,
+    res: ServerResponse,
+    id: string
+  ) {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -224,7 +239,12 @@ export async function startProductionServer(config: Config) {
       if (closed) {
         return;
       }
-      const latest = await queue.get(id);
+      const current = await principal(req, config);
+      if (!current) {
+        res.end();
+        return;
+      }
+      const latest = await authorizeJob(current, id);
       if (!latest) {
         return;
       }
@@ -293,7 +313,7 @@ export async function startProductionServer(config: Config) {
       return;
     }
     if (req.method === "GET" && action === "events") {
-      await streamRun(res, id);
+      await streamRun(req, res, id);
       return;
     }
     if (req.method === "POST" && action === "links") {

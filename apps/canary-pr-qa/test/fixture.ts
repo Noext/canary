@@ -149,8 +149,22 @@ export async function fixture(
         return;
       }
       res.end(
-        `<!doctype html><html lang="en"><title>QA form fixture</title><h1>Welcome form</h1><form><label for="name">Name</label><input id="name" name="name"><button type="submit">Save</button></form><p role="status" id="saved">${options.unchangedState ? "Welcome Ada" : ""}</p>${options.decoy ? "<aside id=decoy>Welcome Ada</aside>" : ""}<script>${options.maliciousUrl ? `fetch(${JSON.stringify(options.maliciousUrl)}).catch(()=>{});` : ""}${options.persistent ? `document.querySelector('#saved').textContent=localStorage.getItem('saved')||'';` : ""}document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();document.querySelector('#saved').textContent=${options.broken ? "'Wrong output'" : "'Welcome '+document.querySelector('#name').value"}${options.persistent && !options.persistenceBroken ? `;localStorage.setItem('saved',document.querySelector('#saved').textContent)` : ""}})</script></html>`
+        `<!doctype html><html lang="en"><title>QA form fixture</title><h1>Welcome form</h1><a href="/download" download>Download report</a><a href="/popup" target="_blank">Open popup</a><form><label for="name">Name</label><input id="name" name="name"><button type="submit">Save</button></form><p role="status" id="saved">${options.unchangedState ? "Welcome Ada" : ""}</p>${options.decoy ? "<aside id=decoy>Welcome Ada</aside>" : ""}<script>${options.maliciousUrl ? `fetch(${JSON.stringify(options.maliciousUrl)}).catch(()=>{});` : ""}${options.persistent ? `document.querySelector('#saved').textContent=localStorage.getItem('saved')||'';` : ""}document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();document.querySelector('#saved').textContent=${options.broken ? "'Wrong output'" : "'Welcome '+document.querySelector('#name').value"}${options.persistent && !options.persistenceBroken ? `;localStorage.setItem('saved',document.querySelector('#saved').textContent)` : ""}})</script></html>`
       );
+      return;
+    }
+    if (path === "/download") {
+      res.writeHead(200, {
+        "Content-Type": "text/plain",
+        "Content-Disposition": 'attachment; filename="report.txt"',
+        "x-commit-sha": SHA,
+      });
+      res.end("QA download evidence");
+      return;
+    }
+    if (path === "/popup") {
+      res.writeHead(200, { "Content-Type": "text/html", "x-commit-sha": SHA });
+      res.end("<!doctype html><h1>Popup evidence</h1>");
       return;
     }
     if (path === "/version.json") {

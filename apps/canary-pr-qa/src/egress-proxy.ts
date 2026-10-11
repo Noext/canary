@@ -1,7 +1,10 @@
-import { lookup } from "node:dns/promises";
+import dns from "node:dns/promises";
 import { createServer, request } from "node:http";
 import { connect, type Socket } from "node:net";
-import { privateAddress } from "../../canary-daemon/src/network-policy.js";
+import {
+  metadataAddress,
+  privateAddress,
+} from "../../canary-daemon/src/network-policy.js";
 import type { Config } from "./config.js";
 
 async function target(input: string, config: Config) {
@@ -14,18 +17,15 @@ async function target(input: string, config: Config) {
   ) {
     throw new Error("Egress host denied");
   }
-  if (
-    ["169.254.169.254", "169.254.170.2", "metadata.google.internal"].includes(
-      url.hostname
-    )
-  ) {
+  if (metadataAddress(url.hostname)) {
     throw new Error("Metadata denied");
   }
-  const addresses = await lookup(url.hostname.replace(/^\[|\]$/g, ""), {
+  const addresses = await dns.lookup(url.hostname.replace(/^\[|\]$/g, ""), {
     all: true,
   });
   if (
     !addresses.length ||
+    addresses.some((a) => metadataAddress(a.address)) ||
     (config.QA_ALLOW_PRIVATE_PREVIEWS !== "true" &&
       addresses.some((a) => privateAddress(a.address)))
   ) {
