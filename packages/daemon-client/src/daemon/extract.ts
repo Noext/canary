@@ -41,20 +41,28 @@ export async function ensureDaemonExtracted(): Promise<string> {
 export async function embeddedRuntimeInstalled(
   baseDir: string
 ): Promise<boolean> {
-  const deps = Object.keys(DAEMON_RUNTIME_DEPENDENCIES);
+  const deps = Object.entries(DAEMON_RUNTIME_DEPENDENCIES);
   const installed = await Promise.all(
-    deps.map((pkg) => dependencyInstalled(baseDir, pkg))
+    deps.map(([pkg, expected]) => dependencyInstalled(baseDir, pkg, expected))
   );
   return installed.every(Boolean);
 }
 
 async function dependencyInstalled(
   baseDir: string,
-  pkg: string
+  pkg: string,
+  expected: string
 ): Promise<boolean> {
   try {
-    await readFile(`${baseDir}/node_modules/${pkg}/package.json`);
-    return true;
+    const manifest = JSON.parse(
+      await readFile(`${baseDir}/node_modules/${pkg}/package.json`, "utf8")
+    ) as { version?: string };
+    // Playwright and its core are exact pins: the vendored sandbox protocol must match.
+    // Presence alone could silently accept an incompatible old runtime after an update.
+    if (/^\d+\.\d+\.\d+$/.test(expected)) {
+      return manifest.version === expected;
+    }
+    return typeof manifest.version === "string";
   } catch {
     return false;
   }

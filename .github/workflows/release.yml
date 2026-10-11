@@ -14,6 +14,8 @@ permissions:
 
 jobs:
   publish:
+    # A fork must not publish packages under upstream's npm identities.
+    if: github.repository == '0xnyn/canary'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
