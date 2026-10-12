@@ -96,6 +96,18 @@ by default; `canary ui --dir <path>` (or adding roots in the UI) points it elsew
 
 Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the `canary` session orchestrator) are the core of the toolkit. Portions are derived from MIT-licensed upstream work by Sawyer Hood (see `LICENSE`).
 
+## Revue automatique des PR (Codex)
+
+- Quand un finding remonté par la revue automatique d'une PR est corrigé,
+  répondre dans le thread concerné (voir `pulls/{n}/comments/{id}/replies`) avec
+  le commit qui corrige et la preuve : test ajouté, commande exécutée. Ne jamais
+  corriger un finding en silence.
+- Corriger le code, pas le test : affaiblir une assertion pour faire passer la CI
+  est un finding en soi. Si le contrat doit réellement changer, le dire dans la
+  réponse et le documenter dans la description de la PR.
+- Après avoir poussé les correctifs, demander une nouvelle revue (`@codex review`)
+  pour que les corrections soient relues par le même relecteur.
+
 ## Frontend PR QA : règles de contribution
 
 - Le dashboard est une application React 19 + Vite dans `apps/canary-pr-qa-ui`
