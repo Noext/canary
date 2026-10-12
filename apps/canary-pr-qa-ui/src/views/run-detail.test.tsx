@@ -125,6 +125,45 @@ describe("RunDetail", () => {
     expect(FakeEventSource.instances).toHaveLength(0);
   });
 
+  it("renders the usage line through the shared copy", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve({
+          ...result,
+          usage: {
+            calls: 2,
+            costUsd: 0.5,
+            pricingConfigured: true,
+            tokens: 1200,
+          },
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByText("1200 tokens · coût estimé $0.5000")
+      ).toBeVisible()
+    );
+  });
+
+  it("says the cost is not configured when the server has no pricing", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve({
+          ...result,
+          usage: { costUsd: 0, pricingConfigured: false, tokens: 900 },
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(screen.getByText("900 tokens · coût non configuré")).toBeVisible()
+    );
+  });
+
   it("refreshes the history when a run is already finished", async () => {
     const onUpdate = vi.fn();
     apiMock.mockImplementation((path: string) => {

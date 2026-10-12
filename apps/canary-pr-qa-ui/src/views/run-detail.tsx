@@ -18,7 +18,6 @@ import {
   shortSha,
   stateLabel,
   toneFor,
-  usageText,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -98,6 +97,18 @@ function summaryToneFor(
     return "warning";
   }
   return errorOutcomes.includes(result.outcome) ? "error" : "neutral";
+}
+
+/** The token/cost line, whose copy belongs to i18n like the rest. */
+function usageLine(usage: RunResult["usage"]): string {
+  if (!usage) {
+    return "";
+  }
+  return copy.usage(
+    usage.tokens,
+    usage.costUsd,
+    usage.pricingConfigured !== false
+  );
 }
 
 /** Bounded rendering of an `actual` value, which is arbitrary JSON. */
@@ -398,7 +409,7 @@ export function RunDetail({
         ))}
       </div>
       <p className="mt-3 text-muted-foreground text-sm" id="usage">
-        {usageText(result?.usage)}
+        {usageLine(result?.usage)}
       </p>
       <div className="mt-3 flex flex-wrap gap-4 font-medium text-sm" id="links">
         {result ? (

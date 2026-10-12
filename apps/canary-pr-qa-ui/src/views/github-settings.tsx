@@ -230,8 +230,11 @@ export function GithubSettings(): ReactNode {
       repository.enabled && !isRestricted(repository.full_name, restriction)
   );
   // A failed status request means the connection is unknown, not absent: never
-  // advertise "À connecter" and the creation form on a transient error.
-  const pending = !github && Boolean(githubError);
+  // advertise "À connecter" and the creation form on a transient error. With a
+  // cached status the panel stays readable, but it must say the last reload
+  // failed instead of passing the cache off as the current state.
+  const stale = Boolean(githubError);
+  const pending = !github && stale;
   const connection = pending
     ? { label: common.checking, tone: "neutral" as const }
     : connectionFor(app, enabled.length);
@@ -286,12 +289,12 @@ export function GithubSettings(): ReactNode {
       >
         {error}
       </p>
-      {pending ? (
+      {stale ? (
         <Notice className="mt-3" id="githubPending" tone="error">
           {githubError}
           <Button
             className="mt-2"
-            onClick={() => void loadGithub()}
+            onClick={() => void loadGithub().catch(() => undefined)}
             type="button"
             variant="secondary"
           >

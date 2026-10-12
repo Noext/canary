@@ -139,8 +139,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setGithubError(undefined);
     } catch (failure) {
       // Without this, an admin whose request failed is shown "À connecter" and
-      // the creation form, as if no App existed.
+      // the creation form, as if no App existed. The rejection is also
+      // propagated: a mutation whose reload failed must not report success on
+      // the strength of the cached status.
       setGithubError(errorText(failure));
+      throw failure;
     }
   }, []);
 
@@ -156,7 +159,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isAdmin) {
-      void loadGithub();
+      // The failure is carried by `githubError`, not by an unhandled rejection.
+      void loadGithub().catch(() => undefined);
     }
   }, [isAdmin, loadGithub]);
 

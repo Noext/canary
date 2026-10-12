@@ -8,8 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, DashboardError, post, SESSION_EXPIRED_EVENT } from "@/api/client";
+import { api, post, SESSION_EXPIRED_EVENT } from "@/api/client";
 import type { Principal } from "@/api/contracts";
+import { okSchema } from "@/api/schemas";
 import { auth } from "@/i18n";
 
 export type SessionPhase = "anonymous" | "authenticated" | "loading";
@@ -128,13 +129,10 @@ export function SessionProvider({
   );
 
   const logout = useCallback(async () => {
-    try {
-      await api("/session", { method: "DELETE" });
-    } catch (failure) {
-      if (!(failure instanceof DashboardError)) {
-        throw failure;
-      }
-    }
+    // DELETE /session answers {ok:true}, not a principal: without the explicit
+    // schema every logout looked like a contract error and was swallowed, so a
+    // real server-side failure left the cookie valid while the UI reloaded.
+    await api("/session", { method: "DELETE", schema: okSchema });
     window.location.reload();
   }, []);
 
