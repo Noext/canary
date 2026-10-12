@@ -36,18 +36,30 @@ export interface Job {
 }
 /** Delivery status that ends an automatic attempt without creating a run. */
 export type DeliveryFailure = "expired" | "rate_limited" | "auto_disabled";
-interface AutomaticRow {
+/**
+ * A validated webhook record. `ignored` marks an event that carries no pull
+ * request to test (a `labeled` or `closed` action, for example).
+ */
+export interface DeliveryPayload {
+  ignored?: boolean;
+  number?: number;
+  prUrl?: string;
+  repo?: string;
+  sha?: string;
+}
+export interface DeliveryRow {
   attempts: number;
+  claim_token?: string | null;
   created_at: Date;
   deadline_at: Date | null;
   id: string;
-  payload: { number?: number; repo?: string; sha?: string };
+  payload: DeliveryPayload;
   reason: string | null;
   run_id: string | null;
   status: string;
   updated_at: Date;
 }
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -59,7 +71,7 @@ CREATE TABLE IF NOT EXISTS qa_jobs (
 CREATE INDEX IF NOT EXISTS qa_claim ON qa_jobs(status,created_at);
 CREATE INDEX IF NOT EXISTS qa_project ON qa_jobs(repo,created_at DESC);
 CREATE INDEX IF NOT EXISTS qa_auto_budget ON qa_jobs(created_at,lower(repo)) WHERE owner='github-app';
-CREATE TABLE IF NOT EXISTS qa_deliveries (id text PRIMARY KEY, event text NOT NULL, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'pending', retry_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), attempts integer NOT NULL DEFAULT 0, deadline_at timestamptz, reason text, last_error text, run_id uuid, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS qa_deliveries (id text PRIMARY KEY, event text NOT NULL, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'pending', retry_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), attempts integer NOT NULL DEFAULT 0, deadline_at timestamptz, reason text, last_error text, run_id uuid, claim_token text, updated_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS qa_delivery_pr_sha ON qa_deliveries ((lower(payload->>'repo')), (payload->>'number'), (payload->>'sha'));
 CREATE TABLE IF NOT EXISTS qa_audit (id bigserial PRIMARY KEY, actor text NOT NULL, action text NOT NULL, run_id uuid, details jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS qa_schema (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
@@ -77,6 +89,7 @@ ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS reason text;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS last_error text;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS run_id uuid;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS claim_token text;
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {
@@ -297,42 +310,97 @@ export class Queue {
    * counted and the next one is scheduled after the given backoff.
    */
   /**
+   * Claims one due delivery for `token`, which owns it until the next claim.
+   *
+   * The row lock is released on commit, so `retry_at` is also the claim lease:
+   * a probe that dies on the network is retried after the lease instead of
+   * spinning. Every later transition is conditional on the token, so a worker
+   * whose lease expired can never promote, expire or reschedule a delivery that
+   * another worker now owns.
+   */
+  async claimDelivery(token: string, leaseSeconds: number) {
+    return (
+      await this.pool.query<DeliveryRow>(
+        `UPDATE qa_deliveries SET retry_at=now()+make_interval(secs => $2::double precision),claim_token=$1,updated_at=now()
+         WHERE id=(SELECT id FROM qa_deliveries WHERE status='pending' AND retry_at<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
+         RETURNING id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at`,
+        [token, leaseSeconds]
+      )
+    ).rows[0];
+  }
+  /**
+   * What the owning worker re-reads before it promotes an attempt: the deadline
+   * and the reasons may have moved while the preview was being verified.
+   */
+  async deliveryClaim(id: string, token: string) {
+    return (
+      await this.pool.query<DeliveryRow>(
+        "SELECT id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at FROM qa_deliveries WHERE id=$1 AND claim_token=$2 AND status='pending'",
+        [id, token]
+      )
+    ).rows[0];
+  }
+  /**
    * A failed probe schedules the next one, but never past the deadline: an
    * attempt whose deadline is closer than the backoff becomes due exactly at the
    * deadline, so expiration is enforced instead of being deferred by up to 300 s.
    */
   async holdDelivery(
     id: string,
+    token: string,
     reason: string,
     backoffSeconds: number,
     waitSeconds: number
   ) {
-    await this.pool.query(
-      `UPDATE qa_deliveries SET attempts=attempts+1,reason=$2,last_error=NULL,
-       retry_at=LEAST(now()+make_interval(secs => $3::double precision),COALESCE(deadline_at,created_at+make_interval(secs => $4::double precision))),
-       updated_at=now() WHERE id=$1`,
-      [id, reason, backoffSeconds, waitSeconds]
+    const result = await this.pool.query(
+      `UPDATE qa_deliveries SET attempts=attempts+1,reason=$3,last_error=NULL,
+       retry_at=LEAST(now()+make_interval(secs => $4::double precision),COALESCE(deadline_at,created_at+make_interval(secs => $5::double precision))),
+       updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'`,
+      [id, token, reason, backoffSeconds, waitSeconds]
     );
+    return result.rowCount === 1;
   }
-  /** Ends an automatic attempt without a run: `expired`, `rate_limited` or `auto_disabled`. */
   async failDelivery(
     id: string,
+    token: string,
     status: DeliveryFailure,
     reason: string,
     lastError?: string
   ) {
-    await this.pool.query(
-      "UPDATE qa_deliveries SET status=$2,reason=$3,last_error=$4,updated_at=now() WHERE id=$1",
-      [id, status, reason, lastError ?? null]
+    const result = await this.pool.query(
+      "UPDATE qa_deliveries SET status=$3,reason=$4,last_error=$5,updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'",
+      [id, token, status, reason, lastError ?? null]
     );
+    return result.rowCount === 1;
   }
+  /**
+   * Promotes a claimed attempt into its run. The deadline is rechecked here, in
+   * the same statement that takes ownership into account, because verifying a
+   * preview can outlive the window the attempt was allowed to wait.
+   */
+  async promoteDelivery(
+    id: string,
+    token: string,
+    runId: string,
+    waitSeconds: number
+  ) {
+    const result = await this.pool.query(
+      `UPDATE qa_deliveries SET status='processed',run_id=$3,updated_at=now()
+       WHERE id=$1 AND claim_token=$2 AND status='pending'
+         AND now() < COALESCE(deadline_at,created_at+make_interval(secs => $4::double precision))`,
+      [id, token, runId, waitSeconds]
+    );
+    return result.rowCount === 1;
+  }
+  async processed(id: string, token: string) {
+    const result = await this.pool.query(
+      "UPDATE qa_deliveries SET status='processed',updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'",
+      [id, token]
+    );
+    return result.rowCount === 1;
+  }
+  /** Ends an automatic attempt without a run: `expired`, `rate_limited` or `auto_disabled`. */
   /** Marks the attempt as promoted: the verified preview created this real job. */
-  async promoteDelivery(id: string, runId: string) {
-    await this.pool.query(
-      "UPDATE qa_deliveries SET status='processed',run_id=$2,updated_at=now() WHERE id=$1",
-      [id, runId]
-    );
-  }
   /**
    * Automatic attempts of the given repositories, newest first. Waiting rows are
    * listed with the attempts still running; expired/rate-limited rows stay visible
@@ -351,7 +419,7 @@ export class Queue {
   async automatic(repos: string[], deadlineSeconds: number) {
     const scope = repos.map((repo) => repo.toLowerCase());
     const rows = (
-      await this.pool.query<AutomaticRow>(
+      await this.pool.query<DeliveryRow>(
         `SELECT id,payload,status,attempts,reason,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
          WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))
          ORDER BY updated_at DESC,created_at DESC LIMIT 50`,
@@ -389,7 +457,7 @@ function automaticState(status: string): AutomaticState {
 function isoInstant(value: Date | null, fallback: Date): string {
   return (value ?? fallback).toISOString();
 }
-function automaticAttempt(row: AutomaticRow): AutomaticAttempt {
+function automaticAttempt(row: DeliveryRow): AutomaticAttempt {
   return {
     attempts: row.attempts,
     deadlineAt: isoInstant(row.deadline_at, row.created_at),

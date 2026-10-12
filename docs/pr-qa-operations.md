@@ -112,7 +112,13 @@ ORDER BY created_at DESC LIMIT 20;"
 `expired`, `rate_limited` (quota horaire), `auto_disabled` (global ou dépôt),
 `ignored` (événement hors du déclencheur automatique). `attempts` compte les
 probes, `reason` porte la cause courante, `last_error` le dernier échec ;
-`deadline_at` fixe la limite d'attente.
+`deadline_at` fixe la limite d'attente. `claim_token` identifie le worker qui
+travaille la ligne : une ligne reprise par un autre worker est silencieusement
+ignorée par l'ancien, et une promotion arrivée après la deadline est refusée (le
+run créé est alors annulé). Les lignes terminales (`processed`, `expired`,
+`rate_limited`, `auto_disabled`) sont supprimées par la rétention après 30 jours :
+un déploiement volontairement désactivé n'accumule pas de lignes `auto_disabled`
+indéfiniment.
 
 Audits associés :
 

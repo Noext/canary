@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AutomaticStatus } from "../src/dashboard/contracts.js";
 import { startProductionServer } from "../src/production-server.js";
 import type { Queue } from "../src/queue.js";
+import { retain } from "../src/retention.js";
 import { processDelivery } from "../src/webhook-inbox.js";
 import { fixture, PR_URL, pgliteQueue, SHA } from "./fixture.js";
 
@@ -153,6 +154,119 @@ it("reports the effective deadline of a delivery accepted without one", async ()
   // The same rule keeps the worker waiting instead of expiring the attempt.
   await processDelivery(q, f.config);
   expect(await delivery(q, "legacy")).toMatchObject({ status: "pending" });
+}, 30_000);
+
+it("lets only the owning worker promote, expire or reschedule an attempt", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  expect(await q.acceptDelivery("owned", "pull_request", attempt, 1800)).toBe(
+    true
+  );
+  const first = await q.claimDelivery("token-one", 90);
+  expect(first).toMatchObject({ id: "owned" });
+  // The lease expires (a probe that took longer than 90 s, or a restarted
+  // worker): a second worker takes the same delivery over.
+  await due(q);
+  expect(await q.claimDelivery("token-two", 90)).toMatchObject({
+    id: "owned",
+  });
+  const job = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL, publish: true, model: "fixture/model" },
+    "webhook:owned"
+  );
+  // Every write from the stale owner is refused, so no run can appear after
+  // another worker already decided what happened to the attempt.
+  expect(await q.deliveryClaim("owned", "token-one")).toBeUndefined();
+  expect(
+    await q.holdDelivery("owned", "token-one", "PREVIEW_NOT_FOUND", 30, 1800)
+  ).toBe(false);
+  expect(
+    await q.failDelivery("owned", "token-one", "expired", "PREVIEW_NOT_FOUND")
+  ).toBe(false);
+  expect(await q.promoteDelivery("owned", "token-one", job.id, 1800)).toBe(
+    false
+  );
+  expect(await delivery(q, "owned")).toMatchObject({
+    run_id: null,
+    status: "pending",
+  });
+  // The current owner promotes it normally.
+  expect(await q.promoteDelivery("owned", "token-two", job.id, 1800)).toBe(
+    true
+  );
+  expect(await delivery(q, "owned")).toMatchObject({
+    run_id: job.id,
+    status: "processed",
+  });
+}, 30_000);
+
+it("refuses to promote an attempt whose deadline closed during the probe", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  expect(
+    await q.acceptDelivery("late-promotion", "pull_request", attempt, 1800)
+  ).toBe(true);
+  await q.claimDelivery("token", 90);
+  const job = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL, publish: true, model: "fixture/model" },
+    "webhook:late-promotion"
+  );
+  // The preview only proved the exact SHA after the wait window elapsed.
+  await q.pool.query(
+    "UPDATE qa_deliveries SET deadline_at=now()-interval '1 second' WHERE id='late-promotion'"
+  );
+  expect(await q.promoteDelivery("late-promotion", "token", job.id, 1800)).toBe(
+    false
+  );
+  expect(await delivery(q, "late-promotion")).toMatchObject({
+    run_id: null,
+    status: "pending",
+  });
+}, 30_000);
+
+it("purges terminal deliveries, including auto-disabled ones, during retention", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  const ids = ["old-auto-disabled", "old-expired", "old-processed"];
+  // Distinct PRs: `acceptDelivery` deduplicates one row per (repo, pr, sha).
+  for (const [index, id] of [...ids, "recent-auto-disabled"].entries()) {
+    await q.acceptDelivery(
+      id,
+      "pull_request",
+      {
+        ...attempt,
+        number: index + 1,
+        sha: String(index + 1).repeat(40),
+      },
+      1800
+    );
+  }
+  await q.pool.query(
+    `UPDATE qa_deliveries SET status=CASE id WHEN 'old-auto-disabled' THEN 'auto_disabled' WHEN 'old-expired' THEN 'expired' ELSE 'processed' END,created_at=now()-interval '31 days' WHERE id = ANY($1::text[])`,
+    [ids]
+  );
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='auto_disabled' WHERE id='recent-auto-disabled'"
+  );
+  await retain(q, f.config);
+  expect(
+    (
+      await q.pool.query<{ id: string }>(
+        "SELECT id FROM qa_deliveries ORDER BY id"
+      )
+    ).rows.map((row) => row.id)
+  ).toEqual(["recent-auto-disabled"]);
 }, 30_000);
 
 it("never reports an ignored webhook as a waiting attempt", async () => {

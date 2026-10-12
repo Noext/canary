@@ -278,7 +278,12 @@ le SHA complet du head, la tentative reste en file et reprobe avec un backoff
 exponentiel de 30, 60, 120 puis 300 secondes. Elle est matérialisée par une ligne
 `qa_deliveries` par `(dépôt, PR, SHA)`, avec `status`, `attempts`, `reason`,
 `deadline_at` et `last_error`. La deadline est `QA_AUTO_PREVIEW_WAIT_SECONDS`
-(1800 s par défaut) après acceptation de la livraison.
+(1800 s par défaut) après acceptation de la livraison. Chaque probe prend la
+propriété de sa livraison (`claim_token`, bail de 90 s) : promotion, expiration et
+replanification ne s'appliquent que si ce jeton est encore le sien, et une
+promotion est refusée si la deadline s'est fermée pendant la vérification de la
+preview. Les livraisons terminales (`processed`, `expired`, `rate_limited`,
+`auto_disabled`) sont purgées après 30 jours.
 
 Après la deadline, la tentative passe en `expired`, avec l'audit
 `automatic.preview_expired` et un log d'avertissement du worker. **Une tentative

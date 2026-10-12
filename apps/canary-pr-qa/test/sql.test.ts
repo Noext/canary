@@ -486,8 +486,8 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
   expect(await q.list(["fixture/app"])).toEqual([]);
 }, 30_000);
 
-it("migrates an existing install to schema version 6 without losing pending deliveries", async () => {
-  expect(SCHEMA_VERSION).toBe(6);
+it("migrates an existing install to schema version 7 without losing pending deliveries", async () => {
+  expect(SCHEMA_VERSION).toBe(7);
   const q = await sqlDatabase();
   expect(
     await q.acceptDelivery("legacy", "pull_request", {
@@ -499,6 +499,7 @@ it("migrates an existing install to schema version 6 without losing pending deli
   ).toBe(true);
   for (const column of [
     "attempts",
+    "claim_token",
     "deadline_at",
     "reason",
     "last_error",
@@ -519,6 +520,7 @@ it("migrates an existing install to schema version 6 without losing pending deli
   expect(columns).toEqual(
     expect.arrayContaining([
       "attempts",
+      "claim_token",
       "deadline_at",
       "reason",
       "last_error",
