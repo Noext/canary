@@ -384,6 +384,39 @@ Run `make` with no args to see all targets.
 
 </details>
 
+<details>
+<summary><strong>Architecture gate (arcovia)</strong></summary>
+
+CI runs [arcovia](https://github.com/gkhan205/arcovia) over the two UI-facing workspaces and fails a
+pull request whose architecture score drops below a recorded floor:
+
+| Target             | Measured score | CI floor |
+| ------------------ | -------------- | -------- |
+| `apps/canary-ui`   | 80.77 (B)      | **75**   |
+| `apps/canary-pr-qa` | 94.18 (A)     | **90**   |
+
+A floor is a non-regression guard, not a target: raise it in the same pull request that fixes the
+findings it penalises, after re-measuring.
+
+arcovia 0.2.2 exits `0` whatever the score, and its console summary prints `Framework React` even
+for a project whose detected framework is `unknown`, so that summary cannot gate anything.
+[`scripts/arcovia-gate.mjs`](scripts/arcovia-gate.mjs) reads `analysis.json` instead, and fails
+closed: schema or version drift, a disagreement between the duplicated `score.overall` and
+`summary.overallScore`, and an analysis that covered no file are all gate failures — never a pass.
+The analysis reads no `node_modules`, so the job installs nothing from the workspace.
+
+Reproduce the job locally, with the same numbers CI reads:
+
+```bash
+npx arcovia@0.2.2 analyze apps/canary-ui --json --output .arcovia
+node scripts/arcovia-gate.mjs --target apps/canary-ui \
+  --report .arcovia/analysis.json --min-score 75
+```
+
+A failing gate prints the most severe findings (rule, file, line) and the points still needed.
+
+</details>
+
 See [`AGENTS.md`](AGENTS.md) for architecture and orientation, [`CONTRIBUTING.md`](CONTRIBUTING.md)
 for the contribution flow, and [`RELEASING.md`](RELEASING.md) for the publish pipeline.
 

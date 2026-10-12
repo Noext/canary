@@ -70,3 +70,71 @@ jobs:
           name: pr-qa-container-logs
           path: /tmp/canary-container-*/service.log
           if-no-files-found: ignore
+
+  # Architecture intelligence for the two UI-facing workspaces. Runs on its own
+  # runner so a score regression is reported as one fast job, independent from
+  # the 30-minute check chain.
+  architecture:
+    name: Architecture gate (arcovia)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ARCOVIA_VERSION: 0.2.2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+
+      # arcovia is not a workspace dependency: it is fetched at an exact
+      # version and checked against its published tarball digest, the same way
+      # this workflow pins actions by SHA and the Postgres image by digest.
+      # It is never added to the lockfile, so `pnpm audit --prod` stays
+      # unaffected. The analysis itself needs no node_modules.
+      - name: Install arcovia (pinned version, verified tarball)
+        env:
+          ARCOVIA_TARBALL_SHA512: "kpMmNTutUDINLhszppwZl24nou+VDN7iel2GGFhdtxZeWhkRtqYlgUzogVNvHpYfyZs3Ik5ZwR4bIIy+swazvw=="
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/arcovia-$ARCOVIA_VERSION.tgz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://registry.npmjs.org/arcovia/-/arcovia-$ARCOVIA_VERSION.tgz"
+          actual="$(openssl dgst -sha512 -binary "$archive" | openssl base64 -A)"
+          if [ "$actual" != "$ARCOVIA_TARBALL_SHA512" ]; then
+            echo "::error::arcovia $ARCOVIA_VERSION tarball digest mismatch"
+            exit 1
+          fi
+          npm install --global --no-fund --no-audit "$archive"
+          arcovia --version
+
+      - name: Analyze architecture (arcovia)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/arcovia"
+          arcovia analyze apps/canary-ui --json \
+            --output "$RUNNER_TEMP/arcovia/canary-ui"
+          arcovia analyze apps/canary-pr-qa --json \
+            --output "$RUNNER_TEMP/arcovia/pr-qa"
+
+      # The thresholds are floors recorded from a measurement of this commit,
+      # never aspirational targets: a lower score than these values means the
+      # pull request added architectural debt. See the README.
+      - name: Architecture score gate
+        run: |
+          set -euo pipefail
+          node scripts/arcovia-gate.mjs \
+            --target apps/canary-ui \
+            --report "$RUNNER_TEMP/arcovia/canary-ui/analysis.json" \
+            --min-score 75 \
+            --target apps/canary-pr-qa \
+            --report "$RUNNER_TEMP/arcovia/pr-qa/analysis.json" \
+            --min-score 90
+
+      - name: Preserve architecture reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arcovia-reports
+          path: ${{ runner.temp }}/arcovia
+          if-no-files-found: ignore
