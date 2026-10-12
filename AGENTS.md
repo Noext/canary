@@ -149,7 +149,7 @@ répertoire et le même projet Compose ; ne pas arrêter les services d'autres p
 Dans un répertoire dédié appartenant au compte de déploiement :
 
 ```bash
-git clone --branch feat/github-app-onboarding https://github.com/Noext/canary.git canary-pr-qa
+git clone --branch feat/guided-qa-dashboard https://github.com/Noext/canary.git canary-pr-qa
 cd canary-pr-qa
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -157,7 +157,7 @@ git rev-parse HEAD
 git status --short
 ```
 
-Le parcours GitHub App est livré sur `feat/github-app-onboarding` avant fusion.
+Le dashboard guidé est livré sur `feat/guided-qa-dashboard` avant fusion.
 Après fusion, utiliser le `main` de votre fork pour la production. Pour un clone existant, inspecter
 ses remotes et changements locaux ; préserver `.env` et `config/`. Ne pas employer
 `reset --hard` ou écraser des changements locaux. Un nom de projet Compose
@@ -328,12 +328,18 @@ copier `config/users.example.json` vers `config/users.json`, configurer les hash
 SHA-256 des tokens et les dépôts autorisés, puis
 `QA_USERS_FILE=/app/config/users.json`. Le README documente aussi les JWT OIDC.
 
-Dans le dashboard : saisir la PR/preview, vérifier le défaut DeepSeek dans le
-dropdown, puis lancer. Suivre les phases/actions par SSE et inspecter le contrat,
-les omissions, les assertions, la vidéo et le résultat. Les vidéos sont finalisées
-après le scénario, pas diffusées en direct. Pour valider la publication, vérifier
-le statut/check et le commentaire sur le **SHA effectivement testé**. Un statut
-`completed` en DB ne signifie pas que les assertions ont réussi.
+Dans le dashboard, l'Accueil indique la prochaine action selon les connexions
+réelles. Utiliser Réglages pour GitHub et l'accès au catalogue IA, puis Nouveau
+test. Renseigner la PR, l'application à tester et le modèle explicite ; cliquer
+Vérifier les accès. Cette étape ne génère pas de contenu IA, ne lance pas de
+scénario et ne publie rien. Elle vérifie seulement PR, catalogue et provenance
+exacte de la preview. Une vérification réussie ne valide pas la fonctionnalité.
+
+Lancer le test après la vérification. L'Historique présente phases, verdicts,
+assertions et vidéos ; les données JSON/run ID sont dans le diagnostic replié.
+Les vidéos sont finalisées après le scénario. Vérifier le rapport et la
+publication sur le SHA effectivement testé. La configuration et les comptes
+existants sont conservés ; aucune nouvelle première installation n'est requise.
 
 Remettre à l'utilisateur la révision déployée, les services sains, la PR et son
 SHA, le run ID, le modèle, l'outcome et les liens réellement vérifiés. Distinguer

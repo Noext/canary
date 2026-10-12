@@ -511,6 +511,10 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       type: "click",
       locator: { by: "role", value: "button", name: "Connexion technique" },
     });
+    await act("history-navigation", {
+      type: "click",
+      locator: { by: "css", value: "#nav-runs" },
+    });
     const listed = await act(
       "list",
       {
@@ -528,6 +532,10 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       }
     );
     expect(listed.actual).toContain("fixture/app #1");
+    await act("new-test-navigation", {
+      type: "click",
+      locator: { by: "css", value: "#nav-new" },
+    });
     const noFallback = await act(
       "no-fallback",
       {
@@ -559,6 +567,10 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       }
     );
     expect(disabled.actual).toBe(true);
+    await act("back-to-history", {
+      type: "click",
+      locator: { by: "css", value: "#nav-runs" },
+    });
     await act("open-run", {
       type: "click",
       locator: { by: "role", value: "link", name: "fixture/app #1" },
@@ -568,39 +580,39 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       {
         type: "assert",
         assertionId: "live",
-        locator: { by: "css", value: "#connection" },
+        locator: { by: "css", value: "#liveConnection" },
       },
       {
         id: "live",
         description: "SSE connected",
         kind: "text",
-        expected: "Flux live connecté",
+        expected: "Suivi en direct connecté",
         verification: "state",
         afterStep: "open",
       }
     );
-    expect(stream.actual).toBe("Flux live connecté");
+    expect(stream.actual).toBe("Suivi en direct connecté");
     await queue.claim("dashboard-worker");
     const running = await act(
       "running",
       {
         type: "assert",
         assertionId: "running",
-        locator: { by: "css", value: "#provenance" },
+        locator: { by: "css", value: "#runState" },
       },
       {
         id: "running",
         description: "Running update delivered",
         kind: "text",
-        expected: "running",
+        expected: "EN COURS",
         verification: "state",
         afterStep: "open",
       }
     );
-    expect(running.actual).toContain("running");
+    expect(running.actual).toContain("EN COURS");
     await act("cancel", {
       type: "click",
-      locator: { by: "role", value: "button", name: "Annuler" },
+      locator: { by: "role", value: "button", name: "Annuler le test" },
     });
     for (
       let i = 0;
@@ -610,6 +622,10 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect((await queue.get(job.id))?.cancel_requested).toBe(true);
+    await act("new-after-cancel", {
+      type: "click",
+      locator: { by: "css", value: "#nav-new" },
+    });
     await act("choose-model", {
       type: "select",
       locator: { by: "css", value: "#model" },
@@ -625,6 +641,26 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       locator: { by: "css", value: "#preview" },
       value: f.baseUrl,
     });
+    await act("preflight-before-launch", {
+      type: "click",
+      locator: { by: "css", value: "#checkRun" },
+    });
+    const checked = await act(
+      "preflight-confirmation",
+      {
+        type: "assert",
+        assertionId: "preflight",
+        locator: { by: "css", value: "#preflightSummary" },
+      },
+      {
+        id: "preflight",
+        description: "PR and preview verified",
+        kind: "text",
+        expected: "fixture/app",
+        verification: "state",
+      }
+    );
+    expect(checked.actual).toContain("fixture/app");
     await act("launch-selected-model", {
       type: "click",
       locator: { by: "css", value: "#startRun" },
@@ -990,6 +1026,20 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     );
   try {
     await act("dashboard", { type: "goto", path: "/" });
+    await text(
+      "guided-welcome",
+      "#welcomeTitle",
+      "Votre premier test commence ici"
+    );
+    await text("next-action", "#welcomeAction", "Connecter GitHub");
+    await text("ai-readiness", "#stepModelState", "Modèle disponible");
+    const welcomeLayout = await canary.act(
+      session,
+      "welcome-desktop",
+      `const page=await browser.getPage("qa"); await page.setViewportSize({width:1440,height:1000}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)}));`
+    );
+    expect(welcomeLayout.actual).toBe(true);
+    await click("settings-navigation", "#welcomeAction");
     await text("github-not-connected", "#githubConnection", "À connecter");
     // Redirect only the external GitHub form to the protocol fixture. Production
     // still posts the real manifest and processes real HTTP callback/state flow.
@@ -1015,6 +1065,9 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     );
     await click("save-selection", "#githubSave");
     await text("selection-saved", "#githubMessage", "Dépôts enregistrés");
+    await click("home-after-github", "#nav-home");
+    await text("ready-action", "#welcomeAction", "Tester une pull request");
+    await click("new-test-after-github", "#welcomeAction");
     const layout = await canary.act(
       session,
       "connected-mobile-layout",
@@ -1056,6 +1109,113 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
   ).toBe(true);
 }, 180_000);
 
+it("presents actual assertions and a playable video instead of raw JSON in the dashboard result", async () => {
+  await dashboardDatabase();
+  const f = await fixture();
+  closers.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  closers.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const queue = new Queue(config.DATABASE_URL);
+  const job = await queue.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "human-result"
+  );
+  await queue.claim("worker");
+  const result = await runQa(
+    { id: job.id, prUrl: PR_URL, previewUrl: f.baseUrl, publish: true },
+    config
+  );
+  expect(result.outcome).toBe("passed");
+  await queue.complete(job.id, "worker", result.outcome);
+  const login = await fetch(`${url}/session`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+  });
+  const value = login.headers
+    .get("set-cookie")!
+    .split(";")[0]!
+    .slice("qa_session=".length);
+  const hosts = [...config.allowedHosts, new URL(url).host];
+  const canary = new Canary({
+    ...config,
+    allowedHosts: hosts,
+    PREVIEW_ALLOWED_HOSTS: hosts.join(","),
+  });
+  const session = await canary.start("Readable result and video", {
+    cookies: [
+      {
+        name: "qa_session",
+        value,
+        domain: "127.0.0.1",
+        path: "/",
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+        expires: -1,
+      },
+    ],
+    origins: [],
+  });
+  try {
+    await canary.act(
+      session,
+      "open-result",
+      compileAction({ type: "goto", path: `/#${job.id}` }, url)
+    );
+    const summary = await canary.act(
+      session,
+      "human-summary",
+      compileAction(
+        {
+          type: "assert",
+          assertionId: "summary",
+          locator: { by: "css", value: "#resultSummary" },
+        },
+        url,
+        {
+          id: "summary",
+          description: "Readable result",
+          kind: "text",
+          expected: "Les assertions ont réussi",
+          verification: "state",
+        }
+      )
+    );
+    expect(summary.actual).toContain("Les assertions ont réussi");
+    const evidence = await canary.act(
+      session,
+      "result-mobile",
+      `const page=await browser.getPage("qa"); await page.setViewportSize({width:390,height:844}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>({fits:document.documentElement.scrollWidth<=innerWidth,video:document.querySelector("#scenarioCards video")?.getAttribute("src"),diagnosticClosed:!document.querySelector("#detail details").open}))}));`
+    );
+    const shown = evidence.actual as {
+      fits: boolean;
+      video: string;
+      diagnosticClosed: boolean;
+    };
+    expect(shown.fits).toBe(true);
+    expect(shown.diagnosticClosed).toBe(true);
+    expect(shown.video).toContain(".webm");
+    const video = await fetch(url + shown.video, {
+      headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+    });
+    expect(video.ok).toBe(true);
+    expect((await video.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    await canary.end(session, join(f.dataDir, "human-dashboard-evidence"));
+  } catch (error) {
+    await canary.abort(session);
+    throw error;
+  }
+}, 180_000);
 it("removes the connected GitHub App from the dashboard only after an explicit confirmation", async () => {
   await dashboardDatabase();
   const f = await githubSetupFixture();
@@ -1143,6 +1303,7 @@ it("removes the connected GitHub App from the dashboard only after an explicit c
     );
   try {
     await act("dashboard", { type: "goto", path: "/" });
+    await click("open-github-settings", "#nav-settings");
     await assertText("connected", "#githubConnection", "Connecté");
     await click("open-danger-zone", "#githubDanger > summary");
     // A refused confirmation must leave GitHub and the local connection alone.
@@ -1165,6 +1326,7 @@ it("removes the connected GitHub App from the dashboard only after an explicit c
     await setup.select(["fixture/app"]);
     f.state.deleteFails = true;
     await act("dashboard-reconnected", { type: "goto", path: "/" });
+    await click("open-github-settings-again", "#nav-settings");
     await assertText("connected-again", "#githubConnection", "Connecté");
     await click("open-danger-zone-again", "#githubDanger > summary");
     await confirmAs("accept-second-confirmation", true);

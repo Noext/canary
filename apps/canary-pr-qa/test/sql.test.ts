@@ -1115,6 +1115,110 @@ it("reads an uninstalled public fork anonymously while keeping base writes insta
   ).toBe(true);
 }, 30_000);
 
+it("checks PR, model and exact preview version without enqueueing, generating AI content or publishing", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const headers = {
+    Authorization: `Bearer ${config.QA_API_TOKEN}`,
+    "Content-Type": "application/json",
+    Origin: url,
+  };
+  const status = await fetch(`${url}/dashboard/status`, { headers });
+  const statusBody = await status.text();
+  expect(statusBody).not.toContain(config.QA_API_TOKEN);
+  expect(statusBody).not.toContain(config.GITHUB_TOKEN);
+  expect(JSON.parse(statusBody)).toMatchObject({
+    github: { mode: "technical", repositories: ["fixture/app"] },
+  });
+  const response = await fetch(`${url}/runs/preflight`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      prUrl: PR_URL,
+      previewUrl: f.baseUrl,
+      model: "fixture-scripted-model",
+    }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    ready: true,
+    pr: { repo: "fixture/app", sha: SHA },
+    preview: { sha: SHA },
+    model: "fixture-scripted-model",
+  });
+  expect(await q.list(["fixture/app"])).toEqual([]);
+  expect(f.modelRequests).toEqual([]);
+  expect(f.outgoing).toEqual([]);
+  const invalid = await fetch(`${url}/runs/preflight`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      prUrl: PR_URL,
+      previewUrl: f.baseUrl,
+      model: "missing-model",
+    }),
+  });
+  expect(invalid.status).toBe(400);
+}, 30_000);
+
+it("refuses a preflight with missing preview provenance and a read-only account", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture({ noSha: true });
+  cleanup.push(f.close);
+  const usersFile = join(f.dataDir, "preflight-viewer.json");
+  const token = "preflight-viewer-token-2026-abcdefgh";
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "viewer",
+        role: "viewer",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256").update(token).digest("hex"),
+      },
+    ])
+  );
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+    QA_USERS_FILE: usersFile,
+  };
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const input = JSON.stringify({
+    prUrl: PR_URL,
+    previewUrl: f.baseUrl,
+    model: "fixture-scripted-model",
+  });
+  const call = (auth: string) =>
+    fetch(`${url}/runs/preflight`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${auth}`,
+        "Content-Type": "application/json",
+        Origin: url,
+      },
+      body: input,
+    });
+  expect((await call(token)).status).toBe(403);
+  const response = await call(config.QA_API_TOKEN);
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ code: "PREVIEW_SHA_MISMATCH" });
+  expect(await q.list(["fixture/app"])).toEqual([]);
+  expect(f.modelRequests).toEqual([]);
+  expect(f.outgoing).toEqual([]);
+}, 30_000);
 it("disconnects the connected GitHub App from the admin API, uninstalls it on GitHub and wipes the local connection", async () => {
   const q = await sqlDatabase();
   const f = await githubSetupFixture();

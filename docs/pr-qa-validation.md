@@ -2,6 +2,24 @@
 
 Implementation in the official `Noext/canary` fork, upstream `0xnyn/canary`, development branch `feat/autonomous-pr-qa`.
 
+## Dashboard guidé — 12 octobre 2026
+
+Branche `feat/guided-qa-dashboard`, basée sur le main du fork après fusion de la
+PR #3. L'accueil, les réglages, le formulaire et la lecture des résultats sont
+refondus ; le moteur Canary et les données existantes restent réutilisés.
+
+- Vérifications locales : lint, TypeScript, **325 tests** et **14 E2E Chromium**.
+- Parcours UI réellement exercés : accueil et prochaine action, App GitHub,
+  connexion locale/technique, modèle explicite, préflight avant lancement,
+  SSE/annulation, restrictions viewer et lecture d'un rapport avec assertions
+  et vidéo servie par l'API. Layouts à 1440 px et 390 px inspectés.
+- SQL : préflight sans enqueue, génération IA ni publication ; provenance de
+  preview manquante et compte viewer refusés ; statut sans credentials exposés.
+- Les captures dans `docs/images` viennent des E2E avec des données fictives.
+  GitHub/IA sont des fixtures ; Chromium et les vidéos sont réels.
+- Les validations CI/Docker de cette révision sont documentées dans sa PR.
+  Aucune mise à jour du VPS utilisateur n'est revendiquée.
+
 ## GitHub App depuis l’UI — 12 octobre 2026
 
 Développements sur `feat/github-app-onboarding`, depuis le main du fork après
