@@ -13,7 +13,7 @@ réelle avant d'augmenter le nombre de workers. Lire aussi [AGENTS.md](../../AGE
 et le [guide d'exploitation](../../docs/pr-qa-operations.md).
 
 ```bash
-git clone --branch feat/autonomous-pr-qa https://github.com/Noext/canary.git
+git clone --branch feat/local-password-auth https://github.com/Noext/canary.git
 cd canary
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -46,8 +46,21 @@ Le wrapper construit l'image, vérifie la configuration, attend les services pui
 lance les probes réelles du doctor depuis le worker. Ouvrir le dashboard sur
 `http://127.0.0.1:8787/` sur le VPS, via un tunnel SSH ou un reverse proxy HTTPS.
 Le port public n'est pas ouvert par Compose. `ARTIFACT_BASE_URL` configure les
-liens GitHub. S'authentifier avec un token individuel, un JWT d'accès SSO ou, pour
-l'amorçage, `QA_API_TOKEN`. Le dashboard crée un cookie HttpOnly d'une heure.
+liens GitHub. Pour créer le premier compte administrateur, générer un lien privé à usage unique :
+
+```bash
+docker compose exec -T pr-qa canary-pr-qa setup-admin --origin https://votre-domaine-qa
+```
+
+Ouvrir le lien dans les 15 minutes, choisir un identifiant et un mot de passe
+(12 caractères minimum), puis utiliser la connexion locale habituelle. Le SSO
+n'est pas nécessaire. Le lien est réservé à l'opérateur ayant accès au VPS :
+aucun visiteur ne peut s'attribuer le premier compte. La configuration existante,
+les runs et leurs preuves sont conservés par la migration automatique.
+
+Les tokens individuels/JWT restent disponibles sous « Accès technique (API / SSO) ».
+`QA_API_TOKEN` reste un secret serveur/API ; il n'est plus le login principal.
+Les sessions locales HttpOnly durent une heure et sont révoquées au logout.
 
 ```bash
 ssh -N -L 8787:127.0.0.1:8787 deploy@VPS
@@ -193,12 +206,42 @@ Un PAT reste possible : lecture Contents/Deployments et écriture PR/statuses.
 Les Checks et l'upsert de commentaire Bot sont réservés au mode GitHub App.
 Le token connecté à ChatGPT n'est pas automatiquement disponible sur votre VPS.
 
+## Comptes locaux et récupération d'accès
+
+Les comptes et sessions locales sont conservés dans PostgreSQL. Les mots de passe
+sont dérivés avec scrypt, sel aléatoire par compte ; seuls les hashes des tokens
+de session et du lien d'installation sont stockés. La création du premier admin
+est atomique ; le lien est consommé une seule fois et aucun nouvel admin initial
+ne peut être créé ensuite. Les tentatives de connexion sont limitées en SQL.
+Le cookie porte `Secure` lorsque l'origine configurée ou le proxy indique HTTPS ;
+conserver `X-Forwarded-Proto` sur votre reverse proxy.
+
+Pour votre installation existante, mettre à jour la branche et l'image sans
+supprimer les volumes, puis lancer `setup-admin`. Aucun mot de passe par défaut
+ou compte public n'est créé. Les comptes techniques existants restent utilisables.
+
+En cas de mot de passe oublié, l'opérateur peut le remplacer via stdin, sans le
+mettre dans les arguments de commande ni dans Git. Depuis Bash sur le VPS :
+
+```bash
+read -rs -p 'Nouveau mot de passe : ' QA_NEW_PASSWORD
+printf '%s' "$QA_NEW_PASSWORD" | docker compose exec -T pr-qa canary-pr-qa reset-password IDENTIFIANT
+unset QA_NEW_PASSWORD
+```
+
+Cette commande révoque toutes les sessions locales du compte. Une nouvelle
+connexion avec le nouveau mot de passe est requise. La commande `setup-admin`
+refuse de recréer un administrateur quand un compte local existe déjà.
+
 ## Dashboard, API et observabilité
 
 | Endpoint | Fonction |
 | --- | --- |
 | `GET /` | Dashboard, formulaire de lancement, recherche, filtres, détails |
-| `POST /session`, `DELETE /session` | Connexion/déconnexion avec cookie HttpOnly |
+| `GET /auth/status` | État de première installation, aucun credential exposé |
+| `POST /auth/setup` | Premier admin, lien privé temporaire requis |
+| `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
+| `POST /session`, `DELETE /session` | Accès technique / déconnexion et révocation locale |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
 | `POST /runs` | `{prUrl,previewUrl?,publish?,model?}`, header `Idempotency-Key` facultatif |

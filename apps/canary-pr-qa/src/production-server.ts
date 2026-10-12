@@ -16,6 +16,7 @@ import {
   signedArtifact,
   validArtifactSignature,
 } from "./access.js";
+import { authRoutes } from "./auth-routes.js";
 import {
   type Config,
   validateConfiguration,
@@ -26,6 +27,7 @@ import { diagnose } from "./diagnostics.js";
 import { GitHub, parsePrUrl } from "./github.js";
 import { verifyWebhook } from "./github-app.js";
 import { importLegacy } from "./legacy.js";
+import { LocalAuth, localCookie } from "./local-auth.js";
 import {
   ModelCatalog,
   ModelIdSchema,
@@ -75,6 +77,8 @@ export async function startProductionServer(config: Config) {
   const queue = new Queue(config.DATABASE_URL);
   await queue.migrate();
   await importLegacy(queue, config);
+  const accounts = new LocalAuth(queue.pool);
+  const localRoute = authRoutes(accounts, queue, config, rawBody, json);
   const github = new GitHub(config);
   const models = new ModelCatalog(config);
   const streams = new Set<ServerResponse>();
@@ -248,7 +252,7 @@ export async function startProductionServer(config: Config) {
       if (closed) {
         return;
       }
-      const current = await principal(req, config);
+      const current = await principal(req, config, accounts);
       if (!current) {
         res.end();
         return;
@@ -343,6 +347,8 @@ export async function startProductionServer(config: Config) {
     }
     if (req.method === "GET" && url.pathname === "/") {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Referrer-Policy", "no-referrer");
       res.setHeader(
         "Content-Security-Policy",
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
@@ -356,7 +362,7 @@ export async function startProductionServer(config: Config) {
     }
     return false;
   }
-  async function login(
+  async function legacyLogin(
     req: IncomingMessage,
     res: ServerResponse,
     url: URL,
@@ -384,6 +390,17 @@ export async function startProductionServer(config: Config) {
       return true;
     }
     return false;
+  }
+  async function login(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    user: Principal | undefined
+  ) {
+    return (
+      (await localRoute(req, res, url)) ||
+      (await legacyLogin(req, res, url, user))
+    );
   }
   async function serveMetrics(res: ServerResponse) {
     const counts = await queue.pool.query(
@@ -434,10 +451,11 @@ export async function startProductionServer(config: Config) {
       return true;
     }
     if (req.method === "DELETE" && url.pathname === "/session") {
-      res.setHeader(
-        "Set-Cookie",
-        "qa_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
-      );
+      await accounts.logout(req);
+      res.setHeader("Set-Cookie", [
+        localCookie("", config, req),
+        "qa_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+      ]);
       json(res, 200, { ok: true });
       return true;
     }
@@ -498,7 +516,7 @@ export async function startProductionServer(config: Config) {
       json(res, 403, { error: "Origin rejected" });
       return;
     }
-    const user = await principal(req, config);
+    const user = await principal(req, config, accounts);
     if (await login(req, res, url, user)) {
       return;
     }
@@ -532,16 +550,12 @@ export async function startProductionServer(config: Config) {
       if (res.headersSent) {
         res.end();
       } else {
-        json(
-          res,
-          /access denied|Administrator/i.test(diagnostic.message) ? 403 : 400,
-          {
-            error: diagnostic.message,
-            code: diagnostic.code,
-            hint: diagnostic.hint,
-            requestId,
-          }
-        );
+        json(res, apiErrorStatus(diagnostic), {
+          error: diagnostic.message,
+          code: diagnostic.code,
+          hint: diagnostic.hint,
+          requestId,
+        });
       }
     });
   });
@@ -564,4 +578,11 @@ export async function startProductionServer(config: Config) {
       await queue.close();
     },
   });
+}
+
+function apiErrorStatus(diagnostic: { code: string; message: string }) {
+  if (["AUTH_RATE_LIMIT", "AUTH_BUSY"].includes(diagnostic.code)) {
+    return 429;
+  }
+  return /access denied|Administrator/i.test(diagnostic.message) ? 403 : 400;
 }

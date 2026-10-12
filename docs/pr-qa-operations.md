@@ -29,7 +29,14 @@ sur GitHub et ne joue pas les scénarios fonctionnels de cette PR. Sans `--pr`,
 la provenance de sa preview n'est pas vérifiée. `--offline` / `--skip-browser`
 signalent explicitement les contrôles sautés.
 
-Ouvrir `/` via tunnel SSH ou reverse proxy HTTPS. Le dashboard montre les phases
+Ouvrir `/` via tunnel SSH ou reverse proxy HTTPS. Créer le premier admin avec
+le lien de `docker compose exec -T pr-qa canary-pr-qa setup-admin --origin https://votre-domaine-qa`
+et choisir identifiant/mot de passe. Le lien expire sous 15 minutes et la création
+initiale est fermée après le premier compte. Les connexions locales ne nécessitent
+pas de SSO ; les accès techniques existants sont conservés dans une section dédiée.
+La récupération de mot de passe via stdin (`reset-password`) est documentée dans
+le README et révoque les sessions du compte. Ne jamais purger la DB pour récupérer
+l'accès. Le dashboard montre les phases
 et actions par SSE à `/runs/:id/events`, les diagnostics et les preuves. Le modèle
 est sélectionné via le catalogue `/models` authentifié, alimenté par le
 `/v1/models` du fournisseur. Le défaut est `opencode-go/deepseek-v4.1-flash` ;
@@ -134,8 +141,8 @@ runs actifs et une file vide. Le wrapper refuse une mise à jour avec des travau
 actifs/en attente. Sur un checkout propre, préserver `.env` / `config/` :
 
 ```bash
-git fetch origin feat/autonomous-pr-qa
-git merge --ff-only origin/feat/autonomous-pr-qa
+git fetch origin main
+git merge --ff-only origin/main
 ./scripts/pr-qa up
 ```
 

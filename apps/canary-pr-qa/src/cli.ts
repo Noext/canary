@@ -4,7 +4,9 @@ import { type Config, loadConfig } from "./config.js";
 import { diagnose } from "./diagnostics.js";
 import { doctor, supportSummary } from "./doctor.js";
 import { startEgressProxy } from "./egress-proxy.js";
+import { LocalAuth } from "./local-auth.js";
 import { startProductionServer } from "./production-server.js";
+import { Queue } from "./queue.js";
 import { runQa } from "./runner.js";
 import { startServer } from "./server.js";
 import { initializeTracing } from "./telemetry.js";
@@ -14,6 +16,7 @@ async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
+      origin: { type: "string" },
       preview: { type: "string" },
       model: { type: "string" },
       "no-publish": { type: "boolean" },
@@ -27,14 +30,17 @@ async function main() {
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write(
-      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
+      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
     );
     return;
   }
   const config = loadConfig();
   const stopTracing = initializeTracing();
   process.once("beforeExit", () => void stopTracing?.());
-  if (await serviceCommand(command, config)) {
+  if (
+    (await accountCommand(command, positionals, values.origin, config)) ||
+    (await serviceCommand(command, config))
+  ) {
     return;
   }
   if (command === "doctor" && positionals.length === 1) {
@@ -98,12 +104,7 @@ async function main() {
     config
   );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  process.exitCode = 2;
-  if (result.outcome === "passed" && !result.error) {
-    process.exitCode = 0;
-  } else if (result.outcome === "failed") {
-    process.exitCode = 1;
-  }
+  process.exitCode = resultExitCode(result);
 }
 main().catch((error) => {
   const diagnostic = diagnose(error);
@@ -127,4 +128,81 @@ async function serviceCommand(command: string | undefined, config: Config) {
     return true;
   }
   return false;
+}
+
+async function accountCommand(
+  command: string | undefined,
+  args: string[],
+  origin: string | undefined,
+  config: Config
+) {
+  if (!["setup-admin", "reset-password"].includes(command ?? "")) {
+    return false;
+  }
+  if (!config.DATABASE_URL) {
+    throw new Error("PostgreSQL is required for local accounts.");
+  }
+  const queue = new Queue(config.DATABASE_URL);
+  try {
+    await queue.migrate();
+    const auth = new LocalAuth(queue.pool);
+    if (command === "setup-admin") {
+      const url = new URL(
+        origin ??
+          (config.ARTIFACT_BASE_URL || `http://127.0.0.1:${config.QA_PORT}`)
+      );
+      if (
+        !["https:", "http:"].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        url.pathname !== "/"
+      ) {
+        throw new Error(
+          "Supply a dashboard origin, e.g. --origin https://canary.pharmania.fr"
+        );
+      }
+      const ticket = await auth.issueSetupTicket();
+      url.hash = `setup=${ticket}`;
+      process.stdout.write(
+        `Open this private setup link within 15 minutes:\n${url.href}\n`
+      );
+    } else {
+      if (!args[1]) {
+        throw new Error(
+          "Use reset-password USERNAME; send the new password via stdin."
+        );
+      }
+      const password = await stdinPassword();
+      await auth.resetPassword(args[1], password);
+      process.stdout.write("Password updated. All local sessions revoked.\n");
+    }
+  } finally {
+    await queue.close();
+  }
+  return true;
+}
+
+async function stdinPassword() {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = Buffer.from(chunk);
+    size += bytes.length;
+    if (size > 1024) {
+      throw new Error("Password input exceeds limit.");
+    }
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks)
+    .toString("utf8")
+    .replace(/\r?\n$/, "");
+}
+
+function resultExitCode(result: { outcome: string; error?: string }) {
+  if (result.outcome === "passed" && !result.error) {
+    return 0;
+  }
+  return result.outcome === "failed" ? 1 : 2;
 }

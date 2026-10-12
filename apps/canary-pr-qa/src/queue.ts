@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createLogger } from "@usecanary/logger";
 import pg from "pg";
 import { QaError } from "./diagnostics.js";
+import { LOCAL_AUTH_MIGRATION } from "./local-auth.js";
 import type { RunOptions } from "./runner.js";
 
 interface AutomaticRunLimits {
@@ -28,7 +29,7 @@ export interface Job {
   updated_at: string;
   worker?: string;
 }
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -48,6 +49,8 @@ INSERT INTO qa_schema(version) VALUES(1) ON CONFLICT DO NOTHING;
 ALTER TABLE qa_jobs ADD COLUMN IF NOT EXISTS usage jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS retry_at timestamptz NOT NULL DEFAULT now();
 INSERT INTO qa_schema(version) VALUES(2) ON CONFLICT DO NOTHING;
+INSERT INTO qa_schema(version) VALUES(3) ON CONFLICT DO NOTHING;
+${LOCAL_AUTH_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {
