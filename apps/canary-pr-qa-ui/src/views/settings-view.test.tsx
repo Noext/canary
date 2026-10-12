@@ -451,15 +451,75 @@ describe("SettingsView", () => {
         "Dépôts enregistrés"
       )
     );
+    // `fixture/other` is not in `repositories`: opting it in would send
+    // autoRepos outside the saved selection, which the server refuses (400).
     expect(calls).toContainEqual({
-      body: { autoRepos: ["fixture/other"], repositories: ["fixture/app"] },
+      body: { autoRepos: [], repositories: ["fixture/app"] },
       method: "PUT",
       path: "/github/app/repositories",
     });
     await waitFor(() =>
-      expect(byId(container, "repo-auto-fixture-other")).toBeChecked()
+      expect(byId(container, "repo-auto-fixture-other")).not.toBeChecked()
     );
     expect(byId(container, "repo-auto-fixture-app")).not.toBeChecked();
+  });
+
+  it("does not opt in an unselected repository whose auto_run defaults to true", async () => {
+    github = {
+      app: {
+        id: "95001",
+        origin: "https://qa.example.com",
+        slug: "canary-fixture-app",
+      },
+      lastDelivery: null,
+      legacyConfigured: false,
+      repositories: [
+        {
+          account: "fixture",
+          auto_run: true,
+          enabled: false,
+          full_name: "fixture/app",
+          installation_id: "1",
+          private: false,
+        },
+        {
+          account: "fixture",
+          auto_run: true,
+          enabled: false,
+          full_name: "fixture/other",
+          installation_id: "1",
+          private: false,
+        },
+      ],
+      restriction: [],
+    };
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "githubRepoList")).toHaveTextContent(
+        "fixture/other"
+      )
+    );
+    // Both repositories arrive with the server-side default `auto_run=true`
+    // while neither is selected yet.
+    expect(byId(container, "repo-auto-fixture-other")).toBeChecked();
+
+    await user.click(byId(container, "repo-fixture-app"));
+    await user.click(byId(container, "githubSave"));
+
+    await waitFor(() =>
+      expect(byId(container, "githubMessage")).toHaveTextContent(
+        "Dépôts enregistrés"
+      )
+    );
+    const saved = calls.find(
+      (call) => call.path === "/github/app/repositories"
+    );
+    expect(saved?.body).toEqual({
+      autoRepos: ["fixture/app"],
+      repositories: ["fixture/app"],
+    });
   });
 
   it("asks for confirmation before uninstalling, then erases only the local connection", async () => {

@@ -203,10 +203,11 @@ export function GithubSettings(): ReactNode {
       const repositories = saveable
         .filter((repository) => isSelected(repository))
         .map((repository) => repository.full_name);
-      // Automatic runs follow the checked rows: an unchecked repository only
-      // stays selectable, it is never opted in behind the operator's back.
+      // Automatic runs follow the checked rows, and only those: the server
+      // refuses an auto-run repository that is not selected, so an unselected
+      // row can never leak its (defaulted) auto-run state into the request.
       const autoRepos = saveable
-        .filter((repository) => isAutoRun(repository))
+        .filter((repository) => isSelected(repository) && isAutoRun(repository))
         .map((repository) => repository.full_name);
       await api("/github/app/repositories", {
         ...post({ repositories, autoRepos }),
