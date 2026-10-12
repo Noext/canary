@@ -273,6 +273,35 @@ describe.skipIf(!image)(
       expect(
         checked.checks.every((c: { status: string }) => c.status === "passed")
       ).toBe(true);
+      // The documented `./scripts/pr-qa doctor` runs inside `worker`, so the policy
+      // probe must test the shared volume there and not an environment-only
+      // fallback: an unwritable qa-policy volume would leave browser/egress stale.
+      const workerChecked = JSON.parse(
+        (
+          await s.compose(
+            "exec",
+            "-T",
+            "worker",
+            "canary-pr-qa",
+            "doctor",
+            "--json",
+            "--skip-browser",
+            "--pr",
+            PR_URL,
+            "--preview",
+            s.inside
+          )
+        ).stdout
+      );
+      const policyCheck = workerChecked.checks.find(
+        (check: { name: string }) => check.name === "preview-policy"
+      );
+      expect(policyCheck, JSON.stringify(workerChecked.checks)).toMatchObject({
+        status: "passed",
+      });
+      expect(String(policyCheck.message)).toContain(
+        "host(s) published and readable"
+      );
       expect(
         (await fetch(`${s.url}/runs`, { method: "POST", body: "{}" })).status
       ).toBe(401);

@@ -176,9 +176,14 @@ async function readPolicy(config: Config): Promise<string[] | undefined> {
 }
 
 /**
- * Verifies that the enforcement containers can read what the API publishes.
- * The real policy file is never rewritten here: doctor may run offline, without
- * the dashboard list, and must not roll a saved list back to the default.
+ * Verifies the shared policy directory from the process that runs doctor.
+ *
+ * Compose runs `./scripts/pr-qa doctor` inside `worker`, which mounts the
+ * `qa-policy` volume like the API: the probe therefore tests the volume the API
+ * publishes into, and the published file is read back the way `browser` and
+ * `egress` read it. The real policy file is never rewritten here - doctor may run
+ * offline, without the dashboard list, and must not roll a saved list back to the
+ * default.
  */
 export async function verifyPreviewPolicyTarget(
   config: Config
@@ -199,7 +204,17 @@ export async function verifyPreviewPolicyTarget(
   } finally {
     await rm(probe, { force: true }).catch(() => undefined);
   }
-  return `Preview policy directory write verified; the browser and egress services read ${PREVIEW_POLICY_FILE} there`;
+  const published = await readPolicy(config).catch(() => {
+    throw new QaError(
+      "PREVIEW_POLICY_INVALID",
+      `Published ${PREVIEW_POLICY_FILE} is not a valid host list`,
+      "The browser and egress services ignore an invalid file and keep their current list; let the API republish it or remove the file."
+    );
+  });
+  const state = published
+    ? `${published.length} host(s) published and readable`
+    : "no list published yet; the API publishes it at startup";
+  return `Shared policy directory is writable by this UID; ${state}`;
 }
 
 export interface PreviewPolicyWatch {

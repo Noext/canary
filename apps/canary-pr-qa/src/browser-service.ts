@@ -18,10 +18,12 @@ export async function startBrowserService(config: Config) {
       "QA_BROWSER_SERVICE_TOKEN must have at least 32 characters"
     );
   }
-  // The dashboard host list also feeds the daemon's own network policy, which is
-  // the fallback when a session is started without an explicit host list.
+  // The service owns this process's configuration: it never talks to itself, and
+  // the policy watcher and the Canary instance must share one object, because the
+  // watcher mutates it and `browserEnvironment` reads it at every command.
+  config.QA_BROWSER_SERVICE_URL = "";
   const policy = watchPreviewPolicy(config);
-  const native = new Canary({ ...config, QA_BROWSER_SERVICE_URL: "" });
+  const native = new Canary(config);
   let active = 0;
   const server = createServer((req, res) => {
     void handle().catch((error) => {
@@ -49,6 +51,12 @@ export async function startBrowserService(config: Config) {
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ code: 0, stdout: "", stderr: "" }));
         return;
+      }
+      if (input.args[0] === "session" && input.args[1] === "start") {
+        // A context keeps the host list it was started with, and the dashboard
+        // edit is already in force: re-read the published policy so a run started
+        // right after an edit never installs the previous list for its whole life.
+        await policy.sync();
       }
       active++;
       try {

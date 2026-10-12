@@ -351,7 +351,8 @@ Une vérification sautée avec `--offline` / `--skip-browser` reste non validée
 
 Le navigateur est isolé sur un réseau Docker interne. Le déploiement garde quatre
 volumes : `qa-data`, `canary-sessions`, `qa-db` et `qa-policy` (liste d'hôtes
-publiée, recréée au démarrage de `pr-qa`). `config/` est monté en lecture
+publiée par `pr-qa`, lue par `browser`/`egress` et sondée par le doctor du
+`worker` ; recréée au démarrage de `pr-qa`). `config/` est monté en lecture
 seule. Vérifier que les fichiers de configuration nécessaires sont lisibles par
 l'UID 1000 sans rendre les clés accessibles à tous.
 

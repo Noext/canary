@@ -10,6 +10,7 @@ import {
   normalizePreviewHosts,
   PREVIEW_POLICY_FILE,
   PreviewHosts,
+  verifyPreviewPolicyTarget,
   watchPreviewPolicy,
 } from "../src/preview-hosts.js";
 import { startProductionServer } from "../src/production-server.js";
@@ -118,6 +119,34 @@ it("passes the effective list to the browser session policy", () => {
   expect(browserEnvironment(config).CANARY_NETWORK_ALLOWED_HOSTS).toBe(
     "new.example.com:8443"
   );
+});
+
+it("verifies the shared policy directory the doctor runs in", async () => {
+  const directory = await temporaryDirectory("canary-doctor-");
+  const config = loadConfig({
+    PREVIEW_ALLOWED_HOSTS: "preview.test",
+    QA_POLICY_DIR: directory,
+  });
+  expect(await verifyPreviewPolicyTarget(config)).toContain(
+    "no list published yet"
+  );
+  await writeFile(
+    join(directory, PREVIEW_POLICY_FILE),
+    JSON.stringify({
+      hosts: ["preview.test", "other.test:8443"],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin-1",
+    })
+  );
+  expect(await verifyPreviewPolicyTarget(config)).toContain(
+    "2 host(s) published and readable"
+  );
+  // An invalid file is ignored by the enforcement containers: doctor must say so
+  // instead of reporting a healthy volume.
+  await writeFile(join(directory, PREVIEW_POLICY_FILE), "not json");
+  await expect(verifyPreviewPolicyTarget(config)).rejects.toMatchObject({
+    code: "PREVIEW_POLICY_INVALID",
+  });
 });
 
 it("publishes the list for the enforcement containers and ignores a corrupted policy", async () => {

@@ -82,7 +82,7 @@ fonctionnelle du modèle ni le succès d'une PR particulière.
 | Service | Responsabilité | Secrets / persistance |
 | --- | --- | --- |
 | `pr-qa` | API, dashboard, sessions utilisateurs, webhooks, SSE | Identités et GitHub ; volumes `qa-data`, `qa-policy` |
-| `worker` | Planification, contrat, exécution et publication | IA/GitHub, fixtures ; `qa-data`, sessions en lecture |
+| `worker` | Planification, contrat, exécution et publication | IA/GitHub, fixtures ; `qa-data`, sessions en lecture, `qa-policy` pour le doctor |
 | `browser` | Moteur Canary, Playwright, QuickJS, Chromium | Token de service ; aucune clé IA/GitHub ; `canary-sessions`, `qa-policy` en lecture |
 | `egress` | Proxy DNS vérifié, connexions vers IP épinglées | Aucun secret de contrôle ; `qa-policy` en lecture |
 | `db` | File durable, leases, livraisons webhook, journal d'accès | Mot de passe DB ; volume `qa-db` |

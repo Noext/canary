@@ -61,6 +61,7 @@ services:
     env_file: ${QA_ENV_FILE:-.env}
     environment:
       QA_DATA_DIR: /data
+      QA_POLICY_DIR: /policy
       DATABASE_URL: postgresql://canary:${QA_DB_PASSWORD}@db:5432/canary
       QA_BROWSER_SERVICE_URL: http://browser:8790
     depends_on:
@@ -71,6 +72,9 @@ services:
     volumes:
       - qa-data:/data
       - canary-sessions:/home/node/.canary/sessions:ro
+      # The documented `./scripts/pr-qa doctor` runs in this container: it probes
+      # the shared policy volume the API publishes into.
+      - qa-policy:/policy
       - ./config:/app/config:ro
     init: true
     restart: unless-stopped
