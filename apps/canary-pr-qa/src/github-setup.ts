@@ -9,7 +9,7 @@ import {
 import type pg from "pg";
 import { z } from "zod";
 import type { Config } from "./config.js";
-import { QaError } from "./diagnostics.js";
+import { diagnose, QaError } from "./diagnostics.js";
 import { appJwt, githubToken } from "./github-app.js";
 import { fetchText } from "./http.js";
 
@@ -516,8 +516,92 @@ export class GitHubSetup {
     );
     return this.status();
   }
+  /**
+   * Removes the GitHub App connection. GitHub is asked first so a refusal is
+   * reported as a warning instead of stranding the instance with credentials
+   * it can no longer use; the local rows are always deleted.
+   */
+  async disconnect(options: { deleteApp?: boolean } = {}) {
+    const app = await this.app();
+    if (!app) {
+      throw failure(
+        "GITHUB_NOT_CONNECTED",
+        "Aucune App GitHub n'est connectée à cette instance."
+      );
+    }
+    const deleteApp = Boolean(options.deleteApp);
+    const uninstalled: string[] = [];
+    const warnings: string[] = [];
+    let appDeleted = false;
+    try {
+      const { pem } = decrypt(app.credentials, this.config);
+      if (deleteApp) {
+        // GitHub also removes every installation of that App.
+        await this.appDelete("/app", app, pem);
+        appDeleted = true;
+      } else {
+        for (const installation of await this.installations(app, pem)) {
+          await this.appDelete(
+            `/app/installations/${installation.id}`,
+            app,
+            pem
+          );
+          uninstalled.push(installation.account.login);
+        }
+      }
+    } catch (error) {
+      warnings.push(
+        `${deleteApp ? "La suppression de l'App" : "La désinstallation sur GitHub"} a échoué (${diagnose(error, this.config).message}). Terminez l'opération depuis les réglages GitHub.`
+      );
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(9287346)");
+      await client.query("DELETE FROM qa_github_app");
+      await client.query("DELETE FROM qa_github_repositories");
+      // A pending manifest/install callback must not recreate the connection.
+      await client.query("DELETE FROM qa_github_state");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return {
+      ...(await this.status()),
+      disconnected: { appDeleted, deleteApp, uninstalled, warnings },
+    };
+  }
   appRequest(path: string, app: AppRow, pem: string) {
     return this.api(path, appJwt(app.app_id, pem));
+  }
+  /**
+   * GitHub answers 204 No Content on a successful delete, which `fetchText`
+   * reports as an empty body: that exact error is the success shape here, and
+   * every non-2xx status keeps its HTTP_* diagnostic.
+   */
+  private async appDelete(path: string, app: AppRow, pem: string) {
+    try {
+      await fetchText(
+        `${this.config.GITHUB_API_URL}${path}`,
+        {
+          method: "DELETE",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${appJwt(app.app_id, pem)}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        },
+        15_000
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "Empty HTTP response") {
+        return;
+      }
+      throw error;
+    }
   }
   async api(path: string, token: string) {
     return JSON.parse(

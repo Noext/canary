@@ -233,6 +233,17 @@ relisent la sélection et synchronisent les installations chaque minute.
 l'UI a priorité sur l'ancien PAT. Les modes techniques historiques restent
 compatibles et documentés dans `.env.example` et le README.
 
+Pour retirer la connexion, utiliser le bloc « Supprimer la connexion GitHub » :
+« Désinstaller l'App de mes dépôts » révoque les installations sur GitHub
+(l'App reste dans vos réglages et reste réinstallable), tandis que « Supprimer
+l'App GitHub » supprime l'App et ses installations de façon irréversible
+(`DELETE /github/app` avec `{"deleteApp":true}`). Les deux effacent les
+credentials chiffrés, les installations, la sélection et les callbacks en
+attente, avec audit `github.app.disconnected` ; un refus GitHub est renvoyé comme
+avertissement sans bloquer le nettoyage local. Ne pas annoncer une App supprimée
+sur GitHub si l'API a répondu par un avertissement : vérifier dans les réglages
+GitHub et terminer à la main.
+
 #### Préconditions des previews
 
 Chaque preview doit correspondre au SHA complet de la PR et exposer soit

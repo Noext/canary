@@ -1055,3 +1055,120 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     result.scenarios[0]!.artifacts.some((path) => path.endsWith(".webm"))
   ).toBe(true);
 }, 180_000);
+
+it("removes the connected GitHub App from the dashboard only after an explicit confirmation", async () => {
+  await dashboardDatabase();
+  const f = await githubSetupFixture();
+  closers.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  closers.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const queue = new Queue(config.DATABASE_URL);
+  const accounts = new LocalAuth(queue.pool);
+  const user = await accounts.setup(
+    {
+      username: "ui-github-remover",
+      password: "ui-github-remover-2026",
+      setupCode: await accounts.issueSetupTicket(),
+    },
+    []
+  );
+  const token = await accounts.session(user);
+  // Connect the App through the same server-side flow the onboarding uses.
+  const setup = new GitHubSetup(queue.pool, config);
+  await setup.convert(
+    user.id,
+    await setup.state(user.id, "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const hosts = [
+    ...config.allowedHosts,
+    new URL(url).host,
+    new URL(f.api).host,
+  ];
+  const canary = new Canary({
+    ...config,
+    allowedHosts: hosts,
+    PREVIEW_ALLOWED_HOSTS: hosts.join(","),
+  });
+  const id = await canary.start("GitHub App dashboard removal", {
+    cookies: [
+      {
+        name: "qa_local_session",
+        value: token,
+        domain: "127.0.0.1",
+        path: "/",
+        secure: false,
+        httpOnly: true,
+        sameSite: "Lax",
+        expires: -1,
+      },
+    ],
+    origins: [],
+  });
+  const act = (
+    label: string,
+    action: Parameters<typeof compileAction>[0],
+    assertion?: Parameters<typeof compileAction>[2]
+  ) => canary.act(id, label, compileAction(action, url, assertion));
+  const click = (label: string, selector: string) =>
+    act(label, { type: "click", locator: { by: "css", value: selector } });
+  const assertText = (label: string, selector: string, expected: string) =>
+    act(
+      label,
+      {
+        type: "assert",
+        assertionId: label,
+        locator: { by: "css", value: selector },
+      },
+      {
+        id: label,
+        description: expected,
+        kind: "text",
+        expected,
+        verification: "state",
+      }
+    );
+  const confirmAs = (label: string, answer: boolean) =>
+    canary.act(
+      id,
+      label,
+      `const page=await browser.getPage("qa"); await page.evaluate((answer)=>{window.confirm=()=>answer},${answer}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full}));`
+    );
+  try {
+    await act("dashboard", { type: "goto", path: "/" });
+    await assertText("connected", "#githubConnection", "Connecté");
+    await click("open-danger-zone", "#githubDanger > summary");
+    // A refused confirmation must leave GitHub and the local connection alone.
+    await confirmAs("refuse-confirmation", false);
+    await click("disconnect-refused", "#githubUninstall");
+    await assertText("still-connected", "#githubConnection", "Connecté");
+    expect(f.state.uninstalls).toBe(0);
+    expect((await setup.status()).app?.id).toBe("95001");
+    // Confirming uninstalls the App on GitHub and wipes the local connection.
+    await confirmAs("accept-confirmation", true);
+    await click("uninstall-app", "#githubUninstall");
+    await assertText("disconnected", "#githubConnection", "À connecter");
+    await assertText(
+      "removed-message",
+      "#githubMessage",
+      "App désinstallée sur GitHub"
+    );
+    await canary.end(id, join(f.dataDir, "github-removal-evidence"));
+  } catch (error) {
+    await canary.abort(id);
+    throw error;
+  }
+  expect(f.state.uninstalls).toBe(1);
+  expect((await setup.status()).app).toBeNull();
+  expect((await setup.status()).repositories).toEqual([]);
+  const effective = await new GitHubSetup(queue.pool, config).effective();
+  expect(effective.githubInstallations).toBeUndefined();
+  expect(effective.allowedRepos).toEqual([]);
+}, 180_000);
