@@ -13,7 +13,7 @@ réelle avant d'augmenter le nombre de workers. Lire aussi [AGENTS.md](../../AGE
 et le [guide d'exploitation](../../docs/pr-qa-operations.md).
 
 ```bash
-git clone --branch feat/github-app-onboarding https://github.com/Noext/canary.git
+git clone --branch feat/guided-qa-dashboard https://github.com/Noext/canary.git
 cd canary
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -272,6 +272,37 @@ Cette commande révoque toutes les sessions locales du compte. Une nouvelle
 connexion avec le nouveau mot de passe est requise. La commande `setup-admin`
 refuse de recréer un administrateur quand un compte local existe déjà.
 
+## Premier usage du dashboard
+
+Après connexion, l'**Accueil** vous indique la prochaine action : connecter
+GitHub, choisir un modèle disponible ou tester une PR. Les états sont dérivés
+des accès et du catalogue réellement chargé, sans simuler une génération IA.
+
+1. **Réglages** : créer/installer l'App, choisir les dépôts ; vérifier l'accès au
+   fournisseur et consulter les contraintes des previews.
+2. **Nouveau test** : coller l'URL de PR, l'URL de son application de test si elle
+   n'est pas fournie par GitHub, puis choisir votre modèle.
+3. **Vérifier les accès** : lecture de la PR et contrôle de la preview au même SHA.
+   Aucune génération IA, scénario, vidéo ou écriture GitHub à cette étape.
+4. **Lancer le test** : le moteur prépare et exécute les scénarios. Les paramètres
+   modifiés invalident la vérification ; le moteur contrôle à nouveau la version
+   au lancement. Les tokens consommés dépendent de votre endpoint IA.
+5. **Historique** : phases live, verdict, assertions et vidéos. Le rapport complet
+   et le commentaire GitHub sont accessibles ; le JSON et le run ID sont dans
+   « Diagnostic technique ». Un résultat bloqué/annulé ne devient pas un succès.
+
+Le catalogue accessible ne prouve pas encore qu'une génération réussira. Une
+preview vérifiée ne prouve pas que les assertions fonctionnelles réussiront.
+Le modèle par défaut reste celui de l'opérateur ; aucun remplacement automatique.
+Les filtres distinguent historique vide et recherche sans résultat. Les statistiques
+portent sur les tests récents retournés par l'API, pas une agrégation illimitée.
+
+Captures réelles des E2E, avec données fictives :
+
+![Accueil guidé](../../docs/images/dashboard-welcome.png)
+
+![Résultat mobile avec assertions et vidéo](../../docs/images/dashboard-result-mobile.png)
+
 ## Dashboard, API et observabilité
 
 | Endpoint | Fonction |
@@ -281,6 +312,8 @@ refuse de recréer un administrateur quand un compte local existe déjà.
 | `POST /auth/setup` | Premier admin, lien privé temporaire requis |
 | `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
 | `POST /session`, `DELETE /session` | Accès technique / déconnexion et révocation locale |
+| `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
+| `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
 | `POST /runs` | `{prUrl,previewUrl?,publish?,model?}`, header `Idempotency-Key` facultatif |
