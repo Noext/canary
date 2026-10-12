@@ -6,12 +6,6 @@ import { Notice } from "@/components/ui/feedback";
 import { Field, Input, Label } from "@/components/ui/form";
 import { auth } from "@/i18n";
 
-/** `auth` carries the visible label; the accessible name spells out the target. */
-const passwordToggleAria = {
-  hide: "Masquer le mot de passe",
-  show: "Afficher le mot de passe",
-} as const;
-
 function Logo() {
   return (
     <div className="flex items-center gap-2 font-semibold text-xl">
@@ -136,8 +130,8 @@ export function LoginView() {
               <Button
                 aria-label={
                   showPassword
-                    ? passwordToggleAria.hide
-                    : passwordToggleAria.show
+                    ? auth.passwordToggleAria.hide
+                    : auth.passwordToggleAria.show
                 }
                 className="mt-1 shrink-0"
                 id="showPassword"

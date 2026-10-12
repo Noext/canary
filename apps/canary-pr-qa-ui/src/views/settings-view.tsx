@@ -6,15 +6,6 @@ import { settings } from "@/i18n";
 import { AiSettings } from "./ai-settings";
 import { GithubSettings } from "./github-settings";
 
-/**
- * The server omits the preview constraints for non-admins, so the card keeps
- * readable fallbacks instead of an empty line.
- */
-const PREVIEW_HOSTS_FALLBACK =
-  "Les hôtes sont définis par l'opérateur du serveur.";
-const PREVIEW_PROOF_FALLBACK =
-  "L'application doit exposer le commit dans un en-tête de version.";
-
 function previewModeFor(preview: SetupStatus["preview"] | undefined): string {
   if (!preview) {
     return "";
@@ -24,6 +15,10 @@ function previewModeFor(preview: SetupStatus["preview"] | undefined): string {
     : settings.preview.modeManual;
 }
 
+/**
+ * The server omits the preview constraints for non-admins, so the card keeps a
+ * readable fallback instead of an empty line.
+ */
 function proofFor(preview: SetupStatus["preview"] | undefined): string {
   if (preview?.shaPath) {
     return settings.preview.proofPath(preview.shaPath);
@@ -31,7 +26,7 @@ function proofFor(preview: SetupStatus["preview"] | undefined): string {
   if (preview?.shaHeader) {
     return settings.preview.proofHeader(preview.shaHeader);
   }
-  return PREVIEW_PROOF_FALLBACK;
+  return settings.preview.proofFallback;
 }
 
 function PreviewSettings(): ReactNode {
@@ -39,7 +34,7 @@ function PreviewSettings(): ReactNode {
   const preview = status?.preview;
   const hosts = preview?.hosts?.length
     ? settings.preview.hosts(preview.hosts.join(", "))
-    : PREVIEW_HOSTS_FALLBACK;
+    : settings.preview.hostsFallback;
 
   return (
     <Card>

@@ -247,9 +247,19 @@ describe("RunDetail", () => {
     const phases = within(element("phaseList"));
     expect(phases.getByText("Lecture de la PR")).toBeVisible();
     expect(phases.getByText("Publication")).toBeVisible();
-    expect(phases.getByText("Exécution Chromium").className).toBe("active");
-    expect(phases.getByText("Préparation").className).toBe("done");
-    expect(phases.getByText("Vérification").className).toBe("");
+    // Real utilities, not dead class names: "active"/"done" have no stylesheet
+    // rule, so a regression there left every phase looking identical.
+    expect(phases.getByText("Exécution Chromium").className).toContain(
+      "bg-primary/20"
+    );
+    expect(phases.getByText("Préparation").className).toContain("bg-pass/10");
+    const upcoming = phases.getByText("Vérification").className;
+    expect(upcoming).not.toContain("bg-pass/10");
+    expect(upcoming).not.toContain("bg-primary/20");
+    for (const step of phases.getAllByRole("listitem")) {
+      expect(step.className).not.toBe("active");
+      expect(step.className).not.toBe("done");
+    }
     expect(lastSource().url).toBe(`/runs/${runId}/events`);
     expect(element("detail").querySelector("details")?.open).toBe(false);
   });

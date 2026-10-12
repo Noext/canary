@@ -1,4 +1,10 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardError } from "@/api/client";
@@ -11,7 +17,7 @@ import type {
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { SessionProvider } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
-import { settings } from "@/i18n";
+import { common, settings } from "@/i18n";
 import { SettingsView } from "./settings-view";
 
 interface ApiCall {
@@ -117,6 +123,7 @@ let github: GitHubStatus;
 let setup: SetupStatus;
 let models: ModelCatalog;
 let modelsFailure: DashboardError | undefined;
+let githubFailure: DashboardError | undefined;
 let refreshFailure: DashboardError | undefined;
 let removalWarnings: string[] = [];
 
@@ -125,6 +132,7 @@ beforeEach(() => {
   github = emptyGithub();
   models = { data: [], defaultModel: "" };
   modelsFailure = undefined;
+  githubFailure = undefined;
   refreshFailure = undefined;
   removalWarnings = [];
   setup = {
@@ -165,6 +173,9 @@ beforeEach(() => {
         }
         return models;
       case "/github/app": {
+        if (githubFailure) {
+          throw githubFailure;
+        }
         if (options?.method === "DELETE") {
           const deleteApp = deleteAppOf(options.body);
           github = emptyGithub();
@@ -273,6 +284,37 @@ const CONTROL_IDS = [
 ] as const;
 
 describe("SettingsView", () => {
+  it("offers a retry instead of the creation form when the GitHub status fails", async () => {
+    githubFailure = new DashboardError("Contrat GitHub indisponible.");
+    const container = renderSettings().container;
+    // The connection is unknown, not absent: no "À connecter" invitation here.
+    await waitFor(() =>
+      expect(byId(container, "githubPending")).toHaveTextContent(
+        "Contrat GitHub indisponible."
+      )
+    );
+    expect(byId(container, "githubCreate")).not.toBeVisible();
+    expect(byId(container, "githubAppActions")).not.toBeVisible();
+    expect(byId(container, "githubConnection")).toHaveTextContent(
+      common.checking
+    );
+
+    githubFailure = undefined;
+    await userEvent.click(
+      within(byId(container, "githubPending")).getByRole("button", {
+        name: common.retry,
+      })
+    );
+    await waitFor(() =>
+      expect(document.getElementById("githubPending")).toBeNull()
+    );
+    // The real state replaces the "Vérification…" placeholder once the retry
+    // succeeds (this fixture has no App yet).
+    expect(byId(container, "githubConnection")).toHaveTextContent(
+      settings.github.notConnected
+    );
+  });
+
   it("renders every control the GitHub, AI and preview cards promise", async () => {
     const { container } = renderSettings();
 

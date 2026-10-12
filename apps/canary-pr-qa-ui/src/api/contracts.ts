@@ -149,11 +149,24 @@ export interface RunCreated {
   statusUrl: string;
 }
 
+export interface ScenarioAssertion {
+  actual?: unknown;
+  baseline?: unknown;
+  id: string;
+  passed: boolean;
+  persisted?: unknown;
+}
+
 export interface ScenarioSummary {
   artifacts: string[];
+  assertions?: ScenarioAssertion[];
   error?: string | null;
   outcome: Outcome;
-  scenario: { id: string; title: string };
+  scenario: {
+    assertions?: { description?: string | null; id: string }[];
+    id: string;
+    title: string;
+  };
 }
 
 /**

@@ -43,17 +43,10 @@ const statusFilters: { label: string; value: string }[] = [
   { label: copy.filters.all, value: "" },
   { label: stateLabel("queued"), value: "queued" },
   { label: stateLabel("running"), value: "running" },
-  { label: "Terminés", value: "completed" },
-  { label: "Annulés", value: "cancelled" },
-  { label: "Interrompus", value: "interrupted" },
+  { label: copy.filters.completed, value: "completed" },
+  { label: copy.filters.cancelled, value: "cancelled" },
+  { label: copy.filters.interrupted, value: "interrupted" },
 ];
-
-/** Empty-state copy when the current filters exclude every run. */
-const filteredEmptyTitle = "Aucun test ne correspond à ces filtres";
-const filteredEmptyIntro =
-  "Modifiez votre recherche ou revenez à tous les états.";
-/** Model column of a run recorded before options were stored. */
-const historicalModel = "Historique";
 
 const cellClass = "border-b border-border px-3 py-2 align-middle";
 
@@ -171,10 +164,10 @@ export function RunsView() {
             ≡
           </div>
           <h3 className="mt-1 font-semibold" id="historyEmptyTitle">
-            {filtered ? filteredEmptyTitle : copy.emptyTitle}
+            {filtered ? copy.filteredEmptyTitle : copy.emptyTitle}
           </h3>
           <p className="text-muted-foreground text-sm" id="historyEmptyIntro">
-            {filtered ? filteredEmptyIntro : copy.emptyIntro}
+            {filtered ? copy.filteredEmptyIntro : copy.emptyIntro}
           </p>
         </div>
         <TableWrap hidden={rows.length === 0} id="historyTable">
@@ -208,7 +201,7 @@ export function RunsView() {
                     <code>{shortSha(run.sha)}</code>
                   </td>
                   <td className={cellClass}>
-                    {modelFromInput(run.input) || historicalModel}
+                    {modelFromInput(run.input) || copy.historicalModel}
                   </td>
                   <td className={cellClass}>
                     <Pill tone={toneFor(run.status)}>

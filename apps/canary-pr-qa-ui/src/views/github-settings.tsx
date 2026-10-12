@@ -27,11 +27,6 @@ import {
 import { common, settings } from "@/i18n";
 import { formatDate, type Tone } from "@/lib/format";
 
-/** Copy the shared i18n module does not carry yet. */
-const UNINSTALL_CTA = "Désinstaller l'App de mes dépôts";
-const DANGER_BODY =
-  "La désinstallation révoque les webhooks et les accès de l'App ; la suppression efface aussi l'App de GitHub et ne peut pas être annulée. Dans les deux cas la connexion locale est effacée.";
-
 type RemovalKind = "delete" | "uninstall";
 type Operation = RemovalKind | "create" | "install" | "refresh" | "save";
 
@@ -93,7 +88,7 @@ function removalNotice(deleteApp: boolean, warnings: string[]): string {
 }
 
 export function GithubSettings(): ReactNode {
-  const { github, loadGithub, loadStatus } = useWorkspace();
+  const { github, githubError, loadGithub, loadStatus } = useWorkspace();
   const { refreshUser } = useSession();
   const { report } = useError();
 
@@ -245,7 +240,12 @@ export function GithubSettings(): ReactNode {
     (repository) =>
       repository.enabled && !isRestricted(repository.full_name, restriction)
   );
-  const connection = connectionFor(app, enabled.length);
+  // A failed status request means the connection is unknown, not absent: never
+  // advertise "À connecter" and the creation form on a transient error.
+  const pending = !github && Boolean(githubError);
+  const connection = pending
+    ? { label: common.checking, tone: "neutral" as const }
+    : connectionFor(app, enabled.length);
   const delivery =
     app && github?.lastDelivery
       ? settings.github.webhookLast(
@@ -297,9 +297,22 @@ export function GithubSettings(): ReactNode {
       >
         {error}
       </p>
+      {pending ? (
+        <Notice className="mt-3" id="githubPending" tone="error">
+          {githubError}
+          <Button
+            className="mt-2"
+            onClick={() => void loadGithub()}
+            type="button"
+            variant="secondary"
+          >
+            {common.retry}
+          </Button>
+        </Notice>
+      ) : null}
       <form
         className="mt-4 grid gap-3"
-        hidden={Boolean(app)}
+        hidden={pending || Boolean(app)}
         id="githubCreate"
         onSubmit={createApp}
       >
@@ -334,7 +347,7 @@ export function GithubSettings(): ReactNode {
           {settings.github.createCta}
         </Button>
       </form>
-      <div hidden={!app} id="githubAppActions">
+      <div hidden={pending || !app} id="githubAppActions">
         <p className="mt-4 text-muted-foreground text-sm" id="githubAppName">
           {app ? settings.github.appName(app.slug, app.id) : ""}
         </p>
@@ -444,14 +457,16 @@ export function GithubSettings(): ReactNode {
           <summary className="cursor-pointer font-medium text-sm">
             {settings.github.dangerSummary}
           </summary>
-          <p className="mt-2 text-muted-foreground text-sm">{DANGER_BODY}</p>
+          <p className="mt-2 text-muted-foreground text-sm">
+            {settings.github.dangerBody}
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               disabled={busy === "uninstall"}
               id="githubUninstall"
               onClick={() => setRemoval("uninstall")}
             >
-              {UNINSTALL_CTA}
+              {settings.github.uninstallCta}
             </Button>
             <Button
               disabled={busy === "delete"}

@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -51,7 +52,9 @@ export function NavigationProvider({
   initialView?: ViewName;
 }) {
   const { canWrite, isAdmin } = useSession();
-  const [view, setView] = useState<ViewName>(initialView);
+  const [view, setView] = useState<ViewName>(() =>
+    isAllowed(initialView, canWrite, isAdmin) ? initialView : "home"
+  );
   const [requestedRun, setRequestedRun] = useState(initialRun);
 
   const navigate = useCallback(
@@ -67,6 +70,15 @@ export function NavigationProvider({
     },
     [canWrite, isAdmin]
   );
+
+  // The role can change under us (a session refresh, a logout landing back on
+  // the app): never leave a panel open that the current role may not read.
+  useEffect(() => {
+    if (!isAllowed(view, canWrite, isAdmin)) {
+      setView("home");
+      replaceHash(undefined);
+    }
+  }, [canWrite, isAdmin, view]);
 
   const openRun = useCallback((runId: string) => {
     replaceHash(runId);
