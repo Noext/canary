@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { errorMessages } from "@/i18n";
+import { apiErrors, errorMessages } from "@/i18n";
 import type { ApiErrorPayload } from "./contracts";
 import {
   type ApiPath,
@@ -33,9 +33,7 @@ export class DashboardError extends Error {
 
 export function errorText(value: unknown): string {
   const failure =
-    value instanceof Error
-      ? value
-      : new Error("Une erreur inattendue est survenue.");
+    value instanceof Error ? value : new Error(apiErrors.unexpected);
   const details = failure instanceof DashboardError ? failure : undefined;
   const message = errorMessages[details?.code ?? ""] ?? failure.message;
   return details?.requestId
@@ -110,9 +108,7 @@ export async function api(
     if (failure instanceof DOMException && failure.name === "AbortError") {
       throw failure;
     }
-    throw new DashboardError(
-      "Le serveur est injoignable. Vérifiez qu'il est démarré et accessible."
-    );
+    throw new DashboardError(apiErrors.unreachable);
   }
 
   const requestId = response.headers.get("X-Request-ID") ?? undefined;
@@ -126,7 +122,7 @@ export async function api(
     if (parsed.success) {
       const details: ApiErrorPayload = parsed.data;
       throw new DashboardError(
-        details.error ?? `La requête a échoué (HTTP ${response.status}).`,
+        details.error ?? apiErrors.failed(response.status),
         {
           code: details.code,
           hint: details.hint,
@@ -134,18 +130,14 @@ export async function api(
         }
       );
     }
-    throw new DashboardError(
-      `Le serveur n'a pas renvoyé une réponse valide (HTTP ${response.status}). Vérifiez sa disponibilité.`,
-      { requestId }
-    );
+    throw new DashboardError(apiErrors.invalidResponse(response.status), {
+      requestId,
+    });
   }
 
   const result = target.safeParse(payload);
   if (!result.success) {
-    throw new DashboardError(
-      "La réponse du serveur ne correspond pas au contrat attendu. Rechargez la page ; si le problème persiste, signalez la référence ci-dessous.",
-      { requestId }
-    );
+    throw new DashboardError(apiErrors.contract, { requestId });
   }
   return result.data;
 }

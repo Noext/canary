@@ -280,8 +280,12 @@ export function RunDetail({
         setJob(initial);
         setMessage(messageFor(initial));
         if (isTerminal(initial.status)) {
+          // No stream will fire: the history has to be refreshed from here, or a
+          // run that finished before this request would stay "en cours" in the
+          // table next to a finished detail.
           setLive(copy.liveDone);
           void loadResult();
+          update.current?.();
           return;
         }
         watch();

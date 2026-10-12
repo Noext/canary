@@ -28,6 +28,22 @@ export const errorMessages: Record<string, string | undefined> = {
     "La connexion à ce service a été refusée. Vérifiez ses credentials sur le serveur.",
 };
 
+/**
+ * Network and contract failures raised by the API client. They reach the user
+ * through the global alert, so they belong to the shared copy like the rest.
+ */
+export const apiErrors = {
+  contract:
+    "La réponse du serveur ne correspond pas au contrat attendu. Rechargez la page ; si le problème persiste, signalez la référence ci-dessous.",
+  failed: (status: number) => `La requête a échoué (HTTP ${status}).`,
+  invalidResponse: (status: number) =>
+    `Le serveur n'a pas renvoyé une réponse valide (HTTP ${status}). Vérifiez sa disponibilité.`,
+  requestFailed: "La requête a échoué.",
+  unexpected: "Une erreur inattendue est survenue.",
+  unreachable:
+    "Le serveur est injoignable. Vérifiez qu'il est démarré et accessible.",
+};
+
 export const roles = {
   admin: "Administrateur",
   operator: "Opérateur",

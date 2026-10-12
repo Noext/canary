@@ -73,11 +73,11 @@ const result = {
   startedAt: "2026-01-01T00:00:00.000Z",
 };
 
-function renderDetail() {
+function renderDetail(onUpdate?: () => void) {
   return render(
     <ErrorProvider>
       <ErrorAlert />
-      <RunDetail canWrite runId={RUN_ID} />
+      <RunDetail canWrite onUpdate={onUpdate} runId={RUN_ID} />
     </ErrorProvider>
   );
 }
@@ -123,6 +123,20 @@ describe("RunDetail", () => {
       expect(screen.getByText("Suivi terminé")).toBeVisible()
     );
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("refreshes the history when a run is already finished", async () => {
+    const onUpdate = vi.fn();
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail(onUpdate);
+    // No stream fires for a finished run, so this callback is the only chance
+    // for the table to drop its stale "en cours" row.
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
   });
 
   it("follows a running run once the run is validated", async () => {

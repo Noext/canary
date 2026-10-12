@@ -90,12 +90,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         const known = catalog.data.some(
           (entry) => entry.id === modelRef.current
         );
+        if (!known) {
+          // A model the provider no longer offers must not stay selected: it
+          // would keep `modelReady` true while the select has no such option.
+          chooseModel("");
+          autoPicked.current = false;
+        }
         const exposesDefault = catalog.data.some(
           (entry) => entry.id === catalog.defaultModel
         );
         // The configured default is only auto-selected when the provider really
         // exposes it: never guess a model on the user's behalf.
-        if (!(known || autoPicked.current) && exposesDefault) {
+        if (!(modelRef.current || autoPicked.current) && exposesDefault) {
           autoPicked.current = true;
           chooseModel(catalog.defaultModel);
         }

@@ -84,6 +84,50 @@ describe("WorkspaceProvider", () => {
     await waitFor(() => expect(modelsCalls()).toBe(2));
   });
 
+  it("drops a selected model the refreshed catalogue no longer offers", async () => {
+    renderWorkspace();
+    await waitFor(() =>
+      expect(screen.getByTestId("model")).toHaveTextContent("model-x")
+    );
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/models") {
+        return Promise.resolve({
+          data: [{ id: "model-z" }],
+          defaultModel: "model-z",
+        });
+      }
+      return Promise.resolve(setupStatus);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "reload" }));
+    // The refreshed catalogue exposes the configured default again, so the
+    // stale selection is replaced rather than silently kept.
+    await waitFor(() =>
+      expect(screen.getByTestId("model")).toHaveTextContent("model-z")
+    );
+  });
+
+  it("clears the selection when the refreshed catalogue offers no default", async () => {
+    renderWorkspace();
+    await waitFor(() =>
+      expect(screen.getByTestId("model")).toHaveTextContent("model-x")
+    );
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/models") {
+        return Promise.resolve({
+          data: [{ id: "model-y" }],
+          defaultModel: "configured-but-absent",
+        });
+      }
+      return Promise.resolve(setupStatus);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "reload" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("count")).toHaveTextContent("1")
+    );
+    // Not ready: the interface must ask for an explicit choice again.
+    expect(screen.getByTestId("model")).toHaveTextContent("");
+  });
+
   it("never selects a model the provider does not expose", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === "/models") {
