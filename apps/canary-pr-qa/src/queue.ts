@@ -296,10 +296,22 @@ export class Queue {
    * Keeps an automatic attempt waiting: the row stays `pending`, one probe is
    * counted and the next one is scheduled after the given backoff.
    */
-  async holdDelivery(id: string, reason: string, backoffSeconds: number) {
+  /**
+   * A failed probe schedules the next one, but never past the deadline: an
+   * attempt whose deadline is closer than the backoff becomes due exactly at the
+   * deadline, so expiration is enforced instead of being deferred by up to 300 s.
+   */
+  async holdDelivery(
+    id: string,
+    reason: string,
+    backoffSeconds: number,
+    waitSeconds: number
+  ) {
     await this.pool.query(
-      "UPDATE qa_deliveries SET attempts=attempts+1,reason=$2,last_error=NULL,retry_at=now()+make_interval(secs => $3::double precision),updated_at=now() WHERE id=$1",
-      [id, reason, backoffSeconds]
+      `UPDATE qa_deliveries SET attempts=attempts+1,reason=$2,last_error=NULL,
+       retry_at=LEAST(now()+make_interval(secs => $3::double precision),COALESCE(deadline_at,created_at+make_interval(secs => $4::double precision))),
+       updated_at=now() WHERE id=$1`,
+      [id, reason, backoffSeconds, waitSeconds]
     );
   }
   /** Ends an automatic attempt without a run: `expired`, `rate_limited` or `auto_disabled`. */
@@ -331,13 +343,17 @@ export class Queue {
    * accepted before `deadline_at` existed (schema v5 and earlier) has no stored
    * deadline: it is resolved here with the same rule the worker applies, so the
    * displayed deadline is the one that actually ends the wait.
+   *
+   * Deliveries recorded with `ignored: true` never carried a pull request to
+   * test (a `labeled` or `closed` action, for example): they stay in the inbox
+   * until the probe loop clears them, and they are never reported as an attempt.
    */
   async automatic(repos: string[], deadlineSeconds: number) {
     const scope = repos.map((repo) => repo.toLowerCase());
     const rows = (
       await this.pool.query<AutomaticRow>(
         `SELECT id,payload,status,attempts,reason,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
-         WHERE lower(payload->>'repo')=ANY($1::text[]) AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))
+         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))
          ORDER BY updated_at DESC,created_at DESC LIMIT 50`,
         [scope, deadlineSeconds]
       )
@@ -349,7 +365,7 @@ export class Queue {
         rate_limited: number;
       }>(
         `SELECT count(*) FILTER (WHERE status='pending')::int AS pending,count(*) FILTER (WHERE status='expired')::int AS expired,count(*) FILTER (WHERE status='rate_limited')::int AS rate_limited FROM qa_deliveries
-         WHERE lower(payload->>'repo')=ANY($1::text[]) AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))`,
+         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))`,
         [scope]
       )
     ).rows[0];

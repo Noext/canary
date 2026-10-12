@@ -155,6 +155,64 @@ it("reports the effective deadline of a delivery accepted without one", async ()
   expect(await delivery(q, "legacy")).toMatchObject({ status: "pending" });
 }, 30_000);
 
+it("never reports an ignored webhook as a waiting attempt", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  // A non-triggering `pull_request` action (`labeled`, `closed`, ...) is stored
+  // for deduplication only: it has no pull request to test.
+  expect(
+    await q.acceptDelivery(
+      "ignored",
+      "pull_request",
+      { ignored: true, repo: "fixture/app" },
+      1800
+    )
+  ).toBe(true);
+  expect(await q.automatic(["fixture/app"], 1800)).toEqual({
+    attempts: [],
+    summary: { expired: 0, rateLimited: 0, waiting: 0 },
+  });
+  // The probe loop still clears it, so retention can delete the row.
+  expect(await delivery(q, "ignored")).toMatchObject({ status: "pending" });
+  await processDelivery(q, f.config);
+  expect(await delivery(q, "ignored")).toMatchObject({ status: "processed" });
+}, 30_000);
+
+it("schedules the next probe at the deadline instead of past it", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  expect(await q.acceptDelivery("capped", "pull_request", attempt, 60)).toBe(
+    true
+  );
+  // Three failed probes already: the next backoff (300 s) is far past the
+  // 60 s deadline, which must still bound the schedule.
+  await q.pool.query("UPDATE qa_deliveries SET attempts=3 WHERE id='capped'");
+  await processDelivery(q, f.config);
+  expect(await delivery(q, "capped")).toMatchObject({
+    attempts: 4,
+    reason: "PREVIEW_NOT_FOUND",
+    status: "pending",
+  });
+  const schedule = (
+    await q.pool.query<{ overdue: boolean; retry_in: number }>(
+      "SELECT retry_at<=deadline_at AS overdue,round(extract(epoch from deadline_at-now()))::int AS retry_in FROM qa_deliveries WHERE id='capped'"
+    )
+  ).rows[0]!;
+  expect(schedule.overdue).toBe(true);
+  expect(schedule.retry_in).toBeLessThanOrEqual(60);
+  // At the deadline the attempt expires at the next probe instead of waiting
+  // for the long backoff it would otherwise have been given.
+  await q.pool.query(
+    "UPDATE qa_deliveries SET deadline_at=now()-interval '1 second' WHERE id='capped'"
+  );
+  await due(q);
+  await processDelivery(q, f.config);
+  expect(await delivery(q, "capped")).toMatchObject({ status: "expired" });
+  expect((await audits(q, "automatic.preview_expired")).length).toBe(1);
+}, 30_000);
+
 it("expires an attempt past its deadline, warns once and never replays it", async () => {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();

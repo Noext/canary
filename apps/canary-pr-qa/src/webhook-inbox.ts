@@ -189,7 +189,12 @@ async function readyDelivery(queue: Queue, config: Config) {
       error instanceof QaError ? error.code : "PREVIEW_UNAVAILABLE";
     // One audit per change of cause; repeated probes stay at debug level.
     const transition = row.attempts === 0 || row.reason !== reason;
-    await queue.holdDelivery(row.id, reason, backoff);
+    await queue.holdDelivery(
+      row.id,
+      reason,
+      backoff,
+      config.QA_AUTO_PREVIEW_WAIT_SECONDS
+    );
     if (transition) {
       await queue.audit("webhook", "automatic.preview_wait", undefined, {
         ...scope,
