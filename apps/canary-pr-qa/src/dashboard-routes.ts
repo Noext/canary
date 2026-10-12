@@ -12,7 +12,11 @@ import { GitHub, type PrContext, parsePrUrl } from "./github.js";
 import type { GitHubSetup } from "./github-setup.js";
 import { type ModelCatalog, ModelIdSchema } from "./model-catalog.js";
 import { resolvePreview } from "./preview.js";
-import { MAX_HOST_LENGTH, type PreviewHosts } from "./preview-hosts.js";
+import {
+  MAX_HOST_LENGTH,
+  type PreviewHosts,
+  PreviewPolicyUnpublishedError,
+} from "./preview-hosts.js";
 import type { Queue } from "./queue.js";
 
 const preflightSchema = z
@@ -58,18 +62,34 @@ export function dashboardRoutes(
       json(res, 403, { error: "Administrator required" });
       return true;
     }
-    if (req.method === "DELETE") {
-      const hosts = await previewHosts.reset(user.id);
-      await queue.audit(user.id, "preview.hosts.reset", undefined, { hosts });
+    const action =
+      req.method === "DELETE" ? "preview.hosts.reset" : "preview.hosts.updated";
+    try {
+      const hosts =
+        req.method === "DELETE"
+          ? await previewHosts.reset(user.id)
+          : await previewHosts.set(
+              user.id,
+              previewHostsSchema.parse(JSON.parse((await read(req)).toString()))
+                .hosts
+            );
+      await queue.audit(user.id, action, undefined, { hosts, published: true });
       json(res, 200, previewSettings(config, previewHosts, hosts));
-      return true;
+    } catch (error) {
+      if (error instanceof PreviewPolicyUnpublishedError) {
+        // The row and the API configuration already changed, so the edit is
+        // audited even though the request fails: a policy-volume incident must
+        // not leave an allowlist change with no trace. A failed audit must not
+        // replace the diagnostic that tells the operator what to fix.
+        await queue
+          .audit(user.id, action, undefined, {
+            hosts: error.hosts,
+            published: false,
+          })
+          .catch(() => undefined);
+      }
+      throw error;
     }
-    const input = previewHostsSchema.parse(
-      JSON.parse((await read(req)).toString())
-    );
-    const hosts = await previewHosts.set(user.id, input.hosts);
-    await queue.audit(user.id, "preview.hosts.updated", undefined, { hosts });
-    json(res, 200, previewSettings(config, previewHosts, hosts));
     return true;
   }
   return async (

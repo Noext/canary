@@ -181,6 +181,62 @@ it("reports an unwritable policy directory instead of saving silently", async ()
   expect(await hosts.effective()).toEqual(["new.example.com"]);
 });
 
+it("audits a stored list whose publication failed", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  // A file where the policy directory should be: the row is written, the
+  // publication cannot succeed.
+  const blocked = join(await temporaryDirectory("canary-blocked-"), "policy");
+  await writeFile(blocked, "not a directory");
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+    QA_POLICY_DIR: blocked,
+  };
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const admin = cookieOf(
+    await fetch(`${url}/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.config.QA_API_TOKEN}` },
+    })
+  );
+  const response = await fetch(`${url}/dashboard/preview-hosts`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Cookie: admin },
+    body: JSON.stringify({ hosts: ["new.example.com"] }),
+  });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    code: "PREVIEW_POLICY_UNWRITABLE",
+  });
+  // The failed request still changed the stored allowlist: it must be audited.
+  expect(
+    (
+      await q.pool.query(
+        "SELECT action,details FROM qa_audit WHERE action LIKE 'preview.hosts.%' ORDER BY id"
+      )
+    ).rows
+  ).toEqual([
+    {
+      action: "preview.hosts.updated",
+      details: { hosts: ["new.example.com"], published: false },
+    },
+  ]);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT hosts FROM qa_preview_hosts WHERE singleton=true"
+      )
+    ).rows[0]
+  ).toEqual({ hosts: ["new.example.com"] });
+  // A retry after the volume is fixed is a single click: the list is stored.
+  expect(config.allowedHosts).toEqual(["new.example.com"]);
+}, 30_000);
+
 it("lets only an administrator edit the host list and audits every change", async () => {
   const q = await sqlDatabase();
   const f = await fixture();
@@ -308,8 +364,11 @@ it("lets only an administrator edit the host list and audits every change", asyn
   expect(await audit()).toEqual([
     {
       action: "preview.hosts.updated",
-      details: { hosts: ["new.example.com:8443"] },
+      details: { hosts: ["new.example.com:8443"], published: true },
     },
-    { action: "preview.hosts.reset", details: { hosts: defaultHosts } },
+    {
+      action: "preview.hosts.reset",
+      details: { hosts: defaultHosts, published: true },
+    },
   ]);
 }, 30_000);

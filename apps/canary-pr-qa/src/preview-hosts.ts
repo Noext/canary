@@ -115,6 +115,27 @@ function policyPath(config: Config) {
 }
 
 /**
+ * A stored host list whose publication failed.
+ *
+ * The row and the in-process configuration already changed by the time this is
+ * thrown, so the caller must still record the edit: a policy-volume incident
+ * cannot be allowed to hide an allowlist change.
+ */
+export class PreviewPolicyUnpublishedError extends QaError {
+  readonly hosts: string[];
+
+  constructor(hosts: string[]) {
+    super(
+      "PREVIEW_POLICY_UNWRITABLE",
+      "Liste enregistrée, mais la politique réseau n'a pas pu être publiée.",
+      "Vérifiez que QA_POLICY_DIR existe et est accessible en écriture par l'UID du service, puis réenregistrez la liste."
+    );
+    this.name = "PreviewPolicyUnpublishedError";
+    this.hosts = hosts;
+  }
+}
+
+/**
  * Publishes the effective list for the containers that enforce it. A failure is
  * reported to the caller: the EGRESS proxy would keep refusing a host the
  * dashboard now accepts, which must not be silent.
@@ -136,11 +157,7 @@ export async function publishPreviewPolicy(
     await rename(temporary, path);
   } catch {
     await rm(temporary, { force: true }).catch(() => undefined);
-    throw new QaError(
-      "PREVIEW_POLICY_UNWRITABLE",
-      "Liste enregistrée, mais la politique réseau n'a pas pu être publiée.",
-      "Vérifiez que QA_POLICY_DIR existe et est accessible en écriture par l'UID du service, puis réenregistrez la liste."
-    );
+    throw new PreviewPolicyUnpublishedError(hosts);
   }
 }
 
@@ -249,6 +266,9 @@ interface PreviewHostsRow {
   updated_by: string;
 }
 
+/** Session advisory lock key for one update-and-publish critical section. */
+export const PREVIEW_HOSTS_LOCK = 9_287_347;
+
 export class PreviewHosts {
   readonly pool: pg.Pool;
   readonly config: Config;
@@ -305,24 +325,53 @@ export class PreviewHosts {
     return hosts;
   }
 
+  /**
+   * Runs one stored-list change together with its publication.
+   *
+   * PostgreSQL serializes the row, but the file rename has to follow the same
+   * order: without a shared lock, an earlier request can publish after a later
+   * one and leave `browser`/`egress` enforcing a list the API no longer has -
+   * removed destinations stay reachable and new previews stay blocked. The lock
+   * is a session advisory lock, so it also serializes another API process and
+   * the boot publication.
+   */
+  private async serialized<T>(
+    operation: (client: pg.PoolClient) => Promise<T>
+  ): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock($1)", [PREVIEW_HOSTS_LOCK]);
+      return await operation(client);
+    } finally {
+      await client
+        .query("SELECT pg_advisory_unlock($1)", [PREVIEW_HOSTS_LOCK])
+        .catch(() => undefined);
+      client.release();
+    }
+  }
+
   async set(actor: string, value: unknown): Promise<string[]> {
     const hosts = normalizePreviewHosts(value);
-    await this.pool.query(
-      "INSERT INTO qa_preview_hosts(singleton,hosts,updated_at,updated_by) VALUES(true,$1::jsonb,now(),$2) ON CONFLICT(singleton) DO UPDATE SET hosts=EXCLUDED.hosts,updated_at=EXCLUDED.updated_at,updated_by=EXCLUDED.updated_by",
-      [JSON.stringify(hosts), actor]
-    );
-    applyPreviewHosts(this.config, hosts);
-    await publishPreviewPolicy(this.config, hosts, actor);
-    return hosts;
+    return await this.serialized(async (client) => {
+      await client.query(
+        "INSERT INTO qa_preview_hosts(singleton,hosts,updated_at,updated_by) VALUES(true,$1::jsonb,now(),$2) ON CONFLICT(singleton) DO UPDATE SET hosts=EXCLUDED.hosts,updated_at=EXCLUDED.updated_at,updated_by=EXCLUDED.updated_by",
+        [JSON.stringify(hosts), actor]
+      );
+      applyPreviewHosts(this.config, hosts);
+      await publishPreviewPolicy(this.config, hosts, actor);
+      return hosts;
+    });
   }
 
   /** Drops the dashboard list and returns to the `PREVIEW_ALLOWED_HOSTS` default. */
   async reset(actor: string): Promise<string[]> {
-    await this.pool.query("DELETE FROM qa_preview_hosts");
     const hosts = this.defaults();
-    applyPreviewHosts(this.config, hosts);
-    await publishPreviewPolicy(this.config, hosts, actor);
-    return hosts;
+    return await this.serialized(async (client) => {
+      await client.query("DELETE FROM qa_preview_hosts");
+      applyPreviewHosts(this.config, hosts);
+      await publishPreviewPolicy(this.config, hosts, actor);
+      return hosts;
+    });
   }
 
   /**
@@ -331,10 +380,8 @@ export class PreviewHosts {
    * published policy and `doctor` reports the unwritable directory.
    */
   async publish(actor: string) {
-    await publishPreviewPolicy(
-      this.config,
-      this.config.allowedHosts,
-      actor
+    await this.serialized(() =>
+      publishPreviewPolicy(this.config, this.config.allowedHosts, actor)
     ).catch((error) =>
       logger.warn(
         { code: "PREVIEW_POLICY_UNWRITABLE", diagnostic: diagnose(error) },

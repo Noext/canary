@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config.js";
 import { GitHubSetup } from "../src/github-setup.js";
 import { LocalAuth } from "../src/local-auth.js";
+import {
+  PREVIEW_HOSTS_LOCK,
+  PREVIEW_POLICY_FILE,
+  PreviewHosts,
+} from "../src/preview-hosts.js";
 import { Queue } from "../src/queue.js";
 import { BASE_SHA, PR_URL, SHA } from "./fixture.js";
 import { githubSetupFixture } from "./github-setup-fixture.js";
@@ -255,4 +264,65 @@ describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
       }
     }, 60_000);
   }
+);
+
+it.skipIf(!process.env.QA_TEST_DATABASE_URL)(
+  "serializes a host-list edit with the publication of the previous one",
+  async () => {
+    const base = new Queue(process.env.QA_TEST_DATABASE_URL!);
+    const namespace = `preview_test_${randomUUID().replaceAll("-", "")}`;
+    await base.pool.query(`CREATE SCHEMA ${namespace}`);
+    const url = new URL(process.env.QA_TEST_DATABASE_URL!);
+    url.searchParams.set("options", `-c search_path=${namespace}`);
+    const isolated = new Queue(url.href);
+    const directory = await mkdtemp(join(tmpdir(), "canary-policy-native-"));
+    const policy = join(directory, PREVIEW_POLICY_FILE);
+    const blocker = await isolated.pool.connect();
+    try {
+      await isolated.migrate();
+      const config = loadConfig({
+        PREVIEW_ALLOWED_HOSTS: "default.example.com",
+        QA_POLICY_DIR: directory,
+      });
+      const hosts = new PreviewHosts(isolated.pool, config);
+      // PostgreSQL serializes the row, but the file rename has to follow the same
+      // order: without the shared lock an earlier editor can publish after a
+      // later one and leave the enforcement containers on a stale list. Another
+      // API process (this blocker) must therefore block the whole
+      // update-and-publish, not just the row write.
+      await blocker.query("SELECT pg_advisory_lock($1)", [PREVIEW_HOSTS_LOCK]);
+      const editors = Promise.allSettled([
+        hosts.set("admin-0", ["race-0.example.com"]),
+        hosts.reset("admin-1"),
+      ]);
+      await delay(200);
+      expect(
+        (await isolated.pool.query("SELECT hosts FROM qa_preview_hosts")).rows
+      ).toEqual([]);
+      await expect(readFile(policy, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await blocker.query("SELECT pg_advisory_unlock($1)", [
+        PREVIEW_HOSTS_LOCK,
+      ]);
+      const results = await editors;
+      expect(results.filter((result) => result.status === "rejected")).toEqual(
+        []
+      );
+      // Whichever edit committed last, the file and the process agree with it.
+      const stored = await hosts.effective();
+      expect(JSON.parse(await readFile(policy, "utf8")).hosts).toEqual(stored);
+      expect(config.allowedHosts).toEqual(stored);
+    } finally {
+      await blocker
+        .query("SELECT pg_advisory_unlock($1)", [PREVIEW_HOSTS_LOCK])
+        .catch(() => undefined);
+      await blocker.release();
+      await isolated.close();
+      await rm(directory, { recursive: true, force: true });
+      await base.pool.query(`DROP SCHEMA ${namespace} CASCADE`);
+      await base.close();
+    }
+  },
+  30_000
 );
