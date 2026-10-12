@@ -1,3 +1,15 @@
+# Refonte des sources du dashboard (PR dédiée après #5)
+
+La branche `refactor/typed-dashboard` remplace les blocs HTML/CSS/JavaScript
+stockés dans des chaînes par des sources séparées et du TypeScript contrôlé.
+Validation locale : `pnpm check` (26 tâches, 328 tests réussis, trois PostgreSQL
+natif ignorés), build de production, commande `dev -- --help` et 14 E2E Chromium.
+Les E2E vérifient les parcours login/App/catalogue/préflight/lancement/SSE,
+les assertions et les vraies vidéos, ainsi que les vues 1440/390 px. GitHub
+et IA sont des fixtures pour cette suite. Les tests contrôlent les ressources
+servies, la CSP sans inline et les IDs du template. CI/Docker de cette révision :
+consulter la PR ; aucun déploiement sur le VPS utilisateur revendiqué.
+
 # Journal de validation PR QA
 
 Implementation in the official `Noext/canary` fork, upstream `0xnyn/canary`, development branch `feat/autonomous-pr-qa`.

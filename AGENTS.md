@@ -96,6 +96,23 @@ by default; `canary ui --dir <path>` (or adding roots in the UI) points it elsew
 
 Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the `canary` session orchestrator) are the core of the toolkit. Portions are derived from MIT-licensed upstream work by Sawyer Hood (see `LICENSE`).
 
+## Frontend PR QA : règles de contribution
+
+- Conserver le HTML dans `apps/canary-pr-qa/src/dashboard/index.html`, le CSS
+  dans `styles.css` et la logique dans des modules TypeScript par fonctionnalité.
+  Ne pas réintroduire de blocs HTML/CSS/JavaScript applicatifs dans des chaînes TS.
+- `dashboard.ts` ne fait que référencer les ressources compilées. Le build
+  navigateur passe par `scripts/dashboard-assets.mjs`, aussi utilisé en test/dev.
+  Garder le navigateur sans imports runtime du backend ou accès à ses secrets.
+- Réutiliser les types du backend pour comptes/jobs/résultats. Vérifier tout
+  changement de contrôle dans `dom.ts` et le test de cohérence des IDs HTML.
+- Garder la CSP de la page sans `unsafe-inline` et utiliser `textContent` pour
+  les données utilisateur/PR. Ne pas ajouter de dépendance frontend uniquement
+  pour contourner un défaut de structure.
+- Exécuter `pnpm check`, le build PR QA et les E2E Chromium avant livraison ;
+  vérifier la CI Compose pour les changements au pipeline de ressources.
+  Lire la section Frontend du README pour les source maps et diagnostics.
+
 ## Instructions aux agents : installation PR QA en production sur VPS
 
 Cette section est la procédure de première installation du fork `Noext/canary`.
@@ -149,7 +166,7 @@ répertoire et le même projet Compose ; ne pas arrêter les services d'autres p
 Dans un répertoire dédié appartenant au compte de déploiement :
 
 ```bash
-git clone --branch feat/guided-qa-dashboard https://github.com/Noext/canary.git canary-pr-qa
+git clone --branch main https://github.com/Noext/canary.git canary-pr-qa
 cd canary-pr-qa
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -157,7 +174,8 @@ git rev-parse HEAD
 git status --short
 ```
 
-Le dashboard guidé est livré sur `feat/guided-qa-dashboard` avant fusion.
+Le dashboard guidé est disponible dans `main`. La refonte de ses sources est
+proposée dans `refactor/typed-dashboard` avant fusion.
 Après fusion, utiliser le `main` de votre fork pour la production. Pour un clone existant, inspecter
 ses remotes et changements locaux ; préserver `.env` et `config/`. Ne pas employer
 `reset --hard` ou écraser des changements locaux. Un nom de projet Compose

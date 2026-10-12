@@ -13,7 +13,7 @@ réelle avant d'augmenter le nombre de workers. Lire aussi [AGENTS.md](../../AGE
 et le [guide d'exploitation](../../docs/pr-qa-operations.md).
 
 ```bash
-git clone --branch feat/guided-qa-dashboard https://github.com/Noext/canary.git
+git clone --branch main https://github.com/Noext/canary.git
 cd canary
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -271,6 +271,52 @@ unset QA_NEW_PASSWORD
 Cette commande révoque toutes les sessions locales du compte. Une nouvelle
 connexion avec le nouveau mot de passe est requise. La commande `setup-admin`
 refuse de recréer un administrateur quand un compte local existe déjà.
+
+## Frontend : structure et diagnostic
+
+Le dashboard utilise des fichiers sources HTML/CSS et des modules TypeScript
+stricts dans `src/dashboard/`. Il partage les types de comptes, jobs et résultats
+avec le backend. Les réponses de préparation sont contrôlées côté serveur par
+les mêmes contrats. Aucun JavaScript applicatif n'est conservé dans une chaîne
+pour échapper au lint ou au contrôle de types.
+
+| Fichier | Responsabilité |
+| --- | --- |
+| `index.html`, `styles.css` | Structure accessible et styles adaptatifs |
+| `client.ts` | Initialisation des fonctionnalités |
+| `auth.ts` | Connexion locale/technique, bootstrap, expiration de session |
+| `github.ts` | Création, installation et sélection des dépôts de l'App |
+| `models.ts` | Catalogue et choix explicite du modèle |
+| `overview.ts`, `navigation.ts` | Actions d'accueil et navigation selon le rôle |
+| `runs.ts`, `results.ts` | Préflight, lancement, suivi SSE, assertions et vidéos |
+| `api.ts`, `contracts.ts`, `state.ts`, `dom.ts` | HTTP, erreurs, contrats, état et contrôles typés |
+| `presentation.ts` | Libellés, badges et chemins de preuves |
+
+`scripts/dashboard-assets.mjs` compile le code navigateur avec esbuild, séparément
+du CLI Node. Le build intègre ces ressources au CLI autonome : aucun fichier
+statique à copier sur le VPS. `dashboard.ts` associe uniquement leurs URLs et
+leurs types MIME. Les scripts et styles sont servis sur `/dashboard/assets/`
+et la page applique une CSP sans `unsafe-inline`. Les ressources ne contiennent
+ni credentials ni données de comptes/runs.
+
+Pour contribuer depuis un clone installé :
+
+```bash
+pnpm --filter @usecanary/pr-qa compile
+pnpm --filter @usecanary/pr-qa test
+pnpm --filter @usecanary/pr-qa test:e2e
+pnpm --filter @usecanary/pr-qa build
+pnpm --filter @usecanary/pr-qa dev -- --help
+```
+
+`dev` utilise le même build que la production, puis transmet les arguments au CLI ;
+relancer après une modification. Les source maps du module navigateur permettent
+de poser un point d'arrêt dans les fichiers TypeScript via les outils développeur.
+Inspecter Console et Réseau : une erreur HTTP présente sa référence de requête,
+les connexions SSE sont dans `/runs/<id>/events`. Les source maps du CLI existent
+aussi dans `dist/`. Pour les incidents de worker, utiliser le run ID du diagnostic
+et les commandes du guide d'exploitation. Les tests chargent réellement le CSS
+et vérifient les ressources, la CSP, les IDs du template et les parcours Chromium.
 
 ## Premier usage du dashboard
 

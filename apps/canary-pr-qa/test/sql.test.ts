@@ -849,7 +849,7 @@ it("connects a GitHub App through admin-only manifest callbacks, encrypts creden
       )
     ).status
   ).toBe(303);
-  expect((await setup.status()).repositories[0].installation_id).toBe("42001");
+  expect((await setup.status()).repositories[0]?.installation_id).toBe("42001");
   expect((await setup.effective()).allowedRepos).toEqual([]);
   expect(
     (
@@ -1132,6 +1132,20 @@ it("checks PR, model and exact preview version without enqueueing, generating AI
     "Content-Type": "application/json",
     Origin: url,
   };
+  const shell = await fetch(url);
+  const csp = shell.headers.get("Content-Security-Policy") || "";
+  expect(csp).toContain("script-src 'self'; style-src 'self'");
+  expect(csp).not.toContain("unsafe-inline");
+  const html = await shell.text();
+  expect(html).toContain("/dashboard/assets/client.js");
+  const script = await fetch(`${url}/dashboard/assets/client.js`);
+  expect(script.status).toBe(200);
+  expect(script.headers.get("Content-Type")).toContain("text/javascript");
+  expect(script.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  expect(await script.text()).toContain("sourceMappingURL=");
+  const css = await fetch(`${url}/dashboard/assets/styles.css`);
+  expect(css.status).toBe(200);
+  expect(css.headers.get("Content-Type")).toContain("text/css");
   const status = await fetch(`${url}/dashboard/status`, { headers });
   const statusBody = await status.text();
   expect(statusBody).not.toContain(config.QA_API_TOKEN);
@@ -1218,4 +1232,52 @@ it("refuses a preflight with missing preview provenance and a read-only account"
   expect(await q.list(["fixture/app"])).toEqual([]);
   expect(f.modelRequests).toEqual([]);
   expect(f.outgoing).toEqual([]);
+}, 30_000);
+
+it("intersects technical account repositories with the live managed App selection in dashboard readiness", async () => {
+  await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const usersFile = join(f.dataDir, "readiness-users.json");
+  const tokens = [
+    "readiness-admin-token-2026-abcdefgh",
+    "readiness-operator-token-2026-abcdefgh",
+  ];
+  await writeFile(
+    usersFile,
+    JSON.stringify(
+      tokens.map((token, index) => ({
+        id: `readiness-${index}`,
+        role: index === 0 ? "admin" : "operator",
+        repos:
+          index === 0 ? ["unselected/app"] : ["unselected/app", "FiXtUrE/ApP"],
+        tokenSha256: createHash("sha256").update(token).digest("hex"),
+      }))
+    )
+  );
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+    QA_USERS_FILE: usersFile,
+  };
+  const setup = new GitHubSetup(new Queue(config.DATABASE_URL).pool, config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  for (const [index, token] of tokens.entries()) {
+    const response = await fetch(`${url}/dashboard/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      github: { mode: "app", repositories: index === 0 ? [] : ["FiXtUrE/ApP"] },
+    });
+  }
 }, 30_000);

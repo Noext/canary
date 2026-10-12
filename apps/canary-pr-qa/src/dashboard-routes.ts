@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { type Principal, requireAccess } from "./access.js";
 import type { Config } from "./config.js";
+import type { Preflight, SetupStatus } from "./dashboard/contracts.js";
 import { QaError } from "./diagnostics.js";
 import { GitHub, type PrContext, parsePrUrl } from "./github.js";
 import type { GitHubSetup } from "./github-setup.js";
@@ -30,10 +31,12 @@ export function dashboardRoutes(
   ) => {
     if (req.method === "GET" && url.pathname === "/dashboard/status") {
       const effective = await setup.effective();
-      json(res, 200, {
+      const status = {
         github: {
           mode: githubMode(effective),
-          repositories: user.repos,
+          repositories: user.repos.filter((repo) =>
+            effective.allowedRepos.includes(repo.toLowerCase())
+          ),
         },
         ai: {
           endpoint: new URL(config.OPENAI_BASE_URL).host,
@@ -49,7 +52,8 @@ export function dashboardRoutes(
               }
             : {}),
         },
-      });
+      } satisfies SetupStatus;
+      json(res, 200, status);
       return true;
     }
     if (req.method !== "POST" || url.pathname !== "/runs/preflight") {
@@ -103,7 +107,7 @@ export function dashboardRoutes(
         "Vérifiez à nouveau sa dernière version."
       );
     }
-    json(res, 200, {
+    const result = {
       ready: true,
       pr: {
         title: context.title,
@@ -113,7 +117,8 @@ export function dashboardRoutes(
       },
       preview: { url: preview.url, sha: preview.sha },
       model: input.model,
-    });
+    } satisfies Preflight;
+    json(res, 200, result);
     return true;
   };
 }
