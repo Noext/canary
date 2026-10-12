@@ -4,7 +4,9 @@ import type { Diagnostic } from "./diagnostics.js";
 const text = z.string().trim().min(1).max(2000);
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),
-  z.object({ by: z.literal("role"), value: text, name: text }).strict(),
+  z
+    .object({ by: z.literal("role"), value: text, name: z.string().max(2000) })
+    .strict(),
   z.object({ by: z.literal("text"), value: text }).strict(),
   z.object({ by: z.literal("label"), value: text }).strict(),
   z.object({ by: z.literal("placeholder"), value: text }).strict(),
@@ -281,6 +283,7 @@ export interface RunResult {
   endedAt?: string;
   error?: string;
   id: string;
+  model?: string;
   outcome: Outcome;
   plan?: Plan;
   preview?: Preview;

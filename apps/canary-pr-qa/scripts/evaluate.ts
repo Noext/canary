@@ -10,23 +10,25 @@ import { fixture, PR_URL } from "../test/fixture.js";
 
 const schema = z.object({
   version: z.literal(1),
-  cases: z.array(
-    z.object({
-      id: z.string(),
-      expected: z.enum(["passed", "failed"]),
-      fixture: z
-        .object({
-          broken: z.boolean().optional(),
-          decoy: z.boolean().optional(),
-          unchangedState: z.boolean().optional(),
-        })
-        .optional(),
-      prUrl: z.string().url().optional(),
-      previewUrl: z.string().url().optional(),
-      requiredActions: z.array(z.string()),
-      annotation: z.string(),
-    })
-  ),
+  cases: z
+    .array(
+      z.object({
+        id: z.string(),
+        expected: z.enum(["passed", "failed"]),
+        fixture: z
+          .object({
+            broken: z.boolean().optional(),
+            decoy: z.boolean().optional(),
+            unchangedState: z.boolean().optional(),
+          })
+          .optional(),
+        prUrl: z.string().url().optional(),
+        previewUrl: z.string().url().optional(),
+        requiredActions: z.array(z.string()),
+        annotation: z.string(),
+      })
+    )
+    .min(1),
 });
 type Case = z.infer<typeof schema>["cases"][number];
 async function evaluateCase(
@@ -39,11 +41,22 @@ async function evaluateCase(
   const local = item.fixture ? await fixture(item.fixture) : undefined;
   try {
     const config = {
-      ...(local?.config ?? configured),
-      OPENAI_BASE_URL: configured.OPENAI_BASE_URL,
-      OPENAI_API_KEY: configured.OPENAI_API_KEY,
+      ...configured,
+      ...(local
+        ? {
+            GITHUB_API_URL: local.config.GITHUB_API_URL,
+            GITHUB_TOKEN: local.config.GITHUB_TOKEN,
+            GITHUB_APP_ID: "",
+            GITHUB_APP_PRIVATE_KEY_FILE: "",
+            GITHUB_INSTALLATION_ID: "",
+            GITHUB_ALLOWED_REPOS: local.config.GITHUB_ALLOWED_REPOS,
+            allowedRepos: local.config.allowedRepos,
+            PREVIEW_ALLOWED_HOSTS: local.config.PREVIEW_ALLOWED_HOSTS,
+            allowedHosts: local.config.allowedHosts,
+            QA_ALLOW_PRIVATE_PREVIEWS: local.config.QA_ALLOW_PRIVATE_PREVIEWS,
+          }
+        : {}),
       OPENAI_MODEL: model,
-      QA_ALLOWED_PROVIDER_HOSTS: configured.QA_ALLOWED_PROVIDER_HOSTS,
       QA_DATA_DIR: output,
     };
     const result = await runQa(
@@ -76,6 +89,13 @@ async function evaluateCase(
     await local?.close();
   }
 }
+function detectionThreshold() {
+  const minimum = Number(process.env.QA_EVAL_MIN_DETECTION ?? 1);
+  if (!Number.isFinite(minimum) || minimum < 0 || minimum > 1) {
+    throw new Error("QA_EVAL_MIN_DETECTION must be 0..1");
+  }
+  return minimum;
+}
 async function main() {
   if (process.env.QA_EVAL_LIVE !== "true") {
     throw new Error(
@@ -93,7 +113,11 @@ async function main() {
   );
   const models = (process.env.QA_EVAL_MODELS ?? configured.OPENAI_MODEL)
     .split(",")
+    .map((id) => id.trim())
     .filter(Boolean);
+  if (!models.length) {
+    throw new Error("At least one explicit evaluation model is required");
+  }
   const repeats = Number(process.env.QA_EVAL_REPEATS ?? 2);
   if (!Number.isInteger(repeats) || repeats < 1 || repeats > 20) {
     throw new Error("QA_EVAL_REPEATS must be 1..20");
@@ -141,11 +165,11 @@ async function main() {
     JSON.stringify(report, null, 2)
   );
   process.stdout.write(`${JSON.stringify(report.metrics, null, 2)}\n`);
-  const minimum = Number(process.env.QA_EVAL_MIN_DETECTION ?? 1);
+  const minimum = detectionThreshold();
   process.exitCode =
     report.metrics.falseGreenRate > 0 ||
-    report.metrics.bugDetectionRate < minimum ||
-    report.metrics.healthyPassRate < 1
+    (bugs.length > 0 && report.metrics.bugDetectionRate < minimum) ||
+    (healthy.length > 0 && report.metrics.healthyPassRate < 1)
       ? 1
       : 0;
 }

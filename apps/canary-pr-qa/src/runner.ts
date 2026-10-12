@@ -8,6 +8,7 @@ import { executeScenario } from "./executor.js";
 import { fixtureCatalog } from "./fixtures.js";
 import { GitHub, type PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
+import { runModelConfig } from "./model-catalog.js";
 import { trustedPolicy, validateCoverage, validateProvider } from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
@@ -27,6 +28,7 @@ const logger = createLogger({ name: "canary-pr-qa" });
 export interface RunOptions {
   expectedSha?: string;
   id?: string;
+  model?: string;
   previewUrl?: string;
   prUrl: string;
   publish?: boolean;
@@ -147,6 +149,7 @@ async function executePlan(
   const initialPage = await discover(context, preview, root, canary);
   const payload = {
     pr: context,
+    changedFiles: context.files.map((file) => file.filename),
     preview,
     initialPage,
     maxScenarios: config.QA_MAX_SCENARIOS,
@@ -339,6 +342,7 @@ async function runUnscoped(
   const result: RunResult = {
     id,
     prUrl: options.prUrl,
+    model: config.OPENAI_MODEL,
     startedAt: new Date().toISOString(),
     outcome: "blocked",
     scenarios: [],
@@ -472,8 +476,9 @@ async function runUnscoped(
 
 export async function runQa(
   options: RunOptions,
-  config: Config
+  configured: Config
 ): Promise<RunResult> {
+  const config = runModelConfig(configured, options.model);
   if (runScope.getStore()) {
     return traced(
       "qa.run",

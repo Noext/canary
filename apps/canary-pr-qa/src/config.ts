@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { QaError } from "./diagnostics.js";
+import { ModelIdSchema } from "./model-catalog.js";
 
 const envSchema = z.object({
   QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
@@ -57,7 +58,8 @@ const envSchema = z.object({
   GITHUB_ALLOWED_REPOS: z.string().default(""),
   OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   OPENAI_API_KEY: z.string().default(""),
-  OPENAI_MODEL: z.string().min(1).default("configured-model"),
+  OPENAI_MODEL: ModelIdSchema.default("opencode-go/deepseek-v4.1-flash"),
+  QA_ALLOWED_MODELS: z.string().default(""),
   OPENAI_JSON_MODE: z.enum(["true", "false"]).default("true"),
   OPENAI_TOKEN_PARAMETER: z
     .enum(["max_tokens", "max_completion_tokens"])

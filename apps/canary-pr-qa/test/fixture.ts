@@ -96,11 +96,15 @@ export async function fixture(
     persistenceBroken?: boolean;
     maliciousUrl?: string;
     requireCookie?: boolean;
+    unnamedStatus?: boolean;
+    models?: string[];
+    modelsStatus?: number;
   } = {}
 ) {
   const outgoing: { path: string; payload: Record<string, unknown> }[] = [];
   const comments: { id: number; body: string; user: { type: string } }[] = [];
   const modelRequests: Record<string, unknown>[] = [];
+  const catalogRequests: string[] = [];
 
   let prReads = 0;
   const server = createServer((req, res) => {
@@ -111,6 +115,22 @@ export async function fixture(
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Test fixture deliberately dispatches all local protocol endpoints in one place.
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const path = req.url ?? "/";
+    if (path === "/v1/models") {
+      catalogRequests.push(path);
+      json(
+        res,
+        {
+          data: (
+            options.models ?? [
+              "fixture-scripted-model",
+              "fixture-alternate-model",
+            ]
+          ).map((id) => ({ id })),
+        },
+        options.modelsStatus ?? 200
+      );
+      return;
+    }
     if (
       path === "/repos/fixture/app" ||
       path === "/repos/fixture/app/contents"
@@ -238,7 +258,14 @@ export async function fixture(
               scenarios: [],
               skipped: [{ sourceFile: "src/form.ts", reason: "fixture" }],
             }
-          : plan;
+          : structuredClone(plan);
+        if (options.unnamedStatus && !options.noScenarios) {
+          (value as Plan).scenarios[0]!.assertions[0]!.target = {
+            by: "role",
+            value: "status",
+            name: "",
+          };
+        }
       } else {
         const request = JSON.parse(messages[1]?.content ?? "{}");
         const next = request.nextRequiredStep;
@@ -328,6 +355,7 @@ export async function fixture(
     baseUrl,
     outgoing,
     modelRequests,
+    catalogRequests,
     dataDir,
     close: () =>
       new Promise<void>((done) => {

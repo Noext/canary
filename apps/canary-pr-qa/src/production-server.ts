@@ -26,6 +26,11 @@ import { diagnose } from "./diagnostics.js";
 import { GitHub, parsePrUrl } from "./github.js";
 import { verifyWebhook } from "./github-app.js";
 import { importLegacy } from "./legacy.js";
+import {
+  ModelCatalog,
+  ModelIdSchema,
+  runModelConfig,
+} from "./model-catalog.js";
 import { type Job, Queue } from "./queue.js";
 import { purgeRun } from "./retention.js";
 import { serveArtifact } from "./server.js";
@@ -42,6 +47,7 @@ const inputSchema = z
     prUrl: z.string().url(),
     previewUrl: z.string().url().optional(),
     publish: z.boolean().default(true),
+    model: ModelIdSchema.optional(),
   })
   .strict();
 function json(res: ServerResponse, status: number, value: unknown) {
@@ -70,6 +76,7 @@ export async function startProductionServer(config: Config) {
   await queue.migrate();
   await importLegacy(queue, config);
   const github = new GitHub(config);
+  const models = new ModelCatalog(config);
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
   let stopping = false;
@@ -104,6 +111,8 @@ export async function startProductionServer(config: Config) {
     );
     const ref = parsePrUrl(input.prUrl);
     requireAccess(user, ref.repo, true);
+    const selected = runModelConfig(config, input.model).OPENAI_MODEL;
+    await models.require(selected);
     if (!config.allowedRepos.includes(ref.repo.toLowerCase())) {
       throw new Error("Repository not allowed");
     }
@@ -127,7 +136,7 @@ export async function startProductionServer(config: Config) {
       ref.number,
       pr.data.head.sha,
       user.id,
-      input,
+      { ...input, model: selected },
       key
     );
     json(res, 202, {
@@ -397,7 +406,25 @@ export async function startProductionServer(config: Config) {
     res.setHeader("Content-Type", metrics.contentType);
     res.end(await metrics.metrics());
   }
-  async function userRoute(
+  async function modelRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    user: Principal
+  ) {
+    if (req.method === "GET" && url.pathname === "/models") {
+      if (user.role === "viewer") {
+        throw new Error("Project access denied: operator required");
+      }
+      json(res, 200, {
+        data: (await models.list()).map((id) => ({ id })),
+        defaultModel: config.OPENAI_MODEL,
+      });
+      return true;
+    }
+    return false;
+  }
+  async function accountRoute(
     req: IncomingMessage,
     res: ServerResponse,
     url: URL,
@@ -420,6 +447,20 @@ export async function startProductionServer(config: Config) {
         throw new Error("Administrator required");
       }
       await serveMetrics(res);
+      return true;
+    }
+    return false;
+  }
+  async function userRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    user: Principal
+  ) {
+    if (
+      (await modelRoute(req, res, url, user)) ||
+      (await accountRoute(req, res, url, user))
+    ) {
       return true;
     }
     if (req.method === "GET" && url.pathname === "/runs") {

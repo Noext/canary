@@ -21,9 +21,12 @@ async function setup() {
 
 describe("production configuration and useful diagnostics", () => {
   it("rejects example defaults, placeholder auth, endpoint credentials and invalid artifact origins", async () => {
-    expect(() => validateConfiguration(loadConfig({}), true)).toThrow(
-      "OPENAI_MODEL"
-    );
+    expect(() =>
+      validateConfiguration(
+        loadConfig({ OPENAI_MODEL: "your-model-name" }),
+        true
+      )
+    ).toThrow("OPENAI_MODEL");
     const f = await setup();
     for (const override of [
       { QA_API_TOKEN: "replace-with-at-least-24-random-characters" },

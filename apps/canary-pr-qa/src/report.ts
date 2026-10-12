@@ -26,6 +26,7 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
     "<!-- canary-pr-qa -->",
     "## Canary autonomous PR QA",
     `**Result: ${result.outcome.toUpperCase()}** · Commit \`${result.sha ?? "unavailable"}\``,
+    `Model: \`${clean(result.model ?? "historical / unavailable")}\``,
     result.preview
       ? `Preview: ${result.preview.url}\nProvenance: ${clean(result.preview.evidence)}`
       : "Preview not verified.",

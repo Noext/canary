@@ -15,6 +15,7 @@ async function main() {
     allowPositionals: true,
     options: {
       preview: { type: "string" },
+      model: { type: "string" },
       "no-publish": { type: "boolean" },
       help: { type: "boolean" },
       json: { type: "boolean" },
@@ -26,7 +27,7 @@ async function main() {
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write(
-      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--no-publish]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
+      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
     );
     return;
   }
@@ -92,6 +93,7 @@ async function main() {
       prUrl: positionals[1],
       previewUrl: values.preview,
       publish: !values["no-publish"],
+      model: values.model,
     },
     config
   );

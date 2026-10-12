@@ -39,12 +39,22 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
     expect(JSON.stringify(result)).not.toContain(f.config.GITHUB_TOKEN);
   }, 180_000);
   it("plays the form test, records video/trace/screenshots and publishes passed results", async () => {
-    const f = await fixture();
+    const f = await fixture({ unnamedStatus: true });
     closers.push(f.close);
     const result = await runQa(
-      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      {
+        prUrl: PR_URL,
+        previewUrl: f.baseUrl,
+        model: "fixture-alternate-model",
+      },
       f.config
     );
+    expect(result.model).toBe("fixture-alternate-model");
+    expect(
+      f.modelRequests.every(
+        (request) => request.model === "fixture-alternate-model"
+      )
+    ).toBe(true);
     expect(result.outcome, result.error ?? result.scenarios[0]?.error).toBe(
       "passed"
     );
@@ -442,6 +452,7 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
   );
   const config = {
     ...f.config,
+    OPENAI_MODEL: "missing-default-model",
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
     QA_USERS_FILE: usersFile,
@@ -503,6 +514,37 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       }
     );
     expect(listed.actual).toContain("fixture/app #1");
+    const noFallback = await act(
+      "no-fallback",
+      {
+        type: "assert",
+        assertionId: "no-fallback",
+        locator: { by: "css", value: "#modelState" },
+      },
+      {
+        id: "no-fallback",
+        description: "Explicit choice required for missing default",
+        kind: "text",
+        expected: "choisissez explicitement",
+        verification: "state",
+      }
+    );
+    expect(noFallback.actual).toContain("choisissez explicitement");
+    const disabled = await act(
+      "launch-disabled",
+      {
+        type: "assert",
+        assertionId: "disabled",
+        locator: { by: "css", value: "#startRun:disabled" },
+      },
+      {
+        id: "disabled",
+        description: "Cannot launch before explicit selection",
+        kind: "visible",
+        verification: "state",
+      }
+    );
+    expect(disabled.actual).toBe(true);
     await act("open-run", {
       type: "click",
       locator: { by: "role", value: "link", name: "fixture/app #1" },
@@ -554,6 +596,37 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect((await queue.get(job.id))?.cancel_requested).toBe(true);
+    await act("choose-model", {
+      type: "select",
+      locator: { by: "css", value: "#model" },
+      value: "fixture-alternate-model",
+    });
+    await act("enter-pr", {
+      type: "fill",
+      locator: { by: "css", value: "#pr" },
+      value: PR_URL,
+    });
+    await act("enter-preview", {
+      type: "fill",
+      locator: { by: "css", value: "#preview" },
+      value: f.baseUrl,
+    });
+    await act("launch-selected-model", {
+      type: "click",
+      locator: { by: "css", value: "#startRun" },
+    });
+    for (
+      let i = 0;
+      i < 30 && (await queue.list(["fixture/app"])).length < 2;
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const selected = (await queue.list(["fixture/app"])).find(
+      (run) => run.id !== job.id
+    );
+    expect(selected?.input.model).toBe("fixture-alternate-model");
+    expect(f.catalogRequests.length).toBeGreaterThan(0);
     await act("logout", {
       type: "click",
       locator: { by: "role", value: "button", name: "Déconnexion" },

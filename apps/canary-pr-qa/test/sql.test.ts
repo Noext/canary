@@ -199,6 +199,40 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
     ).status
   ).toBe(200);
   expect((await q.get(run.id))?.status).toBe("cancelled");
+  expect((await fetch(`${url}/models`)).status).toBe(401);
+  expect(
+    (await fetch(`${url}/models`, { headers: mixedCaseHeaders })).status
+  ).toBe(403);
+  const catalog = await fetch(`${url}/models`, { headers: admin });
+  expect(catalog.status).toBe(200);
+  expect(await catalog.json()).toMatchObject({
+    defaultModel: "fixture-scripted-model",
+  });
+  const denied = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({
+      prUrl: PR_URL,
+      previewUrl: f.baseUrl,
+      model: "absent-model",
+    }),
+  });
+  expect(denied.status).toBeGreaterThanOrEqual(400);
+  expect((await q.list(["fixture/app"])).length).toBe(1);
+  const chosen = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({
+      prUrl: PR_URL,
+      previewUrl: f.baseUrl,
+      model: "fixture-alternate-model",
+    }),
+  });
+  expect(chosen.status).toBe(202);
+  const created = (await chosen.json()) as { id: string };
+  expect((await q.get(created.id))?.input.model).toBe(
+    "fixture-alternate-model"
+  );
 }, 30_000);
 
 it("accepts only signed webhook bytes, deduplicates deliveries and waits for live SHA provenance before enqueue", async () => {

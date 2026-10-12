@@ -39,6 +39,15 @@ function fakeBrowser() {
 }
 
 describe("validation and deterministic assertions", () => {
+  it("supports an unnamed status role with its frozen assertion target", () => {
+    const target = { by: "role" as const, value: "status", name: "" };
+    const contract = structuredClone(plan);
+    contract.scenarios[0]!.assertions[0]!.target = target;
+    expect(
+      PlanSchema.parse(contract).scenarios[0]!.assertions[0]!.target
+    ).toEqual(target);
+    expect(locatorExpression(target)).toContain('name: ""');
+  });
   it("accepts only canonical GitHub PR URLs", () => {
     expect(parsePrUrl(PR_URL).repo).toBe("fixture/app");
     for (const url of [

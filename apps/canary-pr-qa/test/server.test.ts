@@ -239,7 +239,13 @@ describe("persistent authenticated job service", () => {
       await delay(10);
     }
     expect(runQa).toHaveBeenCalledWith(
-      { prUrl: PR_URL, previewUrl: s.baseUrl, publish: true, id: job.id },
+      {
+        prUrl: PR_URL,
+        previewUrl: s.baseUrl,
+        publish: true,
+        id: job.id,
+        model: "fixture-scripted-model",
+      },
       expect.anything()
     );
     expect(

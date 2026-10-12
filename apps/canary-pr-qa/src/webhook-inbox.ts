@@ -100,7 +100,7 @@ export async function processDelivery(queue: Queue, config: Config) {
       value.number,
       value.sha,
       "github-app",
-      { prUrl: value.prUrl, publish: true },
+      { prUrl: value.prUrl, publish: true, model: config.OPENAI_MODEL },
       `webhook:${value.repo.toLowerCase()}:${value.number}:${value.sha}`,
       {
         global: config.QA_WEBHOOK_MAX_RUNS_PER_HOUR,

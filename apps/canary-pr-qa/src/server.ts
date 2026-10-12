@@ -17,6 +17,11 @@ import {
 } from "./config.js";
 import { type Diagnostic, diagnose, QaError, redact } from "./diagnostics.js";
 import { parsePrUrl } from "./github.js";
+import {
+  ModelCatalog,
+  ModelIdSchema,
+  runModelConfig,
+} from "./model-catalog.js";
 import { writeJson } from "./report.js";
 import { runQa } from "./runner.js";
 
@@ -26,6 +31,7 @@ const requestSchema = z
     prUrl: z.string().url(),
     previewUrl: z.string().url().optional(),
     publish: z.boolean().default(true),
+    model: ModelIdSchema.optional(),
   })
   .strict();
 const ID = /^[0-9a-f-]{36}$/;
@@ -167,6 +173,7 @@ export async function startServer(config: Config) {
   validateConfiguration(config, true);
   await mkdir(config.QA_DATA_DIR, { recursive: true });
   const queue: { id: string; input: z.infer<typeof requestSchema> }[] = [];
+  const models = new ModelCatalog(config);
   let busy = false;
   let reservations = 0;
   let stopping = false;
@@ -279,6 +286,8 @@ export async function startServer(config: Config) {
     reservations++;
     try {
       const input = requestSchema.parse(await readBody(req));
+      input.model = runModelConfig(config, input.model).OPENAI_MODEL;
+      await models.require(input.model);
       const ref = parsePrUrl(input.prUrl);
       if (!config.allowedRepos.includes(ref.repo.toLowerCase())) {
         throw new Error("Repository is not allowed");
@@ -330,6 +339,13 @@ export async function startServer(config: Config) {
     }
     if (req.method === "POST" && url.pathname === "/runs") {
       await enqueue(req, res);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/models") {
+      send(res, 200, {
+        data: (await models.list()).map((id) => ({ id })),
+        defaultModel: config.OPENAI_MODEL,
+      });
       return;
     }
     const run = /^\/runs\/([0-9a-f-]{36})$/.exec(url.pathname);

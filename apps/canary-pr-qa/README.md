@@ -327,3 +327,11 @@ persistante reste signalée dans le résultat durable ; elle ne devient pas un s
 Le proxy accepte les upgrades `ws://` et `wss://`, utilise respectivement les ports
 80 et 443 par défaut, et vérifie le certificat TLS pour l'hôte d'origine en WSS.
 Les contrôles de liste d'hôtes, DNS/IP et métadonnées restent appliqués.
+
+## Modèle IA et catalogue dynamique
+
+Le défaut est `opencode-go/deepseek-v4.1-flash`. Le dashboard récupère les IDs depuis le `/v1/models` de `OPENAI_BASE_URL` via son API authentifiée `/models`. La clé reste côté serveur. Le catalogue est mis en cache 30 secondes et peut être rechargé avec « Actualiser les modèles ». Aucun autre modèle n'est choisi automatiquement : si le défaut ou la sélection précédente manque, choisissez explicitement un ID avant de lancer.
+
+Le modèle choisi est enregistré dans le job, utilisé pour le planificateur et l'exécuteur, et affiché dans la liste, le détail et le rapport. Une modification ultérieure de `OPENAI_MODEL` ne modifie pas les jobs déjà en attente. `QA_ALLOWED_MODELS` permet une liste autorisée d'IDs séparés par des virgules ; vide signifie tous les IDs retournés par le fournisseur. CLI : `--model ID` ; API : champ optionnel `model`. Les webhooks utilisent le défaut configuré.
+
+Les tarifs globaux configurés concernent le modèle par défaut. Pour un autre modèle, le coût reste indisponible et le budget de tokens reste actif. Une erreur de catalogue bloque le lancement dans le dashboard et affiche un diagnostic. Pour Cloudflare, autorisez l'IP de sortie du serveur/VPS qui appelle le fournisseur. L'IP du navigateur de l'utilisateur n'est pas celle de cet appel.
