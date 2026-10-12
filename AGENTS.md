@@ -96,22 +96,61 @@ by default; `canary ui --dir <path>` (or adding roots in the UI) points it elsew
 
 Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the `canary` session orchestrator) are the core of the toolkit. Portions are derived from MIT-licensed upstream work by Sawyer Hood (see `LICENSE`).
 
+## Revue automatique des PR (Codex)
+
+- **Trois tours de revue automatique au maximum par PR.** Les findings de ces
+  trois tours sont corrigés et chacun reçoit une réponse dans son thread (voir
+  `pulls/{n}/comments/{id}/replies`) avec le commit qui corrige et sa preuve :
+  test ajouté, commande exécutée, résultat. Ne jamais corriger un finding en
+  silence.
+- **Après le troisième tour, le cycle s'arrête** : plus de `@codex review`, et
+  les remarques suivantes ne sont ni attendues ni traitées dans la PR. Un point
+  encore jugé utile devient une tâche de suivi explicite (issue ou PR dédiée),
+  jamais une quatrième itération. La relecture qui peut encore bloquer la fusion
+  après ce plafond est humaine.
+- Corriger le code, pas le test : affaiblir une assertion pour faire passer la CI
+  est un finding en soi. Si le contrat doit réellement changer, le dire dans la
+  réponse et le documenter dans la description de la PR.
+- Après avoir poussé les correctifs, demander une nouvelle revue (`@codex review`)
+  pour que les corrections soient relues par le même relecteur.
+- Ne pas relancer de revue automatique pour un correctif de documentation, de
+  commentaire ou de mise en forme : ces changements attendent le tour suivant du
+  même cycle ou la relecture humaine.
+- **Trois tours de revue au maximum, pour toute PR.** Constater le tour de revue
+  initial comme le tour 1 et s'arrêter après le tour 3 : ne pas demander de
+  quatrième passe `@codex review`, même si des findings restent ouverts. Chaque
+  tour coûte une correction, une validation complète et une relecture ; au-delà
+  de trois, les findings résiduels sont triés dans le fil de la PR (finding, avis
+  argumenté, ce qui reste à faire) et la décision revient à l'humain, qui ouvre
+  au besoin une PR de suivi. Cette règle limite la boucle, elle n'autorise pas à
+  corriger un finding en silence : ce qui est corrigé reste annoncé dans son fil
+  avec son commit et sa preuve.
+
 ## Frontend PR QA : règles de contribution
 
-- Conserver le HTML dans `apps/canary-pr-qa/src/dashboard/index.html`, le CSS
-  dans `styles.css` et la logique dans des modules TypeScript par fonctionnalité.
-  Ne pas réintroduire de blocs HTML/CSS/JavaScript applicatifs dans des chaînes TS.
-- `dashboard.ts` ne fait que référencer les ressources compilées. Le build
-  navigateur passe par `scripts/dashboard-assets.mjs`, aussi utilisé en test/dev.
-  Garder le navigateur sans imports runtime du backend ou accès à ses secrets.
-- Réutiliser les types du backend pour comptes/jobs/résultats. Vérifier tout
-  changement de contrôle dans `dom.ts` et le test de cohérence des IDs HTML.
-- Garder la CSP de la page sans `unsafe-inline` et utiliser `textContent` pour
-  les données utilisateur/PR. Ne pas ajouter de dépendance frontend uniquement
-  pour contourner un défaut de structure.
-- Exécuter `pnpm check`, le build PR QA et les E2E Chromium avant livraison ;
-  vérifier la CI Compose pour les changements au pipeline de ressources.
-  Lire la section Frontend du README pour les source maps et diagnostics.
+- Le dashboard est une application React 19 + Vite dans `apps/canary-pr-qa-ui`
+  (`@usecanary/pr-qa-ui`) : composants, hooks, TypeScript strict, Tailwind v4,
+  tests Vitest + Testing Library. Aucune écriture DOM impérative
+  (`getElementById`, `textContent =`, `innerHTML`) et aucun bloc HTML/CSS
+  applicatif dans des chaînes TS.
+- `apps/canary-pr-qa` embarque le build Vite à la compilation
+  (`scripts/ui-assets.mjs`, chargeur esbuild `?ui`) : `dist/cli.js` reste
+  auto-contenu et les assets sont servis sous `/dashboard/assets/*`. Ne pas
+  ajouter d'étape Docker ni de fichier statique à copier ; lancer
+  `pnpm --filter @usecanary/pr-qa-ui build` avant de reconstruire `pr-qa` seul.
+- Toute réponse serveur passe par `src/api/client.ts` (schémas Zod dans
+  `src/api/schemas.ts`) et tout texte visible vient de `src/i18n.ts`. Un
+  changement de contrat HTTP se répercute des deux côtés
+  (`apps/canary-pr-qa/src/dashboard/contracts.ts` et
+  `apps/canary-pr-qa-ui/src/api/contracts.ts`).
+- Conserver les `id` et les libellés français assertés par l'e2e Chromium
+  (`apps/canary-pr-qa/test/e2e.test.ts`) et `test/sql.test.ts`.
+- Garder la CSP sans `unsafe-inline` : pas de `<style>` ni d'attribut `style=`
+  en ligne, pas de script inline, et pas de dépendance ajoutée pour contourner
+  un défaut de structure.
+- Exécuter `pnpm check`, le build PR QA et les E2E avant livraison ; vérifier la
+  CI Compose pour les changements au pipeline de ressources. Lire la section
+  Frontend du README pour les source maps et diagnostics.
 
 ## Instructions aux agents : installation PR QA en production sur VPS
 
@@ -211,6 +250,8 @@ Renseigner au minimum :
 | `QA_ALLOWED_PROVIDER_HOSTS` | `ai.noext.fr` ; toute politique fournisseur du dépôt testé doit également autoriser ce host |
 | `PREVIEW_ALLOWED_HOSTS` | Hôtes exacts nécessaires aux previews, API, images, polices et WebSockets, avec les ports non standards ; remplacer l'exemple |
 | `ARTIFACT_BASE_URL` | Origine HTTPS du dashboard si les rapports doivent être accessibles depuis les liens GitHub ; pas de suffixe `/artifacts` |
+| `QA_AUTO_RUNS` | `true` par défaut : un PR non brouillon sur un dépôt connecté et opt-in lance le run ; `false` enregistre les tentatives `auto_disabled` (audit `automatic.disabled`) sans exécuter |
+| `QA_AUTO_PREVIEW_WAIT_SECONDS` | Attente de la preuve du SHA complet, en secondes (60-86400, défaut 1800) ; au-delà, tentative `expired`, audit `automatic.preview_expired`, jamais rejouée |
 
 Le modèle par défaut est un choix explicite de l'utilisateur. **Ne jamais le
 remplacer ou choisir un autre modèle de sa propre initiative**, y compris pendant
@@ -235,7 +276,10 @@ Créer mon App sur GitHub → confirmer sur GitHub → Installer/gérer les dép
 Actualiser → cocher les dépôts → Enregistrer. Compte personnel par défaut,
 organisation facultative. GitHub crée une vraie App privée appartenant à
 l'opérateur, avec permissions/webhook/callbacks préremplis. Aucun PAT, ID
-installation ou PEM à configurer dans `.env` pour ce parcours.
+installation ou PEM à configurer dans `.env` pour ce parcours. Sélectionner un
+dépôt l'active par défaut pour les runs automatiques
+(`qa_github_repositories.auto_run`) ; la vue GitHub permet de le désactiver pour
+ce seul dépôt.
 
 Configurer l'origine publique HTTPS dans `ARTIFACT_BASE_URL` et rendre les
 callbacks `/github/app/callback`, `/github/app/installed` et `/github/webhook`
@@ -359,6 +403,17 @@ Les vidéos sont finalisées après le scénario. Vérifier le rapport et la
 publication sur le SHA effectivement testé. La configuration et les comptes
 existants sont conservés ; aucune nouvelle première installation n'est requise.
 
+Un `pull_request` non brouillon sur un dépôt connecté et opt-in démarre aussi le
+run sans opérateur. Tant qu'aucune preview ne prouve le SHA complet du head, la
+tentative attend en file (backoff 30/60/120/300 s) puis expire après
+`QA_AUTO_PREVIEW_WAIT_SECONDS` ; contrôler les tentatives du dashboard
+(`GET /dashboard/automatic`) avant de conclure. **Une tentative expirée n'est
+jamais rejouée automatiquement** : relancer explicitement ou pousser un nouveau
+commit. Désactiver par dépôt dans Réglages → GitHub, ou globalement avec
+`QA_AUTO_RUNS=false`. L'opérateur doit toujours fournir une preview qui expose le
+SHA complet, sinon l'automatisation attend au lieu de tester ; le parcours manuel
+par URL de PR et preview exacte reste disponible.
+
 Remettre à l'utilisateur la révision déployée, les services sains, la PR et son
 SHA, le run ID, le modèle, l'outcome et les liens réellement vérifiés. Distinguer
 `passed`, `failed`, `blocked`, `stale`, `skipped` et les travaux interrompus.
@@ -380,10 +435,12 @@ HTTP ; `QA_RAW_EVIDENCE=true` n'est à activer qu'après contrôle des données 
 
 Vérifier dans l'ordre la configuration, SQL et sa migration, le worker/sa lease,
 IA/GitHub, la provenance de la preview, Chromium puis le proxy egress. Une lease
-expirée est interrompue, jamais rejouée automatiquement. Pour des captures du
-moteur, consulter le service `browser` : les captures temporaires du doctor sont
-supprimées après vérification. Les codes et procédures ciblées sont dans le
-[guide de dépannage](docs/pr-qa-operations.md).
+expirée est interrompue, jamais rejouée automatiquement. Une tentative
+automatique en attente ou expirée se lit dans `qa_deliveries` et `qa_audit`
+(`automatic.*`), jamais comme un run `qa_jobs` : le job n'est créé qu'une fois la
+provenance vérifiée. Pour des captures du moteur, consulter le service `browser` :
+les captures temporaires du doctor sont supprimées après vérification. Les codes
+et procédures ciblées sont dans le [guide de dépannage](docs/pr-qa-operations.md).
 
 ### 7. Mettre à jour, arrêter et sauvegarder
 

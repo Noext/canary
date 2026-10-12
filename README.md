@@ -7,7 +7,7 @@
 
 ## Autonomous Pull Request QA (this fork)
 
-This fork adds [`apps/canary-pr-qa`](apps/canary-pr-qa/README.md): give it a GitHub PR URL and an exact-commit preview to plan and execute functional scenarios in the existing Canary Chromium engine, with one session/video per scenario, deterministic assertions, reports and GitHub publication. It supports an OpenAI-compatible endpoint and single-VPS deployment via the root `docker-compose.yml`. See the app README for installation, configuration, limitations and executable E2E tests.
+This fork adds [`apps/canary-pr-qa`](apps/canary-pr-qa/README.md): a non-draft pull request on a connected, opted-in repository starts its QA run automatically, waiting for an exact-commit preview before planning and executing functional scenarios in the existing Canary Chromium engine, with one session/video per scenario, deterministic assertions, reports and GitHub publication. Manual runs from a PR URL plus an exact-commit preview remain available. It supports an OpenAI-compatible endpoint and single-VPS deployment via the root `docker-compose.yml`. See the app README for installation, configuration, limitations and executable E2E tests.
 
 Canary is a QA harness purpose built for coding agents like Claude Code. It reads your code diffs, identifies the affected UI flows, and tests them in real browser instances using Claude Code.
 

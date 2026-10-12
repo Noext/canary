@@ -133,10 +133,15 @@ jobs:
             --output "$RUNNER_TEMP/arcovia/canary-ui"
           arcovia analyze apps/canary-pr-qa --json \
             --output "$RUNNER_TEMP/arcovia/pr-qa"
+          arcovia analyze apps/canary-pr-qa-ui --json \
+            --output "$RUNNER_TEMP/arcovia/pr-qa-ui"
 
       # The thresholds are floors recorded from a measurement of this commit,
       # never aspirational targets: a lower score than these values means the
       # pull request added architectural debt. See the README.
+      # Measured when the floors were recorded: canary-ui 80.77, pr-qa 94.57,
+      # pr-qa-ui 97.25 (the React dashboard, which this gate now covers so it
+      # cannot rot behind the imperative code it replaced).
       - name: Architecture score gate
         run: |
           set -euo pipefail
@@ -146,7 +151,10 @@ jobs:
             --min-score 75 \
             --target apps/canary-pr-qa \
             --report "$RUNNER_TEMP/arcovia/pr-qa/analysis.json" \
-            --min-score 90
+            --min-score 90 \
+            --target apps/canary-pr-qa-ui \
+            --report "$RUNNER_TEMP/arcovia/pr-qa-ui/analysis.json" \
+            --min-score 95
 
       - name: Preserve architecture reports
         if: always()

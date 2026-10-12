@@ -201,8 +201,10 @@ fournis par l'URL ne sont jamais utilisés comme preuve d'autorisation : les
 installations sont énumérées avec le JWT de l'App de cette instance.
 
 La sélection est explicite : aucune installation ne lance de QA avant d'avoir
-sélectionné les dépôts dans Canary. Si `GITHUB_ALLOWED_REPOS` est renseigné,
-l'accès effectif est l'intersection entre sélection UI et restriction serveur.
+sélectionné les dépôts dans Canary. Sélectionner un dépôt l'active par défaut
+pour les runs automatiques (`qa_github_repositories.auto_run`, réglable par dépôt
+dans la vue GitHub) ; si `GITHUB_ALLOWED_REPOS` est renseigné, l'accès effectif
+est l'intersection entre sélection UI et restriction serveur.
 L'accès admin suit cette sélection à chaque requête. Le worker synchronise les
 installations toutes les 60 secondes ; Actualiser applique immédiatement les
 retraits/suspensions. Une erreur réseau de synchronisation est journalisée et
@@ -232,11 +234,13 @@ locale est tout de même effacée et l'API renvoie un avertissement : terminez l
 suppression depuis les réglages GitHub de l'App. Aucun secret n'est renvoyé dans
 la réponse et les runs suivants repassent au mode technique ou à « non
 connecté ». Déconnecter ne supprime aucun volume, run ou preuve.
-La migration SQL version 5 conserve comptes, sessions, runs et preuves.
+La migration SQL version 6 conserve comptes, sessions, runs et preuves ; elle ajoute
+l'état d'attente des tentatives automatiques et l'option `auto_run` par dépôt.
 
-Les livraisons de webhooks validées sont stockées en inbox SQL,
-dédupliquées ; le worker attend la preview jusqu'à `QA_PREVIEW_WAIT_SECONDS`, avec
-un nouvel essai toutes les 30 secondes. Les runs d'anciens SHA sont annulés.
+Les livraisons de webhooks validées sont stockées en inbox SQL et dédupliquées.
+L'attente de la preview du chemin automatique suit `QA_AUTO_PREVIEW_WAIT_SECONDS`
+et le backoff décrit plus bas ; `QA_PREVIEW_WAIT_SECONDS` garde son sens pour le
+chemin manuel/legacy. Les runs d'anciens SHA sont annulés.
 Les livraisons distinctes d'un même dépôt/PR/SHA partagent une seule entrée
 d'inbox et un seul run automatique, y compris si un job historique utilise une
 clé par delivery. Un reopen du même SHA ne relance pas ses écritures navigateur.
@@ -251,7 +255,7 @@ La déduplication précède le quota ; les reruns explicites authentifiés reste
 possibles. Avec un budget de `QA_RUN_MAX_TOKENS` par run, la limite globale borne
 également le volume horaire de tokens des runs nouvellement admis.
 
-Un refus crée un audit `webhook.rate_limited` et une entrée d'inbox
+Un refus crée un audit `automatic.rate_limited` et une entrée d'inbox
 `rate_limited`, sans exécuter le modèle ni rejouer automatiquement la demande.
 Le diagnostic est consultable dans les logs worker et dans `qa_audit` ; un
 opérateur peut ajuster les limites après inspection de l'usage ou lancer un
@@ -259,6 +263,63 @@ run explicite. Les quotas ne limitent pas les jobs manuels déjà autorisés.
 
 Les drafts ne sont pas lancés automatiquement. Les erreurs de publication sont
 visibles, sans simulation de succès.
+
+### Cycle de vie d'une tentative automatique
+
+Un dépôt sélectionné est opt-in par défaut : `qa_github_repositories.auto_run`
+vaut `true` et se règle par dépôt dans la vue GitHub des réglages du dashboard.
+Un `pull_request` non brouillon (`opened`, `reopened`, `synchronize`,
+`ready_for_review`) sur un dépôt connecté et opt-in démarre donc le run sans
+opérateur. `GITHUB_ALLOWED_REPOS`, lorsqu'il est renseigné, reste un plafond
+serveur : un dépôt hors de cette liste n'est jamais automatique.
+
+La provenance exacte du SHA reste obligatoire. Tant qu'aucune preview ne prouve
+le SHA complet du head, la tentative reste en file et reprobe avec un backoff
+exponentiel de 30, 60, 120 puis 300 secondes. Elle est matérialisée par une ligne
+`qa_deliveries` par `(dépôt, PR, SHA)`, avec `status`, `attempts`, `reason`,
+`deadline_at` et `last_error`. La deadline est `QA_AUTO_PREVIEW_WAIT_SECONDS`
+(1800 s par défaut) après acceptation de la livraison. Chaque probe prend la
+propriété de sa livraison (`claim_token`, bail de 90 s) : promotion, expiration et
+replanification ne s'appliquent que si ce jeton est encore le sien, et une
+promotion est refusée si la deadline s'est fermée pendant la vérification de la
+preview. Les livraisons terminales (`processed`, `expired`, `rate_limited`,
+`auto_disabled`) sont purgées après 30 jours.
+
+Après la deadline, la tentative passe en `expired`, avec l'audit
+`automatic.preview_expired` et un log d'avertissement du worker. **Une tentative
+expirée n'est jamais rejouée automatiquement** : relancer explicitement depuis le
+dashboard ou pousser un nouveau commit.
+
+| État | Audit | Cause |
+| --- | --- | --- |
+| en attente | `automatic.preview_wait` | preview sans preuve du SHA complet |
+| `processed` | `automatic.promoted` | preview vérifiée, run réel créé |
+| `expired` | `automatic.preview_expired` | deadline `QA_AUTO_PREVIEW_WAIT_SECONDS` dépassée |
+| `rate_limited` | `automatic.rate_limited` | budgets horaires globaux/par dépôt |
+| `auto_disabled` | `automatic.disabled` | `QA_AUTO_RUNS=false` |
+| `auto_disabled` | `automatic.repo_disabled` | dépôt non opt-in |
+
+Une tentative n'est pas un job `qa_jobs` : aucun statut de run n'est inventé, le
+run réel n'est créé qu'une fois la preview vérifiée.
+
+`GET /dashboard/automatic` expose aux administrateurs, opérateurs et viewers
+ayant accès au dépôt les tentatives les plus récentes d'abord (50 au maximum),
+avec un résumé des tentatives en attente, expirées et rate-limitées. Les lignes
+`expired` et `rate_limited` restent visibles 24 heures ; les tentatives en attente
+sont comptées dans le résumé.
+
+Interrupteurs : `QA_AUTO_RUNS=false` désactive les runs automatiques de tout le
+déploiement (les tentatives sont enregistrées `auto_disabled`, audit
+`automatic.disabled`) sans retirer la connexion GitHub ; désactiver le run
+automatique de ce dépôt dans la vue GitHub des réglages le désactive pour ce seul
+dépôt. Dans les deux cas, le
+parcours manuel reste disponible : une URL de PR et une preview vérifiable
+continuent de fonctionner pour tout ce que l'automatisation a sauté.
+
+L'opérateur doit toujours fournir une preview joignable exposant le SHA complet
+(en-tête ou JSON selon `PREVIEW_SHA_PATH`), autoriser ses hôtes dans
+`PREVIEW_ALLOWED_HOSTS` et laisser GitHub livrer les webhooks sur une origine
+HTTPS publique. L'automatisation ne devine ni l'URL ni le SHA.
 
 Un PAT reste possible : lecture Contents/Deployments et écriture PR/statuses.
 Les Checks et l'upsert de commentaire Bot sont réservés au mode GitHub App.
@@ -293,49 +354,53 @@ refuse de recréer un administrateur quand un compte local existe déjà.
 
 ## Frontend : structure et diagnostic
 
-Le dashboard utilise des fichiers sources HTML/CSS et des modules TypeScript
-stricts dans `src/dashboard/`. Il partage les types de comptes, jobs et résultats
-avec le backend. Les réponses de préparation sont contrôlées côté serveur par
-les mêmes contrats. Aucun JavaScript applicatif n'est conservé dans une chaîne
-pour échapper au lint ou au contrôle de types.
+Le dashboard est une application **React 19 + Vite** dans le workspace
+[`apps/canary-pr-qa-ui`](../../apps/canary-pr-qa-ui) (`@usecanary/pr-qa-ui`) :
+composants, hooks, TypeScript strict, Tailwind v4, tests Vitest + Testing
+Library. Aucun JavaScript applicatif n'est conservé dans une chaîne et aucune
+écriture DOM impérative n'est admise.
 
 | Fichier | Responsabilité |
 | --- | --- |
-| `index.html`, `styles.css` | Structure accessible et styles adaptatifs |
-| `client.ts` | Initialisation des fonctionnalités |
-| `auth.ts` | Connexion locale/technique, bootstrap, expiration de session |
-| `github.ts` | Création, installation et sélection des dépôts de l'App |
-| `models.ts` | Catalogue et choix explicite du modèle |
-| `overview.ts`, `navigation.ts` | Actions d'accueil et navigation selon le rôle |
-| `runs.ts`, `results.ts` | Préflight, lancement, suivi SSE, assertions et vidéos |
-| `api.ts`, `contracts.ts`, `state.ts`, `dom.ts` | HTTP, erreurs, contrats, état et contrôles typés |
-| `presentation.ts` | Libellés, badges et chemins de preuves |
+| `src/api/client.ts` | HTTP, erreurs typées, événement d'expiration de session |
+| `src/api/schemas.ts`, `src/api/contracts.ts` | Schémas Zod et types du contrat HTTP |
+| `src/i18n.ts` | Textes français, libellés d'états, phases et messages d'erreur |
+| `src/app/*` | Session, espace de travail (statuts, modèles), navigation, coquille |
+| `src/views/*` | Connexion, accueil, nouveau test, historique et détail, réglages |
+| `src/components/ui/*` | Boutons, champs, tableaux, pastilles et notices |
 
-`scripts/dashboard-assets.mjs` compile le code navigateur avec esbuild, séparément
-du CLI Node. Le build intègre ces ressources au CLI autonome : aucun fichier
-statique à copier sur le VPS. `dashboard.ts` associe uniquement leurs URLs et
-leurs types MIME. Les scripts et styles sont servis sur `/dashboard/assets/`
-et la page applique une CSP sans `unsafe-inline`. Les ressources ne contiennent
-ni credentials ni données de comptes/runs.
+`apps/canary-pr-qa/scripts/ui-assets.mjs` lit le build Vite et l'embarque dans le
+CLI Node via le chargeur esbuild `?ui` : `dist/cli.js` reste autonome, aucun
+fichier statique à copier sur le VPS. `dashboard.ts` associe uniquement les URLs
+et les types MIME. Les scripts et styles sont servis sur `/dashboard/assets/` et
+la page applique une CSP sans `unsafe-inline` (donc pas d'attribut `style=` ni de
+`<style>` en ligne dans les composants). Les ressources ne contiennent ni
+credentials ni données de comptes/runs.
 
 Pour contribuer depuis un clone installé :
 
 ```bash
-pnpm --filter @usecanary/pr-qa compile
+pnpm --filter @usecanary/pr-qa-ui dev        # Vite + proxy API sur 127.0.0.1:8787
+pnpm --filter @usecanary/pr-qa-ui test       # composants (Vitest + Testing Library)
+pnpm --filter @usecanary/pr-qa-ui compile    # tsc --noEmit
+pnpm --filter @usecanary/pr-qa-ui build      # dist/ consommé par pr-qa
 pnpm --filter @usecanary/pr-qa test
 pnpm --filter @usecanary/pr-qa test:e2e
 pnpm --filter @usecanary/pr-qa build
-pnpm --filter @usecanary/pr-qa dev -- --help
 ```
 
-`dev` utilise le même build que la production, puis transmet les arguments au CLI ;
-relancer après une modification. Les source maps du module navigateur permettent
-de poser un point d'arrêt dans les fichiers TypeScript via les outils développeur.
-Inspecter Console et Réseau : une erreur HTTP présente sa référence de requête,
-les connexions SSE sont dans `/runs/<id>/events`. Les source maps du CLI existent
-aussi dans `dist/`. Pour les incidents de worker, utiliser le run ID du diagnostic
-et les commandes du guide d'exploitation. Les tests chargent réellement le CSS
-et vérifient les ressources, la CSP, les IDs du template et les parcours Chromium.
+`dev` du dashboard suppose le serveur PR QA démarré avec sa base (`pnpm --filter
+@usecanary/pr-qa dev -- serve`) : Vite proxifie l'API sur la même origine, ce qui
+préserve le cookie de session et le contrôle Origin/Host du serveur. `dev` du CLI
+embarque le dernier build du dashboard : relancer
+`pnpm --filter @usecanary/pr-qa-ui build` après une modification de l'interface.
+Les source maps (inline dans `client.js`) permettent de poser un point d'arrêt
+dans les fichiers TypeScript via les outils développeur. Inspecter Console et
+Réseau : une erreur HTTP présente sa référence de requête, les connexions SSE
+sont dans `/runs/<id>/events`. Les source maps du CLI existent aussi dans
+`dist/`. Pour les incidents de worker, utiliser le run ID du diagnostic et les
+commandes du guide d'exploitation. Les tests chargent réellement le CSS et
+vérifient les ressources, la CSP et les parcours Chromium.
 
 ## Premier usage du dashboard
 

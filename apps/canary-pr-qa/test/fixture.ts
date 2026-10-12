@@ -6,7 +6,11 @@ import {
 } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PGlite } from "@electric-sql/pglite";
+import pg from "pg";
+import { vi } from "vitest";
 import { loadConfig } from "../src/config.js";
+import { Queue } from "../src/queue.js";
 import type { Plan } from "../src/schema.js";
 
 export const SHA = "1".repeat(40);
@@ -80,6 +84,43 @@ export async function body(
 export function json(res: ServerResponse, value: unknown, status = 200) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(value));
+}
+/**
+ * Runs the production SQL of `Queue` on PostgreSQL WASM: migration, delivery
+ * state machine and queue helpers execute the real statements without a server.
+ * Multi-process row locking is covered separately on native PostgreSQL in CI.
+ */
+export async function pgliteQueue(cleanup: (() => Promise<void>)[]) {
+  const db = await PGlite.create();
+  cleanup.push(() => db.close());
+  const query = async (text: string, values?: unknown[]) => {
+    if (!values && text.includes("CREATE TABLE")) {
+      await db.exec(text);
+      return { rows: [], rowCount: 0 };
+    }
+    const result = await db.query(text, values);
+    return {
+      rows: result.rows,
+      rowCount: result.affectedRows ?? result.rows.length,
+    };
+  };
+  const pool = {
+    query,
+    connect: async () => ({ query, release: () => undefined }),
+    end: async () => undefined,
+    on: () => undefined,
+  };
+  vi.spyOn(pg, "Pool").mockImplementation(
+    class {
+      query = pool.query;
+      connect = pool.connect;
+      end = pool.end;
+      on = pool.on;
+    } as unknown as typeof pg.Pool
+  );
+  const queue = new Queue("postgres://fixture");
+  await queue.migrate();
+  return queue;
 }
 export async function fixture(
   options: {

@@ -1,0 +1,44 @@
+{
+  "name": "@usecanary/pr-qa-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "description": "Dashboard React du produit PR QA (Canary)",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "e2e": "playwright test",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist coverage .turbo"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.17.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.6.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@playwright/test": "1.58.2",
+    "@tailwindcss/vite": "^4.3.0",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "jsdom": "^30.1.2",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.3.5",
+    "vitest": "^4.1.0"
+  }
+}

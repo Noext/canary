@@ -127,6 +127,37 @@
       }
     },
     {
+      // PR QA dashboard (React 19 + Vite). Ultracite's framework-agnostic core
+      // preset never enables the React rules, so they are turned on for this app
+      // only: the rest of the repo is not a React codebase.
+      "includes": ["apps/canary-pr-qa-ui/**"],
+      // `useEffect` is banned in this app (see rules/no-useeffect.grit): work
+      // belongs in event handlers, derived values, or a store read through
+      // useSyncExternalStore. The rest of the repo either has no React code or
+      // keeps its existing effects, so the rule is scoped here on purpose.
+      "plugins": ["./rules/no-useeffect.grit"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noChildrenProp": "error",
+            "noNestedComponentDefinitions": "error",
+            "noReactPropAssignments": "error",
+            "noRenderReturnValue": "error",
+            "noVoidElementsWithChildren": "error",
+            "useExhaustiveDependencies": "error",
+            "useHookAtTopLevel": "error",
+            "useJsxKeyInIterable": "error"
+          },
+          "suspicious": {
+            "noArrayIndexKey": "error",
+            "noDuplicateJsxProps": "error",
+            "noReactForwardRef": "error"
+          },
+          "style": { "useReactFunctionComponents": "error" }
+        }
+      }
+    },
+    {
       // Astro viewer app. Its endpoints/server code may log diagnostics to the
       // terminal that spawned `canary ui` (no shared CLI stdout/stderr contract
       // like the other apps), and endpoint handlers are conventionally `async`

@@ -71,6 +71,29 @@ describe("validation and deterministic assertions", () => {
       validatePreviewUrl("https://user:pass@preview.test", config)
     ).toThrow();
   });
+  it("defaults automatic runs to on with a 1800 s preview wait, and keeps the manual wait", () => {
+    const config = loadConfig({ PREVIEW_ALLOWED_HOSTS: "preview.test" });
+    expect(config.autoRuns).toBe(true);
+    expect(config.QA_AUTO_PREVIEW_WAIT_SECONDS).toBe(1800);
+    expect(config.QA_PREVIEW_WAIT_SECONDS).toBe(900);
+    // Only the managed App connection sets `automaticRepos`; legacy mode leaves it unset.
+    expect("automaticRepos" in config).toBe(false);
+    const disabled = loadConfig({
+      PREVIEW_ALLOWED_HOSTS: "preview.test",
+      QA_AUTO_PREVIEW_WAIT_SECONDS: "60",
+      QA_AUTO_RUNS: "false",
+    });
+    expect(disabled.autoRuns).toBe(false);
+    expect(disabled.QA_AUTO_PREVIEW_WAIT_SECONDS).toBe(60);
+    for (const wait of ["59", "86401"]) {
+      expect(() =>
+        loadConfig({
+          PREVIEW_ALLOWED_HOSTS: "preview.test",
+          QA_AUTO_PREVIEW_WAIT_SECONDS: wait,
+        })
+      ).toThrow();
+    }
+  });
   it("rejects arbitrary code, duplicate assertions, zero-assertion scenarios", () => {
     expect(() =>
       DecisionSchema.parse({

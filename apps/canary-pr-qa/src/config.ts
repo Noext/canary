@@ -24,6 +24,13 @@ const envSchema = z.object({
     .min(30)
     .max(7200)
     .default(900),
+  QA_AUTO_RUNS: z.enum(["true", "false"]).default("true"),
+  QA_AUTO_PREVIEW_WAIT_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(86_400)
+    .default(1800),
   QA_BASELINE_URL_TEMPLATE: z.string().default(""),
   DATABASE_URL: z.string().default(""),
   QA_RUN_TIMEOUT_SECONDS: z.coerce
@@ -125,6 +132,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     allowedRepos: parsed.GITHUB_ALLOWED_REPOS.split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
+    autoRuns: parsed.QA_AUTO_RUNS === "true",
     allowedHosts: parsed.PREVIEW_ALLOWED_HOSTS.split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
@@ -133,6 +141,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
 export type Config = ReturnType<typeof loadConfig> & {
   githubPrivateKey?: string;
   githubInstallations?: Record<string, string>;
+  /**
+   * Repositories (lowercase `owner/repository`) whose pull requests may start a
+   * run without an operator. Present only when the dashboard-managed GitHub App
+   * is connected; `undefined` means every entry of `allowedRepos` is automatic,
+   * which keeps the legacy `GITHUB_TOKEN` + `GITHUB_ALLOWED_REPOS` setup working.
+   */
+  automaticRepos?: string[];
 };
 
 function validEndpoint(input: string, origin = false): boolean {

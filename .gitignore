@@ -23,6 +23,12 @@ qa-data/
 apps/canary-browser/src/assets/embedded.generated.ts
 packages/daemon-client/src/assets/embedded.generated.ts
 
+# Dashboard end-to-end harness: reports, traces and the throwaway admin credentials
+# it creates against a local fixture server.
+test-results/
+playwright-report/
+apps/canary-pr-qa-ui/e2e/.auth/
+
 # Operator-managed production identities, auth state and GitHub App keys.
 config/users.json
 config/fixtures.json
