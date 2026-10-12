@@ -107,6 +107,15 @@ Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the 
   réponse et le documenter dans la description de la PR.
 - Après avoir poussé les correctifs, demander une nouvelle revue (`@codex review`)
   pour que les corrections soient relues par le même relecteur.
+- **Trois tours de revue au maximum, pour toute PR.** Constater le tour de revue
+  initial comme le tour 1 et s'arrêter après le tour 3 : ne pas demander de
+  quatrième passe `@codex review`, même si des findings restent ouverts. Chaque
+  tour coûte une correction, une validation complète et une relecture ; au-delà
+  de trois, les findings résiduels sont triés dans le fil de la PR (finding, avis
+  argumenté, ce qui reste à faire) et la décision revient à l'humain, qui ouvre
+  au besoin une PR de suivi. Cette règle limite la boucle, elle n'autorise pas à
+  corriger un finding en silence : ce qui est corrigé reste annoncé dans son fil
+  avec son commit et sa preuve.
 
 ## Frontend PR QA : règles de contribution
 
