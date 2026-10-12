@@ -17,7 +17,7 @@ services:
     mem_limit: 1g
     cpus: 1
   pr-qa:
-    build:
+    build: &qa-build
       context: .
       dockerfile: Dockerfile.pr-qa
     image: ${QA_IMAGE:-canary-pr-qa:local}
@@ -53,6 +53,7 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
   worker:
+    build: *qa-build
     image: ${QA_IMAGE:-canary-pr-qa:local}
     command: [worker]
     env_file: ${QA_ENV_FILE:-.env}
@@ -76,6 +77,7 @@ services:
     cpus: 1
     logging: *logging
   browser:
+    build: *qa-build
     image: ${QA_IMAGE:-canary-pr-qa:local}
     command: [browser-service]
     environment:
@@ -105,6 +107,7 @@ services:
       retries: 3
     logging: *logging
   egress:
+    build: *qa-build
     image: ${QA_IMAGE:-canary-pr-qa:local}
     command: [egress-proxy]
     environment:
