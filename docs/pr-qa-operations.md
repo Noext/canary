@@ -74,8 +74,8 @@ Les logs portent run ID, request ID, phase/action, durée et diagnostics.
 | `/data/<run-id>/result.json` | Résultat agrégé, contrat, assertions, usage et publication |
 | `/data/<run-id>/report.html`, `report.md` | Rapport principal et liens vers les preuves |
 | Sous-dossiers de scénario | Vidéo WebM, trace ZIP, HAR, console, screenshots et rapport Canary natif |
-| PostgreSQL `qa_audit` | Accès, suppressions et refus de quota automatique |
-| PostgreSQL `qa_deliveries` | Inbox webhook, déduplication et attente de preview |
+| PostgreSQL `qa_audit` | Accès, suppressions, refus de quota automatique et actions `automatic.*` |
+| PostgreSQL `qa_deliveries` | Inbox webhook, déduplication, tentatives automatiques en attente/expirées |
 
 `job.json` concerne les jobs legacy sur disque : la file de production est en SQL.
 Les fichiers natifs `results.json` de chaque session ne sont pas le `result.json`
@@ -88,6 +88,74 @@ Les traces/HAR/logs et rapports natifs imbriqués sont refusés par défaut ; le
 rapport principal et ses vidéos/images sont accessibles selon les droits du projet.
 N'activer `QA_RAW_EVIDENCE=true` qu'après contrôle des données de test. Les chemins
 encodés sont normalisés avant la politique ; les encodages ambigus sont refusés.
+
+## Tentatives automatiques en attente ou expirées
+
+Un run automatique ne démarre que lorsque la preview prouve le SHA complet du
+head. Tant que ce n'est pas le cas, la tentative vit dans `qa_deliveries` et
+reprobe la preview avec un backoff de 30, 60, 120 puis 300 secondes. Au-delà de
+`QA_AUTO_PREVIEW_WAIT_SECONDS` (1800 s par défaut, plage 60-86400), elle passe en
+`expired` : elle n'est **pas** rejouée automatiquement.
+
+Délimiter les tentatives récentes :
+
+```bash
+docker compose exec -T db psql -U canary -d canary -c "
+SELECT payload->>'repo' AS repo, payload->>'number' AS pr, payload->>'sha' AS sha,
+       status, attempts, reason, deadline_at, last_error, retry_at, created_at
+FROM qa_deliveries
+WHERE status IN ('pending','expired','rate_limited','auto_disabled')
+ORDER BY created_at DESC LIMIT 20;"
+```
+
+`status` : `pending` (attente), `processed` (run créé ou livraison sans suite),
+`expired`, `rate_limited` (quota horaire), `auto_disabled` (global ou dépôt),
+`ignored` (événement hors du déclencheur automatique). `attempts` compte les
+probes, `reason` porte la cause courante, `last_error` le dernier échec ;
+`deadline_at` fixe la limite d'attente.
+
+Audits associés :
+
+```bash
+docker compose exec -T db psql -U canary -d canary -c "
+SELECT created_at, actor, action, details FROM qa_audit
+WHERE action LIKE 'automatic.%' ORDER BY created_at DESC LIMIT 50;"
+```
+
+| Action | Symptôme |
+| --- | --- |
+| `automatic.preview_wait` | preview encore sans preuve du SHA complet |
+| `automatic.preview_expired` | deadline dépassée, l'attente est terminée |
+| `automatic.promoted` | preview vérifiée, run réel créé |
+| `automatic.rate_limited` | budgets `QA_WEBHOOK_MAX_RUNS_PER_HOUR` / `QA_WEBHOOK_REPO_MAX_RUNS_PER_HOUR` atteints |
+| `automatic.disabled` | `QA_AUTO_RUNS=false` |
+| `automatic.repo_disabled` | dépôt non opt-in (`qa_github_repositories.auto_run=false`) |
+
+Logs : `docker compose logs --tail=200 worker` — l'expiration et chaque
+désactivation produisent un avertissement du worker (dépôt, PR, SHA) ; les
+webhooks eux-mêmes se lisent côté `pr-qa` (inbox SQL, `/github/webhook`). Le
+dashboard expose le même état avec `GET /dashboard/automatic` (tentatives des
+24 heures, résumé en attente/expirées/rate-limitées). Une tentative en attente
+n'a **pas** de ligne `qa_jobs` : le job n'existe qu'après vérification.
+
+Correctifs :
+
+- Preview absente au bon SHA : déployer une preview qui expose le SHA complet
+  (`PREVIEW_SHA_HEADER` ou `PREVIEW_SHA_PATH`), autoriser ses hôtes dans
+  `PREVIEW_ALLOWED_HOSTS` ; tant que `status='pending'` et la deadline non
+  atteinte, la tentative reprend seule.
+- Déploiement plus lent que la deadline : augmenter
+  `QA_AUTO_PREVIEW_WAIT_SECONDS` puis redémarrer le worker. Une ligne déjà
+  `expired` reste expirée : relancer explicitement depuis le dashboard ou pousser
+  un nouveau commit.
+- `auto_disabled` inattendu : vérifier `auto_run` du dépôt dans les réglages
+  GitHub du dashboard puis `QA_AUTO_RUNS`.
+- `rate_limited` : attendre la fenêtre glissante ou lancer un run explicite
+  autorisé ; ne pas modifier les limites sans inspecter l'usage.
+
+Ne jamais déclarer réussie une tentative expirée ni rejouer ses écritures : le run
+réel n'est créé qu'après vérification de la provenance, et un parcours manuel
+reste possible pour ce que l'automatisation a sauté.
 
 ## Erreurs et vérifications ciblées
 

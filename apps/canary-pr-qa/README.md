@@ -201,8 +201,10 @@ fournis par l'URL ne sont jamais utilisés comme preuve d'autorisation : les
 installations sont énumérées avec le JWT de l'App de cette instance.
 
 La sélection est explicite : aucune installation ne lance de QA avant d'avoir
-sélectionné les dépôts dans Canary. Si `GITHUB_ALLOWED_REPOS` est renseigné,
-l'accès effectif est l'intersection entre sélection UI et restriction serveur.
+sélectionné les dépôts dans Canary. Sélectionner un dépôt l'active par défaut
+pour les runs automatiques (`qa_github_repositories.auto_run`, réglable par dépôt
+dans la vue GitHub) ; si `GITHUB_ALLOWED_REPOS` est renseigné, l'accès effectif
+est l'intersection entre sélection UI et restriction serveur.
 L'accès admin suit cette sélection à chaque requête. Le worker synchronise les
 installations toutes les 60 secondes ; Actualiser applique immédiatement les
 retraits/suspensions. Une erreur réseau de synchronisation est journalisée et
@@ -232,11 +234,13 @@ locale est tout de même effacée et l'API renvoie un avertissement : terminez l
 suppression depuis les réglages GitHub de l'App. Aucun secret n'est renvoyé dans
 la réponse et les runs suivants repassent au mode technique ou à « non
 connecté ». Déconnecter ne supprime aucun volume, run ou preuve.
-La migration SQL version 5 conserve comptes, sessions, runs et preuves.
+La migration SQL version 6 conserve comptes, sessions, runs et preuves ; elle ajoute
+l'état d'attente des tentatives automatiques et l'option `auto_run` par dépôt.
 
-Les livraisons de webhooks validées sont stockées en inbox SQL,
-dédupliquées ; le worker attend la preview jusqu'à `QA_PREVIEW_WAIT_SECONDS`, avec
-un nouvel essai toutes les 30 secondes. Les runs d'anciens SHA sont annulés.
+Les livraisons de webhooks validées sont stockées en inbox SQL et dédupliquées.
+L'attente de la preview du chemin automatique suit `QA_AUTO_PREVIEW_WAIT_SECONDS`
+et le backoff décrit plus bas ; `QA_PREVIEW_WAIT_SECONDS` garde son sens pour le
+chemin manuel/legacy. Les runs d'anciens SHA sont annulés.
 Les livraisons distinctes d'un même dépôt/PR/SHA partagent une seule entrée
 d'inbox et un seul run automatique, y compris si un job historique utilise une
 clé par delivery. Un reopen du même SHA ne relance pas ses écritures navigateur.
@@ -251,7 +255,7 @@ La déduplication précède le quota ; les reruns explicites authentifiés reste
 possibles. Avec un budget de `QA_RUN_MAX_TOKENS` par run, la limite globale borne
 également le volume horaire de tokens des runs nouvellement admis.
 
-Un refus crée un audit `webhook.rate_limited` et une entrée d'inbox
+Un refus crée un audit `automatic.rate_limited` et une entrée d'inbox
 `rate_limited`, sans exécuter le modèle ni rejouer automatiquement la demande.
 Le diagnostic est consultable dans les logs worker et dans `qa_audit` ; un
 opérateur peut ajuster les limites après inspection de l'usage ou lancer un
@@ -259,6 +263,58 @@ run explicite. Les quotas ne limitent pas les jobs manuels déjà autorisés.
 
 Les drafts ne sont pas lancés automatiquement. Les erreurs de publication sont
 visibles, sans simulation de succès.
+
+### Cycle de vie d'une tentative automatique
+
+Un dépôt sélectionné est opt-in par défaut : `qa_github_repositories.auto_run`
+vaut `true` et se règle par dépôt dans la vue GitHub des réglages du dashboard.
+Un `pull_request` non brouillon (`opened`, `reopened`, `synchronize`,
+`ready_for_review`) sur un dépôt connecté et opt-in démarre donc le run sans
+opérateur. `GITHUB_ALLOWED_REPOS`, lorsqu'il est renseigné, reste un plafond
+serveur : un dépôt hors de cette liste n'est jamais automatique.
+
+La provenance exacte du SHA reste obligatoire. Tant qu'aucune preview ne prouve
+le SHA complet du head, la tentative reste en file et reprobe avec un backoff
+exponentiel de 30, 60, 120 puis 300 secondes. Elle est matérialisée par une ligne
+`qa_deliveries` par `(dépôt, PR, SHA)`, avec `status`, `attempts`, `reason`,
+`deadline_at` et `last_error`. La deadline est `QA_AUTO_PREVIEW_WAIT_SECONDS`
+(1800 s par défaut) après acceptation de la livraison.
+
+Après la deadline, la tentative passe en `expired`, avec l'audit
+`automatic.preview_expired` et un log d'avertissement du worker. **Une tentative
+expirée n'est jamais rejouée automatiquement** : relancer explicitement depuis le
+dashboard ou pousser un nouveau commit.
+
+| État | Audit | Cause |
+| --- | --- | --- |
+| en attente | `automatic.preview_wait` | preview sans preuve du SHA complet |
+| `processed` | `automatic.promoted` | preview vérifiée, run réel créé |
+| `expired` | `automatic.preview_expired` | deadline `QA_AUTO_PREVIEW_WAIT_SECONDS` dépassée |
+| `rate_limited` | `automatic.rate_limited` | budgets horaires globaux/par dépôt |
+| `auto_disabled` | `automatic.disabled` | `QA_AUTO_RUNS=false` |
+| `auto_disabled` | `automatic.repo_disabled` | dépôt non opt-in |
+
+Une tentative n'est pas un job `qa_jobs` : aucun statut de run n'est inventé, le
+run réel n'est créé qu'une fois la preview vérifiée.
+
+`GET /dashboard/automatic` expose aux administrateurs, opérateurs et viewers
+ayant accès au dépôt les tentatives les plus récentes d'abord (50 au maximum),
+avec un résumé des tentatives en attente, expirées et rate-limitées. Les lignes
+`expired` et `rate_limited` restent visibles 24 heures ; les tentatives en attente
+sont comptées dans le résumé.
+
+Interrupteurs : `QA_AUTO_RUNS=false` désactive les runs automatiques de tout le
+déploiement (les tentatives sont enregistrées `auto_disabled`, audit
+`automatic.disabled`) sans retirer la connexion GitHub ; désactiver le run
+automatique de ce dépôt dans la vue GitHub des réglages le désactive pour ce seul
+dépôt. Dans les deux cas, le
+parcours manuel reste disponible : une URL de PR et une preview vérifiable
+continuent de fonctionner pour tout ce que l'automatisation a sauté.
+
+L'opérateur doit toujours fournir une preview joignable exposant le SHA complet
+(en-tête ou JSON selon `PREVIEW_SHA_PATH`), autoriser ses hôtes dans
+`PREVIEW_ALLOWED_HOSTS` et laisser GitHub livrer les webhooks sur une origine
+HTTPS publique. L'automatisation ne devine ni l'URL ni le SHA.
 
 Un PAT reste possible : lecture Contents/Deployments et écriture PR/statuses.
 Les Checks et l'upsert de commentaire Bot sont réservés au mode GitHub App.
