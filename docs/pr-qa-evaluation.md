@@ -8,7 +8,7 @@ Le plan et les décisions sont produits par **l'endpoint IA configuré**, jamais
 par le modèle de fixture des tests d'orchestration.
 
 ```bash
-QA_EVAL_LIVE=true QA_EVAL_MODELS=model-a,model-b QA_EVAL_REPEATS=3 \
+QA_EVAL_LIVE=true QA_EVAL_MODELS=opencode-go/deepseek-v4.1-flash QA_EVAL_REPEATS=3 \
   pnpm --filter @usecanary/pr-qa exec tsx scripts/evaluate.ts
 ```
 
@@ -31,5 +31,6 @@ comptes/données de test configurés. `publish=false` évite les commentaires/st
 GitHub pendant l'évaluation. Les interactions navigateur et fixtures restent réelles.
 
 Ce petit corpus est un gate initial, pas un benchmark exhaustif ou une garantie
-qu'une QA autonome peut remplacer toutes les suites de tests. Aucune qualité IA
-réelle n'est affirmée tant que ce corpus n'a pas été exécuté avec vos modèles.
+qu'une QA autonome peut remplacer toutes les suites de tests. Les résultats d'un essai sont documentés dans la PR ; ils ne garantissent pas les
+performances sur vos applications. Le modèle par défaut est
+`opencode-go/deepseek-v4.1-flash` ; aucun autre modèle n'est choisi automatiquement.

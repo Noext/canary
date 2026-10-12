@@ -13,12 +13,13 @@ export interface RunScope {
   verifyOwnership?: () => Promise<void>;
 }
 export const runScope = new AsyncLocalStorage<RunScope>();
-export function checkBudget(reserveTokens = 0) {
+export function checkBudget(reserveTokens = 0, reserveCostUsd = 0) {
   const scope = runScope.getStore();
   scope?.signal.throwIfAborted();
   if (
     scope &&
     (scope.tokens + reserveTokens > scope.maxTokens ||
+      scope.costUsd + reserveCostUsd > scope.maxCostUsd ||
       scope.costUsd >= scope.maxCostUsd)
   ) {
     throw new QaError(

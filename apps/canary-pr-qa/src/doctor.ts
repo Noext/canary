@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
+  rm,
   stat,
   statfs,
   unlink,
@@ -172,10 +173,12 @@ console.log("CANARY_PR_QA_OBSERVATION:" + JSON.stringify({ url: page.url(), snap
           );
         }
         const files = await canary.end(session, destination);
-        return `Real Chromium form assertion passed; ${files.length} evidence files at ${destination}`;
+        return `Real Chromium form assertion passed; ${files.length} evidence files verified and temporary captures removed`;
       } catch (error) {
         await canary.abort(session);
         throw error;
+      } finally {
+        await rm(destination, { recursive: true, force: true });
       }
     });
   }

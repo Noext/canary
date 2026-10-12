@@ -359,24 +359,37 @@ export class GitHub {
     );
   }
 
-  async comment(context: PrContext, body: string): Promise<string> {
-    const marker = "<!-- canary-pr-qa -->";
-    const comments = z
-      .array(
-        z.object({
-          id: z.number(),
-          body: z.string(),
-          user: z.object({ type: z.string() }).optional(),
-        })
-      )
-      .parse(
+  private async findBotComment(context: PrContext, marker: string) {
+    const schema = z.array(
+      z.object({
+        id: z.number(),
+        body: z.string(),
+        user: z.object({ type: z.string() }).optional(),
+      })
+    );
+    for (let page = 1; page <= 100; page++) {
+      const comments = schema.parse(
         await this.request(
-          `/repos/${context.ref.repo}/issues/${context.ref.number}/comments?per_page=100`
+          `/repos/${context.ref.repo}/issues/${context.ref.number}/comments?per_page=100&page=${page}`
         )
       );
-    const existing = comments.find(
-      (c) => c.body.startsWith(marker) && c.user?.type === "Bot"
+      const existing = comments.find(
+        (c) => c.body.startsWith(marker) && c.user?.type === "Bot"
+      );
+      if (existing) {
+        return existing;
+      }
+      if (comments.length < 100) {
+        return;
+      }
+    }
+    throw new Error(
+      "Comment history exceeds 100 pages; refusing to create a duplicate report"
     );
+  }
+  async comment(context: PrContext, body: string): Promise<string> {
+    const marker = "<!-- canary-pr-qa -->";
+    const existing = await this.findBotComment(context, marker);
     const result = z
       .object({ html_url: z.string().url() })
       .parse(

@@ -33,7 +33,7 @@ import {
 } from "./model-catalog.js";
 import { type Job, Queue } from "./queue.js";
 import { purgeRun } from "./retention.js";
-import { serveArtifact } from "./server.js";
+import { canonicalArtifactPath, serveArtifact } from "./server.js";
 import {
   durableCost,
   durableRuns,
@@ -201,9 +201,10 @@ export async function startProductionServer(config: Config) {
     res: ServerResponse,
     url: URL,
     id: string,
-    path: string,
+    rawPath: string,
     user?: Principal
   ) {
+    const path = canonicalArtifactPath(rawPath);
     const job = await queue.get(id);
     if (!job) {
       throw new Error("Run not found");
@@ -284,9 +285,7 @@ export async function startProductionServer(config: Config) {
       .object({ path: z.string().regex(/^[\w./-]+$/) })
       .strict()
       .parse(JSON.parse((await rawBody(req)).toString()));
-    if (value.path.includes("..")) {
-      throw new Error("Invalid path");
-    }
+    value.path = canonicalArtifactPath(value.path);
     await queue.audit(user.id, "artifact.share", id, { path: value.path });
     json(res, 200, {
       url: signedArtifact(id, value.path, config),

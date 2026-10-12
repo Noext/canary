@@ -195,12 +195,13 @@ export class Queue {
     usage: unknown = {}
   ) {
     const result = await this.pool.query(
-      "UPDATE qa_jobs SET status=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'completed' END,outcome=$3,error=$4,usage=$5,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' AND lease_until>now() RETURNING id",
+      "UPDATE qa_jobs SET status=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'completed' END,outcome=CASE WHEN cancel_requested THEN 'blocked' ELSE $3 END,error=CASE WHEN cancel_requested THEN 'Run cancelled during completion' ELSE $4 END,usage=$5,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker=$2 AND status='running' AND lease_until>now() RETURNING status",
       [id, worker, outcome, error ?? null, JSON.stringify(usage)]
     );
     if (!result.rowCount) {
       throw new Error("Worker lost job ownership; completion rejected");
     }
+    return result.rows[0].status as string;
   }
   async cancel(id: string, actor: string) {
     await this.pool.query(

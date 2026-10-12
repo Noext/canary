@@ -102,6 +102,19 @@ async function readStatus(config: Config, id: string) {
   }
 }
 
+export function canonicalArtifactPath(raw: string) {
+  if (/%(?:2f|5c|00)/i.test(raw)) {
+    throw new Error("Ambiguous artifact path");
+  }
+  const path = decodeURIComponent(raw);
+  if (
+    !/^[\w./-]+$/.test(path) ||
+    path.split("/").some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("Invalid artifact path");
+  }
+  return path;
+}
 export async function serveArtifact(
   res: ServerResponse,
   config: Config,
@@ -109,7 +122,7 @@ export async function serveArtifact(
   artifactPath: string
 ) {
   const root = resolve(config.QA_DATA_DIR, id);
-  const path = resolve(root, decodeURIComponent(artifactPath));
+  const path = resolve(root, artifactPath);
   if (
     relative(root, path).startsWith("..") ||
     ![
@@ -354,7 +367,12 @@ export async function startServer(config: Config) {
       return;
     }
     if (req.method === "GET" && artifact?.[1] && artifact[2]) {
-      await serveArtifact(res, config, artifact[1], artifact[2]);
+      await serveArtifact(
+        res,
+        config,
+        artifact[1],
+        canonicalArtifactPath(artifact[2])
+      );
       return;
     }
     send(res, 404, { error: "Not found" });

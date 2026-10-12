@@ -1,12 +1,14 @@
 import { createHash, createHmac } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { afterEach, expect, it, vi } from "vitest";
+import { completeRun } from "../src/completion.js";
 import { doctor } from "../src/doctor.js";
 import { startProductionServer } from "../src/production-server.js";
 import { Queue, SCHEMA_VERSION } from "../src/queue.js";
+import type { RunResult } from "../src/schema.js";
 import { processDelivery } from "../src/webhook-inbox.js";
 import { BASE_SHA, fixture, PR_URL, SHA } from "./fixture.js";
 
@@ -199,6 +201,31 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
     ).status
   ).toBe(200);
   expect((await q.get(run.id))?.status).toBe("cancelled");
+  const captureRoot = join(f.dataDir, run.id, "scenario");
+  await mkdir(captureRoot, { recursive: true });
+  await writeFile(join(captureRoot, "trace.zip"), "private trace test data");
+  for (const path of [
+    "scenario/trace.zip",
+    "scenario/trace.%7aip",
+    "scenario/trace%2ezip",
+  ]) {
+    expect(
+      (
+        await fetch(`${url}/artifacts/${run.id}/${path}`, {
+          headers: mixedCaseHeaders,
+        })
+      ).status
+    ).toBe(403);
+  }
+  for (const path of ["scenario/trace.%257aip", "scenario%2ftrace.zip"]) {
+    expect(
+      (
+        await fetch(`${url}/artifacts/${run.id}/${path}`, {
+          headers: mixedCaseHeaders,
+        })
+      ).status
+    ).toBe(400);
+  }
   expect((await fetch(`${url}/models`)).status).toBe(401);
   expect(
     (await fetch(`${url}/models`, { headers: mixedCaseHeaders })).status
@@ -456,4 +483,45 @@ it("keeps doctor aligned with the actual migration version and rejects older sch
     status: "failed",
     message: expect.stringContaining(`supported version ${SCHEMA_VERSION}`),
   });
+}, 30_000);
+
+it("invalidates an already published result when cancellation wins the atomic completion", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  const job = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "cancel-after-publication"
+  );
+  await q.claim("worker");
+  const result: RunResult = {
+    id: job.id,
+    prUrl: PR_URL,
+    sha: SHA,
+    startedAt: "now",
+    outcome: "passed",
+    scenarios: [],
+    publication: { commentUrl: PR_URL, status: "success" },
+  };
+  await q.cancel(job.id, "admin");
+  await completeRun(q, job.id, "worker", result, f.config);
+  expect(await q.get(job.id)).toMatchObject({
+    status: "cancelled",
+    outcome: "blocked",
+  });
+  expect(result.outcome).toBe("blocked");
+  expect(f.outgoing.find((item) => item.payload.state)?.payload.state).toBe(
+    "error"
+  );
+  expect(
+    f.outgoing.find((item) => item.path.endsWith("/comments"))?.payload.body
+  ).toContain("BLOCKED");
+  expect(
+    JSON.parse(await readFile(join(f.dataDir, job.id, "result.json"), "utf8"))
+      .outcome
+  ).toBe("blocked");
 }, 30_000);

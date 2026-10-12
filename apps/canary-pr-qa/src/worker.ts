@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { createLogger } from "@usecanary/logger";
+import { completeRun } from "./completion.js";
 import type { Config } from "./config.js";
 import { diagnose } from "./diagnostics.js";
 import { Queue } from "./queue.js";
@@ -86,13 +87,7 @@ export async function startWorker(
           },
           () => runQa({ ...job.input, id: job.id }, config)
         );
-        await queue.complete(
-          job.id,
-          worker,
-          result.outcome,
-          result.error,
-          result.usage
-        );
+        await completeRun(queue, job.id, worker, result, config);
       } catch (error) {
         logger.error(
           { runId: job.id, diagnostic: diagnose(error, config) },

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import net from "node:net";
 import { join } from "node:path";
@@ -36,6 +36,7 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
       []
     );
     expect(f.outgoing).toEqual([]);
+    expect(await readdir(join(f.dataDir, "_doctor"))).toEqual([]);
     expect(JSON.stringify(result)).not.toContain(f.config.GITHUB_TOKEN);
   }, 180_000);
   it("plays the form test, records video/trace/screenshots and publishes passed results", async () => {
@@ -163,6 +164,32 @@ it("rejects static matching output as transition evidence in actual Chromium", a
   );
   expect(result.outcome, result.scenarios[0]?.error).toBe("failed");
   expect(result.scenarios[0]?.assertions[0]).toMatchObject({
+    baseline: "Welcome Ada",
+    actual: "Welcome Ada",
+    passed: false,
+  });
+  const differentName = structuredClone(plan.scenarios[0]!);
+  differentName.id = "unchanged-grace";
+  const enter = differentName.steps[0]!.action;
+  if (enter.type !== "fill") {
+    throw new Error("Expected form input");
+  }
+  enter.value = "Grace";
+  const assertion = differentName.assertions[0]!;
+  if (assertion.kind !== "text") {
+    throw new Error("Expected text assertion");
+  }
+  assertion.expected = "Welcome Grace";
+  const alternate = await executeScenario(
+    differentName,
+    f.baseUrl,
+    f.dataDir,
+    f.config,
+    new Canary(f.config),
+    new Model(f.config)
+  );
+  expect(alternate.outcome, alternate.error).toBe("failed");
+  expect(alternate.assertions[0]).toMatchObject({
     baseline: "Welcome Ada",
     actual: "Welcome Ada",
     passed: false,
