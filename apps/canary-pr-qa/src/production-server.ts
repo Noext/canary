@@ -184,11 +184,8 @@ export async function startProductionServer(config: Config) {
         return;
       }
     }
-    const saved = await queue.pool.query(
-      "INSERT INTO qa_deliveries(id,event,payload) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id",
-      [delivery, event, JSON.stringify(record)]
-    );
-    json(res, 202, { accepted: true, duplicate: saved.rowCount === 0 });
+    const saved = await queue.acceptDelivery(delivery, event, record);
+    json(res, 202, { accepted: true, duplicate: !saved });
   }
   async function artifact(
     _req: IncomingMessage,

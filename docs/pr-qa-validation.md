@@ -101,3 +101,27 @@ du WebM après une navigation depuis un autre site et un clic sur les contrôles
 le refus d'un script injecté et le refus d'une mutation cross-site. Le test OTLP
 force uniquement son sampler de fixture pour ignorer le taux de sampling du poste. Le résultat
 de la CI du commit final est consigné dans la PR.
+
+## Correctifs après revue Codex — 12 octobre 2026
+
+Les quatre findings sur `3e12031` ont été reproduits avant correction : cinq
+assertions de régression échouaient (publication, réponse de commentaire perdue,
+filtre de dépôt, proxy WS et deliveries distinctes du même SHA).
+
+Le statut GitHub précède désormais le commentaire ; une réponse de commentaire
+perdue déclenche une réparation du commentaire Bot. Les filtres SQL normalisent
+la casse. Les upgrades WS/WSS conservent les contrôles DNS/IP et utilisent TLS
+avec l'hôte d'origine pour WSS. Inbox et queue dédupliquent par dépôt/PR/SHA.
+Des limites horaires SQL partagées par les workers bornent les runs automatiques
+(60 par déploiement, 20 par dépôt par défaut), avec audit des refus et reruns
+explicites disponibles.
+
+Les 28 tests ciblés passent localement, avec un échange réseau WS et une
+connexion TLS WSS réelle utilisant uniquement une CA de fixture. La suite native
+PostgreSQL vérifie 12 livraisons concurrentes, 12 tentatives du même run et
+12 dépassements concurrents du quota ; son exécution distante et la CI du commit
+correctif sont documentées dans la PR, après lecture des résultats.
+
+Après installation des archives officielles Chromium/ffmpeg attendues par
+Playwright, `pnpm check` passe localement : 306 tests, avec les deux tests
+PostgreSQL natif ignorés faute de serveur local. TypeScript et lint passent.

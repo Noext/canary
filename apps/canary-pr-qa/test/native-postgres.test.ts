@@ -66,3 +66,66 @@ describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
     }, 60_000);
   }
 );
+
+describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
+  "native PostgreSQL webhook contention",
+  () => {
+    it("admits one inbox row and one automatic run per SHA, enforcing repository budget atomically", async () => {
+      const q = new Queue(process.env.QA_TEST_DATABASE_URL!);
+      await q.migrate();
+      const repo = `test/webhook-${randomUUID()}`;
+      const payload = { repo, number: 1, sha: SHA };
+      const limits = { global: 10_000, repository: 1 };
+      try {
+        const accepted = await Promise.all(
+          Array.from({ length: 12 }, (_, index) =>
+            q.acceptDelivery(`${repo}-${index}`, "pull_request", payload)
+          )
+        );
+        expect(accepted.filter(Boolean)).toHaveLength(1);
+        const jobs = await Promise.all(
+          Array.from({ length: 12 }, (_, index) =>
+            q.enqueue(
+              repo,
+              1,
+              SHA,
+              "github-app",
+              { prUrl: PR_URL },
+              `webhook:${repo}:delivery-${index}`,
+              limits
+            )
+          )
+        );
+        expect(new Set(jobs.map((job) => job.id)).size).toBe(1);
+        const rejected = await Promise.allSettled(
+          Array.from({ length: 12 }, (_, index) =>
+            q.enqueue(
+              repo,
+              index + 2,
+              SHA,
+              "github-app",
+              { prUrl: PR_URL },
+              `webhook:${repo}:other-pr-${index}`,
+              limits
+            )
+          )
+        );
+        expect(
+          rejected.every(
+            (result) =>
+              result.status === "rejected" &&
+              result.reason.code === "WEBHOOK_RATE_LIMIT"
+          )
+        ).toBe(true);
+        expect(await q.list([repo.toUpperCase()])).toHaveLength(1);
+      } finally {
+        await q.pool.query(
+          "DELETE FROM qa_deliveries WHERE payload->>'repo'=$1",
+          [repo]
+        );
+        await q.pool.query("DELETE FROM qa_jobs WHERE repo=$1", [repo]);
+        await q.close();
+      }
+    }, 60_000);
+  }
+);

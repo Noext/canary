@@ -1,6 +1,8 @@
 import dns from "node:dns/promises";
 import { createServer, request } from "node:http";
-import { connect, type Socket } from "node:net";
+import { request as secureRequest } from "node:https";
+import { connect, isIP, type Socket } from "node:net";
+import tls from "node:tls";
 import { createLogger } from "@usecanary/logger";
 import {
   metadataAddress,
@@ -21,7 +23,7 @@ function denied(error: unknown) {
 async function target(input: string, config: Config) {
   const url = new URL(input);
   if (
-    !["http:", "https:"].includes(url.protocol) ||
+    !["http:", "https:", "ws:", "wss:"].includes(url.protocol) ||
     url.username ||
     url.password ||
     !config.allowedHosts.includes(url.host.toLowerCase())
@@ -48,6 +50,22 @@ async function target(input: string, config: Config) {
   }
   return { url, address };
 }
+function secureTarget(url: URL) {
+  return url.protocol === "https:" || url.protocol === "wss:";
+}
+function targetPort(url: URL) {
+  return Number(url.port || (secureTarget(url) ? 443 : 80));
+}
+function connectTarget(url: URL, address: string, ready: () => void): Socket {
+  const options = { host: address, port: targetPort(url) };
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  return secureTarget(url)
+    ? tls.connect(
+        { ...options, ...(isIP(hostname) ? {} : { servername: hostname }) },
+        ready
+      )
+    : connect(options, ready);
+}
 export async function startEgressProxy(config: Config) {
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
@@ -57,10 +75,13 @@ export async function startEgressProxy(config: Config) {
     }
     void target(req.url ?? "", config)
       .then(({ url, address }) => {
-        const upstream = request(
+        const upstream = (secureTarget(url) ? secureRequest : request)(
           {
             hostname: address,
-            port: url.port || 80,
+            port: targetPort(url),
+            ...(secureTarget(url)
+              ? { servername: url.hostname.replace(/^\[|\]$/g, "") }
+              : {}),
             path: url.pathname + url.search,
             method: req.method,
             headers: {
@@ -119,19 +140,16 @@ export async function startEgressProxy(config: Config) {
   server.on("upgrade", (req, socket, head) => {
     void target(req.url ?? "", config)
       .then(({ url, address }) => {
-        const upstream = connect(
-          { host: address, port: Number(url.port || 80) },
-          () => {
-            upstream.write(
-              `${req.method} ${url.pathname + url.search} HTTP/1.1\r\n${req.rawHeaders.reduce((headers, value, index) => headers + (index % 2 ? `${value}\r\n` : `${value}: `), "")}\r\n`
-            );
-            if (head.length) {
-              upstream.write(head);
-            }
-            socket.pipe(upstream);
-            upstream.pipe(socket);
+        const upstream = connectTarget(url, address, () => {
+          upstream.write(
+            `${req.method} ${url.pathname + url.search} HTTP/1.1\r\n${req.rawHeaders.reduce((headers, value, index) => headers + (index % 2 ? `${value}\r\n` : `${value}: `), "")}\r\n`
+          );
+          if (head.length) {
+            upstream.write(head);
           }
-        );
+          socket.pipe(upstream);
+          upstream.pipe(socket);
+        });
         tunnel(socket as Socket, upstream);
       })
       .catch((error) => {

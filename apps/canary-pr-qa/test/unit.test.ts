@@ -211,7 +211,10 @@ describe("runner false-green regressions", () => {
     );
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("CONTEXT_INCOMPLETE");
-    expect(f.outgoing.at(-1)?.payload.state).toBe("error");
+    expect(
+      f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+        .state
+    ).toBe("error");
     expect(result.scenarios).toEqual([]);
   });
   it("blocks self-declared success without executing planned assertions", async () => {
@@ -225,7 +228,10 @@ describe("runner false-green regressions", () => {
     expect(result.scenarios[0]?.error).toContain(
       "before all planned assertions"
     );
-    expect(f.outgoing.at(-1)?.payload.state).toBe("error");
+    expect(
+      f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+        .state
+    ).toBe("error");
   });
   it("marks updated PR heads stale rather than posting success", async () => {
     const f = await setup({ updatedSha: true });
@@ -235,7 +241,10 @@ describe("runner false-green regressions", () => {
       f.config
     );
     expect(result.outcome).toBe("stale");
-    expect(f.outgoing.at(-1)?.payload.state).toBe("error");
+    expect(
+      f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+        .state
+    ).toBe("error");
   });
   it("does not greenlight skipped-only plans", async () => {
     const f = await setup({ noScenarios: true });
@@ -246,7 +255,10 @@ describe("runner false-green regressions", () => {
     );
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("CRITICAL_COVERAGE_MISSING");
-    expect(f.outgoing.at(-1)?.payload.state).toBe("error");
+    expect(
+      f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+        .state
+    ).toBe("error");
     expect(
       (await stat(join(f.dataDir, result.id, "report.html"))).size
     ).toBeGreaterThan(0);
@@ -298,6 +310,67 @@ it("closes an interrupted pinned GitHub check without publishing success", async
     "pending",
     "error",
   ]);
+});
+it("never publishes a passing comment when the final GitHub status fails", async () => {
+  const f = await setup();
+  fakeBrowser();
+  const status = GitHub.prototype.status;
+  vi.spyOn(GitHub.prototype, "status").mockImplementation(async function (
+    this: GitHub,
+    ...args
+  ) {
+    if (args[1] === "success") {
+      throw new Error("Status API unavailable");
+    }
+    return await status.apply(this, args);
+  });
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  expect(result.scenarios[0]?.outcome).toBe("passed");
+  expect(result.outcome).toBe("blocked");
+  expect(
+    f.outgoing.some((r) => String(r.payload.body).includes("Result: PASSED"))
+  ).toBe(false);
+  expect(
+    f.outgoing.filter((request) => request.payload.state).at(-1)?.payload.state
+  ).toBe("error");
+  expect(
+    JSON.parse(
+      await readFile(join(f.dataDir, result.id, "result.json"), "utf8")
+    ).outcome
+  ).toBe("blocked");
+});
+it("repairs a passing comment when GitHub wrote it but its response was lost", async () => {
+  const f = await setup();
+  fakeBrowser();
+  const comment = GitHub.prototype.comment;
+  let first = true;
+  vi.spyOn(GitHub.prototype, "comment").mockImplementation(async function (
+    this: GitHub,
+    ...args
+  ) {
+    const url = await comment.apply(this, args);
+    if (first) {
+      first = false;
+      throw new Error("Comment response lost");
+    }
+    return url;
+  });
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  expect(result.outcome).toBe("blocked");
+  const comments = f.outgoing.filter((r) => r.payload.body);
+  expect(comments.at(-1)?.payload.body).toContain("Result: BLOCKED");
+  expect(result.publication?.status).toBe("error");
+  const remoteComments = (await (
+    await fetch(`${f.baseUrl}/repos/fixture/app/issues/1/comments?per_page=100`)
+  ).json()) as { body: string }[];
+  expect(remoteComments).toHaveLength(1);
+  expect(remoteComments[0]!.body).toContain("Result: BLOCKED");
 });
 it("rejects publication when worker ownership cannot be verified, even after passing assertions", async () => {
   const f = await setup();

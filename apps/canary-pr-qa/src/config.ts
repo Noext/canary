@@ -5,6 +5,18 @@ import { QaError } from "./diagnostics.js";
 
 const envSchema = z.object({
   QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
+  QA_WEBHOOK_MAX_RUNS_PER_HOUR: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10_000)
+    .default(60),
+  QA_WEBHOOK_REPO_MAX_RUNS_PER_HOUR: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10_000)
+    .default(20),
   QA_PREVIEW_WAIT_SECONDS: z.coerce
     .number()
     .int()

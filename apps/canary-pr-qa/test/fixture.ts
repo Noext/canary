@@ -99,6 +99,7 @@ export async function fixture(
   } = {}
 ) {
   const outgoing: { path: string; payload: Record<string, unknown> }[] = [];
+  const comments: { id: number; body: string; user: { type: string } }[] = [];
   const modelRequests: Record<string, unknown>[] = [];
 
   let prReads = 0;
@@ -260,7 +261,24 @@ export async function fixture(
       return;
     }
     if (req.method === "GET" && path.includes("/comments?")) {
-      json(res, []);
+      json(res, comments);
+      return;
+    }
+    if (
+      req.method === "PATCH" &&
+      path.startsWith("/repos/fixture/app/issues/comments/")
+    ) {
+      const payload = await body(req);
+      const comment = comments.find(
+        (item) => item.id === Number(path.split("/").at(-1))
+      );
+      if (!comment) {
+        json(res, { error: "Comment not found" }, 404);
+        return;
+      }
+      comment.body = String(payload.body);
+      outgoing.push({ path, payload });
+      json(res, { html_url: `${PR_URL}#issuecomment-${comment.id}` });
       return;
     }
     if (
@@ -268,6 +286,13 @@ export async function fixture(
       (path.includes("/statuses/") || path.endsWith("/comments"))
     ) {
       outgoing.push({ path, payload: await body(req) });
+      if (path.endsWith("/comments")) {
+        comments.push({
+          id: comments.length + 1,
+          body: String(outgoing.at(-1)!.payload.body),
+          user: { type: "Bot" },
+        });
+      }
       json(
         res,
         path.endsWith("/comments")

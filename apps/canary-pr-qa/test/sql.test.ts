@@ -68,6 +68,10 @@ it("runs migration, idempotent enqueue, ownership leases, cancellation and crash
     "one"
   );
   expect(duplicate.id).toBe(first.id);
+  expect((await q.list(["FiXtUrE/ApP"])).map((job) => job.id)).toEqual([
+    first.id,
+  ]);
+  expect(await q.list(["other/repo"])).toEqual([]);
   const claimed = await q.claim("worker-a");
   expect(claimed?.id).toBe(first.id);
   expect(await q.heartbeat(first.id, "worker-b")).toBe(false);
@@ -103,6 +107,7 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
   const f = await fixture();
   cleanup.push(f.close);
   const token = "individual-token-0123456789-abcdef";
+  const mixedCaseToken = "mixed-case-viewer-token-0123456789";
   const usersFile = join(f.dataDir, "users.json");
   await writeFile(
     usersFile,
@@ -112,6 +117,12 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
         role: "viewer",
         repos: ["other/repo"],
         tokenSha256: createHash("sha256").update(token).digest("hex"),
+      },
+      {
+        id: "authorized-viewer",
+        role: "viewer",
+        repos: ["FiXtUrE/ApP"],
+        tokenSha256: createHash("sha256").update(mixedCaseToken).digest("hex"),
       },
     ])
   );
@@ -161,6 +172,15 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
   expect((await q.get(run.id))?.cancel_requested).toBe(false);
   const list = await fetch(`${url}/runs`, { headers: admin });
   expect(((await list.json()) as unknown[]).length).toBe(1);
+  const mixedCaseHeaders = { Authorization: `Bearer ${mixedCaseToken}` };
+  expect(
+    (await (
+      await fetch(`${url}/runs`, { headers: mixedCaseHeaders })
+    ).json()) as { id: string }[]
+  ).toMatchObject([{ id: run.id }]);
+  expect(
+    (await fetch(`${url}/runs/${run.id}`, { headers: mixedCaseHeaders })).status
+  ).toBe(200);
   const stream = await fetch(`${url}/runs/${run.id}/events`, {
     headers: admin,
   });
@@ -218,6 +238,18 @@ it("accepts only signed webhook bytes, deduplicates deliveries and waits for liv
   expect(
     await (await fetch(url, { method: "POST", headers, body: payload })).json()
   ).toMatchObject({ duplicate: true });
+  expect(
+    await (
+      await fetch(url, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "x-github-delivery": "different-delivery-same-sha",
+        },
+        body: payload,
+      })
+    ).json()
+  ).toMatchObject({ duplicate: true });
   await processDelivery(q, config);
   expect(await q.list(["fixture/app"])).toEqual([]);
   expect(
@@ -241,4 +273,127 @@ it("accepts only signed webhook bytes, deduplicates deliveries and waits for liv
   ).toBe("processed");
   await processDelivery(q, config);
   expect((await q.list(["fixture/app"])).length).toBe(1);
+}, 30_000);
+
+it("deduplicates automatic PR/SHA runs across delivery IDs and applies durable hourly limits", async () => {
+  const q = await sqlDatabase();
+  const limits = { global: 2, repository: 1 };
+  const first = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL },
+    "delivery:legacy"
+  );
+  const duplicate = await q.enqueue(
+    "FIXTURE/APP",
+    1,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL },
+    `webhook:fixture/app:1:${SHA}`,
+    limits
+  );
+  expect(duplicate.id).toBe(first.id);
+  await q.cancel(first.id, "test");
+  await expect(
+    q.enqueue(
+      "fixture/app",
+      2,
+      SHA,
+      "github-app",
+      { prUrl: PR_URL },
+      "webhook:second-pr",
+      limits
+    )
+  ).rejects.toMatchObject({ code: "WEBHOOK_RATE_LIMIT" });
+  await q.enqueue(
+    "other/repo",
+    1,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL },
+    "webhook:other-repo",
+    limits
+  );
+  await expect(
+    q.enqueue(
+      "third/repo",
+      1,
+      SHA,
+      "github-app",
+      { prUrl: PR_URL },
+      "webhook:third-repo",
+      limits
+    )
+  ).rejects.toMatchObject({ code: "WEBHOOK_RATE_LIMIT" });
+  // An authenticated explicit rerun remains possible; failed/cancelled attempts still cost budget.
+  await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "operator",
+    { prUrl: PR_URL },
+    "manual:rerun"
+  );
+  expect(await q.list(["fixture/app"])).toHaveLength(2);
+  await q.pool.query(
+    "UPDATE qa_jobs SET created_at=now()-interval '2 hours' WHERE owner='github-app'"
+  );
+  await q.enqueue(
+    "fixture/app",
+    2,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL },
+    "webhook:second-pr",
+    limits
+  );
+  expect(await q.list(["fixture/app"])).toHaveLength(3);
+}, 30_000);
+
+it("records rate-limited webhook work without enqueueing or automatically retrying a model run", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  await q.enqueue(
+    "other/repo",
+    1,
+    SHA,
+    "github-app",
+    { prUrl: PR_URL },
+    "delivery:spent-budget"
+  );
+  const payload = { repo: "fixture/app", number: 1, sha: SHA, prUrl: PR_URL };
+  expect(await q.acceptDelivery("rate-limited", "pull_request", payload)).toBe(
+    true
+  );
+  await processDelivery(q, {
+    ...f.config,
+    PREVIEW_URL_TEMPLATE: f.baseUrl,
+    QA_WEBHOOK_MAX_RUNS_PER_HOUR: 1,
+  });
+  expect(await q.list(["fixture/app"])).toEqual([]);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT status FROM qa_deliveries WHERE id='rate-limited'"
+      )
+    ).rows[0].status
+  ).toBe("rate_limited");
+  expect(
+    (
+      await q.pool.query(
+        "SELECT details FROM qa_audit WHERE action='webhook.rate_limited'"
+      )
+    ).rows
+  ).toMatchObject([
+    { details: { delivery: "rate-limited", repo: "fixture/app", sha: SHA } },
+  ]);
+  expect(
+    await q.acceptDelivery("reopened-same-sha", "pull_request", payload)
+  ).toBe(false);
+  await processDelivery(q, f.config);
+  expect(await q.list(["fixture/app"])).toEqual([]);
 }, 30_000);

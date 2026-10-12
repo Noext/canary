@@ -264,7 +264,10 @@ describe.skipIf(!image)(
       expect(
         result.scenarios[0]?.artifacts.some((file) => file.endsWith(".webm"))
       ).toBe(true);
-      expect(s.outgoing.at(-1)?.payload.state).toBe("failure");
+      expect(
+        s.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+          .state
+      ).toBe("failure");
     }, 180_000);
   }
 );

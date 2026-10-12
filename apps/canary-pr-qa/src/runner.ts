@@ -275,27 +275,29 @@ async function publish(
   config: Config,
   reportUrl?: string
 ) {
+  let commentAttempted = false;
   try {
     await runScope.getStore()?.verifyOwnership?.();
-    const commentUrl = await github.comment(
-      context,
-      reportMarkdown(result, reportUrl)
-    );
-    result.publication = { commentUrl, status: "pending" };
     const status = statusFor(result.outcome);
-    await runScope.getStore()?.verifyOwnership?.();
     await github.status(
       context,
       status,
       `QA ${result.outcome}: ${result.scenarios.filter((s) => s.outcome === "passed").length}/${result.scenarios.length} scenarios`,
       reportUrl
     );
-    result.publication.status = status;
+    await runScope.getStore()?.verifyOwnership?.();
+    commentAttempted = true;
+    const commentUrl = await github.comment(
+      context,
+      reportMarkdown(result, reportUrl)
+    );
+    result.publication = { commentUrl, status };
   } catch (error) {
     result.diagnostic = diagnose(error, config);
     result.outcome = "blocked";
     result.error =
       `${result.error ?? ""} GitHub publication failed: ${result.diagnostic.message}`.trim();
+    let recoveryStatus = "failed";
     await runScope
       .exit(() =>
         github.status(
@@ -305,7 +307,24 @@ async function publish(
           reportUrl
         )
       )
+      .then(() => {
+        recoveryStatus = "error";
+      })
       .catch(() => undefined);
+    // A failed response can follow a successful write: repair the upserted comment too.
+    if (commentAttempted) {
+      await runScope
+        .exit(async () => {
+          const commentUrl = await github.comment(
+            context,
+            reportMarkdown(result, reportUrl)
+          );
+          result.publication = { commentUrl, status: recoveryStatus };
+        })
+        .catch((repairError) => {
+          result.error += ` Blocked comment update failed: ${diagnose(repairError, config).message}`;
+        });
+    }
   }
 }
 async function runUnscoped(

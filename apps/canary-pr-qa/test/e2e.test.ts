@@ -95,7 +95,10 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
     expect(result.scenarios[0]?.assertions).toEqual([
       { id: "saved", passed: false, actual: "Wrong output", baseline: "" },
     ]);
-    expect(f.outgoing.at(-1)?.payload.state).toBe("failure");
+    expect(
+      f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+        .state
+    ).toBe("failure");
     expect(
       result.scenarios[0]?.artifacts.some((file) => file.endsWith(".webm"))
     ).toBe(true);

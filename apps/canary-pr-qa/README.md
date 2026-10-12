@@ -166,6 +166,26 @@ synchronize, ready_for_review). La signature HMAC SHA-256 est vérifiée sur les
 octets originaux avant traitement. Les livraisons sont stockées en inbox SQL,
 dédupliquées ; le worker attend la preview jusqu'à `QA_PREVIEW_WAIT_SECONDS`, avec
 un nouvel essai toutes les 30 secondes. Les runs d'anciens SHA sont annulés.
+Les livraisons distinctes d'un même dépôt/PR/SHA partagent une seule entrée
+d'inbox et un seul run automatique, y compris si un job historique utilise une
+clé par delivery. Un reopen du même SHA ne relance pas ses écritures navigateur.
+Pour relancer volontairement, utiliser le dashboard avec une nouvelle clé
+d'idempotence.
+
+`QA_WEBHOOK_MAX_RUNS_PER_HOUR=60` limite les nouveaux runs automatiques de tout
+le déploiement ; `QA_WEBHOOK_REPO_MAX_RUNS_PER_HOUR=20` limite chaque dépôt.
+Ces fenêtres glissantes sont comptées dans PostgreSQL sous verrou partagé par
+les workers : les runs terminés, annulés ou échoués consomment aussi leur quota.
+La déduplication précède le quota ; les reruns explicites authentifiés restent
+possibles. Avec un budget de `QA_RUN_MAX_TOKENS` par run, la limite globale borne
+également le volume horaire de tokens des runs nouvellement admis.
+
+Un refus crée un audit `webhook.rate_limited` et une entrée d'inbox
+`rate_limited`, sans exécuter le modèle ni rejouer automatiquement la demande.
+Le diagnostic est consultable dans les logs worker et dans `qa_audit` ; un
+opérateur peut ajuster les limites après inspection de l'usage ou lancer un
+run explicite. Les quotas ne limitent pas les jobs manuels déjà autorisés.
+
 Les drafts ne sont pas lancés automatiquement. Les erreurs de publication sont
 visibles, sans simulation de succès.
 
@@ -298,3 +318,12 @@ La session utilise un cookie `HttpOnly`, `SameSite=Lax` et `Secure` en HTTPS :
 un lien de rapport ouvert depuis GitHub conserve l'authentification. Les mutations
 avec une origine étrangère sont refusées. L'E2E vérifie cette navigation entre
 sites, la lecture réelle de la vidéo et le refus d'une mutation cross-site.
+
+La publication du statut/check précède le commentaire de résultat. Si la réponse
+d'un commentaire est perdue après son écriture, le runner tente de le mettre à
+jour avec le résultat bloqué et de fermer le statut en erreur. Une panne GitHub
+persistante reste signalée dans le résultat durable ; elle ne devient pas un succès.
+
+Le proxy accepte les upgrades `ws://` et `wss://`, utilise respectivement les ports
+80 et 443 par défaut, et vérifie le certificat TLS pour l'hôte d'origine en WSS.
+Les contrôles de liste d'hôtes, DNS/IP et métadonnées restent appliqués.
