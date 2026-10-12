@@ -417,6 +417,48 @@ A failing gate prints the most severe findings (rule, file, line) and the points
 
 </details>
 
+<details>
+<summary><strong>Self-hosted CI runner</strong></summary>
+
+Every job of [`ci.yml`](.github/workflows/ci.yml) and
+[`qa-release.yml`](.github/workflows/qa-release.yml) runs on the self-hosted runner `gh-runner`
+(`runs-on: [self-hosted, linux, x64, canary-ci]`) instead of a GitHub-hosted runner. It is the LXC
+container `126` (`192.168.103.47`), provisioned by
+[`Noext/infra-agent-cts`](https://github.com/Noext/infra-agent-cts) — see
+`ansible/roles/ghrunner/README.md` in that repository.
+
+What the container provides, and what CI therefore depends on:
+
+| Need                                              | Provided by                                                        |
+| ------------------------------------------------- | ------------------------------------------------------------------ |
+| Docker and Compose ≥ 2.20 (image build, Compose E2E) | the `docker` role                                               |
+| Chromium system libraries                         | the `ghrunner` role                                                |
+| Postgres 16.10 for `check`                        | the job's own `services:` container — supported on a self-hosted Linux runner with Docker installed |
+| Node and pnpm                                     | `actions/setup-node` and `pnpm/action-setup`, not the container     |
+
+Two constraints to know before editing these workflows:
+
+- **No `sudo` on the runner.** The `gh-runner` account has no sudoers entry; the container ships
+  Chromium's libraries precisely so that `playwright install chromium` works without `--with-deps`.
+  A step that needs root will fail here. `ci.yml` keeps both paths (`sudo -n true` decides), so the
+  workflow still works on a hosted runner.
+- **`release.yml` is untouched** and stays on `ubuntu-latest`: it publishes to npm for the upstream
+  `0xnyn/canary` repository and never runs in this fork.
+
+The container is deliberately not trusted with the home network. An nftables table (visible with
+`nft list table inet gh_runner` inside the container) drops egress to `192.168.0.0/16`,
+`172.16.0.0/12`, `10.0.0.0/8`, `100.64.0.0/10` and `169.254.0.0/16`: a pull request whose workflow
+runs arbitrary code here cannot reach the NAS, the databases or the other containers. Internet stays
+open, so the runner can still reach GitHub, the npm registry and Docker Hub.
+
+Residual risk, accepted deliberately: this repository is public, so workflow code from a pull
+request — including a fork — executes on that container. It also runs with the `docker` group, which
+is root-equivalent inside it, and a runner is **not** ephemeral: `_work`, the pnpm cache and Docker
+images survive between jobs, so a malicious pull request could poison a cache a later job reuses. The
+container boundary and the egress table are what limit the damage.
+
+</details>
+
 See [`AGENTS.md`](AGENTS.md) for architecture and orientation, [`CONTRIBUTING.md`](CONTRIBUTING.md)
 for the contribution flow, and [`RELEASING.md`](RELEASING.md) for the publish pipeline.
 
