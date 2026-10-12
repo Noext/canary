@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RunResult } from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
+import { githubSetupFixture } from "./github-setup-fixture.js";
 
 const exec = promisify(execFile);
 const image = process.env.CANARY_DOCKER_IMAGE;
@@ -28,15 +29,17 @@ async function freePort() {
   await new Promise<void>((done) => server.close(() => done()));
   return address.port;
 }
-async function container(broken = false) {
-  const f = await fixture({ broken, listenHost: "0.0.0.0" });
+async function container(broken = false, appSetup = false) {
+  const f = appSetup
+    ? await githubSetupFixture({ listenHost: "0.0.0.0" })
+    : await fixture({ broken, listenHost: "0.0.0.0" });
   closers.push(f.close);
   const directory = await mkdtemp(join(tmpdir(), "canary-container-"));
   const envFile = join(directory, "fixture.env");
   const override = join(directory, "compose.yml");
   const project = `canaryqa${randomUUID().replaceAll("-", "")}`;
   const port = await freePort();
-  const inside = `http://host.docker.internal:${new URL(f.baseUrl).port}`;
+  const inside = `http://host.docker.internal:${new URL(f.config.GITHUB_API_URL).port}`;
   const values = {
     ...f.config,
     QA_DB_PASSWORD: "container-fixture-db-password-012345",
@@ -160,6 +163,49 @@ async function execute(s: Awaited<ReturnType<typeof container>>) {
 describe.skipIf(!image)(
   "first installation of the production Compose image",
   () => {
+    it("boots without a PAT, connects the App and runs through the worker after API/worker restart", async () => {
+      const s = await container(false, true);
+      const cookie = await localAccountFlow(s);
+      const auth = { ...s.headers, Cookie: cookie };
+      const registration = (await (
+        await fetch(`${s.url}/github/app/manifest`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ name: "Canary Compose fixture" }),
+        })
+      ).json()) as { action: string };
+      const state = new URL(registration.action).searchParams.get("state")!;
+      expect(
+        (
+          await fetch(
+            `${s.url}/github/app/callback?state=${state}&code=fixture-manifest-code`,
+            { headers: auth, redirect: "manual" }
+          )
+        ).status
+      ).toBe(303);
+      expect(
+        (
+          await fetch(`${s.url}/github/app/repositories`, {
+            method: "PUT",
+            headers: auth,
+            body: JSON.stringify({ repositories: ["fixture/app"] }),
+          })
+        ).status
+      ).toBe(200);
+      await s.compose("restart", "pr-qa", "worker");
+      await s.waitHealthy();
+      const status = (await (
+        await fetch(`${s.url}/github/app`, { headers: auth })
+      ).json()) as { app: { id: string } };
+      expect(status.app.id).toBe("95001");
+      const result = await execute(s);
+      expect(result.result.outcome, JSON.stringify(result.result)).toBe(
+        "passed"
+      );
+      expect(
+        s.outgoing.some((request) => request.payload.state === "success")
+      ).toBe(true);
+    }, 180_000);
     it("starts under UID 1000 with new writable volumes, runs doctor and a real Chromium test, persists evidence across restart", async () => {
       const s = await container();
       expect(

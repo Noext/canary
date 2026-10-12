@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createLogger } from "@usecanary/logger";
 import pg from "pg";
 import { QaError } from "./diagnostics.js";
+import { GITHUB_SETUP_MIGRATION } from "./github-setup.js";
 import { LOCAL_AUTH_MIGRATION } from "./local-auth.js";
 import type { RunOptions } from "./runner.js";
 
@@ -29,7 +30,7 @@ export interface Job {
   updated_at: string;
   worker?: string;
 }
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -51,6 +52,8 @@ ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS retry_at timestamptz NOT NULL
 INSERT INTO qa_schema(version) VALUES(2) ON CONFLICT DO NOTHING;
 INSERT INTO qa_schema(version) VALUES(3) ON CONFLICT DO NOTHING;
 ${LOCAL_AUTH_MIGRATION}
+INSERT INTO qa_schema(version) VALUES(4) ON CONFLICT DO NOTHING;
+${GITHUB_SETUP_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {

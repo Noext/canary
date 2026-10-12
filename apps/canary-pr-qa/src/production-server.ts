@@ -23,9 +23,11 @@ import {
   validatePreviewUrl,
 } from "./config.js";
 import { dashboard } from "./dashboard.js";
-import { diagnose } from "./diagnostics.js";
+import { diagnose, QaError } from "./diagnostics.js";
 import { GitHub, parsePrUrl } from "./github.js";
 import { verifyWebhook } from "./github-app.js";
+import { GitHubSetup } from "./github-setup.js";
+import { githubSetupRoutes } from "./github-setup-routes.js";
 import { importLegacy } from "./legacy.js";
 import { LocalAuth, localCookie } from "./local-auth.js";
 import {
@@ -78,8 +80,11 @@ export async function startProductionServer(config: Config) {
   await queue.migrate();
   await importLegacy(queue, config);
   const accounts = new LocalAuth(queue.pool);
-  const localRoute = authRoutes(accounts, queue, config, rawBody, json);
-  const github = new GitHub(config);
+  const setup = new GitHubSetup(queue.pool, config);
+  const setupRoute = githubSetupRoutes(setup, queue, rawBody, json);
+  async function identify(req: IncomingMessage) {
+    return principal(req, await setup.effective(), accounts);
+  }
   const models = new ModelCatalog(config);
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
@@ -110,6 +115,20 @@ export async function startProductionServer(config: Config) {
     res: ServerResponse,
     user: Principal
   ) {
+    const effective = await setup.effective();
+    const github = new GitHub(effective);
+    if (
+      !(
+        (effective.GITHUB_TOKEN || effective.GITHUB_APP_ID) &&
+        effective.allowedRepos.length
+      )
+    ) {
+      throw new QaError(
+        "GITHUB_NOT_CONNECTED",
+        "Connectez GitHub et sélectionnez au moins un dépôt avant de lancer une QA.",
+        "Utilisez la section GitHub du dashboard administrateur."
+      );
+    }
     const input = inputSchema.parse(
       JSON.parse((await rawBody(req)).toString())
     );
@@ -117,7 +136,7 @@ export async function startProductionServer(config: Config) {
     requireAccess(user, ref.repo, true);
     const selected = runModelConfig(config, input.model).OPENAI_MODEL;
     await models.require(selected);
-    if (!config.allowedRepos.includes(ref.repo.toLowerCase())) {
+    if (!effective.allowedRepos.includes(ref.repo.toLowerCase())) {
       throw new Error("Repository not allowed");
     }
     if (input.previewUrl) {
@@ -150,12 +169,13 @@ export async function startProductionServer(config: Config) {
     });
   }
   async function webhook(req: IncomingMessage, res: ServerResponse) {
+    const effective = await setup.effective();
     const raw = await rawBody(req, 1_000_000);
     if (
       !verifyWebhook(
         raw,
         String(req.headers["x-hub-signature-256"] ?? ""),
-        config.GITHUB_WEBHOOK_SECRET
+        effective.GITHUB_WEBHOOK_SECRET
       )
     ) {
       json(res, 401, { error: "Invalid webhook signature" });
@@ -170,32 +190,24 @@ export async function startProductionServer(config: Config) {
     const repo = payload.repository?.full_name;
     if (
       typeof repo !== "string" ||
-      !config.allowedRepos.includes(repo.toLowerCase())
+      !effective.allowedRepos.includes(repo.toLowerCase())
     ) {
+      json(res, 200, { ignored: true });
+      return;
+    }
+    if (!validInstallation(effective, repo, payload)) {
       json(res, 200, { ignored: true });
       return;
     }
     // Durable inbox: only validated metadata, no full webhook body retained.
     const pr = payload.pull_request;
     const record =
-      event === "pull_request" &&
-      ["opened", "reopened", "synchronize", "ready_for_review"].includes(
-        payload.action
-      ) &&
-      pr &&
-      !pr.draft
+      automaticPr(event, payload) && pr
         ? { repo, number: pr.number, sha: pr.head?.sha, prUrl: pr.html_url }
         : { repo, ignored: true };
-    if (!("ignored" in record)) {
-      const ref = parsePrUrl(record.prUrl);
-      if (
-        ref.repo.toLowerCase() !== repo.toLowerCase() ||
-        ref.number !== record.number ||
-        !/^[a-f0-9]{40}$/.test(record.sha ?? "")
-      ) {
-        json(res, 400, { error: "Invalid pull request metadata" });
-        return;
-      }
+    if (!("ignored" in record || validPullRequest(record, repo))) {
+      json(res, 400, { error: "Invalid pull request metadata" });
+      return;
     }
     const saved = await queue.acceptDelivery(delivery, event, record);
     json(res, 202, { accepted: true, duplicate: !saved });
@@ -252,7 +264,7 @@ export async function startProductionServer(config: Config) {
       if (closed) {
         return;
       }
-      const current = await principal(req, config, accounts);
+      const current = await identify(req);
       if (!current) {
         res.end();
         return;
@@ -398,8 +410,13 @@ export async function startProductionServer(config: Config) {
     user: Principal | undefined
   ) {
     return (
-      (await localRoute(req, res, url)) ||
-      (await legacyLogin(req, res, url, user))
+      (await authRoutes(
+        accounts,
+        queue,
+        await setup.effective(),
+        rawBody,
+        json
+      )(req, res, url)) || (await legacyLogin(req, res, url, user))
     );
   }
   async function serveMetrics(res: ServerResponse) {
@@ -475,6 +492,7 @@ export async function startProductionServer(config: Config) {
     user: Principal
   ) {
     if (
+      (await setupRoute(req, res, url, user)) ||
       (await modelRoute(req, res, url, user)) ||
       (await accountRoute(req, res, url, user))
     ) {
@@ -516,7 +534,7 @@ export async function startProductionServer(config: Config) {
       json(res, 403, { error: "Origin rejected" });
       return;
     }
-    const user = await principal(req, config, accounts);
+    const user = await identify(req);
     if (await login(req, res, url, user)) {
       return;
     }
@@ -544,6 +562,8 @@ export async function startProductionServer(config: Config) {
   const server = createServer((req, res) => {
     const requestId = randomUUID();
     res.setHeader("X-Request-ID", requestId);
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Cache-Control", "no-store");
     void handle(req, res).catch((error) => {
       const diagnostic = diagnose(error, config);
       logger.warn({ requestId, diagnostic }, "API request failed");
@@ -585,4 +605,42 @@ function apiErrorStatus(diagnostic: { code: string; message: string }) {
     return 429;
   }
   return /access denied|Administrator/i.test(diagnostic.message) ? 403 : 400;
+}
+
+function validInstallation(
+  config: Config,
+  repo: string,
+  payload: { installation?: { id?: number } }
+) {
+  return (
+    !config.githubInstallations ||
+    String(payload.installation?.id) ===
+      config.githubInstallations[repo.toLowerCase()]
+  );
+}
+
+function automaticPr(
+  event: string,
+  payload: { action: string; pull_request?: { draft?: boolean } }
+) {
+  return (
+    event === "pull_request" &&
+    ["opened", "reopened", "synchronize", "ready_for_review"].includes(
+      payload.action
+    ) &&
+    payload.pull_request &&
+    !payload.pull_request.draft
+  );
+}
+
+function validPullRequest(
+  record: { prUrl: string; number: number; sha?: string },
+  repo: string
+) {
+  const ref = parsePrUrl(record.prUrl);
+  return (
+    ref.repo.toLowerCase() === repo.toLowerCase() &&
+    ref.number === record.number &&
+    /^[a-f0-9]{40}$/.test(record.sha ?? "")
+  );
 }

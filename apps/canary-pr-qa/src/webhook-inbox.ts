@@ -33,6 +33,14 @@ async function readyDelivery(queue: Queue, config: Config) {
       await client.query("COMMIT");
       return;
     }
+    if (!config.allowedRepos.includes(value.repo.toLowerCase())) {
+      await client.query(
+        "UPDATE qa_deliveries SET status='processed' WHERE id=$1",
+        [row.id]
+      );
+      await client.query("COMMIT");
+      return;
+    }
     const github = new GitHub(config);
     const latest = await github.pr(value.prUrl);
     await client.query(

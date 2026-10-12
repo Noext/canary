@@ -130,7 +130,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       .filter(Boolean),
   };
 }
-export type Config = ReturnType<typeof loadConfig>;
+export type Config = ReturnType<typeof loadConfig> & {
+  githubPrivateKey?: string;
+  githubInstallations?: Record<string, string>;
+};
 
 function validEndpoint(input: string, origin = false): boolean {
   try {
@@ -157,17 +160,17 @@ function serviceProblems(config: Config) {
       "Set QA_API_TOKEN to at least 24 random characters; replace the example placeholder"
     );
   }
-  if (!config.allowedRepos.length) {
-    problems.push("Set GITHUB_ALLOWED_REPOS before serving jobs");
-  }
-  if (!(config.GITHUB_TOKEN || config.GITHUB_APP_ID)) {
+  if (legacyGitHubMissing(config)) {
     problems.push(
-      "Set GITHUB_TOKEN for the default GitHub publication workflow"
+      "Configure a GitHub credential and GITHUB_ALLOWED_REPOS for the legacy file service; use PostgreSQL for UI onboarding"
     );
   }
   if (
     config.GITHUB_APP_ID &&
-    !(config.GITHUB_INSTALLATION_ID && config.GITHUB_APP_PRIVATE_KEY_FILE)
+    !(
+      config.githubPrivateKey ||
+      (config.GITHUB_INSTALLATION_ID && config.GITHUB_APP_PRIVATE_KEY_FILE)
+    )
   ) {
     problems.push(
       "Set GITHUB_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY_FILE together with GITHUB_APP_ID"
@@ -259,4 +262,12 @@ export function validatePreviewUrl(input: string, config: Config): URL {
     );
   }
   return url;
+}
+
+function legacyGitHubMissing(config: Config) {
+  return !(
+    config.DATABASE_URL ||
+    (config.allowedRepos.length &&
+      (config.GITHUB_TOKEN || config.GITHUB_APP_ID))
+  );
 }

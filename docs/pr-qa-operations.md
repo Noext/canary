@@ -36,7 +36,9 @@ initiale est fermée après le premier compte. Les connexions locales ne nécess
 pas de SSO ; les accès techniques existants sont conservés dans une section dédiée.
 La récupération de mot de passe via stdin (`reset-password`) est documentée dans
 le README et révoque les sessions du compte. Ne jamais purger la DB pour récupérer
-l'accès. Le dashboard montre les phases
+l'accès. Connecter GitHub depuis la section GitHub du dashboard : créer l’App, confirmer
+sur GitHub, installer, actualiser et sélectionner les dépôts. Aucun PAT requis
+pour ce parcours. Le dashboard montre les phases
 et actions par SSE à `/runs/:id/events`, les diagnostics et les preuves. Le modèle
 est sélectionné via le catalogue `/models` authentifié, alimenté par le
 `/v1/models` du fournisseur. Le défaut est `opencode-go/deepseek-v4.1-flash` ;
@@ -187,3 +189,32 @@ services et contrôler doctor, consultation des runs et preuves. N'importer aucu
 dump dans la DB de production ni écraser ses volumes sans autorisation explicite.
 Les commandes de sauvegarde/restauration décrivent la procédure ; elles n'ont pas
 été exécutées sur un VPS utilisateur pendant cette livraison.
+
+## Connexion GitHub dans l'UI
+
+Lire la section GitHub du README. Un état À connecter au premier boot est normal ;
+le doctor marque GitHub comme sauté jusqu’à connexion et sélection. Vérifier :
+
+- L'origine `ARTIFACT_BASE_URL` correspond exactement au domaine HTTPS du dashboard.
+- L'App privée est créée sur le bon compte/organisation et installée sur les dépôts.
+- Les permissions Contents/Metadata/Deployments read et PR/Statuses/Checks write sont acceptées.
+- Actualiser après un changement côté GitHub ; sélectionner et enregistrer les dépôts.
+- Le WAF/reverse proxy accepte les webhooks signés sur `/github/webhook`.
+
+`GITHUB_STATE_INVALID` : retour expiré, déjà utilisé ou d’un autre admin ; reprendre
+le parcours. Si l'App est déjà visible dans Canary, utiliser Installer/Actualiser.
+`GITHUB_MANIFEST_FAILED` : vérifier disponibilité GitHub/réseau et durée du code.
+Si une App a été créée sur GitHub mais n’apparaît pas dans Canary après une panne
+de conversion/DB, le code ne peut pas être réutilisé : supprimer cette App orpheline
+dans ses réglages GitHub puis reprendre la création. Ne pas supprimer de dépôt.
+`GITHUB_CREDENTIALS_UNREADABLE` : restaurer le `QA_API_TOKEN` d'origine avec la DB ;
+ne pas purger les comptes/runs. Cette version ne fournit pas de rotation du secret
+serveur avec re-chiffrement automatique.
+`GITHUB_PERMISSIONS` : accepter les permissions sur GitHub puis actualiser.
+`GITHUB_REPOSITORY_DENIED` : dépôt retiré/suspendu ou bloqué par la restriction serveur.
+
+Les audits `github.app.created`, `github.installations.synced` et
+`github.repositories.selected` ne contiennent pas les credentials. Le dashboard
+affiche le dernier webhook durable ; les codes request ID des erreurs API permettent
+de retrouver les logs. Ne pas inclure les codes/state des callbacks dans les logs
+d'accès de votre reverse proxy (journaliser le chemin sans query).

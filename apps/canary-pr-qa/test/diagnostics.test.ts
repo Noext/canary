@@ -33,13 +33,23 @@ describe("production configuration and useful diagnostics", () => {
       { OPENAI_BASE_URL: "http://user:secret@localhost/v1" },
       { ARTIFACT_BASE_URL: "https://qa.test/artifacts" },
       { ARTIFACT_BASE_URL: "not-a-url" },
-      { GITHUB_TOKEN: "" },
     ]) {
       expect(() =>
         validateConfiguration({ ...f.config, ...override }, true)
       ).toThrow();
     }
     expect(() => validateConfiguration(f.config, true)).not.toThrow();
+    expect(() =>
+      validateConfiguration(
+        {
+          ...f.config,
+          GITHUB_TOKEN: "",
+          DATABASE_URL: "postgres://fixture",
+          allowedRepos: [],
+        },
+        true
+      )
+    ).not.toThrow();
   });
   it("redacts provider/API secrets including URL-encoded and JSON-escaped forms", async () => {
     const f = await setup();

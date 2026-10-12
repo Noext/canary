@@ -149,7 +149,7 @@ répertoire et le même projet Compose ; ne pas arrêter les services d'autres p
 Dans un répertoire dédié appartenant au compte de déploiement :
 
 ```bash
-git clone --branch feat/local-password-auth https://github.com/Noext/canary.git canary-pr-qa
+git clone --branch feat/github-app-onboarding https://github.com/Noext/canary.git canary-pr-qa
 cd canary-pr-qa
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -157,7 +157,7 @@ git rev-parse HEAD
 git status --short
 ```
 
-La connexion locale est livrée sur `feat/local-password-auth` avant fusion.
+Le parcours GitHub App est livré sur `feat/github-app-onboarding` avant fusion.
 Après fusion, utiliser le `main` de votre fork pour la production. Pour un clone existant, inspecter
 ses remotes et changements locaux ; préserver `.env` et `config/`. Ne pas employer
 `reset --hard` ou écraser des changements locaux. Un nom de projet Compose
@@ -185,8 +185,8 @@ Renseigner au minimum :
 | `QA_API_TOKEN` | Secret fort pour l'amorçage administrateur du dashboard |
 | `QA_DB_PASSWORD` | Secret hexadécimal PostgreSQL ; Compose assemble `DATABASE_URL` |
 | `QA_BROWSER_SERVICE_TOKEN` | Secret distinct pour les commandes du navigateur isolé |
-| `GITHUB_ALLOWED_REPOS` | Dépôts exacts autorisés, séparés par virgules |
-| `GITHUB_TOKEN` | PAT avec Contents/Metadata/Deployments en lecture, Pull requests et Commit statuses en écriture ; ou utiliser l'App décrite ci-dessous |
+| `GITHUB_ALLOWED_REPOS` | Facultatif : restriction serveur ; vide pour sélectionner les dépôts installés depuis l’UI |
+| `GITHUB_TOKEN` | Laisser vide pour le parcours GitHub App du dashboard |
 | `OPENAI_BASE_URL` | `https://ai.noext.fr/v1` pour l'endpoint fourni par l'utilisateur |
 | `OPENAI_API_KEY` | Clé active fournie par l'opérateur ; ne pas réutiliser une ancienne clé temporaire de test |
 | `OPENAI_MODEL` | **`opencode-go/deepseek-v4.1-flash`** |
@@ -210,21 +210,28 @@ pas contourné en changeant de fournisseur ou de modèle. Les tarifs
 pour activer les estimations et réserves de coût ; les budgets de tokens et de
 temps restent actifs même sans tarif.
 
-#### Alternative GitHub App et webhooks
+#### GitHub App depuis le dashboard
 
-Pour un Check GitHub et un commentaire Bot mis à jour, installer votre App sur
-les seuls dépôts autorisés : Contents/Metadata/Deployments en lecture ; Pull
-requests, Commit statuses et Checks en écriture. Configurer :
+Après démarrage et création du compte local admin, utiliser la section GitHub :
+Créer mon App sur GitHub → confirmer sur GitHub → Installer/gérer les dépôts →
+Actualiser → cocher les dépôts → Enregistrer. Compte personnel par défaut,
+organisation facultative. GitHub crée une vraie App privée appartenant à
+l'opérateur, avec permissions/webhook/callbacks préremplis. Aucun PAT, ID
+installation ou PEM à configurer dans `.env` pour ce parcours.
 
-- `GITHUB_APP_ID` et `GITHUB_INSTALLATION_ID` ;
-- `GITHUB_APP_PRIVATE_KEY_FILE=/app/config/github-app.pem`, avec la clé réelle
-  dans `config/github-app.pem`, lisible par l'UID 1000 du conteneur ;
-- `GITHUB_WEBHOOK_SECRET`, secret distinct d'au moins 32 caractères, et l'URL
-  HTTPS `/github/webhook` avec les événements Pull request.
+Configurer l'origine publique HTTPS dans `ARTIFACT_BASE_URL` et rendre les
+callbacks `/github/app/callback`, `/github/app/installed` et `/github/webhook`
+joignables derrière le proxy/WAF. Le service peut démarrer avec GitHub non
+connecté ; doctor indique alors un contrôle sauté. Ne pas l'annoncer validé.
+Après connexion, relancer doctor et un run réellement publié.
 
-Les tokens d'installation sont renouvelés par le service. Le token GitHub
-connecté à ChatGPT n'est pas automatiquement disponible sur le VPS. Un PAT permet
-le mode manuel ; l'upsert de commentaire Bot nécessite l'App.
+Les clés sont chiffrées en PostgreSQL ; préserver `QA_API_TOKEN` avec la DB
+(le HKDF en dérive la clé AES-GCM). Ne pas le régénérer lors d'une mise à jour
+ou d'une restauration : ce n'est pas une rotation transparente. Les workers
+relisent la sélection et synchronisent les installations chaque minute.
+`GITHUB_ALLOWED_REPOS`, si renseigné, reste un plafond serveur. L'App gérée par
+l'UI a priorité sur l'ancien PAT. Les modes techniques historiques restent
+compatibles et documentés dans `.env.example` et le README.
 
 #### Préconditions des previews
 

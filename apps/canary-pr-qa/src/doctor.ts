@@ -14,6 +14,7 @@ import { Canary } from "./canary.js";
 import { type Config, validateConfiguration } from "./config.js";
 import { type Diagnostic, diagnose, QaError, redact } from "./diagnostics.js";
 import { GitHub, type PrContext } from "./github.js";
+import { GitHubSetup } from "./github-setup.js";
 import { Model } from "./model.js";
 import { resolvePreview } from "./preview.js";
 import { Queue, SCHEMA_VERSION } from "./queue.js";
@@ -49,7 +50,7 @@ export function configSummary(config: Config) {
   };
 }
 export async function doctor(
-  config: Config,
+  initialConfig: Config,
   options: {
     offline?: boolean;
     skipBrowser?: boolean;
@@ -57,6 +58,7 @@ export async function doctor(
     previewUrl?: string;
   } = {}
 ) {
+  let config = initialConfig;
   const checks: Check[] = [];
   const check = async (
     name: string,
@@ -127,6 +129,7 @@ export async function doctor(
           );
         }
         await queue.pool.query("SELECT count(*)::int AS count FROM qa_jobs");
+        config = await new GitHubSetup(queue.pool, config).effective();
         return `PostgreSQL connection, schema version ${SCHEMA_VERSION} and job-table read verified`;
       } finally {
         await queue.close();
@@ -194,6 +197,12 @@ console.log("CANARY_PR_QA_OBSERVATION:" + JSON.stringify({ url: page.url(), snap
     skip("preview", "Preview provenance not verified");
   } else {
     const github = new GitHub(config);
+    if (githubOnboardingPending(config)) {
+      skip(
+        "github-setup",
+        "GitHub onboarding pending: create/install the App and select repositories in the dashboard; no GitHub run is validated yet"
+      );
+    }
     for (const repo of config.allowedRepos) {
       await check(`github:${repo}`, async () => {
         await github.request(`/repos/${repo}`);
@@ -315,4 +324,11 @@ export async function supportSummary(id: string, config: Config) {
     note: "This summary omits browser snapshots, typed values, assertion actual values, HAR, traces, cookies and environment secret values. Review before sharing.",
   };
   return JSON.parse(redact(JSON.stringify(summary), config));
+}
+
+function githubOnboardingPending(config: Config) {
+  return !(
+    config.allowedRepos.length &&
+    (config.GITHUB_TOKEN || config.GITHUB_APP_ID)
+  );
 }

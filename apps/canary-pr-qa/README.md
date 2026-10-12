@@ -13,7 +13,7 @@ réelle avant d'augmenter le nombre de workers. Lire aussi [AGENTS.md](../../AGE
 et le [guide d'exploitation](../../docs/pr-qa-operations.md).
 
 ```bash
-git clone --branch feat/local-password-auth https://github.com/Noext/canary.git
+git clone --branch feat/github-app-onboarding https://github.com/Noext/canary.git
 cd canary
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -26,8 +26,9 @@ Générer **trois secrets différents** pour `QA_API_TOKEN`, `QA_DB_PASSWORD` et
 `QA_BROWSER_SERVICE_TOKEN`. Utiliser du hexadécimal pour le mot de passe PostgreSQL
  afin qu'il soit compatible avec son URL. Renseigner :
 
-- `GITHUB_ALLOWED_REPOS` : liste exacte des dépôts à tester, `owner/repo`.
-- `GITHUB_TOKEN`, ou les trois paramètres GitHub App documentés plus bas.
+- GitHub se connecte depuis le dashboard administrateur après démarrage.
+  `GITHUB_ALLOWED_REPOS` est une restriction serveur facultative, vide par défaut.
+- Aucun `GITHUB_TOKEN` ou credential App n'est requis pour le parcours UI Compose.
 - `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` : votre vrai endpoint `/v1`.
 - `PREVIEW_ALLOWED_HOSTS` : tous les hôtes nécessaires à la preview, API, images,
   polices et WebSockets inclus, avec leurs ports lorsqu'ils ne sont pas standards.
@@ -167,16 +168,54 @@ sous prétexte qu'il existe aussi sur la base.
 
 ## GitHub App et déclenchement automatique
 
-Installer votre propre GitHub App sur les dépôts exacts autorisés. Permissions :
-Contents, Metadata et Deployments en lecture ; Pull requests, Commit statuses et
-Checks en écriture. Configurer `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID` et
-`GITHUB_APP_PRIVATE_KEY_FILE=/app/config/github-app.pem`, puis un secret webhook
-aléatoire >= 32 caractères. La clé privée reste hors de Git. Les tokens
- d'installation sont renouvelés avant expiration.
+Depuis le dashboard, connecté comme administrateur :
 
-Webhook HTTPS : `/github/webhook`, événements Pull request (opened, reopened,
-synchronize, ready_for_review). La signature HMAC SHA-256 est vérifiée sur les
-octets originaux avant traitement. Les livraisons sont stockées en inbox SQL,
+1. Dans **GitHub**, donner un nom à l'App. Laisser Organisation vide pour votre
+   compte personnel, ou saisir votre organisation.
+2. Cliquer **Créer mon App sur GitHub**. GitHub affiche le nom et les permissions
+   préremplis. Confirmer la création sur GitHub ; l'App vous appartient.
+3. Au retour dans Canary, cliquer **Installer / gérer les dépôts sur GitHub**.
+   Choisir le compte et uniquement les dépôts nécessaires, puis valider sur GitHub.
+4. Cliquer **Actualiser la connexion** si GitHub ne revient pas automatiquement,
+   cocher les dépôts à utiliser et **Enregistrer les dépôts sélectionnés**.
+5. Lancer un run. Les workers utilisent les tokens d'installation renouvelables,
+   les Checks et les commentaires de votre App, sans PAT ni redémarrage.
+
+`ARTIFACT_BASE_URL` doit être l'origine HTTPS publique de ce dashboard, par
+exemple `https://canary.pharmania.fr`. Le reverse proxy doit transmettre le host
+et le protocole. Les callbacks `/github/app/callback`, `/github/app/installed`
+et le webhook `/github/webhook` doivent être joignables ; le WAF doit laisser
+GitHub livrer les webhooks. La connexion locale doit rester valide pendant le
+parcours. Les créations personnelles et d'organisation sont prises en charge
+avec une App privée par instance et plusieurs installations de cette App.
+
+Le manifest demande Contents/Metadata/Deployments en lecture,
+Pull requests/Commit statuses/Checks en écriture, avec l'événement Pull request.
+L'UI ne reçoit jamais le PEM, le secret webhook ni les tokens d'installation.
+Les credentials sont chiffrés en AES-256-GCM en PostgreSQL, avec une clé dérivée
+par HKDF du secret serveur `QA_API_TOKEN`. **Préserver ce secret avec la sauvegarde
+DB** ; le changer sans migration du chiffrement rend les credentials illisibles.
+Les sauvegardes restent des secrets. Le state de callback est lié à l'admin,
+hashé en SQL, valable 30 minutes et consommé une fois. Les installation IDs
+fournis par l'URL ne sont jamais utilisés comme preuve d'autorisation : les
+installations sont énumérées avec le JWT de l'App de cette instance.
+
+La sélection est explicite : aucune installation ne lance de QA avant d'avoir
+sélectionné les dépôts dans Canary. Si `GITHUB_ALLOWED_REPOS` est renseigné,
+l'accès effectif est l'intersection entre sélection UI et restriction serveur.
+L'accès admin suit cette sélection à chaque requête. Le worker synchronise les
+installations toutes les 60 secondes ; Actualiser applique immédiatement les
+retraits/suspensions. Une erreur réseau de synchronisation est journalisée et
+ne remplace pas la sélection par une liste partielle. Les runs en attente sur
+un dépôt retiré sont refusés ; la publication vérifie à nouveau la sélection.
+
+Les anciens PAT et paramètres App restent disponibles pour des installations
+techniques existantes, mais l'App gérée par l'UI a priorité une fois créée.
+Le service Compose peut démarrer sans connexion GitHub ; doctor affiche cette
+étape comme **skipped/onboarding pending**, jamais comme accès GitHub validé.
+La migration SQL version 5 conserve comptes, sessions, runs et preuves.
+
+Les livraisons de webhooks validées sont stockées en inbox SQL,
 dédupliquées ; le worker attend la preview jusqu'à `QA_PREVIEW_WAIT_SECONDS`, avec
 un nouvel essai toutes les 30 secondes. Les runs d'anciens SHA sont annulés.
 Les livraisons distinctes d'un même dépôt/PR/SHA partagent une seule entrée
