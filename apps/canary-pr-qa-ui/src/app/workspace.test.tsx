@@ -6,13 +6,14 @@ import { useWorkspace, WorkspaceProvider } from "./workspace";
 
 const apiMock = vi.fn();
 
-vi.mock("@/api/client", () => ({
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
   api: (...args: unknown[]) => apiMock(...args),
 }));
 
-vi.mock("./session", () => ({
-  useSession: () => ({ canWrite: true, isAdmin: false }),
-}));
+let session = { canWrite: true, isAdmin: false };
+
+vi.mock("./session", () => ({ useSession: () => session }));
 
 const setupStatus = {
   ai: { defaultModel: "model-x", endpoint: "ai.example.com" },
@@ -21,12 +22,29 @@ const setupStatus = {
 };
 
 function Probe() {
-  const { loadModels, model, models, modelsBusy } = useWorkspace();
+  const {
+    githubError,
+    loadGithub,
+    loadModels,
+    loadStatus,
+    model,
+    models,
+    modelsBusy,
+    statusError,
+  } = useWorkspace();
   return (
     <div>
       <span data-testid="busy">{String(modelsBusy)}</span>
       <span data-testid="count">{models?.data.length ?? -1}</span>
       <span data-testid="model">{model}</span>
+      <span data-testid="statusError">{statusError ?? ""}</span>
+      <span data-testid="githubError">{githubError ?? ""}</span>
+      <button onClick={() => void loadStatus()} type="button">
+        status
+      </button>
+      <button onClick={() => void loadGithub()} type="button">
+        github
+      </button>
       <button onClick={() => void loadModels()} type="button">
         reload
       </button>
@@ -49,6 +67,7 @@ function renderWorkspace() {
 }
 
 beforeEach(() => {
+  session = { canWrite: true, isAdmin: false };
   apiMock.mockReset();
   apiMock.mockImplementation((path: string) => {
     if (path === "/models") {
@@ -62,6 +81,53 @@ beforeEach(() => {
 });
 
 describe("WorkspaceProvider", () => {
+  it("exposes a failed setup status instead of pretending GitHub is absent", async () => {
+    let failing = true;
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/dashboard/status" && failing) {
+        return Promise.reject(new Error("Le serveur est injoignable."));
+      }
+      if (path === "/models") {
+        return Promise.resolve({
+          data: [{ id: "model-x" }],
+          defaultModel: "model-x",
+        });
+      }
+      return Promise.resolve(setupStatus);
+    });
+    renderWorkspace();
+    await waitFor(() =>
+      expect(screen.getByTestId("statusError")).toHaveTextContent("injoignable")
+    );
+    failing = false;
+    await userEvent.click(screen.getByRole("button", { name: "status" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("statusError")).toHaveTextContent("")
+    );
+  });
+
+  it("exposes a failed GitHub status so the panel can ask to retry", async () => {
+    session = { canWrite: true, isAdmin: true };
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/github/app") {
+        return Promise.reject(new Error("Contrat GitHub indisponible."));
+      }
+      if (path === "/models") {
+        return Promise.resolve({
+          data: [{ id: "model-x" }],
+          defaultModel: "model-x",
+        });
+      }
+      return Promise.resolve(setupStatus);
+    });
+    renderWorkspace();
+    await waitFor(() =>
+      expect(screen.getByTestId("githubError")).toHaveTextContent(
+        "Contrat GitHub indisponible."
+      )
+    );
+  });
+
   it("loads the catalogue once, even under StrictMode's double effect", async () => {
     renderWorkspace();
     await waitFor(() =>

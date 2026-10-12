@@ -20,6 +20,7 @@ import {
   toneFor,
   usageText,
 } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 type LiveRun = z.infer<typeof runJobSchema>;
 
@@ -48,6 +49,11 @@ function parseFrame(data: string): LiveRun | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+/** Phase tracker states: real utilities, the stylesheet has no `.done`. */
+const phaseBase = "rounded-full border px-2 py-1";
+const phaseDone = "border-pass/40 bg-pass/10 text-pass";
+const phaseActive = "border-primary-edge bg-primary/20 font-semibold";
+
 function phaseClass(
   index: number,
   phase: number,
@@ -55,12 +61,12 @@ function phaseClass(
   outcome: string | null | undefined
 ): string {
   if (name === "done") {
-    return outcome === "passed" ? "done" : "";
+    return outcome === "passed" ? phaseDone : "";
   }
   if (index === phase) {
-    return "active";
+    return phaseActive;
   }
-  return index < phase ? "done" : "";
+  return index < phase ? phaseDone : "";
 }
 
 function messageFor(data: LiveRun): string {
@@ -362,7 +368,10 @@ export function RunDetail({
       <ol className="mt-3 flex flex-wrap gap-2 text-xs" id="phaseList">
         {phaseSteps.map((step, index) => (
           <li
-            className={phaseClass(index, phase, progress?.phase, job?.outcome)}
+            className={cn(
+              phaseBase,
+              phaseClass(index, phase, progress?.phase, job?.outcome)
+            )}
             key={step}
           >
             {step}

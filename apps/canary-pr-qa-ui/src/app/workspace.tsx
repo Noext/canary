@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { api } from "@/api/client";
+import { api, errorText } from "@/api/client";
 import type {
   GitHubStatus,
   ModelCatalog,
@@ -19,6 +19,8 @@ import { useSession } from "./session";
 
 interface WorkspaceContextValue {
   github?: GitHubStatus;
+  /** Set when the GitHub status request failed: the state is unknown, not empty. */
+  githubError?: string;
   githubReady: boolean;
   loadGithub(): Promise<void>;
   /** Reloads the catalogue on demand (retry buttons); the initial load is automatic. */
@@ -35,6 +37,8 @@ interface WorkspaceContextValue {
   setPreflight(value: Preflight | undefined): void;
   setPreflightBusy(value: boolean): void;
   status?: SetupStatus;
+  /** Set when the setup status request failed, so the UI can retry it. */
+  statusError?: string;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(
@@ -52,6 +56,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<ModelCatalog>();
   const [github, setGithub] = useState<GitHubStatus>();
   const [modelsBusy, setModelsBusy] = useState(false);
+  const [statusError, setStatusError] = useState<string>();
+  const [githubError, setGithubError] = useState<string>();
   const inFlight = useRef(false);
   const loaded = useRef(false);
   const [modelsError, setModelsError] = useState<string>();
@@ -68,7 +74,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadStatus = useCallback(async () => {
-    setStatus(await api("/dashboard/status"));
+    try {
+      setStatus(await api("/dashboard/status"));
+      setStatusError(undefined);
+    } catch (failure) {
+      // Swallowing this would leave `githubReady` false and the New Test screen
+      // silently refusing to launch, with no error and no way to retry.
+      setStatusError(errorText(failure));
+    }
   }, []);
 
   const fetchModels = useCallback(
@@ -121,11 +134,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const loadModels = useCallback(() => fetchModels(true), [fetchModels]);
 
   const loadGithub = useCallback(async () => {
-    setGithub(await api("/github/app"));
+    try {
+      setGithub(await api("/github/app"));
+      setGithubError(undefined);
+    } catch (failure) {
+      // Without this, an admin whose request failed is shown "À connecter" and
+      // the creation form, as if no App existed.
+      setGithubError(errorText(failure));
+    }
   }, []);
 
   useEffect(() => {
-    void loadStatus().catch(() => undefined);
+    void loadStatus();
   }, [loadStatus]);
 
   useEffect(() => {
@@ -136,7 +156,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isAdmin) {
-      void loadGithub().catch(() => undefined);
+      void loadGithub();
     }
   }, [isAdmin, loadGithub]);
 
@@ -158,13 +178,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       loadModels,
       loadStatus,
       ...(github ? { github } : {}),
+      ...(githubError ? { githubError } : {}),
       ...(models ? { models } : {}),
       ...(preflight ? { preflight } : {}),
       ...(status ? { status } : {}),
+      ...(statusError ? { statusError } : {}),
     }),
     [
       chooseModel,
       github,
+      githubError,
       loadGithub,
       loadModels,
       loadStatus,
@@ -175,6 +198,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       preflight,
       preflightBusy,
       status,
+      statusError,
     ]
   );
 

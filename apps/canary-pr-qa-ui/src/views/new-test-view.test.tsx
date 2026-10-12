@@ -1,4 +1,10 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardError } from "@/api/client";
@@ -12,7 +18,7 @@ import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { NavigationProvider, useNavigation } from "@/app/navigation";
 import { SessionProvider } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
-import { newTest } from "@/i18n";
+import { common, newTest } from "@/i18n";
 import { NewTestView } from "./new-test-view";
 
 const { apiMock } = vi.hoisted(() => ({
@@ -405,6 +411,31 @@ describe("NewTestView", () => {
     expect(window.location.hash).toBe(`#${RUN_ID}`);
     expect(document.getElementById("preflightResult")).toBeNull();
     expect(byId("startRun")).toBeDisabled();
+  });
+
+  it("explains a failed setup status and lets the operator retry it", async () => {
+    let failing = true;
+    apiMock.mockImplementation(async (path: string) => {
+      if (path === "/dashboard/status" && failing) {
+        throw new DashboardError("Le serveur est injoignable.");
+      }
+      return defaultResponse(path);
+    });
+    renderScreen();
+
+    const blocker = await screen.findByText("Le serveur est injoignable.");
+    expect(blocker).toBeVisible();
+    expect(
+      within(byId("runBlocker")).getByRole("button", { name: common.retry })
+    ).toBeVisible();
+
+    failing = false;
+    await userEvent.click(
+      within(byId("runBlocker")).getByRole("button", { name: common.retry })
+    );
+    await waitFor(() =>
+      expect(document.getElementById("runBlocker")).toBeNull()
+    );
   });
 
   it("keeps the guide and the publication footnote", async () => {

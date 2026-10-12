@@ -88,7 +88,7 @@ function removalNotice(deleteApp: boolean, warnings: string[]): string {
 }
 
 export function GithubSettings(): ReactNode {
-  const { github, loadGithub, loadStatus } = useWorkspace();
+  const { github, githubError, loadGithub, loadStatus } = useWorkspace();
   const { refreshUser } = useSession();
   const { report } = useError();
 
@@ -229,7 +229,12 @@ export function GithubSettings(): ReactNode {
     (repository) =>
       repository.enabled && !isRestricted(repository.full_name, restriction)
   );
-  const connection = connectionFor(app, enabled.length);
+  // A failed status request means the connection is unknown, not absent: never
+  // advertise "À connecter" and the creation form on a transient error.
+  const pending = !github && Boolean(githubError);
+  const connection = pending
+    ? { label: common.checking, tone: "neutral" as const }
+    : connectionFor(app, enabled.length);
   const delivery =
     app && github?.lastDelivery
       ? settings.github.webhookLast(
@@ -281,9 +286,22 @@ export function GithubSettings(): ReactNode {
       >
         {error}
       </p>
+      {pending ? (
+        <Notice className="mt-3" id="githubPending" tone="error">
+          {githubError}
+          <Button
+            className="mt-2"
+            onClick={() => void loadGithub()}
+            type="button"
+            variant="secondary"
+          >
+            {common.retry}
+          </Button>
+        </Notice>
+      ) : null}
       <form
         className="mt-4 grid gap-3"
-        hidden={Boolean(app)}
+        hidden={pending || Boolean(app)}
         id="githubCreate"
         onSubmit={createApp}
       >
@@ -318,7 +336,7 @@ export function GithubSettings(): ReactNode {
           {settings.github.createCta}
         </Button>
       </form>
-      <div hidden={!app} id="githubAppActions">
+      <div hidden={pending || !app} id="githubAppActions">
         <p className="mt-4 text-muted-foreground text-sm" id="githubAppName">
           {app ? settings.github.appName(app.slug, app.id) : ""}
         </p>

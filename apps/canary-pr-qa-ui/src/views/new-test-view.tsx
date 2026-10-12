@@ -16,7 +16,7 @@ import {
   Input,
   Select,
 } from "@/components/ui/form";
-import { newTest } from "@/i18n";
+import { common, newTest } from "@/i18n";
 
 interface RunInput {
   model: string;
@@ -91,6 +91,8 @@ export function NewTestView() {
     setModel,
     setPreflight,
     setPreflightBusy,
+    loadStatus,
+    statusError,
   } = useWorkspace();
 
   const form = useRef<HTMLFormElement>(null);
@@ -200,9 +202,19 @@ export function NewTestView() {
               <CardDescription>{newTest.intro}</CardDescription>
             </div>
           </CardHeader>
-          {githubReady ? null : (
+          {githubReady && !statusError ? null : (
             <Notice className="mb-4" id="runBlocker" tone="warning">
-              {newTest.blocker}
+              {statusError ?? newTest.blocker}
+              {statusError ? (
+                <Button
+                  className="mt-2"
+                  onClick={() => void loadStatus()}
+                  type="button"
+                  variant="secondary"
+                >
+                  {common.retry}
+                </Button>
+              ) : null}
             </Notice>
           )}
           <form
