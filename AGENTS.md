@@ -98,20 +98,29 @@ Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the 
 
 ## Frontend PR QA : règles de contribution
 
-- Conserver le HTML dans `apps/canary-pr-qa/src/dashboard/index.html`, le CSS
-  dans `styles.css` et la logique dans des modules TypeScript par fonctionnalité.
-  Ne pas réintroduire de blocs HTML/CSS/JavaScript applicatifs dans des chaînes TS.
-- `dashboard.ts` ne fait que référencer les ressources compilées. Le build
-  navigateur passe par `scripts/dashboard-assets.mjs`, aussi utilisé en test/dev.
-  Garder le navigateur sans imports runtime du backend ou accès à ses secrets.
-- Réutiliser les types du backend pour comptes/jobs/résultats. Vérifier tout
-  changement de contrôle dans `dom.ts` et le test de cohérence des IDs HTML.
-- Garder la CSP de la page sans `unsafe-inline` et utiliser `textContent` pour
-  les données utilisateur/PR. Ne pas ajouter de dépendance frontend uniquement
-  pour contourner un défaut de structure.
-- Exécuter `pnpm check`, le build PR QA et les E2E Chromium avant livraison ;
-  vérifier la CI Compose pour les changements au pipeline de ressources.
-  Lire la section Frontend du README pour les source maps et diagnostics.
+- Le dashboard est une application React 19 + Vite dans `apps/canary-pr-qa-ui`
+  (`@usecanary/pr-qa-ui`) : composants, hooks, TypeScript strict, Tailwind v4,
+  tests Vitest + Testing Library. Aucune écriture DOM impérative
+  (`getElementById`, `textContent =`, `innerHTML`) et aucun bloc HTML/CSS
+  applicatif dans des chaînes TS.
+- `apps/canary-pr-qa` embarque le build Vite à la compilation
+  (`scripts/ui-assets.mjs`, chargeur esbuild `?ui`) : `dist/cli.js` reste
+  auto-contenu et les assets sont servis sous `/dashboard/assets/*`. Ne pas
+  ajouter d'étape Docker ni de fichier statique à copier ; lancer
+  `pnpm --filter @usecanary/pr-qa-ui build` avant de reconstruire `pr-qa` seul.
+- Toute réponse serveur passe par `src/api/client.ts` (schémas Zod dans
+  `src/api/schemas.ts`) et tout texte visible vient de `src/i18n.ts`. Un
+  changement de contrat HTTP se répercute des deux côtés
+  (`apps/canary-pr-qa/src/dashboard/contracts.ts` et
+  `apps/canary-pr-qa-ui/src/api/contracts.ts`).
+- Conserver les `id` et les libellés français assertés par l'e2e Chromium
+  (`apps/canary-pr-qa/test/e2e.test.ts`) et `test/sql.test.ts`.
+- Garder la CSP sans `unsafe-inline` : pas de `<style>` ni d'attribut `style=`
+  en ligne, pas de script inline, et pas de dépendance ajoutée pour contourner
+  un défaut de structure.
+- Exécuter `pnpm check`, le build PR QA et les E2E avant livraison ; vérifier la
+  CI Compose pour les changements au pipeline de ressources. Lire la section
+  Frontend du README pour les source maps et diagnostics.
 
 ## Instructions aux agents : installation PR QA en production sur VPS
 

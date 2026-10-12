@@ -1,15 +1,12 @@
-import client from "./dashboard/client.ts?browser";
-import html from "./dashboard/index.html?raw";
-import styles from "./dashboard/styles.css?raw";
+import ui from "./dashboard/ui-assets?ui";
 
-export const dashboard = html;
-export const dashboardAssets = new Map([
-  [
-    "/dashboard/assets/styles.css",
-    { type: "text/css; charset=utf-8", body: styles },
-  ],
-  [
-    "/dashboard/assets/client.js",
-    { type: "text/javascript; charset=utf-8", body: client },
-  ],
-]);
+/**
+ * The compiled dashboard: one HTML shell plus the assets it references.
+ * The shell and every asset come from the `@usecanary/pr-qa-ui` Vite build,
+ * embedded here at build time so `dist/cli.js` remains self-contained.
+ */
+export const dashboard = ui.html;
+
+export const dashboardAssets = new Map(
+  ui.assets.map((asset) => [asset.path, { body: asset.body, type: asset.type }])
+);

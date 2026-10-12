@@ -1,8 +1,8 @@
-declare module "*?raw" {
-  const asset: string;
-  export default asset;
+interface DashboardUiAssets {
+  assets: { body: string; path: string; type: string }[];
+  html: string;
 }
-declare module "*?browser" {
-  const bundle: string;
-  export default bundle;
+declare module "*?ui" {
+  const ui: DashboardUiAssets;
+  export default ui;
 }

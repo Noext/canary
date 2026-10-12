@@ -1143,7 +1143,10 @@ it("checks PR, model and exact preview version without enqueueing, generating AI
   expect(script.headers.get("Content-Type")).toContain("text/javascript");
   expect(script.headers.get("X-Content-Type-Options")).toBe("nosniff");
   expect(await script.text()).toContain("sourceMappingURL=");
-  const css = await fetch(`${url}/dashboard/assets/styles.css`);
+  const map = await fetch(`${url}/dashboard/assets/client.js.map`);
+  expect(map.status).toBe(200);
+  expect(map.headers.get("Content-Type")).toContain("application/json");
+  const css = await fetch(`${url}/dashboard/assets/client.css`);
   expect(css.status).toBe(200);
   expect(css.headers.get("Content-Type")).toContain("text/css");
   const status = await fetch(`${url}/dashboard/status`, { headers });
@@ -1322,9 +1325,13 @@ it("disconnects the connected GitHub App from the admin API, uninstalls it on Gi
   );
   await setup.select(["fixture/app"]);
   expect((await setup.status()).app?.id).toBe("95001");
+  // The dashboard is a React single-page application: the removal controls are
+  // rendered by the browser bundle, not present in the served HTML shell.
   const page = await (await call("/")).text();
-  expect(page).toContain('id="githubUninstall"');
-  expect(page).toContain('id="githubDeleteApp"');
+  expect(page).toContain('id="root"');
+  const bundle = await (await call("/dashboard/assets/client.js")).text();
+  expect(bundle).toContain("githubUninstall");
+  expect(bundle).toContain("githubDeleteApp");
   const response = await call("/github/app", "DELETE", {});
   expect(response.status).toBe(200);
   const body = (await response.json()) as Awaited<

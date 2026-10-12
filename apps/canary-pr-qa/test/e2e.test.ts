@@ -1071,7 +1071,7 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     const layout = await canary.act(
       session,
       "connected-mobile-layout",
-      `const page=await browser.getPage("qa"); await page.setViewportSize({width:390,height:844}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>({fits:document.documentElement.scrollWidth<=innerWidth,runVisible:!document.getElementById("runForm").closest("section").hidden,createHidden:getComputedStyle(document.getElementById("githubCreate")).display==="none"}))}));`
+      `const page=await browser.getPage("qa"); await page.setViewportSize({width:390,height:844}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>({fits:document.documentElement.scrollWidth<=innerWidth,runVisible:!document.getElementById("runForm").closest("section").hidden,createHidden:(()=>{const form=document.getElementById("githubCreate");return !form||getComputedStyle(form).display==="none"})()}))}));`
     );
     expect(layout.actual).toEqual({
       fits: true,

@@ -293,49 +293,53 @@ refuse de recréer un administrateur quand un compte local existe déjà.
 
 ## Frontend : structure et diagnostic
 
-Le dashboard utilise des fichiers sources HTML/CSS et des modules TypeScript
-stricts dans `src/dashboard/`. Il partage les types de comptes, jobs et résultats
-avec le backend. Les réponses de préparation sont contrôlées côté serveur par
-les mêmes contrats. Aucun JavaScript applicatif n'est conservé dans une chaîne
-pour échapper au lint ou au contrôle de types.
+Le dashboard est une application **React 19 + Vite** dans le workspace
+[`apps/canary-pr-qa-ui`](../../apps/canary-pr-qa-ui) (`@usecanary/pr-qa-ui`) :
+composants, hooks, TypeScript strict, Tailwind v4, tests Vitest + Testing
+Library. Aucun JavaScript applicatif n'est conservé dans une chaîne et aucune
+écriture DOM impérative n'est admise.
 
 | Fichier | Responsabilité |
 | --- | --- |
-| `index.html`, `styles.css` | Structure accessible et styles adaptatifs |
-| `client.ts` | Initialisation des fonctionnalités |
-| `auth.ts` | Connexion locale/technique, bootstrap, expiration de session |
-| `github.ts` | Création, installation et sélection des dépôts de l'App |
-| `models.ts` | Catalogue et choix explicite du modèle |
-| `overview.ts`, `navigation.ts` | Actions d'accueil et navigation selon le rôle |
-| `runs.ts`, `results.ts` | Préflight, lancement, suivi SSE, assertions et vidéos |
-| `api.ts`, `contracts.ts`, `state.ts`, `dom.ts` | HTTP, erreurs, contrats, état et contrôles typés |
-| `presentation.ts` | Libellés, badges et chemins de preuves |
+| `src/api/client.ts` | HTTP, erreurs typées, événement d'expiration de session |
+| `src/api/schemas.ts`, `src/api/contracts.ts` | Schémas Zod et types du contrat HTTP |
+| `src/i18n.ts` | Textes français, libellés d'états, phases et messages d'erreur |
+| `src/app/*` | Session, espace de travail (statuts, modèles), navigation, coquille |
+| `src/views/*` | Connexion, accueil, nouveau test, historique et détail, réglages |
+| `src/components/ui/*` | Boutons, champs, tableaux, pastilles et notices |
 
-`scripts/dashboard-assets.mjs` compile le code navigateur avec esbuild, séparément
-du CLI Node. Le build intègre ces ressources au CLI autonome : aucun fichier
-statique à copier sur le VPS. `dashboard.ts` associe uniquement leurs URLs et
-leurs types MIME. Les scripts et styles sont servis sur `/dashboard/assets/`
-et la page applique une CSP sans `unsafe-inline`. Les ressources ne contiennent
-ni credentials ni données de comptes/runs.
+`apps/canary-pr-qa/scripts/ui-assets.mjs` lit le build Vite et l'embarque dans le
+CLI Node via le chargeur esbuild `?ui` : `dist/cli.js` reste autonome, aucun
+fichier statique à copier sur le VPS. `dashboard.ts` associe uniquement les URLs
+et les types MIME. Les scripts et styles sont servis sur `/dashboard/assets/` et
+la page applique une CSP sans `unsafe-inline` (donc pas d'attribut `style=` ni de
+`<style>` en ligne dans les composants). Les ressources ne contiennent ni
+credentials ni données de comptes/runs.
 
 Pour contribuer depuis un clone installé :
 
 ```bash
-pnpm --filter @usecanary/pr-qa compile
+pnpm --filter @usecanary/pr-qa-ui dev        # Vite + proxy API sur 127.0.0.1:8787
+pnpm --filter @usecanary/pr-qa-ui test       # composants (Vitest + Testing Library)
+pnpm --filter @usecanary/pr-qa-ui compile    # tsc --noEmit
+pnpm --filter @usecanary/pr-qa-ui build      # dist/ consommé par pr-qa
 pnpm --filter @usecanary/pr-qa test
 pnpm --filter @usecanary/pr-qa test:e2e
 pnpm --filter @usecanary/pr-qa build
-pnpm --filter @usecanary/pr-qa dev -- --help
 ```
 
-`dev` utilise le même build que la production, puis transmet les arguments au CLI ;
-relancer après une modification. Les source maps du module navigateur permettent
-de poser un point d'arrêt dans les fichiers TypeScript via les outils développeur.
-Inspecter Console et Réseau : une erreur HTTP présente sa référence de requête,
-les connexions SSE sont dans `/runs/<id>/events`. Les source maps du CLI existent
-aussi dans `dist/`. Pour les incidents de worker, utiliser le run ID du diagnostic
-et les commandes du guide d'exploitation. Les tests chargent réellement le CSS
-et vérifient les ressources, la CSP, les IDs du template et les parcours Chromium.
+`dev` du dashboard suppose le serveur PR QA démarré avec sa base (`pnpm --filter
+@usecanary/pr-qa dev -- serve`) : Vite proxifie l'API sur la même origine, ce qui
+préserve le cookie de session et le contrôle Origin/Host du serveur. `dev` du CLI
+embarque le dernier build du dashboard : relancer
+`pnpm --filter @usecanary/pr-qa-ui build` après une modification de l'interface.
+Les source maps (inline dans `client.js`) permettent de poser un point d'arrêt
+dans les fichiers TypeScript via les outils développeur. Inspecter Console et
+Réseau : une erreur HTTP présente sa référence de requête, les connexions SSE
+sont dans `/runs/<id>/events`. Les source maps du CLI existent aussi dans
+`dist/`. Pour les incidents de worker, utiliser le run ID du diagnostic et les
+commandes du guide d'exploitation. Les tests chargent réellement le CSS et
+vérifient les ressources, la CSP et les parcours Chromium.
 
 ## Premier usage du dashboard
 

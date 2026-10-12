@@ -1,19 +1,16 @@
 import { defineConfig } from "vitest/config";
-import { bundleDashboard } from "./scripts/dashboard-assets.mjs";
+import { readUiAssets } from "./scripts/ui-assets.mjs";
 
 export default defineConfig({
   plugins: [
     {
-      name: "dashboard-browser",
       enforce: "pre",
+      name: "dashboard-ui-assets",
       async load(id) {
-        if (!id.endsWith("?browser")) {
+        if (!id.endsWith("?ui")) {
           return;
         }
-        return (
-          "export default " +
-          JSON.stringify(await bundleDashboard(id.slice(0, -8)))
-        );
+        return `export default ${JSON.stringify(await readUiAssets())}`;
       },
     },
   ],
