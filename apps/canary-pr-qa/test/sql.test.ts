@@ -541,8 +541,22 @@ it("creates the first local admin once, authenticates without SSO, revokes sessi
   );
   const auth = new LocalAuth(q.pool);
   const ticket = await auth.issueSetupTicket();
+  const localUsersFile = join(f.dataDir, "legacy-users.json");
+  const viewerToken = "legacy-viewer-token-2026-123456789";
+  await writeFile(
+    localUsersFile,
+    JSON.stringify([
+      {
+        id: "legacy-viewer",
+        role: "viewer",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
+      },
+    ])
+  );
   const config = {
     ...f.config,
+    QA_USERS_FILE: localUsersFile,
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
   };
@@ -585,6 +599,21 @@ it("creates the first local admin once, authenticates without SSO, revokes sessi
   expect(await (await fetch(`${url}/auth/status`)).json()).toEqual({
     initialized: true,
   });
+  const mixed = await fetch(`${url}/me`, {
+    headers: { Cookie: cookie, Authorization: `Bearer ${viewerToken}` },
+  });
+  expect(await mixed.json()).toMatchObject({
+    id: "legacy-viewer",
+    role: "viewer",
+  });
+  expect(
+    (
+      await fetch(`${url}/me`, {
+        headers: { Cookie: cookie, Authorization: "Bearer invalid-token" },
+      })
+    ).status
+  ).toBe(401);
+
   await expect(auth.issueSetupTicket()).rejects.toThrow("existe déjà");
   expect(
     (await submit("/auth/setup", { ...credentials, setupCode: ticket })).status
@@ -652,6 +681,19 @@ it("creates the first local admin once, authenticates without SSO, revokes sessi
   expect(await q.get(existing.id)).toBeDefined();
   await q.migrate();
   expect(await auth.status()).toEqual({ initialized: true });
+  const changedRepos = ["fixture/new-project"];
+  const newestLogin = await auth.login({
+    username: credentials.username,
+    password: "replacement-password-2026",
+  });
+  const newestToken = await auth.session(newestLogin!);
+  const updatedPrincipal = await auth.principal(
+    {
+      headers: { cookie: `qa_local_session=${newestToken}` },
+    } as import("node:http").IncomingMessage,
+    changedRepos
+  );
+  expect(updatedPrincipal?.repos).toEqual(changedRepos);
   const newTicket = await q.pool.query(
     "SELECT token_hash FROM qa_setup_ticket"
   );
@@ -684,14 +726,34 @@ it("expires setup links and shares local login rate limits in SQL", async () => 
     "UPDATE qa_local_sessions SET expires_at=now()-interval '1 second'"
   );
   expect(
-    await auth.principal({
-      headers: { cookie: `qa_local_session=${token}` },
-    } as import("node:http").IncomingMessage)
+    await auth.principal(
+      {
+        headers: { cookie: `qa_local_session=${token}` },
+      } as import("node:http").IncomingMessage,
+      ["fixture/app"]
+    )
   ).toBeUndefined();
   await q.pool.query(
     "INSERT INTO qa_auth_attempts(key,count,expires_at) VALUES('global-login',120,now()+interval '1 minute')"
   );
+  await q.pool.query(
+    "INSERT INTO qa_auth_attempts(key,count,expires_at) SELECT 'expired-'||n,1,now()-interval '1 minute' FROM generate_series(1,300) n"
+  );
   await expect(
     auth.login({ username: "qa-admin", password: "test-password-2026" })
   ).rejects.toMatchObject({ code: "AUTH_RATE_LIMIT" });
+  expect(
+    (
+      await q.pool.query(
+        "SELECT count(*)::int AS count FROM qa_auth_attempts WHERE expires_at<now()"
+      )
+    ).rows[0].count
+  ).toBeLessThanOrEqual(50);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT key FROM qa_auth_attempts WHERE expires_at>now()"
+      )
+    ).rows
+  ).toEqual([{ key: "global-login" }]);
 }, 30_000);

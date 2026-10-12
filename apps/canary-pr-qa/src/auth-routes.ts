@@ -47,7 +47,12 @@ export function authRoutes(
       id: user.id,
       username: user.username,
       role: user.role,
-      repos: user.repos,
+      repos:
+        user.role === "admin"
+          ? config.allowedRepos
+          : user.repos.filter((repo) =>
+              config.allowedRepos.includes(repo.toLowerCase())
+            ),
     });
     return true;
   };

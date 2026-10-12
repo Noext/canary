@@ -820,7 +820,29 @@ it("creates a local admin and logs in/out with a password in real mobile Chromiu
       ","
     ),
   });
-  const id = await canary.start("Local account setup and password login");
+  const legacyLogin = await fetch(`${url}/session`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+  });
+  const legacyValue = legacyLogin.headers
+    .get("set-cookie")!
+    .split(";")[0]!
+    .slice("qa_session=".length);
+  const id = await canary.start("Local account setup and password login", {
+    cookies: [
+      {
+        name: "qa_session",
+        value: legacyValue,
+        domain: "127.0.0.1",
+        path: "/",
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+        expires: -1,
+      },
+    ],
+    origins: [],
+  });
   const act = (
     label: string,
     action: Parameters<typeof compileAction>[0],

@@ -61,11 +61,13 @@ export async function principal(
   config: Config,
   local?: LocalAuth
 ): Promise<Principal | undefined> {
-  const account = await local?.principal(req);
+  const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+  const account = token
+    ? undefined
+    : await local?.principal(req, config.allowedRepos);
   if (account) {
     return account;
   }
-  const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
   const records = await users(config);
   if (token && equal(token, config.QA_API_TOKEN)) {
     return { id: "bootstrap-admin", role: "admin", repos: config.allowedRepos };
@@ -93,6 +95,9 @@ export async function principal(
         }
       }
     }
+  }
+  if (token) {
+    return;
   }
   return cookiePrincipal(req, config, records);
 }

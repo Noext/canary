@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS qa_setup_ticket (
 CREATE TABLE IF NOT EXISTS qa_auth_attempts (
  key text PRIMARY KEY, count integer NOT NULL, expires_at timestamptz NOT NULL
 );
+CREATE INDEX IF NOT EXISTS qa_auth_attempt_expiry ON qa_auth_attempts(expires_at,key);
 `;
 export const Username = z
   .string()
@@ -200,21 +201,11 @@ export class LocalAuth {
   }
   async login(input: z.infer<typeof Credentials>) {
     const key = hash(input.username);
-    const attempts = await this.pool.query(
-      "INSERT INTO qa_auth_attempts(key,count,expires_at) VALUES($1,1,now()+interval '1 minute'),('global-login',1,now()+interval '1 minute') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN qa_auth_attempts.expires_at<now() THEN 1 ELSE qa_auth_attempts.count+1 END,expires_at=CASE WHEN qa_auth_attempts.expires_at<now() THEN EXCLUDED.expires_at ELSE qa_auth_attempts.expires_at END RETURNING key,count",
-      [key]
+    await this.pool.query(
+      "DELETE FROM qa_auth_attempts WHERE key IN (SELECT key FROM qa_auth_attempts WHERE expires_at<now() ORDER BY expires_at,key LIMIT 250)"
     );
-    if (
-      attempts.rows.some(
-        (row) => row.count > (row.key === "global-login" ? 120 : 10)
-      )
-    ) {
-      throw new QaError(
-        "AUTH_RATE_LIMIT",
-        "Trop de tentatives. Réessayez dans une minute.",
-        "Login attempts are limited in PostgreSQL."
-      );
-    }
+    await this.admitAttempt("global-login", 120);
+    await this.admitAttempt(key, 10);
     const row = (
       await this.pool.query<UserRow>(
         "SELECT * FROM qa_local_users WHERE username=$1",
@@ -236,6 +227,19 @@ export class LocalAuth {
       passwordProof: row.password_hash,
     };
   }
+  private async admitAttempt(key: string, maximum: number) {
+    const attempts = await this.pool.query(
+      "INSERT INTO qa_auth_attempts(key,count,expires_at) VALUES($1,1,now()+interval '1 minute') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN qa_auth_attempts.expires_at<now() THEN 1 ELSE qa_auth_attempts.count+1 END,expires_at=CASE WHEN qa_auth_attempts.expires_at<now() THEN EXCLUDED.expires_at ELSE qa_auth_attempts.expires_at END RETURNING count",
+      [key]
+    );
+    if (attempts.rows[0].count > maximum) {
+      throw new QaError(
+        "AUTH_RATE_LIMIT",
+        "Trop de tentatives. Réessayez dans une minute.",
+        "Login attempts are limited in PostgreSQL."
+      );
+    }
+  }
   async session(user: Principal & { passwordProof: string }) {
     const token = randomBytes(32).toString("base64url");
     await this.pool.query(
@@ -253,7 +257,10 @@ export class LocalAuth {
     }
     return token;
   }
-  async principal(req: IncomingMessage): Promise<Principal | undefined> {
+  async principal(
+    req: IncomingMessage,
+    allowedRepos: string[]
+  ): Promise<Principal | undefined> {
     const token = sessionToken(req);
     if (!token) {
       return;
@@ -268,7 +275,14 @@ export class LocalAuth {
       return {
         id: `local:${row.id}`,
         role: row.role,
-        repos: row.repos,
+        repos:
+          row.role === "admin"
+            ? allowedRepos
+            : row.repos.filter((repo) =>
+                allowedRepos
+                  .map((value) => value.toLowerCase())
+                  .includes(repo.toLowerCase())
+              ),
         username: row.username,
       };
     }
