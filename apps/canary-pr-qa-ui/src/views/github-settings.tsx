@@ -27,11 +27,6 @@ import {
 import { common, settings } from "@/i18n";
 import { formatDate, type Tone } from "@/lib/format";
 
-/** Copy the shared i18n module does not carry yet. */
-const UNINSTALL_CTA = "Désinstaller l'App de mes dépôts";
-const DANGER_BODY =
-  "La désinstallation révoque les webhooks et les accès de l'App ; la suppression efface aussi l'App de GitHub et ne peut pas être annulée. Dans les deux cas la connexion locale est effacée.";
-
 type RemovalKind = "delete" | "uninstall";
 type Operation = RemovalKind | "create" | "install" | "refresh" | "save";
 
@@ -412,14 +407,16 @@ export function GithubSettings(): ReactNode {
           <summary className="cursor-pointer font-medium text-sm">
             {settings.github.dangerSummary}
           </summary>
-          <p className="mt-2 text-muted-foreground text-sm">{DANGER_BODY}</p>
+          <p className="mt-2 text-muted-foreground text-sm">
+            {settings.github.dangerBody}
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               disabled={busy === "uninstall"}
               id="githubUninstall"
               onClick={() => setRemoval("uninstall")}
             >
-              {UNINSTALL_CTA}
+              {settings.github.uninstallCta}
             </Button>
             <Button
               disabled={busy === "delete"}

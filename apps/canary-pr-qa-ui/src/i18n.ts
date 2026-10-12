@@ -143,6 +143,10 @@ export const auth = {
   passwordLabel: "Mot de passe",
   passwordMismatch: "Les mots de passe ne correspondent pas.",
   passwordPlaceholder: "Votre mot de passe",
+  passwordToggleAria: {
+    hide: "Masquer le mot de passe",
+    show: "Afficher le mot de passe",
+  },
   setupCommandPrefix:
     "docker compose exec -T pr-qa canary-pr-qa setup-admin --origin ",
   setupInstructions:
@@ -198,6 +202,23 @@ export const home = {
   actionViewer: "Voir les tests",
   actionStart: "Configurer mon espace",
   actionRun: "Tester une pull request",
+  actionChooseModel: "Choisir mon modèle IA",
+  githubChooseRepos: "Choisir vos dépôts →",
+  githubConnect: "Connecter GitHub →",
+  githubTechnical: "Accès technique actif",
+  modelStateBusy: "Chargement du catalogue…",
+  modelStateReady: "Modèle disponible",
+  modelStateRetry: "Vérifier la connexion →",
+  modelStateUnavailable:
+    "Modèle par défaut indisponible : choisissez explicitement un modèle.",
+  noteProgress:
+    "Votre progression est enregistrée. Commencez par l’étape indiquée.",
+  noteReady: "PR + application de test → scénarios, vidéos et résultat.",
+  noteViewer: "Votre compte dispose d’un accès en lecture.",
+  onboardingIntro:
+    "Suivez ces étapes dans l’ordre. Votre configuration est conservée.",
+  runsLoading: "Chargement de vos tests…",
+  setupCount: (ready: number) => `${ready}/2 connexions prêtes`,
 } as const;
 
 export const newTest = {
@@ -222,9 +243,15 @@ export const newTest = {
   intro: "La vérification des accès précède le lancement des scénarios.",
   launch: "Lancer le test",
   launching: "Création du test…",
+  modelAvailable: (count: number) =>
+    `${count} modèles disponibles · aucun remplacement automatique.`,
+  modelChoose: "Choisir un modèle",
   modelLabel: "Modèle IA pour ce test",
   modelLoading: "Chargement des modèles…",
   modelRefresh: "Actualiser les modèles",
+  modelRequired:
+    "Modèle précédent ou par défaut indisponible : choisissez explicitement un modèle.",
+  modelUnavailable: "Catalogue indisponible",
   previewHelp:
     "C'est le site que Chromium visitera. Laissez vide si GitHub fournit déjà une preview pour cette PR.",
   previewLabel: "URL de l'application de test",
@@ -251,13 +278,22 @@ export const runs = {
   emptyIntro: "Lancez votre premier test depuis « Nouveau test ».",
   emptyTitle: "Aucun test pour le moment",
   eventsLoading: "En attente du worker…",
+  filteredEmptyIntro: "Modifiez votre recherche ou revenez à tous les états.",
+  filteredEmptyTitle: "Aucun test ne correspond à ces filtres",
   filters: {
     all: "Tous les états",
+    cancelled: "Annulés",
+    completed: "Terminés",
+    interrupted: "Interrompus",
     search: "Rechercher un dépôt ou un commit",
     searchLabel: "Rechercher un projet ou SHA",
     statusLabel: "Filtrer les tests",
     submit: "Filtrer",
   },
+  // Two labels for the model of a run recorded before options were stored: the
+  // history table shows the first, the detail provenance the second.
+  historicalModel: "Historique",
+  historicalModelDetail: "Modèle historique",
   historyTitle: "Historique des tests",
   historyIntro: "Vos tests récents, leur état et leurs résultats.",
   liveConnected: "Suivi en direct connecté",
@@ -266,8 +302,12 @@ export const runs = {
   liveInterrupted: "Le test a été interrompu : ",
   liveInvalid: "Suivi interrompu : réponse invalide",
   liveReconnecting: "Reconnexion du suivi…",
+  invalidFrame: "Le suivi du test a renvoyé une réponse invalide.",
+  missingResult: "Aucun rapport de scénarios disponible pour ce test. ",
   phaseDetail: (scenario: string, action: string) => `${scenario} · ${action}`,
   report: "Ouvrir le rapport",
+  resultFallback: "Résultat disponible.",
+  runIdentifierPrefix: "Run ID : ",
   githubResult: "Résultat sur GitHub ↗",
   technicalSummary: "Diagnostic technique et données du run",
   technicalIntro:
@@ -281,6 +321,9 @@ export const runs = {
     result: "Résultat",
     status: "État",
   },
+  assertions: (passed: number, total: number) =>
+    `${passed}/${total} assertions validées`,
+  assertionsEmpty: "Aucune assertion exécutée",
   usage: (tokens: number, costUsd: number, configured: boolean) =>
     `${tokens} tokens · ${
       configured ? `coût estimé $${costUsd.toFixed(4)}` : "coût non configuré"
@@ -291,6 +334,7 @@ export const runs = {
 export const settings = {
   ai: {
     catalog: (count: number) => `${count} modèles disponibles`,
+    catalogAccessible: "Catalogue accessible",
     defaultModel: (model: string) => `Modèle par défaut : ${model}`,
     endpoint: (host: string) => `Endpoint : ${host}`,
     failureHelp:
@@ -298,6 +342,7 @@ export const settings = {
     failureSummary: "Si la connexion échoue",
     intro:
       "Canary utilise l’endpoint configuré sur votre serveur. Le modèle se choisit pour chaque test.",
+    needsAttention: "Connexion à vérifier",
     retry: "Vérifier à nouveau l'accès IA",
     title: "Votre fournisseur IA",
   },
@@ -314,7 +359,10 @@ export const settings = {
     created:
       "App créée. Installez-la sur GitHub, actualisez la connexion puis choisissez vos dépôts.",
     dangerSummary: "Supprimer la connexion GitHub",
+    dangerBody:
+      "La désinstallation révoque les webhooks et les accès de l'App ; la suppression efface aussi l'App de GitHub et ne peut pas être annulée. Dans les deux cas la connexion locale est effacée.",
     deleteApp: "Supprimer l'App GitHub",
+    uninstallCta: "Désinstaller l'App de mes dépôts",
     emptyRepos:
       "Aucun dépôt accessible. Installez votre App puis cliquez sur Actualiser.",
     installCta: "Installer / gérer les dépôts sur GitHub",
@@ -359,11 +407,14 @@ export const settings = {
   preview: {
     help: "Ces restrictions sont configurées par l’opérateur du serveur. Le bouton Vérifier les accès vous donne un diagnostic avant lancement.",
     hosts: (hosts: string) => `Hôtes autorisés : ${hosts}`,
+    hostsFallback: "Les hôtes sont définis par l'opérateur du serveur.",
     intro:
       "Pour chaque PR, Canary a besoin d'une URL de test présentant exactement ses changements.",
     modeAutomatic:
       "Canary déduit l'URL de test à partir du déploiement de la PR.",
     modeManual: "Renseignez l'URL de test de chaque PR dans le formulaire.",
+    proofFallback:
+      "L'application doit exposer le commit dans un en-tête de version.",
     proofHeader: (header: string) => `En-tête de version : ${header}`,
     proofPath: (path: string) => `Chemin de version : ${path}`,
     title: "L'application à tester",
@@ -374,6 +425,7 @@ export const settings = {
 
 export const common = {
   cancel: "Annuler",
+  checking: "Vérification…",
   confirm: "Confirmer",
   loading: "Chargement…",
   retry: "Réessayer",

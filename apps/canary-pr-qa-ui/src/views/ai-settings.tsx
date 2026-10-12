@@ -8,26 +8,21 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/form";
-import { settings } from "@/i18n";
+import { common, settings } from "@/i18n";
 import type { Tone } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-/** Copy the shared i18n module does not carry yet. */
-const AI_VERIFYING = "Vérification…";
-const AI_CATALOG_ACCESSIBLE = "Catalogue accessible";
-const AI_NEEDS_ATTENTION = "Connexion à vérifier";
 
 function aiConnectionFor(
   hasCatalog: boolean,
   failure: string | undefined
 ): { label: string; tone: Tone } {
   if (failure) {
-    return { label: AI_NEEDS_ATTENTION, tone: "failed" };
+    return { label: settings.ai.needsAttention, tone: "failed" };
   }
   if (hasCatalog) {
-    return { label: AI_CATALOG_ACCESSIBLE, tone: "success" };
+    return { label: settings.ai.catalogAccessible, tone: "success" };
   }
-  return { label: AI_VERIFYING, tone: "neutral" };
+  return { label: common.checking, tone: "neutral" };
 }
 
 export function AiSettings(): ReactNode {

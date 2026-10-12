@@ -142,37 +142,58 @@ export const cancelSchema = z.object({ cancelRequested: z.literal(true) });
 
 export const okSchema = z.object({ ok: z.literal(true) });
 
-const scenarioSummarySchema = z.object({
-  artifacts: z.array(z.string()),
-  error: z.string().nullish(),
-  outcome: outcomeSchema,
-  scenario: z.object({ id: z.string(), title: z.string() }),
+const resultAssertionSchema = z.object({
+  actual: z.unknown().optional(),
+  baseline: z.unknown().optional(),
+  id: z.string(),
+  passed: z.boolean(),
+  persisted: z.unknown().optional(),
 });
 
-export const runResultSchema = z.object({
-  endedAt: z.string().nullish(),
-  error: z.string().nullish(),
+/** The planned assertion, matched by id to label the executed one. */
+const planAssertionSchema = z.object({
+  description: z.string().nullish(),
   id: z.string(),
-  outcome: outcomeSchema,
-  preview: z.object({ sha: z.string(), url: z.string() }).nullish(),
-  prUrl: z.string(),
-  publication: z
-    .object({ commentUrl: z.string(), status: z.string() })
-    .nullish(),
-  scenarios: z.array(scenarioSummarySchema),
-  sha: z.string().nullish(),
-  startedAt: z.string(),
-  usage: z
-    .object({
-      calls: z.number().nullish(),
-      costUsd: z.number(),
-      estimated: z.boolean().nullish(),
-      model: z.string().nullish(),
-      pricingConfigured: z.boolean().nullish(),
-      tokens: z.number(),
-    })
-    .nullish(),
 });
+
+const scenarioSummarySchema = z.object({
+  artifacts: z.array(z.string()),
+  assertions: z.array(resultAssertionSchema).optional(),
+  error: z.string().nullish(),
+  outcome: outcomeSchema,
+  scenario: z.object({
+    assertions: z.array(planAssertionSchema).optional(),
+    id: z.string(),
+    title: z.string(),
+  }),
+});
+
+export const runResultSchema = z
+  .object({
+    endedAt: z.string().nullish(),
+    error: z.string().nullish(),
+    id: z.string(),
+    outcome: outcomeSchema,
+    preview: z.object({ sha: z.string(), url: z.string() }).nullish(),
+    prUrl: z.string(),
+    publication: z
+      .object({ commentUrl: z.string(), status: z.string() })
+      .nullish(),
+    scenarios: z.array(scenarioSummarySchema),
+    sha: z.string().nullish(),
+    startedAt: z.string(),
+    usage: z
+      .object({
+        calls: z.number().nullish(),
+        costUsd: z.number(),
+        estimated: z.boolean().nullish(),
+        model: z.string().nullish(),
+        pricingConfigured: z.boolean().nullish(),
+        tokens: z.number(),
+      })
+      .nullish(),
+  })
+  .passthrough();
 
 export const errorPayloadSchema = z.object({
   code: z.string().optional(),

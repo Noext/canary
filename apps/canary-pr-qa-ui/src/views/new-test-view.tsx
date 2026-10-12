@@ -18,18 +18,6 @@ import {
 } from "@/components/ui/form";
 import { newTest } from "@/i18n";
 
-/**
- * Model-field copy the shared i18n module does not carry yet. Same constraint
- * as the rest of the screen: the catalogue is never guessed, so an empty
- * selection after a successful load must ask for an explicit choice.
- */
-const modelUnavailable = "Catalogue indisponible";
-const modelChoose = "Choisir un modèle";
-const modelRequired =
-  "Modèle précédent ou par défaut indisponible : choisissez explicitement un modèle.";
-const modelAvailable = (count: number) =>
-  `${count} modèles disponibles · aucun remplacement automatique.`;
-
 interface RunInput {
   model: string;
   previewUrl?: string;
@@ -47,14 +35,22 @@ function buildInput(prUrl: string, preview: string, model: string): RunInput {
 
 const asJson = (value: RunInput) => JSON.stringify(value);
 
+/**
+ * The catalogue is never guessed, so an empty selection after a successful load
+ * must ask for an explicit choice.
+ */
 function placeholderFor(
   catalog: ModelCatalog | undefined,
-  error: string | undefined
+  error: string | undefined,
+  busy: boolean
 ): string {
   if (catalog) {
-    return modelChoose;
+    return newTest.modelChoose;
   }
-  return error ? modelUnavailable : newTest.modelLoading;
+  if (busy) {
+    return newTest.modelLoading;
+  }
+  return error ? newTest.modelUnavailable : newTest.modelChoose;
 }
 
 function modelStateText(
@@ -70,9 +66,13 @@ function modelStateText(
     return error;
   }
   if (!catalog) {
-    return newTest.modelLoading;
+    // Nothing is loading and nothing arrived: say so instead of pretending to
+    // still be loading, so "Actualiser les modèles" is the obvious next move.
+    return newTest.modelUnavailable;
   }
-  return ready ? modelAvailable(catalog.data.length) : modelRequired;
+  return ready
+    ? newTest.modelAvailable(catalog.data.length)
+    : newTest.modelRequired;
 }
 
 export function NewTestView() {
@@ -182,7 +182,7 @@ export function NewTestView() {
   };
 
   const options = models?.data ?? [];
-  const placeholder = placeholderFor(models, modelsError);
+  const placeholder = placeholderFor(models, modelsError, modelsBusy);
   const modelState = modelStateText(
     models,
     modelsError,

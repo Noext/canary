@@ -8,43 +8,16 @@ import { useWorkspace } from "@/app/workspace";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/feedback";
 import { Card, CardHeader, CardTitle } from "@/components/ui/form";
-import { home, settings, type ViewName } from "@/i18n";
+import { common, home, newTest, settings, type ViewName } from "@/i18n";
 import { outcomeLabel, stateLabel, type Tone, toneFor } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-/**
- * Copy this screen owns. `src/i18n.ts` is shared and edited by several agents
- * at once, so these stay local until they are promoted there.
- */
-const copy = {
-  actionChooseModel: "Choisir mon modèle IA",
-  actionConnectGithub: "Connecter GitHub",
-  githubChooseRepos: "Choisir vos dépôts →",
-  githubConnect: "Connecter GitHub →",
-  githubStateChecking: "Vérification…",
-  githubTechnical: "Accès technique actif",
-  modelStateBusy: "Chargement du catalogue…",
-  modelStateLoading: "Chargement des modèles…",
-  modelStateReady: "Modèle disponible",
-  modelStateRetry: "Vérifier la connexion →",
-  modelStateUnavailable:
-    "Modèle par défaut indisponible : choisissez explicitement un modèle.",
-  noteProgress:
-    "Votre progression est enregistrée. Commencez par l’étape indiquée.",
-  noteReady: "PR + application de test → scénarios, vidéos et résultat.",
-  noteViewer: "Votre compte dispose d’un accès en lecture.",
-  onboardingIntro:
-    "Suivez ces étapes dans l’ordre. Votre configuration est conservée.",
-  runsLoading: "Chargement de vos tests…",
-  setupCount: (ready: number) => `${ready}/2 connexions prêtes`,
-} as const;
 
 /** The label of `#welcomeAction`, derived from readiness exactly like the legacy `syncReadiness()`. */
 function welcomeActionLabel(githubReady: boolean, modelReady: boolean): string {
   if (!githubReady) {
-    return copy.actionConnectGithub;
+    return home.onboarding.githubTitle;
   }
-  return modelReady ? home.actionRun : copy.actionChooseModel;
+  return modelReady ? home.actionRun : home.actionChooseModel;
 }
 
 function githubStepState(
@@ -52,16 +25,16 @@ function githubStepState(
   githubReady: boolean
 ): string {
   if (!status) {
-    return copy.githubStateChecking;
+    return common.checking;
   }
   if (githubReady) {
     return status.github.mode === "app"
       ? settings.github.connected(status.github.repositories.length)
-      : copy.githubTechnical;
+      : home.githubTechnical;
   }
   return status.github.mode === "app"
-    ? copy.githubChooseRepos
-    : copy.githubConnect;
+    ? home.githubChooseRepos
+    : home.githubConnect;
 }
 
 function modelStepState(state: {
@@ -71,15 +44,15 @@ function modelStepState(state: {
   modelsBusy: boolean;
 }): string {
   if (state.modelReady) {
-    return copy.modelStateReady;
+    return home.modelStateReady;
   }
   if (state.modelsBusy) {
-    return copy.modelStateBusy;
+    return home.modelStateBusy;
   }
   if (state.catalogLoaded) {
-    return copy.modelStateUnavailable;
+    return home.modelStateUnavailable;
   }
-  return state.catalogFailed ? copy.modelStateRetry : copy.modelStateLoading;
+  return state.catalogFailed ? home.modelStateRetry : newTest.modelLoading;
 }
 
 /** The pill follows the run's outcome, falling back to its status. */
@@ -190,9 +163,9 @@ function heroNote(
   modelReady: boolean
 ): string {
   if (!canWrite) {
-    return copy.noteViewer;
+    return home.noteViewer;
   }
-  return githubReady && modelReady ? copy.noteReady : copy.noteProgress;
+  return githubReady && modelReady ? home.noteReady : home.noteProgress;
 }
 
 function heroActionTarget(
@@ -308,11 +281,11 @@ export function HomeView({
           <div>
             <CardTitle>{home.onboarding.title}</CardTitle>
             <p className="text-muted-foreground text-sm">
-              {copy.onboardingIntro}
+              {home.onboardingIntro}
             </p>
           </div>
           <Pill id="setupCount" tone={readinessTone(readyCount)}>
-            {copy.setupCount(readyCount)}
+            {home.setupCount(readyCount)}
           </Pill>
         </CardHeader>
         <div className="grid gap-3 md:grid-cols-3">
@@ -390,7 +363,7 @@ export function HomeView({
         </CardHeader>
         {loading ? (
           <p className="text-muted-foreground text-sm" role="status">
-            {copy.runsLoading}
+            {home.runsLoading}
           </p>
         ) : null}
         <div

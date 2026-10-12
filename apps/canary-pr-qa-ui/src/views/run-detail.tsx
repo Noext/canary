@@ -35,17 +35,6 @@ export function modelFromInput(input: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-/** Copy the legacy dashboard shows for runs whose options were never stored. */
-const historicalModel = "Modèle historique";
-/** Prefix of the run identifier line in the technical diagnostic. */
-const runIdentifierPrefix = "Run ID : ";
-/** Shown when a finished run has no readable result.json. */
-const missingResult = "Aucun rapport de scénarios disponible pour ce test. ";
-/** Fallback for an outcome the interface does not know. */
-const resultFallback = "Résultat disponible.";
-/** Error reported when a live frame does not match the run contract. */
-const invalidFrame = "Le suivi du test a renvoyé une réponse invalide.";
-
 const errorOutcomes = ["failed", "blocked", "stale"];
 
 function parseFrame(data: string): LiveRun | undefined {
@@ -88,7 +77,7 @@ function messageFor(data: LiveRun): string {
 }
 
 function summaryFor(result: RunResult): string {
-  const base = resultSummaries[result.outcome] ?? resultFallback;
+  const base = resultSummaries[result.outcome] ?? copy.resultFallback;
   const error = result.error ? ` ${result.error}` : "";
   const publication =
     result.publication?.status === "failed" ? copy.publicationFailed : "";
@@ -103,6 +92,55 @@ function summaryToneFor(
     return "warning";
   }
   return errorOutcomes.includes(result.outcome) ? "error" : "neutral";
+}
+
+/** Bounded rendering of an `actual` value, which is arbitrary JSON. */
+function actualText(value: unknown): string {
+  if (value === undefined) {
+    return "";
+  }
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
+}
+
+function Assertions({ item }: { item: ScenarioSummary }) {
+  const executed = item.assertions ?? [];
+  if (executed.length === 0) {
+    return (
+      <p className="mt-2 text-muted-foreground text-xs">
+        {copy.assertionsEmpty}
+      </p>
+    );
+  }
+  const passed = executed.filter((assertion) => assertion.passed).length;
+  return (
+    <div className="mt-2">
+      <p className="text-muted-foreground text-xs">
+        {copy.assertions(passed, executed.length)}
+      </p>
+      <ul className="mt-1 space-y-1 text-xs">
+        {executed.map((assertion) => {
+          const planned = item.scenario.assertions?.find(
+            (candidate) => candidate.id === assertion.id
+          );
+          const actual = actualText(assertion.actual);
+          return (
+            <li className="flex items-start gap-2" key={assertion.id}>
+              <span aria-hidden="true">{assertion.passed ? "✓" : "✕"}</span>
+              <span
+                className={
+                  assertion.passed ? "text-muted-foreground" : "text-on-fail"
+                }
+              >
+                {planned?.description ?? assertion.id}
+                {!assertion.passed && actual ? ` — ${actual}` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function ScenarioCard({
@@ -130,6 +168,7 @@ function ScenarioCard({
       <p className="mt-1 text-muted-foreground text-sm">
         {resultSummaries[item.outcome] ?? outcomeLabel(item.outcome)}
       </p>
+      <Assertions item={item} />
       {item.error ? (
         <p className="mt-2 text-on-fail text-sm">{item.error}</p>
       ) : null}
@@ -179,7 +218,7 @@ export function RunDetail({
       return;
     }
     let active = true;
-    const source = new EventSource(`/runs/${runId}/events`);
+    let source: EventSource | undefined;
     // A finished run publishes its result next to its other artifacts.
     const loadResult = async () => {
       try {
@@ -192,47 +231,60 @@ export function RunDetail({
         }
       } catch (failure) {
         if (active) {
-          setResultFailure(missingResult + errorText(failure));
+          setResultFailure(copy.missingResult + errorText(failure));
         }
       }
     };
-    source.onopen = () => {
-      if (active) {
-        setLive(copy.liveConnected);
-      }
+    const watch = () => {
+      source = new EventSource(`/runs/${runId}/events`);
+      source.onopen = () => {
+        if (active) {
+          setLive(copy.liveConnected);
+        }
+      };
+      source.onerror = () => {
+        // A closed source is finished, not reconnecting.
+        if (active && source?.readyState !== EventSource.CLOSED) {
+          setLive(copy.liveReconnecting);
+        }
+      };
+      source.onmessage = (event: MessageEvent<string>) => {
+        if (!active) {
+          return;
+        }
+        const frame = parseFrame(event.data);
+        if (!frame) {
+          source?.close();
+          setLive(copy.liveInvalid);
+          report(new Error(copy.invalidFrame));
+          return;
+        }
+        setJob(frame);
+        setMessage(messageFor(frame));
+        if (isTerminal(frame.status)) {
+          source?.close();
+          setLive(copy.liveDone);
+          void loadResult();
+        }
+        update.current?.();
+      };
     };
-    source.onerror = () => {
-      // A closed source is finished, not reconnecting.
-      if (active && source.readyState !== EventSource.CLOSED) {
-        setLive(copy.liveReconnecting);
-      }
-    };
-    source.onmessage = (event: MessageEvent<string>) => {
-      if (!active) {
-        return;
-      }
-      const frame = parseFrame(event.data);
-      if (!frame) {
-        source.close();
-        setLive(copy.liveInvalid);
-        report(new Error(invalidFrame));
-        return;
-      }
-      setJob(frame);
-      setMessage(messageFor(frame));
-      if (isTerminal(frame.status)) {
-        source.close();
-        setLive(copy.liveDone);
-        void loadResult();
-      }
-      update.current?.();
-    };
+    // Validate the run first: the stream is opened for a run this account may
+    // read, otherwise an unknown or forbidden id would leave EventSource
+    // reconnecting forever while the interface pretends to follow it.
     void api<LiveRun>(`/runs/${runId}`, { schema: runJobSchema })
       .then((initial) => {
-        if (active) {
-          setJob(initial);
-          setMessage(messageFor(initial));
+        if (!active) {
+          return;
         }
+        setJob(initial);
+        setMessage(messageFor(initial));
+        if (isTerminal(initial.status)) {
+          setLive(copy.liveDone);
+          void loadResult();
+          return;
+        }
+        watch();
       })
       .catch((failure) => {
         if (active) {
@@ -241,7 +293,7 @@ export function RunDetail({
       });
     return () => {
       active = false;
-      source.close();
+      source?.close();
     };
   }, [report, runId]);
 
@@ -299,7 +351,7 @@ export function RunDetail({
       <p className="text-muted-foreground text-sm" id="provenance">
         {job
           ? `Commit ${shortSha(job.sha)} · ${
-              modelFromInput(job.input) || historicalModel
+              modelFromInput(job.input) || copy.historicalModelDetail
             }`
           : ""}
       </p>
@@ -364,7 +416,9 @@ export function RunDetail({
           {copy.technicalSummary}
         </summary>
         <p className="mt-2 text-muted-foreground">{copy.technicalIntro}</p>
-        <p id="runIdentifier">{runId ? runIdentifierPrefix + runId : ""}</p>
+        <p id="runIdentifier">
+          {runId ? copy.runIdentifierPrefix + runId : ""}
+        </p>
         <pre
           className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-well p-2 text-xs"
           id="events"
