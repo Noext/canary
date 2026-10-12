@@ -40,6 +40,13 @@ vi.mock("@/api/client", async (importOriginal) => {
     api: (path: string) => {
       wire.calls.push(path);
       const handler = wire.handler;
+      if (path === "/dashboard/automatic") {
+        return Promise.resolve({
+          attempts: [],
+          enabledRepos: [],
+          summary: { expired: 0, rateLimited: 0, waiting: 0 },
+        });
+      }
       if (path === "/runs" && handler) {
         // Resolve in a task so a throwing handler becomes a rejection, exactly
         // like the real client.
@@ -116,7 +123,11 @@ function renderHome(props: HomeProps = {}, strict = false) {
 
 const appStatus: SetupStatus = {
   ai: { defaultModel: "fixture-model", endpoint: "https://ai.example.com/v1" },
-  github: { mode: "app", repositories: ["fixture/app"] },
+  github: {
+    autoRepos: ["fixture/app"],
+    mode: "app",
+    repositories: ["fixture/app"],
+  },
   preview: { automatic: true },
 };
 

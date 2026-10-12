@@ -102,6 +102,7 @@ export function GithubSettings(): ReactNode {
   const [savedMessage, setSavedMessage] = useState<string>();
   const [removal, setRemoval] = useState<RemovalKind>();
   const [edited, setEdited] = useState<Record<string, boolean>>({});
+  const [autoEdited, setAutoEdited] = useState<Record<string, boolean>>({});
   const [manifestPost, setManifestPost] = useState<ManifestPost>();
   const manifestForm = useRef<HTMLFormElement>(null);
 
@@ -162,6 +163,7 @@ export function GithubSettings(): ReactNode {
       await api("/github/app/refresh", post({}));
       await loadGithub();
       setEdited({});
+      setAutoEdited({});
       await refreshUser();
       await loadStatus();
     });
@@ -177,6 +179,7 @@ export function GithubSettings(): ReactNode {
       setSavedMessage(undefined);
       await loadGithub();
       setEdited({});
+      setAutoEdited({});
       const warnings = data.disconnected.warnings;
       setNotice(removalNotice(deleteApp, warnings));
       await refreshUser();
@@ -187,20 +190,26 @@ export function GithubSettings(): ReactNode {
     event.preventDefault();
     void run("save", async () => {
       const restriction = github?.restriction ?? [];
-      const repositories = (github?.repositories ?? [])
-        .filter(
-          (repository) =>
-            isSelected(repository) &&
-            !isRestricted(repository.full_name, restriction)
-        )
+      const saveable = (github?.repositories ?? []).filter(
+        (repository) => !isRestricted(repository.full_name, restriction)
+      );
+      const repositories = saveable
+        .filter((repository) => isSelected(repository))
+        .map((repository) => repository.full_name);
+      // Automatic runs follow the checked rows, and only those: the server
+      // refuses an auto-run repository that is not selected, so an unselected
+      // row can never leak its (defaulted) auto-run state into the request.
+      const autoRepos = saveable
+        .filter((repository) => isSelected(repository) && isAutoRun(repository))
         .map((repository) => repository.full_name);
       await api("/github/app/repositories", {
-        ...post({ repositories }),
+        ...post({ repositories, autoRepos }),
         method: "PUT",
       });
       setNotice("");
       await loadGithub();
       setEdited({});
+      setAutoEdited({});
       setSavedMessage(settings.github.messageSaved);
       await refreshUser();
       await loadStatus();
@@ -223,6 +232,8 @@ export function GithubSettings(): ReactNode {
   // otherwise: a fresh status never leaves a tick behind.
   const isSelected = (repository: GitHubRepository): boolean =>
     edited[repository.full_name] ?? repository.enabled;
+  const isAutoRun = (repository: GitHubRepository): boolean =>
+    autoEdited[repository.full_name] ?? repository.auto_run;
   const enabled = repositories.filter(
     (repository) =>
       repository.enabled && !isRestricted(repository.full_name, restriction)
@@ -374,41 +385,62 @@ export function GithubSettings(): ReactNode {
                     repository.full_name,
                     restriction
                   );
-                  const inputId = `repo-${repository.full_name.replaceAll(
-                    "/",
-                    "-"
-                  )}`;
+                  const slug = repository.full_name.replaceAll("/", "-");
+                  const inputId = `repo-${slug}`;
+                  const autoId = `repo-auto-${slug}`;
                   return (
                     <div
-                      className="flex items-center gap-2"
+                      className="flex flex-col gap-1"
                       key={repository.full_name}
                     >
-                      <Checkbox
-                        checked={isSelected(repository)}
-                        disabled={restricted}
-                        id={inputId}
-                        onChange={(event) =>
-                          setEdited((current) => ({
-                            ...current,
-                            [repository.full_name]: event.target.checked,
-                          }))
-                        }
-                        value={repository.full_name}
-                      />
-                      <Label className="flex-1 font-normal" htmlFor={inputId}>
-                        {repository.full_name}
-                        {restricted ? settings.github.restricted : ""}
-                      </Label>
-                      <Pill>
-                        {repository.private
-                          ? settings.github.private
-                          : settings.github.public}
-                      </Pill>
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={isSelected(repository)}
+                          disabled={restricted}
+                          id={inputId}
+                          onChange={(event) =>
+                            setEdited((current) => ({
+                              ...current,
+                              [repository.full_name]: event.target.checked,
+                            }))
+                          }
+                          value={repository.full_name}
+                        />
+                        <Label className="flex-1 font-normal" htmlFor={inputId}>
+                          {repository.full_name}
+                          {restricted ? settings.github.restricted : ""}
+                        </Label>
+                        <Pill>
+                          {repository.private
+                            ? settings.github.private
+                            : settings.github.public}
+                        </Pill>
+                      </div>
+                      <div className="flex items-center gap-2 pl-6">
+                        <Checkbox
+                          checked={isAutoRun(repository)}
+                          disabled={restricted}
+                          id={autoId}
+                          onChange={(event) =>
+                            setAutoEdited((current) => ({
+                              ...current,
+                              [repository.full_name]: event.target.checked,
+                            }))
+                          }
+                        />
+                        <Label
+                          className="flex-1 font-normal text-muted-foreground"
+                          htmlFor={autoId}
+                        >
+                          {settings.github.autoRunLabel}
+                        </Label>
+                      </div>
                     </div>
                   );
                 })
               )}
             </div>
+            <FieldHelp>{settings.github.autoRunHelp}</FieldHelp>
           </fieldset>
           <Button
             className="mt-3"

@@ -60,8 +60,13 @@ export async function retain(queue: Queue, config: Config) {
     used -= size;
     removed++;
   }
+  // Every terminal delivery goes: a disabled deployment or a repository whose
+  // previews never prove the SHA creates one row per pull-request event, and none
+  // of those states is ever moved back to `pending`. `automatic()` only reports
+  // expired and rate-limited rows for 24 hours, so the inbox cannot grow without
+  // bound behind the dashboard.
   await queue.pool.query(
-    "DELETE FROM qa_deliveries WHERE status='processed' AND created_at < now()-interval '30 days'"
+    "DELETE FROM qa_deliveries WHERE status IN ('processed','expired','rate_limited','auto_disabled') AND created_at < now()-interval '30 days'"
   );
   return { removed, bytes: used };
 }

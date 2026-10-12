@@ -111,9 +111,20 @@ Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the 
 - Corriger le code, pas le test : affaiblir une assertion pour faire passer la CI
   est un finding en soi. Si le contrat doit réellement changer, le dire dans la
   réponse et le documenter dans la description de la PR.
+- Après avoir poussé les correctifs, demander une nouvelle revue (`@codex review`)
+  pour que les corrections soient relues par le même relecteur.
 - Ne pas relancer de revue automatique pour un correctif de documentation, de
   commentaire ou de mise en forme : ces changements attendent le tour suivant du
   même cycle ou la relecture humaine.
+- **Trois tours de revue au maximum, pour toute PR.** Constater le tour de revue
+  initial comme le tour 1 et s'arrêter après le tour 3 : ne pas demander de
+  quatrième passe `@codex review`, même si des findings restent ouverts. Chaque
+  tour coûte une correction, une validation complète et une relecture ; au-delà
+  de trois, les findings résiduels sont triés dans le fil de la PR (finding, avis
+  argumenté, ce qui reste à faire) et la décision revient à l'humain, qui ouvre
+  au besoin une PR de suivi. Cette règle limite la boucle, elle n'autorise pas à
+  corriger un finding en silence : ce qui est corrigé reste annoncé dans son fil
+  avec son commit et sa preuve.
 
 ## Frontend PR QA : règles de contribution
 
@@ -239,6 +250,8 @@ Renseigner au minimum :
 | `QA_ALLOWED_PROVIDER_HOSTS` | `ai.noext.fr` ; toute politique fournisseur du dépôt testé doit également autoriser ce host |
 | `PREVIEW_ALLOWED_HOSTS` | Hôtes exacts nécessaires aux previews, API, images, polices et WebSockets, avec les ports non standards ; remplacer l'exemple |
 | `ARTIFACT_BASE_URL` | Origine HTTPS du dashboard si les rapports doivent être accessibles depuis les liens GitHub ; pas de suffixe `/artifacts` |
+| `QA_AUTO_RUNS` | `true` par défaut : un PR non brouillon sur un dépôt connecté et opt-in lance le run ; `false` enregistre les tentatives `auto_disabled` (audit `automatic.disabled`) sans exécuter |
+| `QA_AUTO_PREVIEW_WAIT_SECONDS` | Attente de la preuve du SHA complet, en secondes (60-86400, défaut 1800) ; au-delà, tentative `expired`, audit `automatic.preview_expired`, jamais rejouée |
 
 Le modèle par défaut est un choix explicite de l'utilisateur. **Ne jamais le
 remplacer ou choisir un autre modèle de sa propre initiative**, y compris pendant
@@ -263,7 +276,10 @@ Créer mon App sur GitHub → confirmer sur GitHub → Installer/gérer les dép
 Actualiser → cocher les dépôts → Enregistrer. Compte personnel par défaut,
 organisation facultative. GitHub crée une vraie App privée appartenant à
 l'opérateur, avec permissions/webhook/callbacks préremplis. Aucun PAT, ID
-installation ou PEM à configurer dans `.env` pour ce parcours.
+installation ou PEM à configurer dans `.env` pour ce parcours. Sélectionner un
+dépôt l'active par défaut pour les runs automatiques
+(`qa_github_repositories.auto_run`) ; la vue GitHub permet de le désactiver pour
+ce seul dépôt.
 
 Configurer l'origine publique HTTPS dans `ARTIFACT_BASE_URL` et rendre les
 callbacks `/github/app/callback`, `/github/app/installed` et `/github/webhook`
@@ -387,6 +403,17 @@ Les vidéos sont finalisées après le scénario. Vérifier le rapport et la
 publication sur le SHA effectivement testé. La configuration et les comptes
 existants sont conservés ; aucune nouvelle première installation n'est requise.
 
+Un `pull_request` non brouillon sur un dépôt connecté et opt-in démarre aussi le
+run sans opérateur. Tant qu'aucune preview ne prouve le SHA complet du head, la
+tentative attend en file (backoff 30/60/120/300 s) puis expire après
+`QA_AUTO_PREVIEW_WAIT_SECONDS` ; contrôler les tentatives du dashboard
+(`GET /dashboard/automatic`) avant de conclure. **Une tentative expirée n'est
+jamais rejouée automatiquement** : relancer explicitement ou pousser un nouveau
+commit. Désactiver par dépôt dans Réglages → GitHub, ou globalement avec
+`QA_AUTO_RUNS=false`. L'opérateur doit toujours fournir une preview qui expose le
+SHA complet, sinon l'automatisation attend au lieu de tester ; le parcours manuel
+par URL de PR et preview exacte reste disponible.
+
 Remettre à l'utilisateur la révision déployée, les services sains, la PR et son
 SHA, le run ID, le modèle, l'outcome et les liens réellement vérifiés. Distinguer
 `passed`, `failed`, `blocked`, `stale`, `skipped` et les travaux interrompus.
@@ -408,10 +435,12 @@ HTTP ; `QA_RAW_EVIDENCE=true` n'est à activer qu'après contrôle des données 
 
 Vérifier dans l'ordre la configuration, SQL et sa migration, le worker/sa lease,
 IA/GitHub, la provenance de la preview, Chromium puis le proxy egress. Une lease
-expirée est interrompue, jamais rejouée automatiquement. Pour des captures du
-moteur, consulter le service `browser` : les captures temporaires du doctor sont
-supprimées après vérification. Les codes et procédures ciblées sont dans le
-[guide de dépannage](docs/pr-qa-operations.md).
+expirée est interrompue, jamais rejouée automatiquement. Une tentative
+automatique en attente ou expirée se lit dans `qa_deliveries` et `qa_audit`
+(`automatic.*`), jamais comme un run `qa_jobs` : le job n'est créé qu'une fois la
+provenance vérifiée. Pour des captures du moteur, consulter le service `browser` :
+les captures temporaires du doctor sont supprimées après vérification. Les codes
+et procédures ciblées sont dans le [guide de dépannage](docs/pr-qa-operations.md).
 
 ### 7. Mettre à jour, arrêter et sauvegarder
 

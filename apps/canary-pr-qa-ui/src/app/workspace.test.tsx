@@ -17,7 +17,11 @@ vi.mock("./session", () => ({ useSession: () => session }));
 
 const setupStatus = {
   ai: { defaultModel: "model-x", endpoint: "ai.example.com" },
-  github: { mode: "app" as const, repositories: ["o/r"] },
+  github: {
+    autoRepos: ["o/r"],
+    mode: "app" as const,
+    repositories: ["o/r"],
+  },
   preview: { automatic: false },
 };
 

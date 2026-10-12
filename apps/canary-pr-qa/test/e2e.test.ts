@@ -1059,6 +1059,11 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     );
     await click("install-app", "#githubInstall");
     await text("available-repository", "#githubRepoList", "fixture/app");
+    await text(
+      "auto-run-toggle",
+      "#githubRepoList",
+      "Lancer automatiquement une QA à chaque pull request"
+    );
     await click(
       "select-repository",
       '#githubRepoList input[value="fixture/app"]'
@@ -1066,6 +1071,21 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     await click("save-selection", "#githubSave");
     await text("selection-saved", "#githubMessage", "Dépôts enregistrés");
     await click("home-after-github", "#nav-home");
+    await text(
+      "automatic-runs-block",
+      "#automaticRuns",
+      "Lancements automatiques"
+    );
+    await text(
+      "automatic-enabled-repository",
+      "#automaticEnabledRepos",
+      "1 dépôt(s) en lancement automatique"
+    );
+    await text(
+      "automatic-empty",
+      "#automaticEmpty",
+      "Aucune tentative automatique en attente."
+    );
     await text("ready-action", "#welcomeAction", "Tester une pull request");
     await click("new-test-after-github", "#welcomeAction");
     const layout = await canary.act(
@@ -1086,6 +1106,7 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
   const effective = await new GitHubSetup(queue.pool, config).effective();
   expect(effective.GITHUB_TOKEN).toBe("");
   expect(effective.allowedRepos).toEqual(["fixture/app"]);
+  expect(effective.automaticRepos).toEqual(["fixture/app"]);
   const result = await runQa(
     { prUrl: PR_URL, previewUrl: f.baseUrl, publish: true },
     effective

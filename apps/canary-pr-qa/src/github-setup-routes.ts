@@ -103,11 +103,18 @@ export function githubSetupRoutes(
     }
     if (`${req.method} ${url.pathname}` === "PUT /github/app/repositories") {
       const input = z
-        .object({ repositories: z.array(z.string()) })
+        .object({
+          repositories: z.array(z.string()),
+          autoRepos: z.array(z.string()).optional(),
+        })
         .strict()
         .parse(JSON.parse((await read(req)).toString()));
-      json(res, 200, await setup.select(input.repositories));
+      const status = await setup.select(input.repositories, input.autoRepos);
+      json(res, 200, status);
       await queue.audit(user.id, "github.repositories.selected", undefined, {
+        autoRepos: status.repositories
+          .filter((repository) => repository.auto_run)
+          .map((repository) => repository.full_name),
         repositories: input.repositories,
       });
       return true;

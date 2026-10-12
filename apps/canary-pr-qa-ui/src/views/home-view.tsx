@@ -11,6 +11,7 @@ import { common, home, newTest, settings, type ViewName } from "@/i18n";
 import { outcomeLabel, stateLabel, type Tone, toneFor } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { AutomaticRuns } from "./automatic-runs";
 import { createHomeStore } from "./home-runs-store";
 
 /** The label of `#welcomeAction`, derived from readiness exactly like the legacy `syncReadiness()`. */
@@ -280,6 +281,8 @@ export function HomeView({
           </span>
         </div>
       </Card>
+
+      <AutomaticRuns />
 
       <Card className="mb-5" hidden={!canWrite} id="onboarding">
         <CardHeader>

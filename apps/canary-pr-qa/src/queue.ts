@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@usecanary/logger";
 import pg from "pg";
+import type {
+  AutomaticAttempt,
+  AutomaticState,
+} from "./dashboard/contracts.js";
 import { QaError } from "./diagnostics.js";
 import { GITHUB_SETUP_MIGRATION } from "./github-setup.js";
 import { LOCAL_AUTH_MIGRATION } from "./local-auth.js";
@@ -30,7 +34,32 @@ export interface Job {
   updated_at: string;
   worker?: string;
 }
-export const SCHEMA_VERSION = 5;
+/** Delivery status that ends an automatic attempt without creating a run. */
+export type DeliveryFailure = "expired" | "rate_limited" | "auto_disabled";
+/**
+ * A validated webhook record. `ignored` marks an event that carries no pull
+ * request to test (a `labeled` or `closed` action, for example).
+ */
+export interface DeliveryPayload {
+  ignored?: boolean;
+  number?: number;
+  prUrl?: string;
+  repo?: string;
+  sha?: string;
+}
+export interface DeliveryRow {
+  attempts: number;
+  claim_token?: string | null;
+  created_at: Date;
+  deadline_at: Date | null;
+  id: string;
+  payload: DeliveryPayload;
+  reason: string | null;
+  run_id: string | null;
+  status: string;
+  updated_at: Date;
+}
+export const SCHEMA_VERSION = 7;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -42,7 +71,7 @@ CREATE TABLE IF NOT EXISTS qa_jobs (
 CREATE INDEX IF NOT EXISTS qa_claim ON qa_jobs(status,created_at);
 CREATE INDEX IF NOT EXISTS qa_project ON qa_jobs(repo,created_at DESC);
 CREATE INDEX IF NOT EXISTS qa_auto_budget ON qa_jobs(created_at,lower(repo)) WHERE owner='github-app';
-CREATE TABLE IF NOT EXISTS qa_deliveries (id text PRIMARY KEY, event text NOT NULL, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'pending', retry_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS qa_deliveries (id text PRIMARY KEY, event text NOT NULL, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'pending', retry_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), attempts integer NOT NULL DEFAULT 0, deadline_at timestamptz, reason text, last_error text, run_id uuid, claim_token text, updated_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS qa_delivery_pr_sha ON qa_deliveries ((lower(payload->>'repo')), (payload->>'number'), (payload->>'sha'));
 CREATE TABLE IF NOT EXISTS qa_audit (id bigserial PRIMARY KEY, actor text NOT NULL, action text NOT NULL, run_id uuid, details jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS qa_schema (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
@@ -54,6 +83,13 @@ INSERT INTO qa_schema(version) VALUES(3) ON CONFLICT DO NOTHING;
 ${LOCAL_AUTH_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(4) ON CONFLICT DO NOTHING;
 ${GITHUB_SETUP_MIGRATION}
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS deadline_at timestamptz;
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS reason text;
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS last_error text;
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS run_id uuid;
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS claim_token text;
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {
@@ -111,12 +147,112 @@ export class Queue {
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(9287341)");
+      const job = await this.insertJob(
+        client,
+        repo,
+        pr,
+        sha,
+        owner,
+        input,
+        key,
+        automaticLimits
+      );
+      await client.query("COMMIT");
+      return job;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  /**
+   * Creates the run of a claimed attempt and links it to that attempt in one
+   * transaction. The ownership token and the deadline are re-read under the row
+   * lock, so a worker whose claim expired can never create a run, cancel a run
+   * another worker is using, or promote an attempt that waited past its window.
+   */
+  async promoteAutomatic(input: {
+    delivery: string;
+    key: string;
+    limits: AutomaticRunLimits;
+    pr: number;
+    repo: string;
+    run: RunOptions;
+    sha: string;
+    token: string;
+    waitSeconds: number;
+  }): Promise<{
+    job?: Job;
+    promoted: boolean;
+    reason?: "claim_lost" | "expired" | "missing";
+    row?: DeliveryRow;
+  }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(9287341)");
+      const claimed = await client.query<
+        DeliveryRow & { past_deadline: boolean }
+      >(
+        `SELECT id,payload,status,attempts,reason,claim_token,deadline_at,run_id,updated_at,created_at,
+           (now() >= COALESCE(deadline_at,created_at+make_interval(secs => $2::double precision))) AS past_deadline
+         FROM qa_deliveries WHERE id=$1 FOR UPDATE`,
+        [input.delivery, input.waitSeconds]
+      );
+      const row = claimed.rows[0];
+      if (!row) {
+        await client.query("COMMIT");
+        return { promoted: false, reason: "missing" };
+      }
+      if (row.claim_token !== input.token || row.status !== "pending") {
+        await client.query("COMMIT");
+        return { promoted: false, reason: "claim_lost", row };
+      }
+      if (row.past_deadline) {
+        await client.query("COMMIT");
+        return { promoted: false, reason: "expired", row };
+      }
+      const job = await this.insertJob(
+        client,
+        input.repo,
+        input.pr,
+        input.sha,
+        "github-app",
+        input.run,
+        input.key,
+        input.limits
+      );
+      await client.query(
+        "UPDATE qa_deliveries SET status='processed',run_id=$3,updated_at=now() WHERE id=$1 AND claim_token=$2",
+        [input.delivery, input.token, job.id]
+      );
+      await client.query("COMMIT");
+      return { job, promoted: true };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  /** Debits one hourly budget and inserts the queued job inside the caller's transaction. */
+  private async insertJob(
+    client: pg.PoolClient,
+    repo: string,
+    pr: number,
+    sha: string,
+    owner: string,
+    input: RunOptions,
+    key: string,
+    automaticLimits?: AutomaticRunLimits
+  ): Promise<Job> {
+    {
       const duplicate = await client.query<Job>(
         "SELECT * FROM qa_jobs WHERE idempotency_key=$1 OR ($2 AND owner='github-app' AND lower(repo)=lower($3) AND pr=$4 AND sha=$5) ORDER BY created_at LIMIT 1",
         [key, Boolean(automaticLimits), repo, pr, sha]
       );
       if (duplicate.rows[0]) {
-        await client.query("COMMIT");
         return duplicate.rows[0];
       }
       if (automaticLimits) {
@@ -165,13 +301,7 @@ export class Queue {
         "INSERT INTO qa_audit(actor,action,run_id) VALUES($1,'enqueue',$2)",
         [owner, job.id]
       );
-      await client.query("COMMIT");
       return job;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
     }
   }
   async claim(worker: string): Promise<Job | undefined> {
@@ -232,14 +362,21 @@ export class Queue {
   async acceptDelivery(
     id: string,
     event: string,
-    payload: { repo: string; number?: number; sha?: string; ignored?: boolean }
+    payload: {
+      ignored?: boolean;
+      number?: number;
+      prUrl?: string;
+      repo: string;
+      sha?: string;
+    },
+    deadlineSeconds = 1800
   ) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(9287343)");
       const saved = await client.query(
-        `INSERT INTO qa_deliveries(id,event,payload) SELECT $1,$2,$3::jsonb
+        `INSERT INTO qa_deliveries(id,event,payload,deadline_at) SELECT $1,$2,$3::jsonb,now()+make_interval(secs => $8::double precision)
          WHERE NOT EXISTS (SELECT 1 FROM qa_deliveries WHERE $4 AND lower(payload->>'repo')=lower($5) AND payload->>'number'=$6 AND payload->>'sha'=$7)
          ON CONFLICT DO NOTHING RETURNING id`,
         [
@@ -250,6 +387,7 @@ export class Queue {
           payload.repo,
           String(payload.number ?? ""),
           payload.sha ?? "",
+          deadlineSeconds,
         ]
       );
       await client.query("COMMIT");
@@ -261,7 +399,138 @@ export class Queue {
       client.release();
     }
   }
+  /**
+   * Keeps an automatic attempt waiting: the row stays `pending`, one probe is
+   * counted and the next one is scheduled after the given backoff.
+   */
+  /**
+   * Claims one due delivery for `token`, which owns it until the next claim.
+   *
+   * The row lock is released on commit, so `retry_at` is also the claim lease:
+   * a probe that dies on the network is retried after the lease instead of
+   * spinning. Every later transition is conditional on the token, so a worker
+   * whose lease expired can never promote, expire or reschedule a delivery that
+   * another worker now owns.
+   */
+  async claimDelivery(token: string, leaseSeconds: number) {
+    return (
+      await this.pool.query<DeliveryRow>(
+        `UPDATE qa_deliveries SET retry_at=now()+make_interval(secs => $2::double precision),claim_token=$1,updated_at=now()
+         WHERE id=(SELECT id FROM qa_deliveries WHERE status='pending' AND retry_at<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
+         RETURNING id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at`,
+        [token, leaseSeconds]
+      )
+    ).rows[0];
+  }
+  /**
+   * A failed probe schedules the next one, but never past the deadline: an
+   * attempt whose deadline is closer than the backoff becomes due exactly at the
+   * deadline, so expiration is enforced instead of being deferred by up to 300 s.
+   */
+  async holdDelivery(
+    id: string,
+    token: string,
+    reason: string,
+    backoffSeconds: number,
+    waitSeconds: number
+  ) {
+    const result = await this.pool.query(
+      `UPDATE qa_deliveries SET attempts=attempts+1,reason=$3,last_error=NULL,
+       retry_at=LEAST(now()+make_interval(secs => $4::double precision),COALESCE(deadline_at,created_at+make_interval(secs => $5::double precision))),
+       updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'`,
+      [id, token, reason, backoffSeconds, waitSeconds]
+    );
+    return result.rowCount === 1;
+  }
+  async failDelivery(
+    id: string,
+    token: string,
+    status: DeliveryFailure,
+    reason: string,
+    lastError?: string
+  ) {
+    const result = await this.pool.query(
+      "UPDATE qa_deliveries SET status=$3,reason=$4,last_error=$5,updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'",
+      [id, token, status, reason, lastError ?? null]
+    );
+    return result.rowCount === 1;
+  }
+  async processed(id: string, token: string) {
+    const result = await this.pool.query(
+      "UPDATE qa_deliveries SET status='processed',updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'",
+      [id, token]
+    );
+    return result.rowCount === 1;
+  }
+  /** Ends an automatic attempt without a run: `expired`, `rate_limited` or `auto_disabled`. */
+  /** Marks the attempt as promoted: the verified preview created this real job. */
+  /**
+   * Automatic attempts of the given repositories, newest first. Waiting rows are
+   * listed with the attempts still running; expired/rate-limited rows stay visible
+   * for 24 hours. Attempts are not jobs: no `qa_jobs` row exists before promotion.
+   */
+  /**
+   * Attempts the dashboard may show, scoped to `repos`. A pending delivery
+   * accepted before `deadline_at` existed (schema v5 and earlier) has no stored
+   * deadline: it is resolved here with the same rule the worker applies, so the
+   * displayed deadline is the one that actually ends the wait.
+   *
+   * Deliveries recorded with `ignored: true` never carried a pull request to
+   * test (a `labeled` or `closed` action, for example): they stay in the inbox
+   * until the probe loop clears them, and they are never reported as an attempt.
+   */
+  async automatic(repos: string[], deadlineSeconds: number) {
+    const scope = repos.map((repo) => repo.toLowerCase());
+    const rows = (
+      await this.pool.query<DeliveryRow>(
+        `SELECT id,payload,status,attempts,reason,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
+         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))
+         ORDER BY updated_at DESC,created_at DESC LIMIT 50`,
+        [scope, deadlineSeconds]
+      )
+    ).rows;
+    const counts = (
+      await this.pool.query<{
+        expired: number;
+        pending: number;
+        rate_limited: number;
+      }>(
+        `SELECT count(*) FILTER (WHERE status='pending')::int AS pending,count(*) FILTER (WHERE status='expired')::int AS expired,count(*) FILTER (WHERE status='rate_limited')::int AS rate_limited FROM qa_deliveries
+         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))`,
+        [scope]
+      )
+    ).rows[0];
+    return {
+      attempts: rows.map(automaticAttempt),
+      summary: {
+        expired: counts?.expired ?? 0,
+        rateLimited: counts?.rate_limited ?? 0,
+        waiting: counts?.pending ?? 0,
+      },
+    };
+  }
   async close() {
     await this.pool.end();
   }
+}
+
+function automaticState(status: string): AutomaticState {
+  return status === "expired" || status === "rate_limited" ? status : "waiting";
+}
+function isoInstant(value: Date | null, fallback: Date): string {
+  return (value ?? fallback).toISOString();
+}
+function automaticAttempt(row: DeliveryRow): AutomaticAttempt {
+  return {
+    attempts: row.attempts,
+    deadlineAt: isoInstant(row.deadline_at, row.created_at),
+    id: row.id,
+    reason: row.reason ?? "",
+    pr: row.payload.number ?? 0,
+    repo: row.payload.repo ?? "",
+    runId: row.run_id,
+    sha: row.payload.sha ?? "",
+    state: automaticState(row.status),
+    updatedAt: isoInstant(row.updated_at, row.created_at),
+  };
 }

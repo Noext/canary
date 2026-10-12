@@ -46,7 +46,11 @@ const ADMIN: Principal = {
 
 const READY_STATUS: SetupStatus = {
   ai: { defaultModel: "fixture-model", endpoint: "https://ai.example.com/v1" },
-  github: { mode: "app", repositories: ["fixture/app"] },
+  github: {
+    autoRepos: ["fixture/app"],
+    mode: "app",
+    repositories: ["fixture/app"],
+  },
   preview: { automatic: true },
 };
 
@@ -204,7 +208,7 @@ describe("NewTestView", () => {
   it("keeps the launch disabled until a repository is connected", async () => {
     serve((path) => path === "/dashboard/status", {
       ...READY_STATUS,
-      github: { mode: "missing", repositories: [] },
+      github: { autoRepos: [], mode: "missing", repositories: [] },
     });
     renderScreen();
 

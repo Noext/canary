@@ -1,8 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PGlite } from "@electric-sql/pglite";
-import pg from "pg";
 import { afterEach, expect, it, vi } from "vitest";
 import { completeRun } from "../src/completion.js";
 import { doctor } from "../src/doctor.js";
@@ -14,7 +12,7 @@ import { Queue, SCHEMA_VERSION } from "../src/queue.js";
 import type { RunResult } from "../src/schema.js";
 import { processDelivery } from "../src/webhook-inbox.js";
 import { startWorker } from "../src/worker.js";
-import { BASE_SHA, fixture, PR_URL, SHA } from "./fixture.js";
+import { BASE_SHA, fixture, PR_URL, pgliteQueue, SHA } from "./fixture.js";
 import { githubSetupFixture } from "./github-setup-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -25,37 +23,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 async function sqlDatabase() {
-  const db = await PGlite.create();
-  cleanup.push(() => db.close());
-  // Execute production SQL in PostgreSQL WASM. Multi-process row locking is separately tested on native PostgreSQL in CI.
-  const query = async (text: string, values?: unknown[]) => {
-    if (!values && text.includes("CREATE TABLE")) {
-      await db.exec(text);
-      return { rows: [], rowCount: 0 };
-    }
-    const result = await db.query(text, values);
-    return {
-      rows: result.rows,
-      rowCount: result.affectedRows ?? result.rows.length,
-    };
-  };
-  const pool = {
-    query,
-    connect: async () => ({ query, release: () => undefined }),
-    end: async () => undefined,
-    on: () => undefined,
-  };
-  vi.spyOn(pg, "Pool").mockImplementation(
-    class {
-      query = pool.query;
-      connect = pool.connect;
-      end = pool.end;
-      on = pool.on;
-    } as unknown as typeof pg.Pool
-  );
-  const queue = new Queue("postgres://fixture");
-  await queue.migrate();
-  return queue;
+  return await pgliteQueue(cleanup);
 }
 it("runs migration, idempotent enqueue, ownership leases, cancellation and crash recovery against PostgreSQL SQL", async () => {
   const q = await sqlDatabase();
@@ -323,13 +291,26 @@ it("accepts only signed webhook bytes, deduplicates deliveries and waits for liv
   ).toMatchObject({ duplicate: true });
   await processDelivery(q, config);
   expect(await q.list(["fixture/app"])).toEqual([]);
+  const held = (
+    await q.pool.query(
+      "SELECT status,attempts,reason,last_error,round(extract(epoch from deadline_at-now()))::int AS deadline FROM qa_deliveries WHERE id='delivery-42'"
+    )
+  ).rows[0];
+  expect(held).toMatchObject({
+    attempts: 1,
+    last_error: null,
+    reason: "PREVIEW_NOT_FOUND",
+    status: "pending",
+  });
+  // The webhook stored QA_AUTO_PREVIEW_WAIT_SECONDS (1800 by default) as the deadline.
+  expect(held.deadline).toBe(1800);
   expect(
     (
       await q.pool.query(
-        "SELECT status FROM qa_deliveries WHERE id='delivery-42'"
+        "SELECT count(*)::int AS count FROM qa_audit WHERE action='automatic.preview_wait'"
       )
-    ).rows[0].status
-  ).toBe("pending");
+    ).rows[0].count
+  ).toBe(1);
   await q.pool.query(
     "UPDATE qa_deliveries SET retry_at=now()-interval '1 second'"
   );
@@ -338,10 +319,21 @@ it("accepts only signed webhook bytes, deduplicates deliveries and waits for liv
   expect(
     (
       await q.pool.query(
-        "SELECT status FROM qa_deliveries WHERE id='delivery-42'"
+        "SELECT status,attempts,run_id FROM qa_deliveries WHERE id='delivery-42'"
       )
-    ).rows[0].status
-  ).toBe("processed");
+    ).rows[0]
+  ).toMatchObject({
+    attempts: 1,
+    run_id: (await q.list(["fixture/app"]))[0]!.id,
+    status: "processed",
+  });
+  expect(
+    (
+      await q.pool.query(
+        "SELECT run_id FROM qa_audit WHERE action='automatic.promoted'"
+      )
+    ).rows[0].run_id
+  ).toBe((await q.list(["fixture/app"]))[0]!.id);
   await processDelivery(q, config);
   expect((await q.list(["fixture/app"])).length).toBe(1);
 }, 30_000);
@@ -449,10 +441,22 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
   expect(
     (
       await q.pool.query(
-        "SELECT status FROM qa_deliveries WHERE id='rate-limited'"
+        "SELECT status,attempts,reason,last_error,run_id FROM qa_deliveries WHERE id='rate-limited'"
       )
-    ).rows[0].status
-  ).toBe("rate_limited");
+    ).rows[0]
+  ).toMatchObject({
+    attempts: 0,
+    reason: "WEBHOOK_RATE_LIMIT",
+    run_id: null,
+    status: "rate_limited",
+  });
+  expect(
+    (
+      await q.pool.query(
+        "SELECT last_error FROM qa_deliveries WHERE id='rate-limited'"
+      )
+    ).rows[0].last_error
+  ).toContain("hourly run limit");
   expect(
     (
       await q.pool.query(
@@ -463,10 +467,85 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
     { details: { delivery: "rate-limited", repo: "fixture/app", sha: SHA } },
   ]);
   expect(
+    (
+      await q.pool.query(
+        "SELECT details FROM qa_audit WHERE action='automatic.rate_limited'"
+      )
+    ).rows
+  ).toMatchObject([
+    { details: { delivery: "rate-limited", repo: "fixture/app", sha: SHA } },
+  ]);
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
+    attempts: [{ id: "rate-limited", runId: null, state: "rate_limited" }],
+    summary: { expired: 0, rateLimited: 1, waiting: 0 },
+  });
+  expect(
     await q.acceptDelivery("reopened-same-sha", "pull_request", payload)
   ).toBe(false);
   await processDelivery(q, f.config);
   expect(await q.list(["fixture/app"])).toEqual([]);
+}, 30_000);
+
+it("migrates an existing install to schema version 7 without losing pending deliveries", async () => {
+  expect(SCHEMA_VERSION).toBe(7);
+  const q = await sqlDatabase();
+  expect(
+    await q.acceptDelivery("legacy", "pull_request", {
+      number: 1,
+      prUrl: PR_URL,
+      repo: "fixture/app",
+      sha: SHA,
+    })
+  ).toBe(true);
+  for (const column of [
+    "attempts",
+    "claim_token",
+    "deadline_at",
+    "reason",
+    "last_error",
+    "run_id",
+    "updated_at",
+  ]) {
+    await q.pool.query(`ALTER TABLE qa_deliveries DROP COLUMN ${column}`);
+  }
+  await q.pool.query("DELETE FROM qa_schema WHERE version=$1", [
+    SCHEMA_VERSION,
+  ]);
+  await q.migrate();
+  const columns = (
+    await q.pool.query<{ column_name: string }>(
+      "SELECT column_name FROM information_schema.columns WHERE table_name='qa_deliveries'"
+    )
+  ).rows.map((row) => row.column_name);
+  expect(columns).toEqual(
+    expect.arrayContaining([
+      "attempts",
+      "claim_token",
+      "deadline_at",
+      "reason",
+      "last_error",
+      "run_id",
+      "updated_at",
+    ])
+  );
+  expect(
+    (
+      await q.pool.query(
+        "SELECT status,attempts,reason,last_error,run_id FROM qa_deliveries WHERE id='legacy'"
+      )
+    ).rows[0]
+  ).toMatchObject({
+    attempts: 0,
+    last_error: null,
+    reason: null,
+    run_id: null,
+    status: "pending",
+  });
+  expect(
+    (await q.pool.query("SELECT version FROM qa_schema")).rows.map(
+      (row) => row.version
+    )
+  ).toContain(SCHEMA_VERSION);
 }, 30_000);
 
 it("keeps doctor aligned with the actual migration version and rejects older schemas", async () => {
@@ -1238,7 +1317,7 @@ it("refuses a preflight with missing preview provenance and a read-only account"
 }, 30_000);
 
 it("intersects technical account repositories with the live managed App selection in dashboard readiness", async () => {
-  await sqlDatabase();
+  const q = await sqlDatabase();
   const f = await githubSetupFixture();
   cleanup.push(f.close);
   const usersFile = join(f.dataDir, "readiness-users.json");
@@ -1271,6 +1350,12 @@ it("intersects technical account repositories with the live managed App selectio
     "fixture-manifest-code"
   );
   await setup.select(["fixture/app"]);
+  // A newly selected repository is opted in for automatic runs by default.
+  expect((await setup.status()).repositories).toMatchObject([
+    { auto_run: true, enabled: true, full_name: "fixture/app" },
+  ]);
+  expect((await setup.effective()).allowedRepos).toEqual(["fixture/app"]);
+  expect((await setup.effective()).automaticRepos).toEqual(["fixture/app"]);
   const server = await startProductionServer(config);
   cleanup.push(() => server.shutdown());
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -1280,9 +1365,75 @@ it("intersects technical account repositories with the live managed App selectio
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      github: { mode: "app", repositories: index === 0 ? [] : ["FiXtUrE/ApP"] },
+      github: {
+        autoRepos: index === 0 ? [] : ["FiXtUrE/ApP"],
+        mode: "app",
+        repositories: index === 0 ? [] : ["FiXtUrE/ApP"],
+      },
     });
   }
+  const admin = {
+    Authorization: `Bearer ${tokens[0]}`,
+    "Content-Type": "application/json",
+    Origin: url,
+  };
+  // The route opts a selected repository out of automatic runs without unselecting it.
+  const optedOut = await fetch(`${url}/github/app/repositories`, {
+    method: "PUT",
+    headers: admin,
+    body: JSON.stringify({ autoRepos: [], repositories: ["fixture/app"] }),
+  });
+  expect(optedOut.status).toBe(200);
+  expect(await optedOut.json()).toMatchObject({
+    repositories: [
+      { auto_run: false, enabled: true, full_name: "fixture/app" },
+    ],
+  });
+  expect((await setup.effective()).allowedRepos).toEqual(["fixture/app"]);
+  expect((await setup.effective()).automaticRepos).toEqual([]);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT details FROM qa_audit WHERE action='github.repositories.selected' ORDER BY id DESC LIMIT 1"
+      )
+    ).rows[0].details
+  ).toEqual({ autoRepos: [], repositories: ["fixture/app"] });
+  const status = await fetch(`${url}/dashboard/status`, {
+    headers: admin,
+  });
+  expect(await status.json()).toMatchObject({
+    github: { autoRepos: [], repositories: [] },
+  });
+  // Omitting autoRepos preserves the per-repository choice of the previous selection.
+  const preserved = await fetch(`${url}/github/app/repositories`, {
+    method: "PUT",
+    headers: admin,
+    body: JSON.stringify({ repositories: ["fixture/app"] }),
+  });
+  expect(preserved.status).toBe(200);
+  expect(await preserved.json()).toMatchObject({
+    repositories: [
+      { auto_run: false, enabled: true, full_name: "fixture/app" },
+    ],
+  });
+  const restored = await fetch(`${url}/github/app/repositories`, {
+    method: "PUT",
+    headers: admin,
+    body: JSON.stringify({
+      autoRepos: ["fixture/app"],
+      repositories: ["fixture/app"],
+    }),
+  });
+  expect(restored.status).toBe(200);
+  expect((await setup.effective()).automaticRepos).toEqual(["fixture/app"]);
+  // A repository cannot run automatically while it stays unselected.
+  const denied = await fetch(`${url}/github/app/repositories`, {
+    method: "PUT",
+    headers: admin,
+    body: JSON.stringify({ autoRepos: ["fixture/app"], repositories: [] }),
+  });
+  expect(denied.status).toBe(400);
+  expect((await setup.effective()).automaticRepos).toEqual(["fixture/app"]);
 }, 30_000);
 it("disconnects the connected GitHub App from the admin API, uninstalls it on GitHub and wipes the local connection", async () => {
   const q = await sqlDatabase();
