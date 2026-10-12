@@ -23,6 +23,7 @@ import {
   validatePreviewUrl,
 } from "./config.js";
 import { dashboard } from "./dashboard.js";
+import { dashboardRoutes } from "./dashboard-routes.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import { GitHub, parsePrUrl } from "./github.js";
 import { verifyWebhook } from "./github-app.js";
@@ -86,6 +87,7 @@ export async function startProductionServer(config: Config) {
     return principal(req, await setup.effective(), accounts);
   }
   const models = new ModelCatalog(config);
+  const dashboardRoute = dashboardRoutes(setup, config, models, rawBody, json);
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
   let stopping = false;
@@ -492,6 +494,7 @@ export async function startProductionServer(config: Config) {
     user: Principal
   ) {
     if (
+      (await dashboardRoute(req, res, url, user)) ||
       (await setupRoute(req, res, url, user)) ||
       (await modelRoute(req, res, url, user)) ||
       (await accountRoute(req, res, url, user))
