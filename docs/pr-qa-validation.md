@@ -125,3 +125,10 @@ correctif sont documentées dans la PR, après lecture des résultats.
 Après installation des archives officielles Chromium/ffmpeg attendues par
 Playwright, `pnpm check` passe localement : 306 tests, avec les deux tests
 PostgreSQL natif ignorés faute de serveur local. TypeScript et lint passent.
+
+Le premier run Compose du correctif `efbd4e7` a détecté une incohérence du doctor :
+la migration inscrivait la version 3, mais la probe PostgreSQL attendait encore 2.
+La version attendue est maintenant partagée avec la migration (`SCHEMA_VERSION`).
+Un test SQL vérifie que le doctor accepte le schéma migré et refuse l'ancien.
+Après correction, `pnpm check` passe localement avec 307 tests ; le résultat de la
+CI finale, y compris Compose, est consigné dans la PR.

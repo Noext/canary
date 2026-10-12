@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { afterEach, expect, it, vi } from "vitest";
+import { doctor } from "../src/doctor.js";
 import { startProductionServer } from "../src/production-server.js";
-import { Queue } from "../src/queue.js";
+import { Queue, SCHEMA_VERSION } from "../src/queue.js";
 import { processDelivery } from "../src/webhook-inbox.js";
 import { BASE_SHA, fixture, PR_URL, SHA } from "./fixture.js";
 
@@ -396,4 +397,29 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
   ).toBe(false);
   await processDelivery(q, f.config);
   expect(await q.list(["fixture/app"])).toEqual([]);
+}, 30_000);
+
+it("keeps doctor aligned with the actual migration version and rejects older schemas", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = { ...f.config, DATABASE_URL: "postgres://fixture" };
+  const options = { skipBrowser: true, prUrl: PR_URL, previewUrl: f.baseUrl };
+  const current = await doctor(config, options);
+  expect(
+    current.checks.find((check) => check.name === "postgresql")
+  ).toMatchObject({
+    status: "passed",
+    message: `PostgreSQL connection, schema version ${SCHEMA_VERSION} and job-table read verified`,
+  });
+  await q.pool.query("DELETE FROM qa_schema WHERE version=$1", [
+    SCHEMA_VERSION,
+  ]);
+  const outdated = await doctor(config, options);
+  expect(
+    outdated.checks.find((check) => check.name === "postgresql")
+  ).toMatchObject({
+    status: "failed",
+    message: expect.stringContaining(`supported version ${SCHEMA_VERSION}`),
+  });
 }, 30_000);
