@@ -1,38 +1,44 @@
-import { createHmac, createSign, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  createSign,
+  timingSafeEqual,
+} from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { Config } from "./config.js";
 import { fetchText } from "./http.js";
 
 const cache = new Map<string, { token: string; expires: number }>();
-export async function githubToken(config: Config): Promise<string> {
+export async function githubToken(
+  config: Config,
+  repo?: string
+): Promise<string> {
   if (!config.GITHUB_APP_ID) {
     return config.GITHUB_TOKEN;
   }
-  const key = `${config.GITHUB_API_URL}:${config.GITHUB_APP_ID}:${config.GITHUB_INSTALLATION_ID}`;
+  const installation = config.githubInstallations
+    ? config.githubInstallations[repo?.toLowerCase() ?? ""]
+    : config.GITHUB_INSTALLATION_ID;
+  if (!installation) {
+    throw new Error(
+      "GitHub repository is not connected. Select it in the GitHub settings."
+    );
+  }
+  const pem =
+    config.githubPrivateKey ??
+    (await readFile(config.GITHUB_APP_PRIVATE_KEY_FILE, "utf8"));
+  const key = `${config.GITHUB_API_URL}:${config.GITHUB_APP_ID}:${installation}:${createHash("sha256").update(pem).digest("hex")}`;
   const cached = cache.get(key);
   if (cached && cached.expires > Date.now() + 60_000) {
     return cached.token;
   }
-  if (!(config.GITHUB_INSTALLATION_ID && config.GITHUB_APP_PRIVATE_KEY_FILE)) {
-    throw new Error(
-      "GitHub App installation ID and private key file are required"
-    );
-  }
-  const encode = (value: unknown) =>
-    Buffer.from(JSON.stringify(value)).toString("base64url");
-  const now = Math.floor(Date.now() / 1000);
-  const input = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ iat: now - 60, exp: now + 540, iss: config.GITHUB_APP_ID })}`;
-  const signature = createSign("RSA-SHA256")
-    .update(input)
-    .sign(await readFile(config.GITHUB_APP_PRIVATE_KEY_FILE, "utf8"))
-    .toString("base64url");
   const response = await fetchText(
-    `${config.GITHUB_API_URL}/app/installations/${config.GITHUB_INSTALLATION_ID}/access_tokens`,
+    `${config.GITHUB_API_URL}/app/installations/${installation}/access_tokens`,
     {
       method: "POST",
       headers: {
         Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${input}.${signature}`,
+        Authorization: `Bearer ${appJwt(config.GITHUB_APP_ID, pem)}`,
         "X-GitHub-Api-Version": "2022-11-28",
       },
     }
@@ -52,6 +58,17 @@ export async function githubToken(config: Config): Promise<string> {
   }
   cache.set(key, { token: body.token, expires: Date.parse(body.expires_at) });
   return body.token;
+}
+export function appJwt(appId: string, pem: string) {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const now = Math.floor(Date.now() / 1000);
+  const input = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ iat: now - 60, exp: now + 540, iss: appId })}`;
+  const signature = createSign("RSA-SHA256")
+    .update(input)
+    .sign(pem)
+    .toString("base64url");
+  return `${input}.${signature}`;
 }
 export function verifyWebhook(
   raw: Buffer,

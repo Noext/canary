@@ -24,6 +24,7 @@ export function redact(value: string, config?: Config): string {
     process.env.CANARY_DAEMON_TOKEN,
     config?.QA_BROWSER_SERVICE_TOKEN,
     config?.GITHUB_WEBHOOK_SECRET,
+    config?.githubPrivateKey,
     config?.DATABASE_URL,
     ...Object.entries(process.env)
       .filter(([key]) =>

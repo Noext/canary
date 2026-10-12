@@ -2,6 +2,40 @@
 
 Implementation in the official `Noext/canary` fork, upstream `0xnyn/canary`, development branch `feat/autonomous-pr-qa`.
 
+## GitHub App depuis l’UI — 12 octobre 2026
+
+Développements sur `feat/github-app-onboarding`, depuis le main du fork après
+fusion de la PR #2. Le parcours reprend le mécanisme Manifest officiel utilisé
+par [Proval](https://github.com/seoes/proval), avec credentials serveur et
+sélection explicite des dépôts.
+
+- `pnpm check` local : lint, TypeScript et **323 tests** passent ; les trois
+  tests PostgreSQL natif sont ignorés faute de serveur local.
+- **13 E2E Chromium locaux** passent. Le nouveau cas effectue le formulaire de
+  création, la conversion/callback, l'installation, la sélection puis une QA
+  navigateur avec vidéo, Check/statut/commentaire via une App, sans PAT.
+- Le navigateur et les interactions sont réels ; GitHub et le modèle de ce test
+  sont des API fixtures. Aucune App réelle n'a été créée par cet essai.
+- Régressions SQL : callback lié à l’admin et usage unique/expiration, chiffrement
+  et erreur après changement du secret, sélection/permissions/retrait du dépôt,
+  rechargement des credentials et webhook signé avec le secret issu du manifest.
+- Régressions de la revue/CI : le login technique renvoie les dépôts avant
+  affichage du formulaire ; le worker conserve les credentials App jusqu'à la
+  réparation après annulation ; les forks publics non installés sont lus sans
+  token et leurs écritures restent interdites. Ces trois cas échouaient avant
+  correctif, puis passent en local.
+- La [première CI de la PR #3](https://github.com/Noext/canary/actions/runs/38246780573)
+  a échoué dans l'E2E de login technique (formulaire masqué). Le correctif est
+  poussé sur la même branche ; les validations Docker ci-dessous attendent sa CI.
+- Un troisième test Compose démarre sans PAT, configure l’App, redémarre
+  API/worker et exécute une QA publiée avec les credentials persistés.
+  **Son résultat attend la CI : Docker n'est pas disponible localement.**
+- L'installation de l’App sur GitHub réel et le déploiement de cette version
+  sur le VPS utilisateur restent à vérifier après mise à jour.
+
+Les preuves historiques de moteur/corpus IA ci-dessous restent attachées à
+leurs révisions d’origine ; elles ne remplacent pas la validation de ce parcours.
+
 ## État actuel — 12 octobre 2026
 
 Cette section remplace les limites historiques des premières versions consignées

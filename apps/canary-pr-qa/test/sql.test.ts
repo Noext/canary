@@ -6,12 +6,16 @@ import pg from "pg";
 import { afterEach, expect, it, vi } from "vitest";
 import { completeRun } from "../src/completion.js";
 import { doctor } from "../src/doctor.js";
+import { GitHub } from "../src/github.js";
+import { GitHubSetup, REQUIRED_PERMISSIONS } from "../src/github-setup.js";
 import { LocalAuth } from "../src/local-auth.js";
 import { startProductionServer } from "../src/production-server.js";
 import { Queue, SCHEMA_VERSION } from "../src/queue.js";
 import type { RunResult } from "../src/schema.js";
 import { processDelivery } from "../src/webhook-inbox.js";
+import { startWorker } from "../src/worker.js";
 import { BASE_SHA, fixture, PR_URL, SHA } from "./fixture.js";
+import { githubSetupFixture } from "./github-setup-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -162,6 +166,10 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
     headers: admin,
   });
   expect(login.status).toBe(200);
+  expect(await login.clone().json()).toMatchObject({
+    role: "admin",
+    repos: ["fixture/app"],
+  });
   expect(login.headers.get("set-cookie")).toContain("HttpOnly");
   expect(login.headers.get("set-cookie")).toContain("SameSite=Lax");
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
@@ -756,4 +764,353 @@ it("expires setup links and shares local login rate limits in SQL", async () => 
       )
     ).rows
   ).toEqual([{ key: "global-login" }]);
+}, 30_000);
+
+it("connects a GitHub App through admin-only manifest callbacks, encrypts credentials, selects repositories and reloads them", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const setup = new GitHubSetup(q.pool, config);
+  const accounts = new LocalAuth(q.pool);
+  const localUser = await accounts.setup(
+    {
+      username: "github-admin",
+      password: "github-admin-password-2026",
+      setupCode: await accounts.issueSetupTicket(),
+    },
+    []
+  );
+  const token = await accounts.session(localUser);
+  const cookie = `qa_local_session=${token}`;
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const call = (path: string, method = "GET", value?: unknown) =>
+    fetch(`${url}${path}`, {
+      method,
+      redirect: "manual",
+      headers: {
+        Cookie: cookie,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      ...(value ? { body: JSON.stringify(value) } : {}),
+    });
+  expect((await fetch(`${url}/github/app`)).status).toBe(401);
+  expect((await call("/github/app")).status).toBe(200);
+  const manifestResponse = await call("/github/app/manifest", "POST", {
+    name: "Canary team QA",
+  });
+  const registration = (await manifestResponse.json()) as Awaited<
+    ReturnType<GitHubSetup["manifest"]>
+  >;
+  expect(registration.action).toMatch(
+    /^https:\/\/github.com\/settings\/apps\/new/
+  );
+  expect(registration.manifest.default_permissions).toEqual(
+    REQUIRED_PERMISSIONS
+  );
+  expect(registration.manifest.hook_attributes.url).toBe(
+    "https://qa.example.test/github/webhook"
+  );
+  const state = new URL(registration.action).searchParams.get("state")!;
+  expect(
+    (
+      await call(
+        `/github/app/callback?state=${"a".repeat(64)}&code=fixture-manifest-code`
+      )
+    ).status
+  ).toBe(400);
+  expect(f.state.conversionCount).toBe(0);
+  const callback = `/github/app/callback?state=${state}&code=fixture-manifest-code`;
+  expect((await call(callback)).status).toBe(303);
+  expect((await call(callback)).status).toBe(400);
+  expect(f.state.conversionCount).toBe(1);
+  const saved = (await q.pool.query("SELECT credentials FROM qa_github_app"))
+    .rows[0].credentials;
+  expect(saved).not.toContain(f.pem);
+  expect(saved).not.toContain(f.secret);
+  const safeStatus = await (await call("/github/app")).text();
+  expect(safeStatus).not.toContain(f.secret);
+  expect(safeStatus).not.toContain("PRIVATE KEY");
+  const install = (await (
+    await call("/github/app/install", "POST", {})
+  ).json()) as { url: string };
+  const installState = new URL(install.url).searchParams.get("state")!;
+  expect(
+    (
+      await call(
+        `/github/app/installed?installation_id=999999&state=${installState}`
+      )
+    ).status
+  ).toBe(303);
+  expect((await setup.status()).repositories[0].installation_id).toBe("42001");
+  expect((await setup.effective()).allowedRepos).toEqual([]);
+  expect(
+    (
+      await call("/github/app/repositories", "PUT", {
+        repositories: ["other/not-installed"],
+      })
+    ).status
+  ).toBe(400);
+  expect(
+    (
+      await call("/github/app/repositories", "PUT", {
+        repositories: ["fixture/app"],
+      })
+    ).status
+  ).toBe(200);
+  expect(await (await call("/me")).json()).toMatchObject({
+    role: "admin",
+    repos: ["fixture/app"],
+  });
+  const reloaded = new GitHubSetup(q.pool, config);
+  const effective = await reloaded.effective();
+  expect(effective.GITHUB_TOKEN).toBe("");
+  expect((await new GitHub(effective).pr(PR_URL)).data.head.sha).toBe(SHA);
+  expect(
+    f.requests.find((r) => r.path === "/repos/fixture/app/pulls/1")?.auth
+  ).toBe("Bearer fixture-installation-token-42001");
+  const payload = JSON.stringify({
+    action: "synchronize",
+    installation: { id: 42_001 },
+    repository: { full_name: "fixture/app" },
+    pull_request: {
+      number: 1,
+      html_url: PR_URL,
+      head: { sha: SHA },
+      draft: false,
+    },
+  });
+  const webhook = await fetch(`${url}/github/webhook`, {
+    method: "POST",
+    headers: {
+      "x-github-event": "pull_request",
+      "x-github-delivery": "app-connected-webhook",
+      "x-hub-signature-256": `sha256=${createHmac("sha256", f.secret).update(payload).digest("hex")}`,
+    },
+    body: payload,
+  });
+  expect(webhook.status).toBe(202);
+  await expect(
+    new GitHubSetup(q.pool, {
+      ...config,
+      QA_API_TOKEN: "a-different-secret-2026-123456789",
+    }).effective()
+  ).rejects.toMatchObject({ code: "GITHUB_CREDENTIALS_UNREADABLE" });
+  f.state.removed = true;
+  await setup.refresh();
+  expect((await reloaded.effective()).allowedRepos).toEqual([]);
+  expect(await (await call("/me")).json()).toMatchObject({ repos: [] });
+  await expect(
+    new GitHub(await reloaded.effective()).pr(PR_URL)
+  ).rejects.toThrow("GITHUB_ALLOWED_REPOS");
+  await q.migrate();
+  expect((await setup.status()).app?.id).toBe("95001");
+}, 30_000);
+
+it("rejects expired or cross-user GitHub states, non-admin changes and missing installation permissions", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const setup = new GitHubSetup(q.pool, config);
+  const registration = await setup.manifest("alice", {
+    name: "Canary Org",
+    organization: "fixture-org",
+  });
+  expect(registration.action).toContain(
+    "/organizations/fixture-org/settings/apps/new"
+  );
+  const state = new URL(registration.action).searchParams.get("state")!;
+  await expect(
+    setup.convert("bob", state, "fixture-manifest-code")
+  ).rejects.toMatchObject({ code: "GITHUB_STATE_INVALID" });
+  await q.pool.query(
+    "UPDATE qa_github_state SET expires_at=now()-interval '1 second'"
+  );
+  await expect(
+    setup.convert("alice", state, "fixture-manifest-code")
+  ).rejects.toMatchObject({ code: "GITHUB_STATE_INVALID" });
+  await setup.convert(
+    "alice",
+    await setup.state("alice", "manifest"),
+    "fixture-manifest-code"
+  );
+  f.state.permissions.checks = "read";
+  await expect(setup.refresh()).rejects.toMatchObject({
+    code: "GITHUB_PERMISSIONS",
+  });
+  expect((await setup.status()).repositories).toEqual([]);
+  const usersFile = join(f.dataDir, "viewer.json");
+  const viewerToken = "github-setup-viewer-token-2026";
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "viewer",
+        role: "viewer",
+        repos: [],
+        tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
+      },
+    ])
+  );
+  const server = await startProductionServer({
+    ...config,
+    QA_USERS_FILE: usersFile,
+  });
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  expect(
+    (
+      await fetch(`${url}/github/app/refresh`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${viewerToken}`, Origin: url },
+      })
+    ).status
+  ).toBe(403);
+  expect(
+    (
+      await fetch(`${url}/github/app/manifest`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.QA_API_TOKEN}`,
+          Origin: "https://evil.test",
+        },
+        body: JSON.stringify({ name: "evil" }),
+      })
+    ).status
+  ).toBe(403);
+}, 30_000);
+
+it("retains dashboard App credentials through worker completion when cancellation invalidates a published result", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = { ...f.config, DATABASE_URL: "postgres://fixture" };
+  const setup = new GitHubSetup(q.pool, config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const job = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "app-cancel-after-publish"
+  );
+  const stop = new AbortController();
+  const runner = await import("../src/runner.js");
+  vi.spyOn(runner, "runQa").mockImplementation(async (_input, effective) => {
+    const github = new GitHub(effective);
+    const context = await github.context(PR_URL);
+    await github.status(
+      context,
+      "success",
+      "Fixture published before cancellation"
+    );
+    const commentUrl = await github.comment(
+      context,
+      "Fixture published success"
+    );
+    await q.cancel(job.id, "admin");
+    stop.abort();
+    return {
+      id: job.id,
+      prUrl: PR_URL,
+      sha: SHA,
+      startedAt: "now",
+      outcome: "passed",
+      scenarios: [],
+      publication: { commentUrl, status: "success" },
+    };
+  });
+  await startWorker(config, stop);
+  expect(await q.get(job.id)).toMatchObject({
+    status: "cancelled",
+    outcome: "blocked",
+  });
+  expect(f.outgoing.map((item) => item.payload.state).filter(Boolean)).toEqual([
+    "success",
+    "error",
+  ]);
+  expect(
+    f.outgoing.find((item) => item.path.includes("/issues/comments/"))?.payload
+      .body
+  ).toContain("BLOCKED");
+  const repaired = JSON.parse(
+    await readFile(join(f.dataDir, job.id, "result.json"), "utf8")
+  );
+  expect(repaired.publication.status).toBe("error");
+  expect(repaired.error).not.toContain("repair failed");
+  const invalidations = f.requests.filter(
+    (item) => item.path === `/repos/fixture/app/statuses/${SHA}`
+  );
+  expect(invalidations).toHaveLength(2);
+  expect(
+    invalidations.every(
+      (item) => item.auth === "Bearer fixture-installation-token-42001"
+    )
+  ).toBe(true);
+}, 30_000);
+
+it("reads an uninstalled public fork anonymously while keeping base writes installation-scoped and private forks unavailable", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const setup = new GitHubSetup(q.pool, f.config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  f.state.forkHead = true;
+  const github = new GitHub(await setup.effective());
+  const context = await github.context(PR_URL);
+  expect(context.headRepo).toBe("external/head");
+  expect(
+    context.context.some(
+      (file) => file.ref === SHA && file.content.includes("Public fork content")
+    )
+  ).toBe(true);
+  const forkReads = f.requests.filter((item) =>
+    item.path.startsWith("/repos/external/head/contents/")
+  );
+  expect(forkReads.length).toBeGreaterThan(0);
+  expect(forkReads.every((item) => !item.auth)).toBe(true);
+  const before = f.requests.length;
+  await expect(
+    github.request(`/repos/external/head/statuses/${SHA}`, "POST", {
+      state: "error",
+    })
+  ).rejects.toThrow("not connected");
+  expect(f.requests).toHaveLength(before);
+  await github.status(context, "pending", "Fixture base write");
+  expect(
+    f.requests.find(
+      (item) => item.path === `/repos/fixture/app/statuses/${SHA}`
+    )?.auth
+  ).toBe("Bearer fixture-installation-token-42001");
+  f.state.privateFork = true;
+  const privateContext = await github.context(PR_URL);
+  expect(privateContext.context.some((file) => file.ref === SHA)).toBe(false);
+  expect(
+    privateContext.contextWarnings.some((warning) =>
+      warning.includes("Unavailable context")
+    )
+  ).toBe(true);
 }, 30_000);

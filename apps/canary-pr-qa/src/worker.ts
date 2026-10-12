@@ -4,6 +4,7 @@ import { createLogger } from "@usecanary/logger";
 import { completeRun } from "./completion.js";
 import type { Config } from "./config.js";
 import { diagnose } from "./diagnostics.js";
+import { GitHubSetup } from "./github-setup.js";
 import { Queue } from "./queue.js";
 import { retain } from "./retention.js";
 import { runScope } from "./run-scope.js";
@@ -17,6 +18,7 @@ export async function startWorker(
 ) {
   const queue = new Queue(config.DATABASE_URL);
   await queue.migrate();
+  const setup = new GitHubSetup(queue.pool, config);
   const worker = randomUUID();
   let active: AbortController | undefined;
   const shutdown = () => {
@@ -26,9 +28,23 @@ export async function startWorker(
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
   let lastRetention = 0;
+  let lastGitHubSync = 0;
   try {
     while (!stop.signal.aborted) {
-      await processDelivery(queue, config).catch((error) =>
+      if (Date.now() - lastGitHubSync > 60_000) {
+        lastGitHubSync = Date.now();
+        if (await setup.app()) {
+          await setup
+            .refresh()
+            .catch((error) =>
+              logger.warn(
+                { diagnostic: diagnose(error, config) },
+                "GitHub installation sync failed"
+              )
+            );
+        }
+      }
+      await processDelivery(queue, await setup.effective()).catch((error) =>
         logger.warn(
           { diagnostic: diagnose(error, config) },
           "Webhook inbox retry"
@@ -63,7 +79,12 @@ export async function startWorker(
             controller.abort(new Error("Database heartbeat failed"))
           );
       }, 10_000);
+      let effective = config;
       try {
+        effective = await setup.effective();
+        if (!effective.allowedRepos.includes(job.repo.toLowerCase())) {
+          throw new Error("Repository is no longer connected or allowed");
+        }
         const result = await runScope.run(
           {
             id: job.id,
@@ -75,6 +96,13 @@ export async function startWorker(
             maxCostUsd: config.QA_RUN_MAX_COST_USD,
             verifyOwnership: async () => {
               controller.signal.throwIfAborted();
+              if (
+                !(await setup.effective()).allowedRepos.includes(
+                  job.repo.toLowerCase()
+                )
+              ) {
+                throw new Error("Repository disconnected before publication");
+              }
               if (!(await queue.heartbeat(job.id, worker))) {
                 controller.abort(
                   new Error(
@@ -85,16 +113,21 @@ export async function startWorker(
               }
             },
           },
-          () => runQa({ ...job.input, id: job.id }, config)
+          () => runQa({ ...job.input, id: job.id }, effective)
         );
-        await completeRun(queue, job.id, worker, result, config);
+        await completeRun(queue, job.id, worker, result, effective);
       } catch (error) {
         logger.error(
-          { runId: job.id, diagnostic: diagnose(error, config) },
+          { runId: job.id, diagnostic: diagnose(error, effective) },
           "Worker run failed"
         );
         await queue
-          .complete(job.id, worker, "blocked", diagnose(error, config).message)
+          .complete(
+            job.id,
+            worker,
+            "blocked",
+            diagnose(error, effective).message
+          )
           .catch(() => undefined);
       } finally {
         clearInterval(heartbeat);
