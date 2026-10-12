@@ -22,7 +22,7 @@ import {
   validateConfiguration,
   validatePreviewUrl,
 } from "./config.js";
-import { dashboard } from "./dashboard.js";
+import { dashboard, dashboardAssets } from "./dashboard.js";
 import { dashboardRoutes } from "./dashboard-routes.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import { GitHub, parsePrUrl } from "./github.js";
@@ -359,13 +359,24 @@ export async function startProductionServer(config: Config) {
       json(res, 200, { ok: true, mode: "postgres", jobs: counts.rows });
       return true;
     }
+    if (req.method === "GET" && dashboardAssets.has(url.pathname)) {
+      const asset = dashboardAssets.get(url.pathname);
+      if (!asset) {
+        return false;
+      }
+      res.setHeader("Content-Type", asset.type);
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.end(asset.body);
+      return true;
+    }
     if (req.method === "GET" && url.pathname === "/") {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("Referrer-Policy", "no-referrer");
       res.setHeader(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'"
       );
       res.end(dashboard);
       return true;

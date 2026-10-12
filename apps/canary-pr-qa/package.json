@@ -16,7 +16,7 @@
     "test": "vitest run --exclude test/e2e.test.ts --exclude test/container.test.ts",
     "test:e2e": "vitest run test/e2e.test.ts",
     "test:container": "vitest run test/container.test.ts",
-    "dev": "tsx src/cli.ts",
+    "dev": "node scripts/dev.mjs",
     "clean": "rm -rf dist coverage .turbo"
   },
   "dependencies": {

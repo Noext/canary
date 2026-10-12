@@ -1,8 +1,10 @@
 import { chmod } from "node:fs/promises";
 import { build } from "esbuild";
+import { dashboardAssets } from "./dashboard-assets.mjs";
 
 await build({
   entryPoints: ["src/cli.ts"],
+  plugins: [dashboardAssets()],
   outfile: "dist/cli.js",
   bundle: true,
   platform: "node",

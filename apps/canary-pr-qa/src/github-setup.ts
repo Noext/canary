@@ -144,6 +144,14 @@ interface Repository {
   installation: string;
   private: boolean;
 }
+interface RepositoryRow {
+  account: string;
+  enabled: boolean;
+  full_name: string;
+  installation_id: string;
+  private: boolean;
+}
+
 interface AppRow {
   app_id: string;
   credentials: string;
@@ -168,13 +176,17 @@ export class GitHubSetup {
     const app = await this.app();
     const repositories = app
       ? (
-          await this.pool.query(
+          await this.pool.query<RepositoryRow>(
             "SELECT full_name,installation_id,account,private,enabled FROM qa_github_repositories ORDER BY full_name"
           )
         ).rows
       : [];
     const delivery = (
-      await this.pool.query(
+      await this.pool.query<{
+        event: string;
+        status: string;
+        created_at: string;
+      }>(
         "SELECT event,status,created_at FROM qa_deliveries ORDER BY created_at DESC LIMIT 1"
       )
     ).rows[0];

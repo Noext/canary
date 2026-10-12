@@ -1,5 +1,15 @@
-import { dashboardClient } from "./dashboard/client.js";
-import { dashboardMarkup } from "./dashboard/markup.js";
-import { dashboardStyles } from "./dashboard/styles.js";
+import client from "./dashboard/client.ts?browser";
+import html from "./dashboard/index.html?raw";
+import styles from "./dashboard/styles.css?raw";
 
-export const dashboard = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Canary · QA de vos pull requests</title><style>${dashboardStyles}</style></head><body>${dashboardMarkup}<script>${dashboardClient}</script></body></html>`;
+export const dashboard = html;
+export const dashboardAssets = new Map([
+  [
+    "/dashboard/assets/styles.css",
+    { type: "text/css; charset=utf-8", body: styles },
+  ],
+  [
+    "/dashboard/assets/client.js",
+    { type: "text/javascript; charset=utf-8", body: client },
+  ],
+]);

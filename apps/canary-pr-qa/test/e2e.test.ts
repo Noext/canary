@@ -604,12 +604,12 @@ it("uses the actual dashboard in Chromium: login, project list, live SSE and can
         id: "running",
         description: "Running update delivered",
         kind: "text",
-        expected: "EN COURS",
+        expected: "En cours",
         verification: "state",
         afterStep: "open",
       }
     );
-    expect(running.actual).toContain("EN COURS");
+    expect(String(running.actual).toLowerCase()).toContain("en cours");
     await act("cancel", {
       type: "click",
       locator: { by: "role", value: "button", name: "Annuler le test" },
@@ -1195,14 +1195,14 @@ it("presents actual assertions and a playable video instead of raw JSON in the d
     const evidence = await canary.act(
       session,
       "result-mobile",
-      `const page=await browser.getPage("qa"); await page.setViewportSize({width:390,height:844}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>({fits:document.documentElement.scrollWidth<=innerWidth,video:document.querySelector("#scenarioCards video")?.getAttribute("src"),diagnosticClosed:!document.querySelector("#detail details").open}))}));`
+      `const page=await browser.getPage("qa"); await page.setViewportSize({width:390,height:844}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>({fits:document.documentElement.scrollWidth<=innerWidth,overflow:[...document.querySelectorAll("body *")].filter(e=>e.getBoundingClientRect().right>innerWidth).map(e=>({id:e.id,tag:e.tagName,right:e.getBoundingClientRect().right})).slice(0,8),css:getComputedStyle(document.body).margin,video:document.querySelector("#scenarioCards video")?.getAttribute("src"),diagnosticClosed:!document.querySelector("#detail details").open}))}));`
     );
     const shown = evidence.actual as {
       fits: boolean;
       video: string;
       diagnosticClosed: boolean;
     };
-    expect(shown.fits).toBe(true);
+    expect(shown.fits, JSON.stringify(shown)).toBe(true);
     expect(shown.diagnosticClosed).toBe(true);
     expect(shown.video).toContain(".webm");
     const video = await fetch(url + shown.video, {
@@ -1295,26 +1295,25 @@ it("removes the connected GitHub App from the dashboard only after an explicit c
         verification: "state",
       }
     );
-  const confirmAs = (label: string, answer: boolean) =>
-    canary.act(
-      id,
-      label,
-      `const page=await browser.getPage("qa"); await page.evaluate((answer)=>{window.confirm=()=>answer},${answer}); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full}));`
-    );
   try {
     await act("dashboard", { type: "goto", path: "/" });
     await click("open-github-settings", "#nav-settings");
     await assertText("connected", "#githubConnection", "Connecté");
     await click("open-danger-zone", "#githubDanger > summary");
-    // A refused confirmation must leave GitHub and the local connection alone.
-    await confirmAs("refuse-confirmation", false);
-    await click("disconnect-refused", "#githubUninstall");
+    // A cancelled confirmation must leave GitHub and the local connection alone.
+    await click("ask-disconnect", "#githubUninstall");
+    await assertText(
+      "confirmation-visible",
+      "#githubConfirmText",
+      "Désinstaller l'App GitHub"
+    );
+    await click("cancel-disconnect", "#githubConfirmCancel");
     await assertText("still-connected", "#githubConnection", "Connecté");
     expect(f.state.uninstalls).toBe(0);
     expect((await setup.status()).app?.id).toBe("95001");
     // Confirming uninstalls the App on GitHub and wipes the local connection.
-    await confirmAs("accept-confirmation", true);
-    await click("uninstall-app", "#githubUninstall");
+    await click("ask-disconnect-again", "#githubUninstall");
+    await click("confirm-disconnect", "#githubConfirmRun");
     await assertText("disconnected", "#githubConnection", "À connecter");
     // A refused remote deletion must not be reported as a successful removal.
     await setup.convert(
@@ -1329,8 +1328,8 @@ it("removes the connected GitHub App from the dashboard only after an explicit c
     await click("open-github-settings-again", "#nav-settings");
     await assertText("connected-again", "#githubConnection", "Connecté");
     await click("open-danger-zone-again", "#githubDanger > summary");
-    await confirmAs("accept-second-confirmation", true);
-    await click("refused-uninstall", "#githubUninstall");
+    await click("ask-second-removal", "#githubUninstall");
+    await click("confirm-second-removal", "#githubConfirmRun");
     await assertText(
       "refused-notice",
       "#githubNotice",
