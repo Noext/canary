@@ -2,13 +2,18 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { BrowserSummary } from "@usecanary/protocol";
+import type {
+  BrowserAuth,
+  BrowserSummary,
+  NetworkPolicy,
+} from "@usecanary/protocol";
 import {
   type Browser,
   type BrowserContext,
   chromium,
   type Page,
 } from "playwright";
+import { installNetworkPolicy } from "./network-policy.js";
 
 export interface BrowserEntry {
   appliedInitScripts: Set<string>;
@@ -32,9 +37,11 @@ export interface BrowserEntry {
 }
 
 interface LaunchBrowserOptions {
+  auth?: BrowserAuth;
   headless: boolean;
   ignoreHTTPSErrors: boolean;
   isSession?: boolean;
+  networkPolicy?: NetworkPolicy;
   profileDirOverride?: string;
   record?: {
     har?: { content: "embed" | "attach" | "omit"; path: string };
@@ -43,8 +50,10 @@ interface LaunchBrowserOptions {
 }
 
 export interface SessionLaunchOptions {
+  auth?: BrowserAuth;
   headless: boolean;
   ignoreHTTPSErrors: boolean;
+  networkPolicy?: NetworkPolicy;
   profileDirOverride: string;
   record: {
     har?: { content: "embed" | "attach" | "omit"; path: string };
@@ -481,6 +490,12 @@ export class BrowserManager {
       profileDir,
       {
         headless: options.headless,
+        ...(options.networkPolicy || process.env.CANARY_NETWORK_ALLOWED_HOSTS
+          ? { serviceWorkers: "block" as const }
+          : {}),
+        ...(process.env.CANARY_EGRESS_PROXY
+          ? { proxy: { server: process.env.CANARY_EGRESS_PROXY } }
+          : {}),
         viewport: options.headless ? undefined : null,
         ignoreHTTPSErrors: options.ignoreHTTPSErrors,
         handleSIGINT: false,
@@ -499,6 +514,31 @@ export class BrowserManager {
           : {}),
       }
     );
+    const hosts =
+      options.networkPolicy?.hosts ??
+      process.env.CANARY_NETWORK_ALLOWED_HOSTS?.split(",");
+    if (hosts) {
+      await installNetworkPolicy(
+        context,
+        hosts.map((host) => host.trim().toLowerCase()),
+        options.networkPolicy?.allowPrivate ??
+          process.env.CANARY_NETWORK_ALLOW_PRIVATE === "true",
+        Boolean(process.env.CANARY_EGRESS_PROXY)
+      );
+    }
+    if (options.auth) {
+      await context.addCookies(options.auth.cookies);
+      await context.addInitScript((state) => {
+        const origin = state.origins.find(
+          (item) => item.origin === location.origin
+        );
+        if (origin) {
+          for (const item of origin.localStorage) {
+            localStorage.setItem(item.name, item.value);
+          }
+        }
+      }, options.auth);
+    }
     const browser = context.browser();
 
     if (!browser) {

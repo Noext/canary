@@ -8,7 +8,7 @@
   "scripts": {
     "build": "pnpm bundle && pnpm bundle:sandbox-client",
     "bundle": "esbuild src/daemon.ts --bundle --platform=node --format=esm --outfile=dist/daemon.bundle.mjs --external:playwright --external:quickjs-emscripten --external:@jitl/* --external:pino",
-    "bundle:sandbox-client": "tsx scripts/bundle-sandbox-client.ts",
+    "bundle:sandbox-client": "node --import tsx scripts/bundle-sandbox-client.ts",
     "dev": "tsx src/daemon.ts",
     "compile": "tsc --noEmit",
     "test": "vitest run",

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "healthy-form",
+      "expected": "passed",
+      "fixture": {},
+      "requiredActions": ["fill", "click", "assert"],
+      "annotation": "Submitting Ada must change the saved output to Welcome Ada."
+    },
+    {
+      "id": "broken-form",
+      "expected": "failed",
+      "fixture": { "broken": true },
+      "requiredActions": ["fill", "click", "assert"],
+      "annotation": "Save runs but produces Wrong output. Must fail a functional assertion."
+    },
+    {
+      "id": "static-decoy",
+      "expected": "failed",
+      "fixture": { "broken": true, "decoy": true },
+      "requiredActions": ["fill", "click", "assert"],
+      "annotation": "Matching static text exists outside the changed output. It must not greenlight the broken form."
+    },
+    {
+      "id": "unchanged-output",
+      "expected": "failed",
+      "fixture": { "unchangedState": true },
+      "requiredActions": ["fill", "click", "assert"],
+      "annotation": "Expected text already exists before Save; this test cannot prove the changed write via static state."
+    }
+  ]
+}

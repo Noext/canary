@@ -1,0 +1,16 @@
+{
+  "runId": "06c5c6e0-e037-4547-b39a-1c492271abe6",
+  "sha": "1111111111111111111111111111111111111111",
+  "outcome": "passed",
+  "assertions": [
+    {
+      "id": "saved",
+      "passed": true,
+      "actual": "Welcome Ada"
+    }
+  ],
+  "video": "passed.webm",
+  "screenshot": "passed.png",
+  "fixtureApis": true,
+  "realChromium": true
+}

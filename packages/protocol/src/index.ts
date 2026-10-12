@@ -9,12 +9,40 @@
 // CI drift-check. The extraction here eliminates that class of bug entirely.
 
 import { z } from "zod";
+import runtimeLock from "./runtime-lock.json" with { type: "json" };
+export const EMBEDDED_RUNTIME_LOCK = JSON.stringify(runtimeLock, null, 2);
 
 // ---------- Requests ----------
 
 const RequestBaseSchema = z.object({
   id: z.string().min(1),
+  // Optional authenticated loopback transport. Native Unix/named pipes remain the default.
+  transportToken: z.string().optional(),
 });
+
+export function daemonTcpConfig(
+  env: Record<string, string | undefined>
+): { host: "127.0.0.1"; port: number; token: string } | undefined {
+  const value = env.CANARY_DAEMON_PORT;
+  if (!value) {
+    return;
+  }
+  const port = Number(value);
+  if (
+    !(/^\d+$/.test(value) && Number.isInteger(port)) ||
+    port < 1024 ||
+    port > 65_535
+  ) {
+    throw new Error("CANARY_DAEMON_PORT must be 1024-65535");
+  }
+  const token = env.CANARY_DAEMON_TOKEN;
+  if (!token || token.length < 32) {
+    throw new Error(
+      "TCP transport requires CANARY_DAEMON_TOKEN of at least 32 characters"
+    );
+  }
+  return { host: "127.0.0.1", port, token };
+}
 
 export const ExecuteRequestSchema = RequestBaseSchema.extend({
   type: z.literal("execute"),
@@ -71,8 +99,47 @@ const SessionIdSchema = z
   .max(128)
   .regex(/^(?!.*\.\.)[A-Za-z0-9._-]+$/, "invalid session id");
 
+export const BrowserAuthSchema = z.object({
+  cookies: z
+    .array(
+      z.object({
+        name: z.string(),
+        value: z.string(),
+        domain: z.string(),
+        path: z.string(),
+        expires: z.number().default(-1),
+        httpOnly: z.boolean().default(true),
+        secure: z.boolean().default(true),
+        sameSite: z.enum(["Strict", "Lax", "None"]).default("Lax"),
+      })
+    )
+    .max(100)
+    .default([]),
+  origins: z
+    .array(
+      z.object({
+        origin: z.string().url(),
+        localStorage: z
+          .array(z.object({ name: z.string(), value: z.string() }))
+          .max(100),
+      })
+    )
+    .max(20)
+    .default([]),
+});
+export type BrowserAuth = z.infer<typeof BrowserAuthSchema>;
+export const NetworkPolicySchema = z
+  .object({
+    hosts: z.array(z.string().min(1)).min(1).max(100),
+    allowPrivate: z.boolean().default(false),
+  })
+  .strict();
+export type NetworkPolicy = z.infer<typeof NetworkPolicySchema>;
+
 export const SessionStartRequestSchema = RequestBaseSchema.extend({
   type: z.literal("session-start"),
+  networkPolicy: NetworkPolicySchema.optional(),
+  auth: BrowserAuthSchema.optional(),
   sessionId: SessionIdSchema,
   name: z.string().min(1).max(200).optional(),
   headless: z.boolean().optional(),

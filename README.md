@@ -5,6 +5,10 @@
   https://github.com/user-attachments/assets/53d10b52-35cf-496a-a342-e8719574a000
 </div>
 
+## Autonomous Pull Request QA (this fork)
+
+This fork adds [`apps/canary-pr-qa`](apps/canary-pr-qa/README.md): give it a GitHub PR URL and an exact-commit preview to plan and execute functional scenarios in the existing Canary Chromium engine, with one session/video per scenario, deterministic assertions, reports and GitHub publication. It supports an OpenAI-compatible endpoint and single-VPS deployment via the root `docker-compose.yml`. See the app README for installation, configuration, limitations and executable E2E tests.
+
 Canary is a QA harness purpose built for coding agents like Claude Code. It reads your code diffs, identifies the affected UI flows, and tests them in real browser instances using Claude Code.
 
 Under the hood, it ships with a QuickJS WASM sandbox exposing the full Playwright API, letting Claude automate any long-running UI task — from handling logins to navigating complicated UIs. 

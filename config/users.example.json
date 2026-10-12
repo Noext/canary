@@ -1,0 +1,14 @@
+[
+  {
+    "id": "alice",
+    "role": "admin",
+    "repos": ["Noext/canary"],
+    "tokenSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "id": "reviewer",
+    "role": "viewer",
+    "repos": ["Noext/canary"],
+    "oidcSubject": "replace-with-IdP-subject"
+  }
+]

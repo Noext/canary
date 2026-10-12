@@ -1,0 +1,338 @@
+# Canary autonomous PR QA
+
+Application du monorepo Canary : une URL de PR devient un contrat de test, exécuté
+par le moteur Canary existant dans Chromium. Chaque scénario conserve ses étapes,
+assertions, captures et vidéo. Les résultats sont publiés sur le commit GitHub
+**effectivement testé**. Le fork conserve la relation avec `0xnyn/canary`.
+
+## Première installation Docker sur VPS
+
+Docker Engine et Compose >= 2.20 sont les seuls outils requis sur l'hôte. Prévoir
+8 Go de RAM, 4 vCPU et 30 Go libres pour commencer ; mesurer ensuite la charge
+réelle avant d'augmenter le nombre de workers. Lire aussi [AGENTS.md](../../AGENTS.md)
+et le [guide d'exploitation](../../docs/pr-qa-operations.md).
+
+```bash
+git clone --branch feat/autonomous-pr-qa https://github.com/Noext/canary.git
+cd canary
+git remote add upstream https://github.com/0xnyn/canary.git
+git remote set-url --push upstream DISABLED
+cp .env.example .env
+chmod 600 .env
+openssl rand -hex 32
+```
+
+Générer **trois secrets différents** pour `QA_API_TOKEN`, `QA_DB_PASSWORD` et
+`QA_BROWSER_SERVICE_TOKEN`. Utiliser du hexadécimal pour le mot de passe PostgreSQL
+ afin qu'il soit compatible avec son URL. Renseigner :
+
+- `GITHUB_ALLOWED_REPOS` : liste exacte des dépôts à tester, `owner/repo`.
+- `GITHUB_TOKEN`, ou les trois paramètres GitHub App documentés plus bas.
+- `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` : votre vrai endpoint `/v1`.
+- `PREVIEW_ALLOWED_HOSTS` : tous les hôtes nécessaires à la preview, API, images,
+  polices et WebSockets inclus, avec leurs ports lorsqu'ils ne sont pas standards.
+- La preview doit exposer le SHA Git complet dans `x-commit-sha`, ou dans le JSON
+  `{"sha":"..."}` du chemin `PREVIEW_SHA_PATH`. Cela s'applique également aux
+  previews trouvées via les déploiements GitHub. Un header peut être injecté au
+  build par l'application ou son reverse proxy ; ne pas inventer sa valeur.
+
+```bash
+./scripts/pr-qa up
+./scripts/pr-qa status
+./scripts/pr-qa doctor --pr https://github.com/OWNER/REPO/pull/123 --preview https://preview.example.com
+```
+
+Le wrapper construit l'image, vérifie la configuration, attend les services puis
+lance les probes réelles du doctor depuis le worker. Ouvrir le dashboard sur
+`http://127.0.0.1:8787/` sur le VPS, via un tunnel SSH ou un reverse proxy HTTPS.
+Le port public n'est pas ouvert par Compose. `ARTIFACT_BASE_URL` configure les
+liens GitHub. S'authentifier avec un token individuel, un JWT d'accès SSO ou, pour
+l'amorçage, `QA_API_TOKEN`. Le dashboard crée un cookie HttpOnly d'une heure.
+
+```bash
+ssh -N -L 8787:127.0.0.1:8787 deploy@VPS
+```
+
+La version livrée doit être vérifiée dans le [journal de validation](../../docs/pr-qa-validation.md).
+Un YAML analysé n'est pas un déploiement testé. Le doctor ne prouve pas la qualité
+fonctionnelle du modèle ni le succès d'une PR particulière.
+
+## Architecture et isolation
+
+| Service | Responsabilité | Secrets / persistance |
+| --- | --- | --- |
+| `pr-qa` | API, dashboard, sessions utilisateurs, webhooks, SSE | Identités et GitHub ; volume `qa-data` |
+| `worker` | Planification, contrat, exécution et publication | IA/GitHub, fixtures ; `qa-data`, sessions en lecture |
+| `browser` | Moteur Canary, Playwright, QuickJS, Chromium | Token de service ; aucune clé IA/GitHub ; `canary-sessions` |
+| `egress` | Proxy DNS vérifié, connexions vers IP épinglées | Aucun secret de contrôle |
+| `db` | File durable, leases, livraisons webhook, journal d'accès | Mot de passe DB ; volume `qa-db` |
+
+Le navigateur est sur un réseau Docker `internal`. Son trafic externe passe par
+le proxy, qui valide les hôtes exacts et les IP résolues avant la connexion : les
+endpoints de métadonnées sont toujours refusés ; les IP privées sont refusées par
+défaut. La politique Playwright couvre également sous-ressources, redirections et
+WebSockets, et bloque les service workers. Pour des previews réellement privées,
+activer `QA_ALLOW_PRIVATE_PREVIEWS=true` en conservant une liste d'hôtes précise.
+Ne jamais autoriser les services de contrôle comme destinations de preview.
+
+Les CLIs et sessions Canary sont étendus, conservés et testés. Le navigateur
+reçoit seulement les commandes compilées depuis les actions typées : le modèle
+ne dispose pas d'une commande JavaScript ou shell arbitraire. Les profils contenant
+les cookies sont supprimés après copie des preuves. Le Compose fixe des limites
+CPU/mémoire, supprime les capabilities du navigateur et du proxy et interdit
+l'élévation de privilèges. Cela ne remplace pas une isolation par VM lorsque votre
+modèle de menace exige de résister à une évasion de Chromium.
+
+## Workflow et règles de réussite
+
+1. Lire la PR et ses fichiers à des SHA immuables, puis récupérer le contexte des
+   imports et tests voisins dans les budgets configurés.
+2. Vérifier le déploiement et la provenance HTTP réelle de la preview.
+3. Découvrir l'interface et faire planifier des exigences accompagnées de citations
+   exactes du diff/source. Chaque fichier doit être couvert ou explicitement ignoré.
+4. Valider le contrat : étapes ordonnées, cibles et valeurs figées, assertions
+   exécutées exactement une fois. Les omissions critiques ne sont pas approuvables
+   par le contenu de la PR elle-même.
+5. Préparer les fixtures/rôles de confiance ; exécuter le contrat dans Chromium.
+   `transition` vérifie un changement réel de valeur ; `persisted` refait une lecture
+   après reload. Une assertion fausse est terminale. Une action en erreur n'est
+   pas rejouée automatiquement : ses effets peuvent avoir déjà eu lieu.
+6. Finaliser vidéo, trace, captures, HAR et rapports, puis nettoyer les fixtures.
+7. Recontrôler head/base, état de PR et provenance live ; publier un statut et,
+   avec GitHub App, un Check et un commentaire mis à jour.
+
+`passed` nécessite la totalité du contrat et des preuves ; `failed` signale une
+assertion fausse ; `blocked` une précondition/limite/probe non satisfaite ; `stale`
+un commit devenu obsolète ; `skipped` ne signifie jamais réussite. Le résultat
+n'est pas une certification des changements hors du périmètre des scénarios.
+
+Une politique `.canary/qa.json` est lue **sur le commit de base** :
+
+```json
+{
+  "version": 1,
+  "criticalPaths": ["src/", "app/", "apps/", "packages/"],
+  "approvedSkips": [{"path":"src/generated.ts","reason":"Generated code is covered by the required unit-test check"}],
+  "providerHosts": ["api.openai.com"]
+}
+```
+
+Sans politique, les chemins applicatifs critiques ne peuvent pas être ignorés.
+Configurer les autres checks GitHub obligatoires pour couvrir les tests unitaires,
+backend, sécurité et builds. Les citations lexicales rendent le contrat vérifiable ;
+elles ne garantissent pas que le modèle a identifié tous les bugs.
+
+## Fixtures, authentification et capacités navigateur
+
+Copier `config/fixtures.example.json` vers `config/fixtures.json` et définir
+`QA_FIXTURES_FILE=/app/config/fixtures.json`. Ces fichiers sont montés en lecture
+seule et ignorés par Git. Une fixture est un service de données de test contrôlé :
+`POST seedUrl` puis `POST cleanupUrl`, body `{namespace,scenario}` et header
+`Idempotency-Key`. Il doit créer/supprimer exclusivement les données du namespace.
+Le token vient de `tokenEnv`, jamais du modèle. Préconditions acceptées :
+`fixture:checkout`, `role:member`. Toute précondition en prose reste bloquante.
+
+Un rôle référence une variable d'environnement contenant le storage state
+Playwright `{cookies:[],origins:[]}`. Les domaines/origines sont vérifiés avant
+l'ouverture de la session ; les secrets ne sont pas ajoutés au plan IA.
+Pour des scénarios exigeant une authentification, fournir le rôle configuré ;
+aucun compte de production n'est deviné ou créé automatiquement.
+
+Les actions `download` et `popup` attendent réellement l'événement, vérifient
+respectivement le nom du téléchargement sans erreur et l'URL de la popup.
+Une assertion `visual` compare le screenshot de sa cible à une image PNG
+**de confiance**, déclarée dans `visuals` du catalogue. La tolérance maximale est
+0,1, réglable via `visualTolerance` ; la taille doit correspondre. Ces images ne
+proviennent pas de la PR testée. Les assertions de ces trois types utilisent
+`verification: state`.
+
+`QA_BASELINE_URL_TEMPLATE`, lorsqu'il est renseigné, lance également le contrat
+sur une preview du SHA **base**, dont la provenance est vérifiée. Le résultat
+séparé figure dans `baseline` ; un nouveau comportement peut naturellement ne
+pas exister sur la base. Le runner ne transforme pas un échec head en réussite
+sous prétexte qu'il existe aussi sur la base.
+
+## GitHub App et déclenchement automatique
+
+Installer votre propre GitHub App sur les dépôts exacts autorisés. Permissions :
+Contents, Metadata et Deployments en lecture ; Pull requests, Commit statuses et
+Checks en écriture. Configurer `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID` et
+`GITHUB_APP_PRIVATE_KEY_FILE=/app/config/github-app.pem`, puis un secret webhook
+aléatoire >= 32 caractères. La clé privée reste hors de Git. Les tokens
+ d'installation sont renouvelés avant expiration.
+
+Webhook HTTPS : `/github/webhook`, événements Pull request (opened, reopened,
+synchronize, ready_for_review). La signature HMAC SHA-256 est vérifiée sur les
+octets originaux avant traitement. Les livraisons sont stockées en inbox SQL,
+dédupliquées ; le worker attend la preview jusqu'à `QA_PREVIEW_WAIT_SECONDS`, avec
+un nouvel essai toutes les 30 secondes. Les runs d'anciens SHA sont annulés.
+Les livraisons distinctes d'un même dépôt/PR/SHA partagent une seule entrée
+d'inbox et un seul run automatique, y compris si un job historique utilise une
+clé par delivery. Un reopen du même SHA ne relance pas ses écritures navigateur.
+Pour relancer volontairement, utiliser le dashboard avec une nouvelle clé
+d'idempotence.
+
+`QA_WEBHOOK_MAX_RUNS_PER_HOUR=60` limite les nouveaux runs automatiques de tout
+le déploiement ; `QA_WEBHOOK_REPO_MAX_RUNS_PER_HOUR=20` limite chaque dépôt.
+Ces fenêtres glissantes sont comptées dans PostgreSQL sous verrou partagé par
+les workers : les runs terminés, annulés ou échoués consomment aussi leur quota.
+La déduplication précède le quota ; les reruns explicites authentifiés restent
+possibles. Avec un budget de `QA_RUN_MAX_TOKENS` par run, la limite globale borne
+également le volume horaire de tokens des runs nouvellement admis.
+
+Un refus crée un audit `webhook.rate_limited` et une entrée d'inbox
+`rate_limited`, sans exécuter le modèle ni rejouer automatiquement la demande.
+Le diagnostic est consultable dans les logs worker et dans `qa_audit` ; un
+opérateur peut ajuster les limites après inspection de l'usage ou lancer un
+run explicite. Les quotas ne limitent pas les jobs manuels déjà autorisés.
+
+Les drafts ne sont pas lancés automatiquement. Les erreurs de publication sont
+visibles, sans simulation de succès.
+
+Un PAT reste possible : lecture Contents/Deployments et écriture PR/statuses.
+Les Checks et l'upsert de commentaire Bot sont réservés au mode GitHub App.
+Le token connecté à ChatGPT n'est pas automatiquement disponible sur votre VPS.
+
+## Dashboard, API et observabilité
+
+| Endpoint | Fonction |
+| --- | --- |
+| `GET /` | Dashboard, formulaire de lancement, recherche, filtres, détails |
+| `POST /session`, `DELETE /session` | Connexion/déconnexion avec cookie HttpOnly |
+| `GET /me` | Identité et dépôts accessibles |
+| `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
+| `POST /runs` | `{prUrl,previewUrl?,publish?,model?}`, header `Idempotency-Key` facultatif |
+| `GET /runs` | Liste limitée aux projets de l'utilisateur ; `status`, `search` |
+| `GET /runs/:id` | Statut durable et progression |
+| `GET /runs/:id/events` | SSE, phases/actions live, reconnexion via EventSource |
+| `POST /runs/:id/cancel` | Annulation coopérative, arrêt des requêtes/processus |
+| `POST /runs/:id/links` | Lien signé pour un fichier, expiration 5 minutes |
+| `DELETE /runs/:id` | Suppression administrative d'un run terminal |
+| `GET /artifacts/:id/...` | Rapports, vidéos et preuves selon droits/politique |
+| `GET /metrics` | Prometheus, accès administrateur |
+| `GET /health` | Santé SQL et file, utilisé par Compose |
+
+Le flux live montre les phases et actions ; les vidéos sont des enregistrements
+finalisés, pas une diffusion vidéo en direct. Les métriques modèle indiquent
+latence/appels/tokens ; le résultat inclut usage et coût estimé. Renseigner les
+prix réels `QA_INPUT_COST_PER_MILLION` et `QA_OUTPUT_COST_PER_MILLION` pour le suivi
+du coût. Si l'endpoint omet `usage`, le runner emploie une estimation conservative.
+Les budgets globaux de temps/tokens sont appliqués indépendamment du tarif.
+`OTEL_EXPORTER_OTLP_ENDPOINT` active les spans OTLP ; un collecteur externe est
+nécessaire pour les consulter.
+
+Copier `config/users.example.json` vers `config/users.json`, configurer les vrais
+SHA-256 des tokens individuels et `QA_USERS_FILE=/app/config/users.json`.
+Rôles : viewer (lecture), operator (lancement/annulation), admin (suppression,
+métriques). Chaque identité doit avoir une liste explicite de dépôts. Pour SSO,
+configurer issuer/audience/JWKS et mapper `oidcSubject` à l'identité locale ; les
+JWT d'accès RS256/ES256 sont vérifiés, les claims ne peuvent pas choisir leurs
+droits. L'émission du JWT et le login IdP restent gérés par votre IdP.
+
+## Exploitation, panne et données
+
+Les jobs queued survivent au redémarrage. Plusieurs workers réclament les jobs
+avec `FOR UPDATE SKIP LOCKED`, lease de 45 s et heartbeat de 10 s. Une lease
+expirée devient `interrupted` : aucun scénario potentiellement destructif n'est
+rejoué. Relancer explicitement avec une nouvelle clé d'idempotence. Les jobs legacy
+sur disque sont importés pour conserver leur consultation ; les jobs actifs
+legacy sont marqués interrompus.
+
+```bash
+./scripts/pr-qa logs
+./scripts/pr-qa diagnose RUN_ID
+./scripts/pr-qa doctor --json
+# Ajouter des workers uniquement après avoir mesuré la capacité de Chromium.
+docker compose up -d --scale worker=2
+```
+
+Trois volumes : données, sessions, PostgreSQL. Sauvegarder `qa-data` et faire un
+`pg_dump` cohérent de la DB ; tester une restauration dans un projet Compose
+séparé. **Ne pas utiliser `down -v` sur l'installation de production.**
+La rétention supprime les runs terminaux après `QA_RETENTION_DAYS` ou lorsque
+`QA_STORAGE_MAX_GB` est dépassé ; les runs actifs sont préservés. Les accès et
+suppressions sont audités en DB. Les sessions natives sont purgées après export
+réussi afin de ne pas conserver leurs profils/cookies sans limite.
+
+La publication anonyme `ARTIFACT_PUBLIC` n'est pas utilisée par le serveur SQL.
+Les traces/HAR/console bruts sont refusés par défaut ; `QA_RAW_EVIDENCE=true`
+permet leur accès selon les droits du projet. Restreindre les données de test,
+utiliser `QA_ALLOWED_PROVIDER_HOSTS` et les identités par projet. La redaction
+masque les secrets configurés ; elle ne garantit pas l'anonymisation de tout ce
+qu'une application peut afficher dans une vidéo ou un screenshot.
+
+## Développement et validations
+
+```bash
+corepack enable
+pnpm install --frozen-lockfile
+pnpm check
+node apps/canary/dist/cli.js install
+pnpm --filter @usecanary/pr-qa test:e2e
+# Base de test jetable uniquement :
+QA_TEST_DATABASE_URL=postgresql://canary:password@127.0.0.1:5432/canary pnpm --filter @usecanary/pr-qa test
+```
+
+Les tests SQL locaux utilisent PostgreSQL WASM (PGlite) ; la concurrence native,
+les leases et les pannes sont testées contre un service PostgreSQL distinct en CI.
+Les tests Chromium utilisent des fixtures GitHub/IA : ils valident l'orchestration,
+le moteur et les preuves, pas la qualité d'un modèle réel. Le corpus live est
+expliqué dans [le guide d'évaluation](../../docs/pr-qa-evaluation.md).
+
+Le runtime Canary est installé par `npm ci` avec un lock embarqué et Chromium
+correspondant à Playwright 1.58.2. Les images de base Node/PostgreSQL sont épinglées
+par digest. Le workflow de release QA construit l'image, scanne ses vulnérabilités,
+produit SBOM/provenance et attestation. Son exécution et la protection de branche
+GitHub doivent être constatées sur votre fork ; leur présence dans le code ne
+prouve pas leur activation.
+
+### Contrôles supplémentaires de livraison
+
+Le navigateur du réseau `control` ne résout pas les domaines externes : le proxy
+`egress` résout, vérifie et épingle les IP. Sa santé est vérifiée avant le démarrage
+du browser. Les refus ont le code structuré `EGRESS_POLICY_DENIED` dans
+`docker compose logs egress`. Les adresses de métadonnées restent interdites même
+avec `QA_ALLOW_PRIVATE_PREVIEWS=true`.
+
+Une expiration de lease est irréversible : le worker ne peut ni la renouveler ni
+terminer le job expiré. Il revérifie la propriété avant publication ; une annulation
+ferme le check du SHA épinglé avec `error`, jamais `success`. Une panne de publication
+rend le run `blocked` et conserve les preuves locales.
+
+Les rapports HTML natifs imbriqués, logs, HAR et ZIP sont des preuves brutes,
+interdites par défaut via HTTP. Le rapport principal et ses vidéos/images restent
+accessibles aux utilisateurs autorisés. N'activez `QA_RAW_EVIDENCE` qu'après avoir
+vérifié les données de test. Les clés PEM, états d'authentification et configurations
+montées sont exclus du contexte Docker.
+
+Le check CI audite les dépendances de production. Les mises à jour OpenTelemetry
+sont verrouillées et l'export réel `/v1/traces`, le nom de service et la corrélation
+avec `progress.json` sont vérifiés par un collecteur HTTP de test.
+
+La lecture du WebM depuis le rapport principal est testée dans un vrai navigateur
+avec une session authentifiée : clic sur les contrôles et progression du temps de
+lecture. Le rapport principal n'exécute aucun script ; les rapports natifs restent
+isolés. Les tests vérifient également qu'un script injecté dans un artefact HTML
+n'est pas exécuté.
+
+La session utilise un cookie `HttpOnly`, `SameSite=Lax` et `Secure` en HTTPS :
+un lien de rapport ouvert depuis GitHub conserve l'authentification. Les mutations
+avec une origine étrangère sont refusées. L'E2E vérifie cette navigation entre
+sites, la lecture réelle de la vidéo et le refus d'une mutation cross-site.
+
+La publication du statut/check précède le commentaire de résultat. Si la réponse
+d'un commentaire est perdue après son écriture, le runner tente de le mettre à
+jour avec le résultat bloqué et de fermer le statut en erreur. Une panne GitHub
+persistante reste signalée dans le résultat durable ; elle ne devient pas un succès.
+
+Le proxy accepte les upgrades `ws://` et `wss://`, utilise respectivement les ports
+80 et 443 par défaut, et vérifie le certificat TLS pour l'hôte d'origine en WSS.
+Les contrôles de liste d'hôtes, DNS/IP et métadonnées restent appliqués.
+
+## Modèle IA et catalogue dynamique
+
+Le défaut est `opencode-go/deepseek-v4.1-flash`. Le dashboard récupère les IDs depuis le `/v1/models` de `OPENAI_BASE_URL` via son API authentifiée `/models`. La clé reste côté serveur. Le catalogue est mis en cache 30 secondes et peut être rechargé avec « Actualiser les modèles ». Aucun autre modèle n'est choisi automatiquement : si le défaut ou la sélection précédente manque, choisissez explicitement un ID avant de lancer.
+
+Le modèle choisi est enregistré dans le job, utilisé pour le planificateur et l'exécuteur, et affiché dans la liste, le détail et le rapport. Une modification ultérieure de `OPENAI_MODEL` ne modifie pas les jobs déjà en attente. `QA_ALLOWED_MODELS` permet une liste autorisée d'IDs séparés par des virgules ; vide signifie tous les IDs retournés par le fournisseur. CLI : `--model ID` ; API : champ optionnel `model`. Les webhooks utilisent le défaut configuré.
+
+Les tarifs globaux configurés concernent le modèle par défaut. Pour un autre modèle, le coût reste indisponible et le budget de tokens reste actif. Une erreur de catalogue bloque le lancement dans le dashboard et affiche un diagnostic. Pour Cloudflare, autorisez l'IP de sortie du serveur/VPS qui appelle le fournisseur. L'IP du navigateur de l'utilisateur n'est pas celle de cet appel.

@@ -1,12 +1,11 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-
 import { BrowserManager } from "../../browser-manager.js";
 import { removeDirectoryWithRetries } from "../../test-cleanup.js";
 import { QuickJSSandbox } from "../quickjs-sandbox.js";
+import { localPageFixture } from "./local-page-fixture.js";
 
 const browserName = "named-pages";
 
@@ -51,11 +50,13 @@ function outputLines(output: CapturedOutput): string[] {
     .filter((line) => line.length > 0);
 }
 
+let fixture: Awaited<ReturnType<typeof localPageFixture>>;
 describe.sequential("QuickJS named page management", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 
   beforeAll(async () => {
+    fixture = await localPageFixture();
     browserRootDir = await mkdtemp(
       path.join(os.tmpdir(), "canary-quickjs-named-pages-")
     );
@@ -67,6 +68,7 @@ describe.sequential("QuickJS named page management", () => {
   }, 180_000);
 
   afterAll(async () => {
+    await fixture.close();
     await manager.stopAll();
     await removeDirectoryWithRetries(browserRootDir);
   }, 180_000);
@@ -105,7 +107,7 @@ describe.sequential("QuickJS named page management", () => {
         sandbox,
         `
         const page = await browser.getPage("persist");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(fixture.url)});
         await page.evaluate(() => {
           window.name = "persisted-state";
         });
@@ -127,7 +129,7 @@ describe.sequential("QuickJS named page management", () => {
     }
 
     expect(output.stderr).toEqual([]);
-    expect(outputLines(output)).toContain("https://example.com/");
+    expect(outputLines(output)).toContain(fixture.url);
     expect(outputLines(output)).toContain("Example Domain");
     expect(outputLines(output)).toContain("persisted-state");
     expect(pageNames(await manager.listPages(browserName))).toEqual([
@@ -148,7 +150,7 @@ describe.sequential("QuickJS named page management", () => {
         sandbox,
         `
         const page = await browser.newPage();
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(fixture.url)});
         console.log(await page.title());
       `
       );
@@ -164,9 +166,7 @@ describe.sequential("QuickJS named page management", () => {
     // sandbox closes its anonymous pages the context has no live pages left —
     // no leaked example.com tab and no orphaned blank tab either.
     expect(livePages).toHaveLength(0);
-    expect(livePages.map((page) => page.url())).not.toContain(
-      "https://example.com/"
-    );
+    expect(livePages.map((page) => page.url())).not.toContain(fixture.url);
     expect(pageNames(await manager.listPages(browserName))).toEqual([]);
   }, 120_000);
 

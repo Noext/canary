@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDaemonRunning } from "../ipc/connect.js";
 import { logger } from "../logger.js";
-import { daemonPidPath } from "../paths.js";
+import { canaryDir, daemonPidPath } from "../paths.js";
 import { findDaemonCommand } from "./entry.js";
 import { embeddedRuntimeInstalled } from "./extract.js";
 import { spawnDaemon } from "./spawn.js";
@@ -37,7 +38,7 @@ export async function ensureDaemonRunning(): Promise<void> {
     !(await embeddedRuntimeInstalled(command.workdir))
   ) {
     throw new Error(
-      "Embedded daemon dependencies are missing. Run `canary install` first."
+      "Embedded daemon dependencies are missing or incompatible with this build. Run `canary install` first."
     );
   }
 
@@ -55,7 +56,9 @@ export async function ensureDaemonRunning(): Promise<void> {
       return;
     }
   }
-  throw new Error("Daemon failed to start within 5 seconds");
+  throw new Error(
+    `Daemon failed to start within 5 seconds. Inspect ${join(canaryDir(), "daemon.log")} for the startup error and run canary-pr-qa doctor for installation checks.`
+  );
 }
 
 // Waits up to `timeoutMs` for the daemon to stop accepting connections.

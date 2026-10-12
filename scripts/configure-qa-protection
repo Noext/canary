@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+QA_CONFIG_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ ${1:-} != --apply ]]; then
+  printf '%s\n' 'Review config/branch-protection.json. To apply only to Noext/canary: scripts/configure-qa-protection --apply'
+  exit 0
+fi
+QA_IDENTITY=$(gh api user --jq .login)
+if [[ "$QA_IDENTITY" != Noext ]]; then
+  printf '%s\n' 'Expected GitHub account Noext; no settings were changed.' >&2
+  exit 2
+fi
+gh api --method PUT repos/Noext/canary/branches/main/protection --input "$QA_CONFIG_ROOT/config/branch-protection.json"

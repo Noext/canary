@@ -1,4 +1,5 @@
 import { isMainModule } from "@usecanary/cli-kit";
+import { BrowserAuthSchema } from "@usecanary/protocol";
 import type { Command as CommandType } from "commander";
 import * as commander from "commander";
 
@@ -86,10 +87,13 @@ async function readScriptFromStdin(): Promise<string> {
 }
 
 interface SessionStartOpts {
+  allowPrivate?: boolean;
+  authStdin?: boolean;
   console: boolean;
   har: boolean;
   headless?: boolean;
   name?: string;
+  networkHosts?: string;
   trace: boolean;
   video: boolean;
 }
@@ -134,6 +138,18 @@ export function buildProgram(): CommandType {
     .command("start")
     .description("Start a session and begin recording artifacts")
     .addHelpText("before", `${SESSION_START_LONG_ABOUT}\n`)
+    .option(
+      "--network-hosts <HOSTS>",
+      "Exact allowed network hosts for every browser request"
+    )
+    .option(
+      "--allow-private",
+      "Allow explicitly approved private preview hosts"
+    )
+    .option(
+      "--auth-stdin",
+      "Read trusted session cookies/localStorage JSON from stdin"
+    )
     .option("--name <NAME>", "Human-readable session name")
     .option("--headless", "Launch the session browser without a visible window")
     .option("--no-trace", "Disable Playwright trace capture")
@@ -142,6 +158,15 @@ export function buildProgram(): CommandType {
     .option("--no-console", "Disable console / page-error capture")
     .action(async (opts: SessionStartOpts) => {
       const code = await sessionStart({
+        auth: opts.authStdin
+          ? BrowserAuthSchema.parse(JSON.parse(await readScriptFromStdin()))
+          : undefined,
+        networkPolicy: opts.networkHosts
+          ? {
+              hosts: opts.networkHosts.split(","),
+              allowPrivate: opts.allowPrivate === true,
+            }
+          : undefined,
         name: opts.name,
         headless: opts.headless === true,
         capture: {

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+QA_PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+QA_COMMAND=${1:-help}
+if [[ $# -gt 0 ]]; then shift; fi
+if [[ "$QA_COMMAND" == help || "$QA_COMMAND" == --help ]]; then
+  cat <<'HELP'
+Usage: ./scripts/pr-qa COMMAND [arguments]
+  up                    Build, validate local configuration, start, then run doctor
+  doctor [options]      Check storage, real Chromium/evidence, GitHub and model access
+  diagnose RUN_ID       Print a redacted run summary for debugging
+  logs                  Follow structured service/progress logs
+  status                Show containers and API health
+  stop                  Stop this service while preserving all three data volumes
+Copy .env.example to .env and configure your actual credentials/endpoints first.
+doctor supports --offline, --skip-browser, --json, --pr PR_URL and --preview URL.
+HELP
+  exit 0
+fi
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+  printf '%s\n' 'Docker Engine and the Compose plugin are required; see AGENTS.md for installation.' >&2
+  exit 2
+fi
+QA_WRAPPER_ENV_FILE=${QA_ENV_FILE:-$QA_PROJECT_ROOT/.env}
+if [[ ! -f "$QA_WRAPPER_ENV_FILE" ]]; then
+  printf '%s\n' 'Missing .env. Copy .env.example, configure credentials/endpoints, and chmod 600 .env.' >&2
+  exit 2
+fi
+QA_COMPOSE=(docker compose --project-directory "$QA_PROJECT_ROOT" --env-file "$QA_WRAPPER_ENV_FILE" -f "$QA_PROJECT_ROOT/docker-compose.yml")
+if [[ -f "$QA_PROJECT_ROOT/docker-compose.override.yml" ]]; then
+  QA_COMPOSE+=(-f "$QA_PROJECT_ROOT/docker-compose.override.yml")
+fi
+case "$QA_COMMAND" in
+  up)
+    if [[ -n "$("${QA_COMPOSE[@]}" ps --status running -q pr-qa)" ]]; then
+      "${QA_COMPOSE[@]}" exec -T pr-qa node -e 'fetch("http://127.0.0.1:"+(process.env.QA_PORT||8787)+"/health").then(r=>r.json()).then(s=>{if(s.busy||s.queued||s.jobs?.some(j=>j.count>0)){process.stderr.write("Runs are active/queued. Pause submissions and wait before updating.\n");process.exit(2)}}).catch(()=>process.exit(2))'
+    fi
+    "${QA_COMPOSE[@]}" config --quiet
+    "${QA_COMPOSE[@]}" build pr-qa
+    "${QA_COMPOSE[@]}" run --rm --no-deps -T pr-qa doctor --offline --skip-browser
+    "${QA_COMPOSE[@]}" up -d --wait --wait-timeout 180
+    "${QA_COMPOSE[@]}" exec -T worker canary-pr-qa doctor "$@"
+    ;;
+  doctor|diagnose)
+    "${QA_COMPOSE[@]}" exec -T worker canary-pr-qa "$QA_COMMAND" "$@"
+    ;;
+  logs)
+    "${QA_COMPOSE[@]}" logs --follow --tail=100
+    ;;
+  status)
+    "${QA_COMPOSE[@]}" ps
+    "${QA_COMPOSE[@]}" exec -T pr-qa node -e 'fetch("http://127.0.0.1:"+(process.env.QA_PORT||8787)+"/health").then(async r=>{process.stdout.write(JSON.stringify(await r.json(),null,2)+"\n");process.exit(r.ok?0:2)}).catch(e=>{process.stderr.write(e.message+"\n");process.exit(2)})'
+    ;;
+  stop)
+    "${QA_COMPOSE[@]}" stop worker pr-qa browser egress db
+    ;;
+  *)
+    printf 'Unknown command: %s. Use ./scripts/pr-qa help.\n' "$QA_COMMAND" >&2
+    exit 2
+    ;;
+esac

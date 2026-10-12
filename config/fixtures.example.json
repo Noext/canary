@@ -1,0 +1,15 @@
+{
+  "owner/app": {
+    "roles": { "member": "QA_MEMBER_STORAGE_STATE" },
+    "fixtures": {
+      "checkout": {
+        "seedUrl": "https://test-data.example.com/seed",
+        "cleanupUrl": "https://test-data.example.com/cleanup",
+        "tokenEnv": "QA_FIXTURE_TOKEN",
+        "description": "Create an isolated checkout cart for this run namespace"
+      }
+    },
+    "visuals": { "home": "/app/config/baselines/home.png" },
+    "visualTolerance": 0.001
+  }
+}

@@ -1,0 +1,133 @@
+services:
+  db:
+    image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+    environment:
+      POSTGRES_DB: canary
+      POSTGRES_USER: canary
+      POSTGRES_PASSWORD: ${QA_DB_PASSWORD:?Generate a random QA_DB_PASSWORD}
+    volumes:
+      - qa-db:/var/lib/postgresql/data
+    networks: [control]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canary -d canary"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 1g
+    cpus: 1
+  pr-qa:
+    build:
+      context: .
+      dockerfile: Dockerfile.pr-qa
+    image: ${QA_IMAGE:-canary-pr-qa:local}
+    env_file: ${QA_ENV_FILE:-.env}
+    environment:
+      QA_DATA_DIR: /data
+      QA_HOST: 0.0.0.0
+      DATABASE_URL: postgresql://canary:${QA_DB_PASSWORD}@db:5432/canary
+      QA_BROWSER_SERVICE_URL: http://browser:8790
+    ports:
+      - "127.0.0.1:${QA_PORT:-8787}:${QA_PORT:-8787}"
+    depends_on:
+      db: {condition: service_healthy}
+      browser: {condition: service_healthy}
+    volumes:
+      - qa-data:/data
+      - canary-sessions:/home/node/.canary/sessions:ro
+      - ./config:/app/config:ro
+    networks: [control, external]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    mem_limit: 768m
+    cpus: 1
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.QA_PORT||8787)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: &logging
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  worker:
+    image: ${QA_IMAGE:-canary-pr-qa:local}
+    command: [worker]
+    env_file: ${QA_ENV_FILE:-.env}
+    environment:
+      QA_DATA_DIR: /data
+      DATABASE_URL: postgresql://canary:${QA_DB_PASSWORD}@db:5432/canary
+      QA_BROWSER_SERVICE_URL: http://browser:8790
+    depends_on:
+      db: {condition: service_healthy}
+      browser: {condition: service_healthy}
+    networks: [control, external]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - qa-data:/data
+      - canary-sessions:/home/node/.canary/sessions:ro
+      - ./config:/app/config:ro
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: 1g
+    cpus: 1
+    logging: *logging
+  browser:
+    image: ${QA_IMAGE:-canary-pr-qa:local}
+    command: [browser-service]
+    environment:
+      QA_BROWSER_HOST: 0.0.0.0
+      QA_BROWSER_PORT: 8790
+      QA_BROWSER_SERVICE_TOKEN: ${QA_BROWSER_SERVICE_TOKEN:?Generate a random browser service token}
+      PREVIEW_ALLOWED_HOSTS: ${PREVIEW_ALLOWED_HOSTS}
+      QA_ALLOW_PRIVATE_PREVIEWS: ${QA_ALLOW_PRIVATE_PREVIEWS:-false}
+      CANARY_EGRESS_PROXY: http://egress:3128
+    depends_on:
+      egress: {condition: service_healthy}
+    networks: [control]
+    volumes:
+      - canary-sessions:/home/node/.canary/sessions
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    shm_size: 1gb
+    mem_limit: 4g
+    cpus: 2
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    logging: *logging
+  egress:
+    image: ${QA_IMAGE:-canary-pr-qa:local}
+    command: [egress-proxy]
+    environment:
+      PREVIEW_ALLOWED_HOSTS: ${PREVIEW_ALLOWED_HOSTS}
+      QA_ALLOW_PRIVATE_PREVIEWS: ${QA_ALLOW_PRIVATE_PREVIEWS:-false}
+    networks: [control, external]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    init: true
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3128/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+networks:
+  control: {internal: true}
+  external: {}
+volumes:
+  qa-data:
+  canary-sessions:
+  qa-db:
