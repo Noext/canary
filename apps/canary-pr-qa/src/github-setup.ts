@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS qa_github_state (
 );
 CREATE TABLE IF NOT EXISTS qa_github_repositories (
  full_name text PRIMARY KEY, repository_id text NOT NULL, installation_id text NOT NULL,
- account text NOT NULL, private boolean NOT NULL, enabled boolean NOT NULL DEFAULT false
+ account text NOT NULL, private boolean NOT NULL, enabled boolean NOT NULL DEFAULT false,
+ auto_run boolean NOT NULL DEFAULT true
 );
+ALTER TABLE qa_github_repositories ADD COLUMN IF NOT EXISTS auto_run boolean NOT NULL DEFAULT true;
 `;
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -146,6 +148,7 @@ interface Repository {
 }
 interface RepositoryRow {
   account: string;
+  auto_run: boolean;
   enabled: boolean;
   full_name: string;
   installation_id: string;
@@ -177,7 +180,7 @@ export class GitHubSetup {
     const repositories = app
       ? (
           await this.pool.query<RepositoryRow>(
-            "SELECT full_name,installation_id,account,private,enabled FROM qa_github_repositories ORDER BY full_name"
+            "SELECT full_name,installation_id,account,private,enabled,auto_run FROM qa_github_repositories ORDER BY full_name"
           )
         ).rows
       : [];
@@ -207,8 +210,12 @@ export class GitHubSetup {
     }
     const secret = decrypt(app.credentials, this.config);
     const rows = (
-      await this.pool.query(
-        "SELECT full_name,installation_id FROM qa_github_repositories WHERE enabled=true"
+      await this.pool.query<{
+        auto_run: boolean;
+        full_name: string;
+        installation_id: string;
+      }>(
+        "SELECT full_name,installation_id,auto_run FROM qa_github_repositories WHERE enabled=true"
       )
     ).rows;
     const repositories = rows.filter(
@@ -225,6 +232,9 @@ export class GitHubSetup {
       githubPrivateKey: secret.pem,
       GITHUB_WEBHOOK_SECRET: secret.secret,
       allowedRepos: repositories.map((row) => row.full_name.toLowerCase()),
+      automaticRepos: repositories
+        .filter((row) => row.auto_run)
+        .map((row) => row.full_name.toLowerCase()),
       githubInstallations: Object.fromEntries(
         repositories.map((row) => [
           row.full_name.toLowerCase(),
@@ -540,34 +550,55 @@ export class GitHubSetup {
     }
     return repos;
   }
-  async select(repos: string[]) {
+  async select(repos: string[], autoRepos?: string[]) {
     const requested = z
       .array(z.string().regex(/^[\w.-]+\/[\w.-]+$/))
       .max(10_000)
       .parse(repos)
       .map((repo) => repo.toLowerCase());
+    const automatic =
+      autoRepos === undefined
+        ? undefined
+        : z
+            .array(z.string().regex(/^[\w.-]+\/[\w.-]+$/))
+            .max(10_000)
+            .parse(autoRepos)
+            .map((repo) => repo.toLowerCase());
     // Revalidate GitHub authorization before committing the selection.
     await this.refresh();
     const available = (
       await this.pool.query("SELECT full_name FROM qa_github_repositories")
     ).rows.map((row) => row.full_name);
-    if (
-      requested.some(
-        (repo) =>
-          !available.includes(repo) ||
-          (this.config.allowedRepos.length &&
-            !this.config.allowedRepos.includes(repo))
-      )
-    ) {
+    const denied = (repo: string) =>
+      !available.includes(repo) ||
+      Boolean(
+        this.config.allowedRepos.length &&
+          !this.config.allowedRepos.includes(repo)
+      );
+    if (requested.some(denied)) {
       throw failure(
         "GITHUB_REPOSITORY_DENIED",
         "Un dépôt sélectionné est indisponible ou interdit par la restriction serveur."
       );
     }
-    await this.pool.query(
-      "UPDATE qa_github_repositories SET enabled=(full_name=ANY($1::text[]))",
-      [requested]
-    );
+    // Automatic runs require the repository to stay selected.
+    if (automatic?.some((repo) => !requested.includes(repo))) {
+      throw failure(
+        "GITHUB_REPOSITORY_DENIED",
+        "Un dépôt en runs automatiques doit rester sélectionné ; actualisez la liste des dépôts puis recommencez."
+      );
+    }
+    if (automatic === undefined) {
+      await this.pool.query(
+        "UPDATE qa_github_repositories SET enabled=(full_name=ANY($1::text[]))",
+        [requested]
+      );
+    } else {
+      await this.pool.query(
+        "UPDATE qa_github_repositories SET enabled=(full_name=ANY($1::text[])),auto_run=(full_name=ANY($2::text[]) AND full_name=ANY($1::text[]))",
+        [requested, automatic]
+      );
+    }
     return this.status();
   }
   /**

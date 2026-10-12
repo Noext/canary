@@ -87,7 +87,14 @@ export async function startProductionServer(config: Config) {
     return principal(req, await setup.effective(), accounts);
   }
   const models = new ModelCatalog(config);
-  const dashboardRoute = dashboardRoutes(setup, config, models, rawBody, json);
+  const dashboardRoute = dashboardRoutes(
+    setup,
+    config,
+    models,
+    queue,
+    rawBody,
+    json
+  );
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
   let stopping = false;
@@ -211,7 +218,12 @@ export async function startProductionServer(config: Config) {
       json(res, 400, { error: "Invalid pull request metadata" });
       return;
     }
-    const saved = await queue.acceptDelivery(delivery, event, record);
+    const saved = await queue.acceptDelivery(
+      delivery,
+      event,
+      record,
+      effective.QA_AUTO_PREVIEW_WAIT_SECONDS
+    );
     json(res, 202, { accepted: true, duplicate: !saved });
   }
   async function artifact(

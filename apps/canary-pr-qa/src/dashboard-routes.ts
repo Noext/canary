@@ -8,6 +8,7 @@ import { GitHub, type PrContext, parsePrUrl } from "./github.js";
 import type { GitHubSetup } from "./github-setup.js";
 import { type ModelCatalog, ModelIdSchema } from "./model-catalog.js";
 import { resolvePreview } from "./preview.js";
+import type { Queue } from "./queue.js";
 
 const preflightSchema = z
   .object({
@@ -20,6 +21,7 @@ export function dashboardRoutes(
   setup: GitHubSetup,
   config: Config,
   models: ModelCatalog,
+  queue: Queue,
   read: (req: IncomingMessage) => Promise<Buffer>,
   json: (res: ServerResponse, status: number, value: unknown) => void
 ) {
@@ -30,30 +32,11 @@ export function dashboardRoutes(
     user: Principal
   ) => {
     if (req.method === "GET" && url.pathname === "/dashboard/status") {
-      const effective = await setup.effective();
-      const status = {
-        github: {
-          mode: githubMode(effective),
-          repositories: user.repos.filter((repo) =>
-            effective.allowedRepos.includes(repo.toLowerCase())
-          ),
-        },
-        ai: {
-          endpoint: new URL(config.OPENAI_BASE_URL).host,
-          defaultModel: config.OPENAI_MODEL,
-        },
-        preview: {
-          automatic: Boolean(config.PREVIEW_URL_TEMPLATE),
-          ...(user.role === "admin"
-            ? {
-                hosts: config.allowedHosts,
-                shaHeader: config.PREVIEW_SHA_HEADER,
-                shaPath: config.PREVIEW_SHA_PATH,
-              }
-            : {}),
-        },
-      } satisfies SetupStatus;
-      json(res, 200, status);
+      json(res, 200, await setupStatus(setup, config, user));
+      return true;
+    }
+    if (req.method === "GET" && url.pathname === "/dashboard/automatic") {
+      json(res, 200, await automaticStatus(setup, queue, user));
       return true;
     }
     if (req.method !== "POST" || url.pathname !== "/runs/preflight") {
@@ -121,6 +104,59 @@ export function dashboardRoutes(
     json(res, 200, result);
     return true;
   };
+}
+
+/** Repositories where automatic runs are switched on; legacy mode allows every repository. */
+function automaticRepos(config: Config) {
+  return config.automaticRepos ?? config.allowedRepos;
+}
+
+function scopedRepos(user: Principal, repos: string[]) {
+  return user.repos.filter((repo) => repos.includes(repo.toLowerCase()));
+}
+
+async function setupStatus(
+  setup: GitHubSetup,
+  config: Config,
+  user: Principal
+) {
+  const effective = await setup.effective();
+  return {
+    github: {
+      autoRepos: scopedRepos(user, automaticRepos(effective)),
+      mode: githubMode(effective),
+      repositories: scopedRepos(user, effective.allowedRepos),
+    },
+    ai: {
+      endpoint: new URL(config.OPENAI_BASE_URL).host,
+      defaultModel: config.OPENAI_MODEL,
+    },
+    preview: {
+      automatic: Boolean(config.PREVIEW_URL_TEMPLATE),
+      ...(user.role === "admin"
+        ? {
+            hosts: config.allowedHosts,
+            shaHeader: config.PREVIEW_SHA_HEADER,
+            shaPath: config.PREVIEW_SHA_PATH,
+          }
+        : {}),
+    },
+  } satisfies SetupStatus;
+}
+
+/** Automatic attempts of the repositories the principal may read, newest first. */
+async function automaticStatus(
+  setup: GitHubSetup,
+  queue: Queue,
+  user: Principal
+) {
+  const effective = await setup.effective();
+  const enabledRepos = scopedRepos(user, automaticRepos(effective));
+  for (const repo of enabledRepos) {
+    requireAccess(user, repo);
+  }
+  const { attempts, summary } = await queue.automatic(enabledRepos);
+  return { attempts, enabledRepos, summary };
 }
 
 function githubMode(config: Config) {
