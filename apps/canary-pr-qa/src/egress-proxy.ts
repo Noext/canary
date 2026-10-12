@@ -9,6 +9,7 @@ import {
   privateAddress,
 } from "../../canary-daemon/src/network-policy.js";
 import type { Config } from "./config.js";
+import { watchPreviewPolicy } from "./preview-hosts.js";
 
 const logger = createLogger({ name: "qa-egress" });
 function denied(error: unknown) {
@@ -17,7 +18,7 @@ function denied(error: unknown) {
       code: "EGRESS_POLICY_DENIED",
       reason: error instanceof Error ? error.message : "Unknown egress failure",
     },
-    "Request blocked; inspect PREVIEW_ALLOWED_HOSTS, private-preview policy and DNS"
+    "Request blocked; inspect the dashboard host allowlist, private-preview policy and DNS"
   );
 }
 async function target(input: string, config: Config) {
@@ -67,6 +68,9 @@ function connectTarget(url: URL, address: string, ready: () => void): Socket {
     : connect(options, ready);
 }
 export async function startEgressProxy(config: Config) {
+  // The EGRESS proxy is the network boundary: it follows the host list an
+  // administrator publishes in the dashboard, not just the boot environment.
+  const policy = watchPreviewPolicy(config);
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
       res.setHeader("Content-Type", "application/json");
@@ -161,6 +165,7 @@ export async function startEgressProxy(config: Config) {
     server.once("error", reject);
     server.listen(3128, "0.0.0.0", resolve);
   });
+  server.on("close", () => policy.stop());
   return server;
 }
 function tunnel(client: Socket, upstream: Socket) {

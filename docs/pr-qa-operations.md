@@ -147,9 +147,10 @@ n'a **pas** de ligne `qa_jobs` : le job n'existe qu'après vérification.
 Correctifs :
 
 - Preview absente au bon SHA : déployer une preview qui expose le SHA complet
-  (`PREVIEW_SHA_HEADER` ou `PREVIEW_SHA_PATH`), autoriser ses hôtes dans
-  `PREVIEW_ALLOWED_HOSTS` ; tant que `status='pending'` et la deadline non
-  atteinte, la tentative reprend seule.
+  (`PREVIEW_SHA_HEADER` ou `PREVIEW_SHA_PATH`), autoriser ses hôtes dans la liste
+  initiale `PREVIEW_ALLOWED_HOSTS` ou dans Réglages du dashboard (audit
+  `preview.hosts.updated` / `preview.hosts.reset`) ; tant que `status='pending'`
+  et la deadline non atteinte, la tentative reprend seule.
 - Déploiement plus lent que la deadline : augmenter
   `QA_AUTO_PREVIEW_WAIT_SECONDS` puis redémarrer le worker. Une ligne déjà
   `expired` reste expirée : relancer explicitement depuis le dashboard ou pousser
@@ -177,8 +178,10 @@ reste possible pour ce que l'automatisation a sauté.
 | `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `TIMEOUT` | Adresse/port/DNS Docker et disponibilité de la dépendance concernée |
 | SQL/migration en erreur | Logs `db` puis `pr-qa`, mot de passe et volume conservé ; le doctor vérifie la version supportée du schéma |
 | `PREVIEW_SHA_MISMATCH` | SHA complet de la PR, header `x-commit-sha` ou JSON au chemin configuré ; aucun contournement |
-| `PREVIEW_NOT_FOUND`, `PREVIEW_HOST_NOT_ALLOWED` | Déploiement réussi au bon SHA/environnement ou URL explicite, hôtes exacts avec ports |
-| `EGRESS_POLICY_DENIED` | Logs `egress`, hôtes des API/assets/WebSockets et IP résolues ; métadonnées toujours interdites |
+| `PREVIEW_NOT_FOUND`, `PREVIEW_HOST_NOT_ALLOWED` | Déploiement réussi au bon SHA/environnement ou URL explicite, hôtes exacts avec ports ; la liste en vigueur se lit dans Réglages du dashboard (admin) |
+| `PREVIEW_HOSTS_INVALID`, `PREVIEW_HOSTS_EMPTY` | Format `hôte` ou `hôte:port` sans schéma/chemin/joker et au moins un hôte ; la liste enregistrée reste inchangée en cas de refus |
+| `PREVIEW_POLICY_UNWRITABLE` | Volume `qa-policy` monté et accessible en écriture par l'UID 1000 du service `pr-qa` ; la liste est enregistrée mais `browser`/`egress` gardent la précédente |
+| `EGRESS_POLICY_DENIED` | Logs `egress`, hôtes des API/assets/WebSockets et IP résolues ; liste du dashboard appliquée en quelques secondes ; métadonnées toujours interdites |
 | `CONTEXT_INCOMPLETE` | Diff/versions source manquants : rendre le contexte disponible ou réduire la PR |
 | `CONTRACT_VIOLATION`, `CRITICAL_COVERAGE_MISSING` | Étapes/omissions/citations du plan, politique de confiance au SHA de base ; ne pas assouplir les assertions |
 | `PRECONDITION_UNVERIFIED` | Rôle authentifié / fixture seed-cleanup de confiance disponible pour ce dépôt |
@@ -187,7 +190,7 @@ reste possible pour ce que l'automatisation a sauté.
 | `RUN_OWNERSHIP_LOST`, run `interrupted` | Annulation, heartbeat/lease et disponibilité SQL ; pas de replay automatique des écritures |
 | `CANARY_START_FAILED`, `ENOENT` | Logs `browser`, installation runtime/Chromium dans l'image, versions et transport |
 | `EACCES`, `EPERM` | Fichiers montés et volumes lisibles/inscriptibles par UID 1000, sans exposer les clés à tous |
-| `ENOSPC` / refus de stockage | Disque, trois volumes et rétention ; préserver les preuves avant suppression |
+| `ENOSPC` / refus de stockage | Disque, quatre volumes et rétention ; préserver les preuves avant suppression |
 | `EVIDENCE_VIDEO_MISSING` | Logs session/Chromium et finalisation ; aucune réussite sans preuve |
 | `EADDRINUSE` | Conflit de port local ; modifier `QA_PORT`, redémarrer et adapter tunnel/proxy |
 | HTTP `/health` 503 | SQL indisponible ; distinguer santé de l'API et santé de ses dépendances externes avec doctor |
@@ -222,7 +225,7 @@ git merge --ff-only origin/main
 ./scripts/pr-qa up
 ```
 
-`./scripts/pr-qa stop` arrête les cinq services en conservant les trois volumes.
+`./scripts/pr-qa stop` arrête les cinq services en conservant les quatre volumes.
 Les jobs queued survivent ; une lease expirée est interrompue sans replay.
 Ne pas utiliser `down -v`, des purges Docker globales ou un reset de la DB pour
 réparer un incident. Une rotation de `QA_DB_PASSWORD` dans `.env` seule ne change

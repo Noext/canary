@@ -56,6 +56,19 @@ export interface RunJob extends Job {
   progress?: RunProgress | null;
 }
 
+/**
+ * Preview constraints shown to an administrator, and returned by the host list
+ * endpoint after an edit.
+ */
+export interface PreviewSettings {
+  /** Hosts in force: the dashboard list, or the server default. */
+  hosts?: string[] | null;
+  /** `PREVIEW_ALLOWED_HOSTS` configured on the server, offered as a reset target. */
+  hostsDefault?: string[] | null;
+  shaHeader?: string | null;
+  shaPath?: string | null;
+}
+
 export interface SetupStatus {
   ai: { defaultModel: string; endpoint: string };
   github: {
@@ -64,12 +77,7 @@ export interface SetupStatus {
     mode: "missing" | "technical" | "app";
     repositories: string[];
   };
-  preview: {
-    automatic: boolean;
-    hosts?: string[] | null;
-    shaHeader?: string | null;
-    shaPath?: string | null;
-  };
+  preview: { automatic: boolean } & PreviewSettings;
 }
 
 /** Lifecycle of a pull-request delivery that has no run yet. */

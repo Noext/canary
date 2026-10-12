@@ -2,12 +2,17 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { type Principal, requireAccess } from "./access.js";
 import type { Config } from "./config.js";
-import type { Preflight, SetupStatus } from "./dashboard/contracts.js";
+import type {
+  Preflight,
+  PreviewSettings,
+  SetupStatus,
+} from "./dashboard/contracts.js";
 import { QaError } from "./diagnostics.js";
 import { GitHub, type PrContext, parsePrUrl } from "./github.js";
 import type { GitHubSetup } from "./github-setup.js";
 import { type ModelCatalog, ModelIdSchema } from "./model-catalog.js";
 import { resolvePreview } from "./preview.js";
+import { MAX_HOST_LENGTH, type PreviewHosts } from "./preview-hosts.js";
 import type { Queue } from "./queue.js";
 
 const preflightSchema = z
@@ -17,14 +22,56 @@ const preflightSchema = z
     model: ModelIdSchema,
   })
   .strict();
+const previewHostsSchema = z
+  .object({
+    // Request-level cap only: `normalizePreviewHosts` deduplicates and enforces
+    // the stored limit with a message the dashboard can show.
+    hosts: z.array(z.string().max(MAX_HOST_LENGTH)).max(400),
+  })
+  .strict();
 export function dashboardRoutes(
   setup: GitHubSetup,
   config: Config,
   models: ModelCatalog,
   queue: Queue,
+  previewHosts: PreviewHosts,
   read: (req: IncomingMessage) => Promise<Buffer>,
   json: (res: ServerResponse, status: number, value: unknown) => void
 ) {
+  /**
+   * Administrator-only host list editor. The stored list becomes the list in
+   * force for this process and is published for the browser and egress services.
+   */
+  async function previewHostRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    user: Principal
+  ) {
+    if (
+      url.pathname !== "/dashboard/preview-hosts" ||
+      !["DELETE", "PUT"].includes(req.method ?? "")
+    ) {
+      return false;
+    }
+    if (user.role !== "admin") {
+      json(res, 403, { error: "Administrator required" });
+      return true;
+    }
+    if (req.method === "DELETE") {
+      const hosts = await previewHosts.reset(user.id);
+      await queue.audit(user.id, "preview.hosts.reset", undefined, { hosts });
+      json(res, 200, previewSettings(config, previewHosts, hosts));
+      return true;
+    }
+    const input = previewHostsSchema.parse(
+      JSON.parse((await read(req)).toString())
+    );
+    const hosts = await previewHosts.set(user.id, input.hosts);
+    await queue.audit(user.id, "preview.hosts.updated", undefined, { hosts });
+    json(res, 200, previewSettings(config, previewHosts, hosts));
+    return true;
+  }
   return async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -32,11 +79,14 @@ export function dashboardRoutes(
     user: Principal
   ) => {
     if (req.method === "GET" && url.pathname === "/dashboard/status") {
-      json(res, 200, await setupStatus(setup, config, user));
+      json(res, 200, await setupStatus(setup, config, previewHosts, user));
       return true;
     }
     if (req.method === "GET" && url.pathname === "/dashboard/automatic") {
       json(res, 200, await automaticStatus(setup, queue, user));
+      return true;
+    }
+    if (await previewHostRoute(req, res, url, user)) {
       return true;
     }
     if (req.method !== "POST" || url.pathname !== "/runs/preflight") {
@@ -121,6 +171,7 @@ function scopedRepos(user: Principal, repos: string[]) {
 async function setupStatus(
   setup: GitHubSetup,
   config: Config,
+  previewHosts: PreviewHosts,
   user: Principal
 ) {
   const effective = await setup.effective();
@@ -134,17 +185,38 @@ async function setupStatus(
       endpoint: new URL(config.OPENAI_BASE_URL).host,
       defaultModel: config.OPENAI_MODEL,
     },
-    preview: {
-      automatic: Boolean(config.PREVIEW_URL_TEMPLATE),
-      ...(user.role === "admin"
-        ? {
-            hosts: config.allowedHosts,
-            shaHeader: config.PREVIEW_SHA_HEADER,
-            shaPath: config.PREVIEW_SHA_PATH,
-          }
-        : {}),
-    },
+    preview: previewStatus(config, previewHosts, user),
   } satisfies SetupStatus;
+}
+
+/**
+ * Preview settings for one principal. The host list identifies the test
+ * environments of this instance, so it is only reported to an administrator.
+ */
+function previewStatus(
+  config: Config,
+  previewHosts: PreviewHosts,
+  user: Principal
+): SetupStatus["preview"] {
+  return {
+    automatic: Boolean(config.PREVIEW_URL_TEMPLATE),
+    ...(user.role === "admin"
+      ? previewSettings(config, previewHosts, config.allowedHosts)
+      : {}),
+  };
+}
+
+function previewSettings(
+  config: Config,
+  previewHosts: PreviewHosts,
+  hosts: string[]
+): PreviewSettings {
+  return {
+    hosts,
+    hostsDefault: previewHosts.defaults(),
+    shaHeader: config.PREVIEW_SHA_HEADER,
+    shaPath: config.PREVIEW_SHA_PATH,
+  };
 }
 
 /** Automatic attempts of the repositories the principal may read, newest first. */

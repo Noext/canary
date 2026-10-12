@@ -486,8 +486,8 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
   expect(await q.list(["fixture/app"])).toEqual([]);
 }, 30_000);
 
-it("migrates an existing install to schema version 7 without losing pending deliveries", async () => {
-  expect(SCHEMA_VERSION).toBe(7);
+it("migrates an existing install to the current schema version without losing pending deliveries", async () => {
+  expect(SCHEMA_VERSION).toBe(8);
   const q = await sqlDatabase();
   expect(
     await q.acceptDelivery("legacy", "pull_request", {

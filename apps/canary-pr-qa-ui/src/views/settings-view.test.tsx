@@ -110,6 +110,16 @@ function autoReposOf(body: unknown): string[] | undefined {
   return Array.isArray(value) ? value.map(String) : undefined;
 }
 
+function hostsOf(body: unknown, fallback: string[]): string[] {
+  if (typeof body !== "object" || body === null || !("hosts" in body)) {
+    return fallback;
+  }
+  const value = body.hosts;
+  return Array.isArray(value)
+    ? value.map((host) => String(host).toLowerCase())
+    : fallback;
+}
+
 function byId(container: HTMLElement, id: string): HTMLElement {
   const element = container.querySelector<HTMLElement>(`[id="${id}"]`);
   if (!element) {
@@ -124,6 +134,7 @@ let setup: SetupStatus;
 let models: ModelCatalog;
 let modelsFailure: DashboardError | undefined;
 let githubFailure: DashboardError | undefined;
+let hostsFailure: DashboardError | undefined;
 let manifestFailure: DashboardError | undefined;
 let refreshFailure: DashboardError | undefined;
 let removalWarnings: string[] = [];
@@ -134,6 +145,7 @@ beforeEach(() => {
   models = { data: [], defaultModel: "" };
   modelsFailure = undefined;
   githubFailure = undefined;
+  hostsFailure = undefined;
   manifestFailure = undefined;
   refreshFailure = undefined;
   removalWarnings = [];
@@ -150,6 +162,7 @@ beforeEach(() => {
     preview: {
       automatic: false,
       hosts: ["preview.example.com"],
+      hostsDefault: ["preview.example.com"],
       shaHeader: "x-commit-sha",
     },
   };
@@ -225,6 +238,29 @@ beforeEach(() => {
         };
         return github;
       }
+      case "/dashboard/preview-hosts": {
+        if (hostsFailure) {
+          throw hostsFailure;
+        }
+        const preview = setup.preview;
+        const hostsDefault = preview.hostsDefault ?? [];
+        setup = {
+          ...setup,
+          preview: {
+            ...preview,
+            hosts:
+              options?.method === "DELETE"
+                ? hostsDefault
+                : hostsOf(options?.body, preview.hosts ?? []),
+          },
+        };
+        return {
+          hosts: setup.preview.hosts ?? [],
+          hostsDefault,
+          shaHeader: setup.preview.shaHeader ?? null,
+          shaPath: setup.preview.shaPath ?? null,
+        };
+      }
       default:
         throw new Error(`Unexpected API path ${path}`);
     }
@@ -286,6 +322,13 @@ const CONTROL_IDS = [
   "previewMode",
   "previewHosts",
   "previewProof",
+  "previewHostEditor",
+  "previewHostsDefault",
+  "previewHostList",
+  "previewHostInput",
+  "previewHostAdd",
+  "previewHostSave",
+  "previewHostReset",
 ] as const;
 
 describe("SettingsView", () => {
@@ -855,5 +898,123 @@ describe("SettingsView", () => {
     expect(byId(container, "previewProof")).toHaveTextContent(
       "L'application doit exposer le commit dans un en-tête de version."
     );
+  });
+
+  it("saves the host list an administrator edits and follows the reloaded status", async () => {
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "previewHostList")).toHaveTextContent(
+        "preview.example.com"
+      )
+    );
+    expect(byId(container, "previewHostsDefault")).toHaveTextContent(
+      "Liste initiale du serveur : preview.example.com"
+    );
+    // Nothing to restore while the enforced list is still the server one.
+    expect(byId(container, "previewHostReset")).toBeDisabled();
+
+    await user.type(
+      byId(container, "previewHostInput"),
+      " New.Example.com:8443 "
+    );
+    await user.click(byId(container, "previewHostAdd"));
+    expect(byId(container, "previewHostList")).toHaveTextContent(
+      "new.example.com:8443"
+    );
+    await user.type(byId(container, "previewHostInput"), "PREVIEW.EXAMPLE.COM");
+    await user.click(byId(container, "previewHostAdd"));
+    expect(byId(container, "previewHostsError")).toHaveTextContent(
+      settings.preview.hostsDuplicate
+    );
+
+    await user.click(byId(container, "previewHostSave"));
+    await waitFor(() =>
+      expect(byId(container, "previewHostsSaved")).toHaveTextContent(
+        settings.preview.hostsSaved
+      )
+    );
+    expect(calls).toContainEqual({
+      body: { hosts: ["preview.example.com", "new.example.com:8443"] },
+      method: "PUT",
+      path: "/dashboard/preview-hosts",
+    });
+    // The summary line reports what the server enforces, not the local draft.
+    expect(byId(container, "previewHosts")).toHaveTextContent(
+      "Hôtes autorisés : preview.example.com, new.example.com:8443"
+    );
+  });
+
+  it("refuses a malformed host without calling the server", async () => {
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "previewHostList")).toHaveTextContent(
+        "preview.example.com"
+      )
+    );
+    for (const value of [
+      "https://evil.test/path",
+      "evil.test/*",
+      "user@evil.test",
+    ]) {
+      await user.clear(byId(container, "previewHostInput"));
+      await user.type(byId(container, "previewHostInput"), value);
+      await user.click(byId(container, "previewHostAdd"));
+      expect(byId(container, "previewHostsError")).toHaveTextContent(
+        settings.preview.hostsInvalid
+      );
+    }
+    expect(
+      calls.filter((call) => call.path === "/dashboard/preview-hosts")
+    ).toEqual([]);
+  });
+
+  it("reports a rejected edit and restores the server list", async () => {
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "previewHostList")).toHaveTextContent(
+        "preview.example.com"
+      )
+    );
+    const removal = within(byId(container, "previewHostList")).getByRole(
+      "button",
+      { name: settings.preview.hostsRemove("preview.example.com") }
+    );
+    await user.click(removal);
+    // An empty list would block every run: the editor refuses to save it.
+    expect(byId(container, "previewHostSave")).toBeDisabled();
+    await user.type(byId(container, "previewHostInput"), "evil.test");
+    await user.click(byId(container, "previewHostAdd"));
+
+    hostsFailure = new DashboardError("Hôte(s) invalide(s) : evil.test", {
+      code: "PREVIEW_HOSTS_INVALID",
+    });
+    await user.click(byId(container, "previewHostSave"));
+    await waitFor(() =>
+      expect(byId(container, "previewHostsError")).toHaveTextContent(
+        "Hôte(s) invalide(s) : evil.test"
+      )
+    );
+
+    hostsFailure = undefined;
+    await user.click(byId(container, "previewHostReset"));
+    await waitFor(() =>
+      expect(byId(container, "previewHostsSaved")).toHaveTextContent(
+        settings.preview.hostsResetDone
+      )
+    );
+    expect(calls).toContainEqual({
+      method: "DELETE",
+      path: "/dashboard/preview-hosts",
+    });
+    expect(byId(container, "previewHosts")).toHaveTextContent(
+      "Hôtes autorisés : preview.example.com"
+    );
+    expect(byId(container, "previewHostReset")).toBeDisabled();
   });
 });

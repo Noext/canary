@@ -15,8 +15,8 @@ COPY --from=build /app/apps/canary/package.json /app/apps/canary/package.json
 COPY --from=build /app/apps/canary-pr-qa/package.json /app/apps/canary-pr-qa/package.json
 # Same image supports separate API, worker and isolated browser roles.
 RUN npx --yes playwright@1.58.2 install-deps chromium \
-    && mkdir -p /data /ms-playwright /home/node/.canary/sessions \
-    && chown -R node:node /data /ms-playwright /home/node/.canary \
+    && mkdir -p /data /ms-playwright /home/node/.canary/sessions /policy \
+    && chown -R node:node /data /ms-playwright /home/node/.canary /policy \
     && ln -s /app/apps/canary-pr-qa/dist/cli.js /usr/local/bin/canary-pr-qa
 USER node
 RUN node /app/apps/canary/dist/cli.js install

@@ -7,6 +7,19 @@
  * there fails loudly instead of rendering `undefined`.
  */
 
+/**
+ * Preview constraints shown to an administrator, and returned by the host list
+ * endpoint after an edit.
+ */
+export interface PreviewSettings {
+  /** Hosts in force: the dashboard list, or the server default. */
+  hosts: string[];
+  /** `PREVIEW_ALLOWED_HOSTS` as configured on the server, offered as a reset target. */
+  hostsDefault: string[];
+  shaHeader?: string;
+  shaPath?: string;
+}
+
 export interface SetupStatus {
   ai: { defaultModel: string; endpoint: string };
   github: {
@@ -15,12 +28,7 @@ export interface SetupStatus {
     mode: "missing" | "technical" | "app";
     repositories: string[];
   };
-  preview: {
-    automatic: boolean;
-    hosts?: string[];
-    shaHeader?: string;
-    shaPath?: string;
-  };
+  preview: { automatic: boolean } & Partial<PreviewSettings>;
 }
 
 /** Lifecycle of a pull-request delivery that has no run yet. */

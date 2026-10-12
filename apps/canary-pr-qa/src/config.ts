@@ -75,6 +75,7 @@ const envSchema = z.object({
     .union([z.literal(""), z.coerce.number().min(0).max(2)])
     .default(""),
   QA_DATA_DIR: z.string().default("./qa-data"),
+  QA_POLICY_DIR: z.string().default(""),
   QA_API_TOKEN: z.string().default(""),
   QA_HOST: z.string().default("127.0.0.1"),
   QA_PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
@@ -129,6 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
     ...parsed,
     QA_DATA_DIR: resolve(parsed.QA_DATA_DIR),
+    QA_POLICY_DIR: parsed.QA_POLICY_DIR ? resolve(parsed.QA_POLICY_DIR) : "",
     allowedRepos: parsed.GITHUB_ALLOWED_REPOS.split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),

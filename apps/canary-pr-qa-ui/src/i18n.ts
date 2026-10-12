@@ -467,9 +467,28 @@ export const settings = {
     public: "Public",
   },
   preview: {
-    help: "Ces restrictions sont configurées par l’opérateur du serveur. Le bouton Vérifier les accès vous donne un diagnostic avant lancement.",
+    help: "Ces restrictions s'appliquent au navigateur QA et au proxy de sortie. Le bouton Vérifier les accès vous donne un diagnostic avant lancement.",
     hosts: (hosts: string) => `Hôtes autorisés : ${hosts}`,
     hostsFallback: "Les hôtes sont définis par l'opérateur du serveur.",
+    hostsEditorTitle: "Hôtes autorisés par l'administrateur",
+    hostsEditorIntro:
+      "Seuls ces hôtes peuvent être atteints par le navigateur QA. Un hôte s'écrit sans schéma, chemin ni joker ; les changements prennent effet en quelques secondes.",
+    hostsDefault: (hosts: string) => `Liste initiale du serveur : ${hosts}`,
+    hostsInput: "Nouvel hôte",
+    hostsPlaceholder: "preview.example.com ou preview.example.com:8443",
+    hostsAdd: "Ajouter",
+    hostsRemove: (host: string) => `Retirer ${host}`,
+    hostsRemoveLabel: "Retirer",
+    hostsSave: "Enregistrer les hôtes",
+    hostsSaving: "Enregistrement…",
+    hostsSaved: "Hôtes autorisés enregistrés.",
+    hostsReset: "Rétablir la liste du serveur",
+    hostsResetDone: "Liste du serveur rétablie.",
+    hostsEmpty:
+      "Ajoutez au moins un hôte : une liste vide bloquerait tous les tests.",
+    hostsDuplicate: "Cet hôte est déjà dans la liste.",
+    hostsInvalid:
+      "Format attendu : hôte ou hôte:port, sans schéma, chemin ni joker.",
     intro:
       "Pour chaque PR, Canary a besoin d'une URL de test présentant exactement ses changements.",
     modeAutomatic:

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Canary } from "./canary.js";
 import type { Config } from "./config.js";
 import { diagnose } from "./diagnostics.js";
+import { watchPreviewPolicy } from "./preview-hosts.js";
 
 const commandSchema = z
   .object({
@@ -17,6 +18,9 @@ export async function startBrowserService(config: Config) {
       "QA_BROWSER_SERVICE_TOKEN must have at least 32 characters"
     );
   }
+  // The dashboard host list also feeds the daemon's own network policy, which is
+  // the fallback when a session is started without an explicit host list.
+  const policy = watchPreviewPolicy(config);
   const native = new Canary({ ...config, QA_BROWSER_SERVICE_URL: "" });
   let active = 0;
   const server = createServer((req, res) => {
@@ -60,6 +64,7 @@ export async function startBrowserService(config: Config) {
     server.once("error", reject);
     server.listen(config.QA_BROWSER_PORT, config.QA_BROWSER_HOST, resolve);
   });
+  server.on("close", () => policy.stop());
   return server;
 }
 

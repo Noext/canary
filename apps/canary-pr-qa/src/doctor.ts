@@ -17,6 +17,11 @@ import { GitHub, type PrContext } from "./github.js";
 import { GitHubSetup } from "./github-setup.js";
 import { Model } from "./model.js";
 import { resolvePreview } from "./preview.js";
+import {
+  applyPreviewHosts,
+  PreviewHosts,
+  verifyPreviewPolicyTarget,
+} from "./preview-hosts.js";
 import { Queue, SCHEMA_VERSION } from "./queue.js";
 import type { RunResult } from "./schema.js";
 
@@ -116,6 +121,7 @@ export async function doctor(
     const disk = await statfs(config.QA_DATA_DIR);
     return `Read/write verified; ${Math.floor((disk.bavail * disk.bsize) / 1024 / 1024)} MiB available`;
   });
+  await check("preview-policy", () => verifyPreviewPolicyTarget(config));
   if (config.DATABASE_URL && !options.offline) {
     await check("postgresql", async () => {
       const queue = new Queue(config.DATABASE_URL);
@@ -130,6 +136,12 @@ export async function doctor(
         }
         await queue.pool.query("SELECT count(*)::int AS count FROM qa_jobs");
         config = await new GitHubSetup(queue.pool, config).effective();
+        // Doctor verifies the host list in force, which is the dashboard list when
+        // an administrator saved one.
+        applyPreviewHosts(
+          config,
+          await new PreviewHosts(queue.pool, config).effective()
+        );
         return `PostgreSQL connection, schema version ${SCHEMA_VERSION} and job-table read verified`;
       } finally {
         await queue.close();

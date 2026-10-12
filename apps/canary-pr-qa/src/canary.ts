@@ -276,6 +276,9 @@ export class Canary {
         "--name",
         name.slice(0, 180),
         "--network-hosts",
+        // The Canary CLI takes the list as one comma-separated argument.
+        // `applyPreviewHosts` keeps this string and `allowedHosts` in sync, so a
+        // dashboard list reaches the session policy without a restart.
         this.config.PREVIEW_ALLOWED_HOSTS,
         ...(this.config.QA_ALLOW_PRIVATE_PREVIEWS === "true"
           ? ["--allow-private"]
