@@ -22,6 +22,14 @@ export interface RunJob extends Job {
   error?: string;
   progress?: { phase?: string; scenarioId?: string; action?: string };
 }
+export type GitHubAppRemoval = ApiResponses["/github/app"] & {
+  disconnected: {
+    appDeleted: boolean;
+    deleteApp: boolean;
+    uninstalled: string[];
+    warnings: string[];
+  };
+};
 export interface ApiResponses {
   "/auth/login": Principal;
   "/auth/setup": Principal;

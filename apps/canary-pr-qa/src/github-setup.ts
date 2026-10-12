@@ -9,7 +9,7 @@ import {
 import type pg from "pg";
 import { z } from "zod";
 import type { Config } from "./config.js";
-import { QaError } from "./diagnostics.js";
+import { diagnose, QaError } from "./diagnostics.js";
 import { appJwt, githubToken } from "./github-app.js";
 import { fetchText } from "./http.js";
 
@@ -68,6 +68,20 @@ function failure(code: string, message: string) {
     "Ouvrez les réglages GitHub du dashboard. Vérifiez l'URL HTTPS, l'installation et les permissions de l'App, puis actualisez."
   );
 }
+function invalidStateToken() {
+  return failure(
+    "GITHUB_STATE_INVALID",
+    "Retour GitHub invalide ou expiré. Relancez la connexion depuis le dashboard."
+  );
+}
+function usedStateToken() {
+  return failure(
+    "GITHUB_STATE_INVALID",
+    "Retour GitHub invalide, déjà utilisé ou expiré. Relancez la connexion depuis le dashboard."
+  );
+}
+const CONSUME_STATE =
+  "DELETE FROM qa_github_state WHERE actor=$1 AND token_hash=$2 AND phase=$3 AND expires_at>now() RETURNING actor";
 function cryptKey(config: Config) {
   if (config.QA_API_TOKEN.length < 24) {
     throw failure(
@@ -230,20 +244,38 @@ export class GitHubSetup {
   }
   async consumeState(actor: string, token: string, phase: string) {
     if (!/^[a-f0-9]{64}$/.test(token)) {
-      throw failure(
-        "GITHUB_STATE_INVALID",
-        "Retour GitHub invalide ou expiré. Relancez la connexion depuis le dashboard."
-      );
+      throw invalidStateToken();
     }
-    const result = await this.pool.query(
-      "DELETE FROM qa_github_state WHERE actor=$1 AND token_hash=$2 AND phase=$3 AND expires_at>now() RETURNING actor",
-      [actor, hash(token), phase]
-    );
+    const result = await this.pool.query(CONSUME_STATE, [
+      actor,
+      hash(token),
+      phase,
+    ]);
     if (!result.rows.length) {
-      throw failure(
-        "GITHUB_STATE_INVALID",
-        "Retour GitHub invalide, déjà utilisé ou expiré. Relancez la connexion depuis le dashboard."
-      );
+      throw usedStateToken();
+    }
+  }
+  /**
+   * Consumes the callback state inside the caller's lock. A disconnect holds
+   * the same advisory lock, so a callback that was already consumed but not yet
+   * committed cannot recreate the connection after the removal returns.
+   */
+  private async consumeStateLocked(
+    client: pg.PoolClient,
+    actor: string,
+    token: string,
+    phase: string
+  ) {
+    if (!/^[a-f0-9]{64}$/.test(token)) {
+      throw invalidStateToken();
+    }
+    const result = await client.query(CONSUME_STATE, [
+      actor,
+      hash(token),
+      phase,
+    ]);
+    if (!result.rows.length) {
+      throw usedStateToken();
     }
   }
   async manifest(
@@ -301,11 +333,13 @@ export class GitHubSetup {
     if (!/^[a-zA-Z0-9_-]{1,256}$/.test(code)) {
       throw failure("GITHUB_CODE_INVALID", "Code de création GitHub invalide.");
     }
-    await this.consumeState(actor, state, "manifest");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(9287346)");
+      // Consume the state under the same lock a disconnect takes, so an
+      // in-flight callback cannot resurrect the connection it removed.
+      await this.consumeStateLocked(client, actor, state, "manifest");
       if (
         (await client.query("SELECT app_id FROM qa_github_app")).rows.length
       ) {
@@ -388,6 +422,14 @@ export class GitHubSetup {
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(9287346)");
+      if (
+        !(await client.query("SELECT app_id FROM qa_github_app")).rows.length
+      ) {
+        throw failure(
+          "GITHUB_NOT_CONNECTED",
+          "La connexion GitHub a été supprimée pendant la synchronisation."
+        );
+      }
       for (const repo of repos) {
         await client.query(
           "INSERT INTO qa_github_repositories(full_name,repository_id,installation_id,account,private) VALUES($1,$2,$3,$4,$5) ON CONFLICT(full_name) DO UPDATE SET repository_id=EXCLUDED.repository_id,installation_id=EXCLUDED.installation_id,account=EXCLUDED.account,private=EXCLUDED.private",
@@ -528,8 +570,92 @@ export class GitHubSetup {
     );
     return this.status();
   }
+  /**
+   * Removes the GitHub App connection. GitHub is asked first so a refusal is
+   * reported as a warning instead of stranding the instance with credentials
+   * it can no longer use; the local rows are always deleted.
+   */
+  async disconnect(options: { deleteApp?: boolean } = {}) {
+    const app = await this.app();
+    if (!app) {
+      throw failure(
+        "GITHUB_NOT_CONNECTED",
+        "Aucune App GitHub n'est connectée à cette instance."
+      );
+    }
+    const deleteApp = Boolean(options.deleteApp);
+    const uninstalled: string[] = [];
+    const warnings: string[] = [];
+    let appDeleted = false;
+    try {
+      const { pem } = decrypt(app.credentials, this.config);
+      if (deleteApp) {
+        // GitHub also removes every installation of that App.
+        await this.appDelete("/app", app, pem);
+        appDeleted = true;
+      } else {
+        for (const installation of await this.installations(app, pem)) {
+          await this.appDelete(
+            `/app/installations/${installation.id}`,
+            app,
+            pem
+          );
+          uninstalled.push(installation.account.login);
+        }
+      }
+    } catch (error) {
+      warnings.push(
+        `${deleteApp ? "La suppression de l'App" : "La désinstallation sur GitHub"} a échoué (${diagnose(error, this.config).message}). Terminez l'opération depuis les réglages GitHub.`
+      );
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(9287346)");
+      await client.query("DELETE FROM qa_github_app");
+      await client.query("DELETE FROM qa_github_repositories");
+      // A pending manifest/install callback must not recreate the connection.
+      await client.query("DELETE FROM qa_github_state");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return {
+      ...(await this.status()),
+      disconnected: { appDeleted, deleteApp, uninstalled, warnings },
+    };
+  }
   appRequest(path: string, app: AppRow, pem: string) {
     return this.api(path, appJwt(app.app_id, pem));
+  }
+  /**
+   * GitHub answers 204 No Content on a successful delete, which `fetchText`
+   * reports as an empty body: that exact error is the success shape here, and
+   * every non-2xx status keeps its HTTP_* diagnostic.
+   */
+  private async appDelete(path: string, app: AppRow, pem: string) {
+    try {
+      await fetchText(
+        `${this.config.GITHUB_API_URL}${path}`,
+        {
+          method: "DELETE",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${appJwt(app.app_id, pem)}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        },
+        15_000
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "Empty HTTP response") {
+        return;
+      }
+      throw error;
+    }
   }
   async api(path: string, token: string) {
     return JSON.parse(

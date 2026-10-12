@@ -550,6 +550,7 @@ small {
 }
 #error:empty,
 #githubError:empty,
+#githubNotice:empty,
 #modelState:empty {
   display: none;
 }

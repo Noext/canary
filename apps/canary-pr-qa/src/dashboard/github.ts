@@ -1,5 +1,5 @@
 import { api, errorText, post } from "./api.js";
-import type { ApiResponses } from "./contracts.js";
+import type { ApiResponses, GitHubAppRemoval } from "./contracts.js";
 import { $ } from "./dom.js";
 import { loadSetupStatus } from "./overview.js";
 import { list } from "./runs.js";
@@ -18,6 +18,8 @@ export function renderGitHub(data: ApiResponses["/github/app"]) {
         data.restriction.includes(r.full_name.toLowerCase()))
   );
   if (data.app) {
+    $("githubNotice").textContent = "";
+    $("githubConfirm").hidden = true;
     $("githubConnection").textContent = enabled.length
       ? "Connecté"
       : "À terminer";
@@ -119,6 +121,52 @@ export function initializeGithub() {
       const result = await api("/github/app/install", post({}));
       location.assign(result.url);
     });
+  let pendingRemoval: boolean | undefined;
+  const askRemoval = (deleteApp: boolean) => {
+    pendingRemoval = deleteApp;
+    $("githubConfirmText").textContent = deleteApp
+      ? "Supprimer définitivement l'App GitHub ? L'App, ses installations et ses webhooks disparaissent de GitHub : cette action est irréversible."
+      : "Désinstaller l'App GitHub de tous vos dépôts ? Les webhooks et les accès sont révoqués, et la connexion locale est effacée. Vous pourrez réinstaller l'App.";
+    $("githubConfirm").hidden = false;
+  };
+  const closeRemoval = () => {
+    pendingRemoval = undefined;
+    $("githubConfirm").hidden = true;
+  };
+  const disconnect = (button: HTMLButtonElement, deleteApp: boolean) =>
+    githubBusy(button, async () => {
+      const data = await api<GitHubAppRemoval>("/github/app", {
+        ...post({ deleteApp }),
+        method: "DELETE",
+      });
+      renderGitHub(data);
+      const warnings = data.disconnected.warnings;
+      if (warnings.length) {
+        $("githubNotice").textContent =
+          `Connexion locale effacée ; l'App GitHub est inchangée. ${warnings.join(" ")}`;
+      } else if (deleteApp) {
+        $("githubNotice").textContent = "App supprimée sur GitHub.";
+      } else {
+        $("githubNotice").textContent = "App désinstallée sur GitHub.";
+      }
+      state.currentUser = await api("/me");
+      await loadSetupStatus();
+      await list();
+    });
+  $("githubUninstall").onclick = () => askRemoval(false);
+  $("githubDeleteApp").onclick = () => askRemoval(true);
+  $("githubConfirmCancel").onclick = () => closeRemoval();
+  $("githubConfirmRun").onclick = () => {
+    if (pendingRemoval === undefined) {
+      return;
+    }
+    const deleteApp = pendingRemoval;
+    closeRemoval();
+    disconnect(
+      deleteApp ? $("githubDeleteApp") : $("githubUninstall"),
+      deleteApp
+    );
+  };
   $("githubRefresh").onclick = () =>
     githubBusy($("githubRefresh"), async () => {
       renderGitHub(await api("/github/app/refresh", post({})));

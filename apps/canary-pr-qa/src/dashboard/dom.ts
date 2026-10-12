@@ -24,13 +24,20 @@ interface Elements {
   filters: HTMLFormElement;
   githubAppActions: HTMLElement;
   githubAppName: HTMLElement;
+  githubConfirm: HTMLElement;
+  githubConfirmCancel: HTMLButtonElement;
+  githubConfirmRun: HTMLButtonElement;
+  githubConfirmText: HTMLElement;
   githubConnection: HTMLElement;
   githubCreate: HTMLFormElement;
   githubCreateButton: HTMLButtonElement;
+  githubDanger: HTMLElement;
+  githubDeleteApp: HTMLButtonElement;
   githubError: HTMLElement;
   githubInstall: HTMLButtonElement;
   githubMessage: HTMLElement;
   githubName: HTMLInputElement;
+  githubNotice: HTMLElement;
   githubOrg: HTMLInputElement;
   githubOriginHint: HTMLElement;
   githubRefresh: HTMLButtonElement;
@@ -38,6 +45,7 @@ interface Elements {
   githubRepos: HTMLFormElement;
   githubSave: HTMLButtonElement;
   githubSettings: HTMLElement;
+  githubUninstall: HTMLButtonElement;
   historyEmpty: HTMLElement;
   historyEmptyIntro: HTMLElement;
   historyEmptyTitle: HTMLElement;

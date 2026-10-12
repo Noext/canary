@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { GitHubSetup } from "../src/github-setup.js";
 import { LocalAuth } from "../src/local-auth.js";
 import { Queue } from "../src/queue.js";
 import { BASE_SHA, PR_URL, SHA } from "./fixture.js";
+import { githubSetupFixture } from "./github-setup-fixture.js";
 
 // Dedicated disposable CI database only; this suite creates/deletes its own namespaced rows.
 describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
@@ -166,4 +169,90 @@ it.skipIf(!process.env.QA_TEST_DATABASE_URL)(
     }
   },
   30_000
+);
+
+describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
+  "native PostgreSQL GitHub App removal race",
+  () => {
+    it("never lets an already-consumed manifest callback recreate the App after a disconnect", async () => {
+      const q = new Queue(process.env.QA_TEST_DATABASE_URL!);
+      await q.migrate();
+      const f = await githubSetupFixture();
+      const setup = new GitHubSetup(q.pool, {
+        ...f.config,
+        DATABASE_URL: process.env.QA_TEST_DATABASE_URL!,
+      });
+      // Waiters on the GitHub App serialization lock, in request order.
+      const waiters = async (minimum: number) => {
+        for (let attempt = 0; attempt < 400; attempt++) {
+          const row = await q.pool.query(
+            "SELECT count(*)::int AS count FROM pg_locks WHERE locktype='advisory' AND NOT granted"
+          );
+          if (row.rows[0].count >= minimum) {
+            return true;
+          }
+          await delay(25);
+        }
+        return false;
+      };
+      const blocker = await q.pool.connect();
+      try {
+        // A second admin starts a manifest flow while the instance is still
+        // unconnected, then another admin connects the App with its own state.
+        const registration = await setup.manifest("second-admin", {
+          name: "Canary team QA",
+        });
+        const state = new URL(registration.action).searchParams.get("state")!;
+        await setup.convert(
+          "admin",
+          await setup.state("admin", "manifest"),
+          "fixture-manifest-code"
+        );
+        expect((await setup.status()).app?.id).toBe("95001");
+        // The pending callback and a disconnect are now queued behind a held
+        // lock, disconnect first: consuming that state outside the lock could
+        // let the callback insert a new App after the removal commits.
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT pg_advisory_xact_lock(9287346)");
+        const removal = setup.disconnect({});
+        expect(await waiters(1)).toBe(true);
+        const conversion = setup
+          .convert("second-admin", state, "fixture-manifest-code")
+          .then(
+            () => undefined,
+            (error: unknown) => error
+          );
+        expect(await waiters(2)).toBe(true);
+        await blocker.query("ROLLBACK");
+        await removal;
+        expect(await conversion).toMatchObject({
+          code: "GITHUB_STATE_INVALID",
+        });
+        expect(f.state.conversionCount).toBe(1);
+        expect((await setup.status()).app).toBeNull();
+        expect((await setup.status()).repositories).toEqual([]);
+        expect(
+          (
+            await q.pool.query(
+              "SELECT count(*)::int AS count FROM qa_github_app"
+            )
+          ).rows[0].count
+        ).toBe(0);
+        expect(
+          (
+            await q.pool.query(
+              "SELECT count(*)::int AS count FROM qa_github_repositories"
+            )
+          ).rows[0].count
+        ).toBe(0);
+      } finally {
+        await q.pool.query("DELETE FROM qa_github_app");
+        await q.pool.query("DELETE FROM qa_github_state");
+        await q.pool.query("DELETE FROM qa_github_repositories");
+        await blocker.release();
+        await f.close();
+        await q.close();
+      }
+    }, 60_000);
+  }
 );

@@ -42,6 +42,22 @@ export function githubSetupRoutes(
     }
     return false;
   }
+  async function remove(req: IncomingMessage, user: Principal) {
+    const payload = (await read(req)).toString().trim();
+    const input = payload
+      ? z
+          .object({ deleteApp: z.boolean().optional() })
+          .strict()
+          .parse(JSON.parse(payload))
+      : {};
+    const status = await setup.disconnect(input);
+    await queue.audit(user.id, "github.app.disconnected", undefined, {
+      appDeleted: status.disconnected.appDeleted,
+      uninstalled: status.disconnected.uninstalled.length,
+      warnings: status.disconnected.warnings.length,
+    });
+    return status;
+  }
   return async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -79,6 +95,10 @@ export function githubSetupRoutes(
     if (`${req.method} ${url.pathname}` === "POST /github/app/refresh") {
       json(res, 200, await setup.refresh());
       await queue.audit(user.id, "github.installations.synced");
+      return true;
+    }
+    if (`${req.method} ${url.pathname}` === "DELETE /github/app") {
+      json(res, 200, await remove(req, user));
       return true;
     }
     if (`${req.method} ${url.pathname}` === "PUT /github/app/repositories") {

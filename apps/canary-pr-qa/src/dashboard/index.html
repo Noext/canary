@@ -496,6 +496,7 @@
                   <span> 3. Choisir les dépôts </span>
                 </div>
                 <p id="githubMessage" role="status" class="notice"></p>
+                <p id="githubNotice" class="notice" role="status"></p>
                 <p id="githubError" class="error" role="alert"></p>
                 <form id="githubCreate" class="form-grid">
                   <div>
@@ -544,6 +545,34 @@
                       Enregistrer les dépôts sélectionnés
                     </button>
                   </form>
+                  <details class="technical" id="githubDanger">
+                    <summary>Supprimer la connexion GitHub</summary>
+                    <p>
+                      La désinstallation révoque les webhooks et les accès de
+                      l'App ; la suppression efface aussi l'App de GitHub et ne
+                      peut pas être annulée. Dans les deux cas la connexion
+                      locale est effacée.
+                    </p>
+                    <div class="form-actions">
+                      <button type="button" id="githubUninstall">
+                        Désinstaller l'App de mes dépôts
+                      </button>
+                      <button type="button" class="danger" id="githubDeleteApp">
+                        Supprimer l'App GitHub
+                      </button>
+                    </div>
+                    <div class="notice warning" id="githubConfirm" hidden>
+                      <p id="githubConfirmText"></p>
+                      <div class="form-actions">
+                        <button type="button" id="githubConfirmRun">
+                          Confirmer
+                        </button>
+                        <button type="button" id="githubConfirmCancel">
+                          Annuler
+                        </button>
+                      </div>
+                    </div>
+                  </details>
                 </div>
                 <details class="technical">
                   <summary>Permissions et configuration serveur</summary>
