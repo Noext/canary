@@ -1,6 +1,46 @@
-# PR QA validation — 11 October 2026
+# Journal de validation PR QA
 
 Implementation in the official `Noext/canary` fork, upstream `0xnyn/canary`, development branch `feat/autonomous-pr-qa`.
+
+## État actuel — 12 octobre 2026
+
+Cette section remplace les limites historiques des premières versions consignées
+plus bas. Révision du code vérifiée : `7dfd38cc8e56842f6bb7e5bd4bcbba0bd96473c2`.
+Les mises à jour ultérieures de documentation ne constituent pas un nouveau
+run sur un VPS utilisateur.
+
+- Local : **317 tests**, lint et TypeScript passent ; deux tests PostgreSQL natif
+  ignorés faute de serveur local. **11 E2E Chromium réels** passent.
+- CI [push](https://github.com/Noext/canary/actions/runs/38226619325) et
+  [PR](https://github.com/Noext/canary/actions/runs/38226625266) : success,
+  **319 tests** avec PostgreSQL natif, **10 E2E Chromium + 1 test TCP ignoré**,
+  build Docker et **2 tests Compose** avec volumes neufs, doctor, worker/browser
+  réels, vidéos et persistance après redémarrage. Audit sans vulnérabilité connue.
+- Endpoint réel `https://ai.noext.fr/v1`, uniquement
+  `opencode-go/deepseek-v4.1-flash` : catalogue authentifié de 48 modèles avec
+  défaut disponible, refus 401 sans authentification et clé non exposée.
+- Corpus IA final : **4/4 résultats attendus**, 1 répétition et 1 scénario maximum
+  par cas ; formulaire sain passé, formulaire cassé, texte leurre et sortie
+  inchangée échoués. Quatre vidéos non vides, traces/HAR/screenshots produits,
+  42 607 tokens déclarés ; coût indisponible faute de tarifs configurés.
+  GitHub et previews sont des fixtures locales et `publish=false` pour ce corpus.
+  Le petit corpus ne garantit pas la qualité sur toutes les applications.
+- Les neuf findings Codex sont corrigés avec non-régression. Les cinq dernières
+  régressions échouaient avant correctif : captures par URL encodée, annulation
+  après publication, réserve de coût, captures doctor et pagination des commentaires.
+
+Restent non validés : déploiement sur le VPS de l'utilisateur, installation et
+permissions d'une App GitHub réelle, IdP d'entreprise, image de release publiée,
+activation des protections de branche et restauration de sauvegardes sur VPS.
+L'opérateur doit fournir des credentials actifs et des previews réelles au bon SHA.
+Les premiers essais IA bloqués ont servi aux corrections ; seuls les résultats
+finalement exécutés sont présentés comme réussis. Détails dans la
+[PR du fork](https://github.com/Noext/canary/pull/1).
+
+## Historique — premières validations du 11 octobre 2026
+
+Les sections suivantes décrivent leur révision d'origine ; leurs limites ne
+remplacent pas l'état actuel ci-dessus.
 
 ## Executed successfully
 

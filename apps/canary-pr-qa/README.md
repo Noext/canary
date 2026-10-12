@@ -200,7 +200,8 @@ Le token connecté à ChatGPT n'est pas automatiquement disponible sur votre VPS
 | `GET /` | Dashboard, formulaire de lancement, recherche, filtres, détails |
 | `POST /session`, `DELETE /session` | Connexion/déconnexion avec cookie HttpOnly |
 | `GET /me` | Identité et dépôts accessibles |
-| `POST /runs` | `{prUrl,previewUrl?,publish?}`, header `Idempotency-Key` facultatif |
+| `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
+| `POST /runs` | `{prUrl,previewUrl?,publish?,model?}`, header `Idempotency-Key` facultatif |
 | `GET /runs` | Liste limitée aux projets de l'utilisateur ; `status`, `search` |
 | `GET /runs/:id` | Statut durable et progression |
 | `GET /runs/:id/events` | SSE, phases/actions live, reconnexion via EventSource |

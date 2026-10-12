@@ -12,7 +12,7 @@ Usage: ./scripts/pr-qa COMMAND [arguments]
   diagnose RUN_ID       Print a redacted run summary for debugging
   logs                  Follow structured service/progress logs
   status                Show containers and API health
-  stop                  Stop this service while preserving both data volumes
+  stop                  Stop this service while preserving all three data volumes
 Copy .env.example to .env and configure your actual credentials/endpoints first.
 doctor supports --offline, --skip-browser, --json, --pr PR_URL and --preview URL.
 HELP

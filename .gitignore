@@ -27,3 +27,6 @@ config/users.json
 config/fixtures.json
 config/*.pem
 config/baselines/
+
+# Production backups may contain credentials and private browser evidence.
+backups/
