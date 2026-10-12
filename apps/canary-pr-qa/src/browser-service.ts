@@ -68,6 +68,9 @@ export async function startBrowserService(config: Config) {
       }
     }
   });
+  // The first read is awaited, so a session cannot start on the boot environment
+  // list while the dashboard policy is already published.
+  await policy.sync();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.QA_BROWSER_PORT, config.QA_BROWSER_HOST, resolve);

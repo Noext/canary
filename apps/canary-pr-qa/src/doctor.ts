@@ -21,6 +21,7 @@ import {
   applyPreviewHosts,
   PreviewHosts,
   verifyPreviewPolicyTarget,
+  verifyPublishedPreviewHosts,
 } from "./preview-hosts.js";
 import { Queue, SCHEMA_VERSION } from "./queue.js";
 import type { RunResult } from "./schema.js";
@@ -96,6 +97,45 @@ export async function doctor(
     validateConfiguration(config, true);
     return "Configuration is complete; secret values are omitted";
   });
+  /**
+   * PostgreSQL schema, the effective list it stores, and the list the enforcement
+   * containers actually read. A publication that failed after the row was stored
+   * leaves those two apart and must not pass as healthy.
+   */
+  async function databaseChecks() {
+    if (!(config.DATABASE_URL && !options.offline)) {
+      return;
+    }
+    const ready = await check("postgresql", async () => {
+      const queue = new Queue(config.DATABASE_URL);
+      try {
+        const schema = await queue.pool.query(
+          "SELECT max(version)::int AS version FROM qa_schema"
+        );
+        if (schema.rows[0]?.version !== SCHEMA_VERSION) {
+          throw new Error(
+            `Database schema is not at supported version ${SCHEMA_VERSION}; start the API migration first`
+          );
+        }
+        await queue.pool.query("SELECT count(*)::int AS count FROM qa_jobs");
+        config = await new GitHubSetup(queue.pool, config).effective();
+        // Doctor verifies the host list in force, which is the dashboard list when
+        // an administrator saved one.
+        applyPreviewHosts(
+          config,
+          await new PreviewHosts(queue.pool, config).effective()
+        );
+        return `PostgreSQL connection, schema version ${SCHEMA_VERSION} and job-table read verified`;
+      } finally {
+        await queue.close();
+      }
+    });
+    if (ready && config.QA_POLICY_DIR) {
+      await check("preview-policy-current", () =>
+        verifyPublishedPreviewHosts(config)
+      );
+    }
+  }
   await check("node", () => {
     const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
     if (major < 22 || (major === 22 && minor < 12)) {
@@ -122,32 +162,7 @@ export async function doctor(
     return `Read/write verified; ${Math.floor((disk.bavail * disk.bsize) / 1024 / 1024)} MiB available`;
   });
   await check("preview-policy", () => verifyPreviewPolicyTarget(config));
-  if (config.DATABASE_URL && !options.offline) {
-    await check("postgresql", async () => {
-      const queue = new Queue(config.DATABASE_URL);
-      try {
-        const schema = await queue.pool.query(
-          "SELECT max(version)::int AS version FROM qa_schema"
-        );
-        if (schema.rows[0]?.version !== SCHEMA_VERSION) {
-          throw new Error(
-            `Database schema is not at supported version ${SCHEMA_VERSION}; start the API migration first`
-          );
-        }
-        await queue.pool.query("SELECT count(*)::int AS count FROM qa_jobs");
-        config = await new GitHubSetup(queue.pool, config).effective();
-        // Doctor verifies the host list in force, which is the dashboard list when
-        // an administrator saved one.
-        applyPreviewHosts(
-          config,
-          await new PreviewHosts(queue.pool, config).effective()
-        );
-        return `PostgreSQL connection, schema version ${SCHEMA_VERSION} and job-table read verified`;
-      } finally {
-        await queue.close();
-      }
-    });
-  }
+  await databaseChecks();
   const canary = new Canary(config);
   const built = await check("canary-cli", async () => {
     if (!(await stat(config.CANARY_CLI_PATH)).isFile()) {

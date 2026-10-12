@@ -161,6 +161,10 @@ export async function startEgressProxy(config: Config) {
         socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       });
   });
+  // The first read is awaited: until it succeeds the allowlist is empty, so the
+  // proxy never serves one request on the environment list a dashboard edit may
+  // already have narrowed.
+  await policy.sync();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(3128, "0.0.0.0", resolve);

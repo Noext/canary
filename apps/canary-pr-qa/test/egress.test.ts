@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 import dns from "node:dns/promises";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import tls from "node:tls";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -73,6 +75,55 @@ it("forwards approved traffic to a DNS-pinned target and rejects other destinati
   expect((await get(f.baseUrl)).status).toBe(200);
   const address = unauthorized.address() as { port: number };
   expect((await get(`http://127.0.0.1:${address.port}/`)).status).toBe(403);
+});
+
+it("denies every destination while the published policy is unreadable, then follows it", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const directory = await mkdtemp(join(tmpdir(), "canary-egress-policy-"));
+  cleanup.push(() => rm(directory, { force: true, recursive: true }));
+  const policy = join(directory, "preview-hosts.json");
+  // The upstream is reachable and listed in PREVIEW_ALLOWED_HOSTS: only the
+  // unreadable published policy can explain a refusal.
+  const upstream = createServer((_req, res) => res.end("reachable"));
+  await new Promise<void>((done) => upstream.listen(0, "127.0.0.1", done));
+  cleanup.push(() => new Promise<void>((done) => upstream.close(() => done())));
+  const host = `127.0.0.1:${(upstream.address() as { port: number }).port}`;
+  await writeFile(policy, "not json");
+  const proxy = await startEgressProxy({
+    ...f.config,
+    allowedHosts: [host],
+    PREVIEW_ALLOWED_HOSTS: host,
+    QA_POLICY_DIR: directory,
+  });
+  cleanup.push(() => new Promise<void>((done) => proxy.close(() => done())));
+  const get = (url: string) =>
+    new Promise<{ body: string; status: number }>((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", path: url, port: 3128 },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => resolve({ body, status: res.statusCode ?? 0 }));
+        }
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  expect((await get(`http://${host}/`)).status).toBe(403);
+  // The API republishes the effective list: the poll picks it up without a restart.
+  await writeFile(
+    policy,
+    JSON.stringify({
+      hosts: [host],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin-1",
+    })
+  );
+  await delay(2500);
+  const allowed = await get(`http://${host}/`);
+  expect(allowed.status, JSON.stringify(allowed)).toBe(200);
+  expect(allowed.body).toBe("reachable");
 });
 
 it("tunnels an approved absolute ws URL and denies unapproved or metadata destinations", async () => {

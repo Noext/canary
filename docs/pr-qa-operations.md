@@ -180,8 +180,8 @@ reste possible pour ce que l'automatisation a sauté.
 | `PREVIEW_SHA_MISMATCH` | SHA complet de la PR, header `x-commit-sha` ou JSON au chemin configuré ; aucun contournement |
 | `PREVIEW_NOT_FOUND`, `PREVIEW_HOST_NOT_ALLOWED` | Déploiement réussi au bon SHA/environnement ou URL explicite, hôtes exacts avec ports ; la liste en vigueur se lit dans Réglages du dashboard (admin) |
 | `PREVIEW_HOSTS_INVALID`, `PREVIEW_HOSTS_EMPTY` | Format `hôte` ou `hôte:port` sans schéma/chemin/joker et au moins un hôte ; la liste enregistrée reste inchangée en cas de refus |
-| `PREVIEW_POLICY_UNWRITABLE` | Volume `qa-policy` monté et accessible en écriture par l'UID 1000 du service `pr-qa` ; la liste est enregistrée mais `browser`/`egress` gardent la précédente |
-| `EGRESS_POLICY_DENIED` | Logs `egress`, hôtes des API/assets/WebSockets et IP résolues ; liste du dashboard appliquée en quelques secondes ; métadonnées toujours interdites |
+| `PREVIEW_POLICY_UNWRITABLE` | Volume `qa-policy` monté et accessible en écriture par l'UID 1000 du service `pr-qa` ; la liste est enregistrée mais `browser`/`egress` gardent la précédente ; doctor (`preview-policy-current`) signale l'écart avec la liste en vigueur |
+| `EGRESS_POLICY_DENIED` | Logs `egress`, hôtes des API/assets/WebSockets et IP résolues ; liste du dashboard appliquée en quelques secondes ; une politique publiée absente ou corrompue **ferme** l'accès jusqu'à la republication par l'API ; métadonnées toujours interdites |
 | `CONTEXT_INCOMPLETE` | Diff/versions source manquants : rendre le contexte disponible ou réduire la PR |
 | `CONTRACT_VIOLATION`, `CRITICAL_COVERAGE_MISSING` | Étapes/omissions/citations du plan, politique de confiance au SHA de base ; ne pas assouplir les assertions |
 | `PRECONDITION_UNVERIFIED` | Rôle authentifié / fixture seed-cleanup de confiance disponible pour ce dépôt |

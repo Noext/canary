@@ -37,7 +37,11 @@ Générer **trois secrets différents** pour `QA_API_TOKEN`, `QA_DB_PASSWORD` et
   retire ensuite des hôtes dans Réglages → « Hôtes autorisés par
   l'administrateur » (audit `preview.hosts.updated` / `preview.hosts.reset`), sans
   redémarrage : la liste est publiée aux services `browser` et `egress` via le
-  volume `qa-policy`.
+  volume `qa-policy`. Ces deux services **n'élargissent jamais** la liste : tant
+  que la politique publiée est absente ou illisible, toutes les destinations sont
+  refusées (`PREVIEW_POLICY_MISSING` / `PREVIEW_POLICY_INVALID`) jusqu'à la
+  republication par l'API ; `doctor` compare le fichier publié et la liste en
+  vigueur (`preview-policy-current`).
 - La preview doit exposer le SHA Git complet dans `x-commit-sha`, ou dans le JSON
   `{"sha":"..."}` du chemin `PREVIEW_SHA_PATH`. Cela s'applique également aux
   previews trouvées via les déploiements GitHub. Un header peut être injecté au

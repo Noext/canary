@@ -175,6 +175,48 @@ async function readPolicy(config: Config): Promise<string[] | undefined> {
   );
 }
 
+/** The published list, or `undefined` when nothing was published yet. */
+export function publishedPreviewHosts(config: Config) {
+  return readPolicy(config);
+}
+
+/**
+ * Fails when the published file and the list in force disagree, which is exactly
+ * the state a failed publication leaves behind: the API accepts a host the
+ * enforcement containers do not (or the reverse).
+ */
+export async function verifyPublishedPreviewHosts(
+  config: Config
+): Promise<string> {
+  const published = await readPolicy(config).catch(() => {
+    throw new QaError(
+      "PREVIEW_POLICY_INVALID",
+      `Published ${PREVIEW_POLICY_FILE} is not a valid host list`,
+      "The browser and egress services deny every destination while the file is unreadable; let the API republish it or fix the policy volume."
+    );
+  });
+  if (!published) {
+    throw new QaError(
+      "PREVIEW_POLICY_MISSING",
+      `No published ${PREVIEW_POLICY_FILE} in QA_POLICY_DIR`,
+      "The browser and egress services deny every destination until the API publishes the list; restart the API or re-save the list in Réglages."
+    );
+  }
+  const file = [...published].sort();
+  const inForce = [...config.allowedHosts].sort();
+  if (
+    file.length !== inForce.length ||
+    file.some((host, index) => host !== inForce[index])
+  ) {
+    throw new QaError(
+      "PREVIEW_POLICY_STALE",
+      `Published hosts (${file.join(", ")}) differ from the list in force (${inForce.join(", ")})`,
+      "The browser and egress services enforce the published list; re-save the list in Réglages, or restart the API so it republishes the stored one."
+    );
+  }
+  return `${file.length} host(s) published and matching the list in force`;
+}
+
 /**
  * Verifies the shared policy directory from the process that runs doctor.
  *
@@ -208,7 +250,7 @@ export async function verifyPreviewPolicyTarget(
     throw new QaError(
       "PREVIEW_POLICY_INVALID",
       `Published ${PREVIEW_POLICY_FILE} is not a valid host list`,
-      "The browser and egress services ignore an invalid file and keep their current list; let the API republish it or remove the file."
+      "The browser and egress services deny every destination while the file is unreadable; let the API republish it or fix the policy volume."
     );
   });
   const state = published
@@ -234,25 +276,36 @@ export function watchPreviewPolicy(
 ): PreviewPolicyWatch {
   const path = policyPath(config);
   let applied = "";
-  let warned = false;
+  let warned = "";
   const sync = async () => {
     if (!path) {
       return;
     }
     let hosts: string[] | undefined;
+    let unreadable = false;
     try {
       hosts = await readPolicy(config);
     } catch {
-      if (!warned) {
-        warned = true;
-        logger.warn(
-          { code: "PREVIEW_POLICY_INVALID" },
-          "Published preview policy is unreadable; the current host list is kept"
-        );
-      }
-      return;
+      unreadable = true;
     }
     if (!hosts) {
+      // Fail closed. Falling back to the environment default would re-open a host
+      // an administrator removed, and the file is the only list this process can
+      // trust; the API republishes the effective list, which this poll picks up.
+      const state = unreadable ? "invalid" : "missing";
+      if (warned !== state) {
+        warned = state;
+        logger.warn(
+          {
+            code: unreadable
+              ? "PREVIEW_POLICY_INVALID"
+              : "PREVIEW_POLICY_MISSING",
+          },
+          "Published preview policy is unreadable; every destination is denied until the API republishes it"
+        );
+      }
+      applyPreviewHosts(config, []);
+      applied = "";
       return;
     }
     const fingerprint = hosts.join(",");
@@ -261,7 +314,7 @@ export function watchPreviewPolicy(
     }
     applyPreviewHosts(config, hosts);
     applied = fingerprint;
-    warned = false;
+    warned = "";
     logger.info(
       { code: "PREVIEW_POLICY_APPLIED", hosts: hosts.length },
       "Preview host allowlist applied from the dashboard policy"

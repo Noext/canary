@@ -11,6 +11,7 @@ import {
   PREVIEW_POLICY_FILE,
   PreviewHosts,
   verifyPreviewPolicyTarget,
+  verifyPublishedPreviewHosts,
   watchPreviewPolicy,
 } from "../src/preview-hosts.js";
 import { startProductionServer } from "../src/production-server.js";
@@ -130,6 +131,11 @@ it("verifies the shared policy directory the doctor runs in", async () => {
   expect(await verifyPreviewPolicyTarget(config)).toContain(
     "no list published yet"
   );
+  // Nothing published yet: the enforcement containers deny every destination, and
+  // doctor says so instead of reporting a healthy volume.
+  await expect(verifyPublishedPreviewHosts(config)).rejects.toMatchObject({
+    code: "PREVIEW_POLICY_MISSING",
+  });
   await writeFile(
     join(directory, PREVIEW_POLICY_FILE),
     JSON.stringify({
@@ -141,15 +147,27 @@ it("verifies the shared policy directory the doctor runs in", async () => {
   expect(await verifyPreviewPolicyTarget(config)).toContain(
     "2 host(s) published and readable"
   );
+  // A stored-but-unpublished edit leaves the file on the previous list: the API
+  // accepts a host the enforcement containers refuse.
+  await expect(verifyPublishedPreviewHosts(config)).rejects.toMatchObject({
+    code: "PREVIEW_POLICY_STALE",
+  });
+  applyPreviewHosts(config, ["preview.test", "other.test:8443"]);
+  await expect(verifyPublishedPreviewHosts(config)).resolves.toContain(
+    "2 host(s) published and matching the list in force"
+  );
   // An invalid file is ignored by the enforcement containers: doctor must say so
   // instead of reporting a healthy volume.
   await writeFile(join(directory, PREVIEW_POLICY_FILE), "not json");
   await expect(verifyPreviewPolicyTarget(config)).rejects.toMatchObject({
     code: "PREVIEW_POLICY_INVALID",
   });
+  await expect(verifyPublishedPreviewHosts(config)).rejects.toMatchObject({
+    code: "PREVIEW_POLICY_INVALID",
+  });
 });
 
-it("publishes the list for the enforcement containers and ignores a corrupted policy", async () => {
+it("denies every destination while the published policy is unreadable", async () => {
   const q = await sqlDatabase();
   const directory = await temporaryDirectory("canary-policy-");
   const config = loadConfig({
@@ -157,13 +175,9 @@ it("publishes the list for the enforcement containers and ignores a corrupted po
     QA_POLICY_DIR: directory,
   });
   const hosts = new PreviewHosts(q.pool, config);
-  await hosts.set("admin-1", ["new.example.com"]);
   const policy = join(directory, PREVIEW_POLICY_FILE);
-  expect(JSON.parse(await readFile(policy, "utf8"))).toMatchObject({
-    hosts: ["new.example.com"],
-    updatedBy: "admin-1",
-  });
-  // The enforcement process starts from its environment list and follows the file.
+  // An enforcement process that starts before the first publication has nothing to
+  // trust: the environment default may allow a host an administrator removed.
   const enforcement = loadConfig({
     PREVIEW_ALLOWED_HOSTS: "preview.test",
     QA_POLICY_DIR: directory,
@@ -171,11 +185,20 @@ it("publishes the list for the enforcement containers and ignores a corrupted po
   const watch = watchPreviewPolicy(enforcement, 3_600_000);
   try {
     await watch.sync();
-    expect(enforcement.allowedHosts).toEqual(["new.example.com"]);
-    expect(enforcement.PREVIEW_ALLOWED_HOSTS).toBe("new.example.com");
-    await writeFile(policy, "not json");
+    expect(enforcement.allowedHosts).toEqual([]);
+    await hosts.set("admin-1", ["new.example.com"]);
+    expect(JSON.parse(await readFile(policy, "utf8"))).toMatchObject({
+      hosts: ["new.example.com"],
+      updatedBy: "admin-1",
+    });
     await watch.sync();
     expect(enforcement.allowedHosts).toEqual(["new.example.com"]);
+    expect(enforcement.PREVIEW_ALLOWED_HOSTS).toBe("new.example.com");
+    // A corrupt file fails closed instead of falling back to the environment list,
+    // and an invalid list is rejected wholesale.
+    await writeFile(policy, "not json");
+    await watch.sync();
+    expect(enforcement.allowedHosts).toEqual([]);
     await writeFile(
       policy,
       JSON.stringify({
@@ -185,7 +208,18 @@ it("publishes the list for the enforcement containers and ignores a corrupted po
       })
     );
     await watch.sync();
-    expect(enforcement.allowedHosts).toEqual(["new.example.com"]);
+    expect(enforcement.allowedHosts).toEqual([]);
+    // The next valid publication is followed again, without a restart.
+    await writeFile(
+      policy,
+      JSON.stringify({
+        hosts: ["recovered.example.com"],
+        updatedAt: new Date().toISOString(),
+        updatedBy: "admin-1",
+      })
+    );
+    await watch.sync();
+    expect(enforcement.allowedHosts).toEqual(["recovered.example.com"]);
   } finally {
     watch.stop();
   }
