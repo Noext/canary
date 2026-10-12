@@ -1155,10 +1155,33 @@ it("removes the connected GitHub App from the dashboard only after an explicit c
     await confirmAs("accept-confirmation", true);
     await click("uninstall-app", "#githubUninstall");
     await assertText("disconnected", "#githubConnection", "À connecter");
+    // A refused remote deletion must not be reported as a successful removal.
+    await setup.convert(
+      user.id,
+      await setup.state(user.id, "manifest"),
+      "fixture-manifest-code"
+    );
+    f.state.installed = true;
+    await setup.select(["fixture/app"]);
+    f.state.deleteFails = true;
+    await act("dashboard-reconnected", { type: "goto", path: "/" });
+    await assertText("connected-again", "#githubConnection", "Connecté");
+    await click("open-danger-zone-again", "#githubDanger > summary");
+    await confirmAs("accept-second-confirmation", true);
+    await click("refused-uninstall", "#githubUninstall");
     await assertText(
-      "removed-message",
-      "#githubMessage",
-      "App désinstallée sur GitHub"
+      "refused-notice",
+      "#githubNotice",
+      "Connexion locale effacée"
+    );
+    const refused = await canary.act(
+      id,
+      "refused-message-text",
+      `const page=await browser.getPage("qa"); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:await page.evaluate(()=>document.getElementById("githubNotice").textContent)}));`
+    );
+    expect(String(refused.actual)).toContain("a échoué");
+    expect(String(refused.actual)).not.toContain(
+      "App désinstallée sur GitHub."
     );
     await canary.end(id, join(f.dataDir, "github-removal-evidence"));
   } catch (error) {
