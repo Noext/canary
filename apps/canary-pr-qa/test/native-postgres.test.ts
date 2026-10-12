@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { LocalAuth } from "../src/local-auth.js";
 import { Queue } from "../src/queue.js";
 import { BASE_SHA, PR_URL, SHA } from "./fixture.js";
 
@@ -128,4 +129,41 @@ describe.skipIf(!process.env.QA_TEST_DATABASE_URL)(
       }
     }, 60_000);
   }
+);
+
+it.skipIf(!process.env.QA_TEST_DATABASE_URL)(
+  "admits only one first admin under native PostgreSQL contention",
+  async () => {
+    const base = new Queue(process.env.QA_TEST_DATABASE_URL!);
+    const namespace = `auth_test_${randomUUID().replaceAll("-", "")}`;
+    await base.pool.query(`CREATE SCHEMA ${namespace}`);
+    const url = new URL(process.env.QA_TEST_DATABASE_URL!);
+    url.searchParams.set("options", `-c search_path=${namespace}`);
+    const isolated = new Queue(url.href);
+    try {
+      await isolated.migrate();
+      const auth = new LocalAuth(isolated.pool);
+      const setupCode = await auth.issueSetupTicket();
+      const results = await Promise.allSettled(
+        ["admin-one", "admin-two"].map((username) =>
+          auth.setup(
+            { username, password: "native-password-long-2026", setupCode },
+            ["fixture/app"]
+          )
+        )
+      );
+      expect(
+        results.filter((result) => result.status === "fulfilled")
+      ).toHaveLength(1);
+      expect(
+        (await isolated.pool.query("SELECT id FROM qa_local_users")).rows
+      ).toHaveLength(1);
+      await expect(auth.issueSetupTicket()).rejects.toThrow("existe déjà");
+    } finally {
+      await isolated.close();
+      await base.pool.query(`DROP SCHEMA ${namespace} CASCADE`);
+      await base.close();
+    }
+  },
+  30_000
 );

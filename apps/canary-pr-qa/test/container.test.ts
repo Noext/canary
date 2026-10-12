@@ -243,6 +243,7 @@ describe.skipIf(!image)(
       ).stdout;
       expect(JSON.parse(support).result.outcome).toBe("passed");
       expect(support).not.toContain("Welcome Ada");
+      const localCookie = await localAccountFlow(s);
       const publications = s.outgoing.length;
       await s.compose("restart", "pr-qa");
       await s.waitHealthy();
@@ -252,6 +253,10 @@ describe.skipIf(!image)(
         ).json()
       ).toMatchObject({ status: "completed", progress: { phase: "done" } });
       expect(s.outgoing.length).toBe(publications);
+      expect(
+        (await fetch(`${s.url}/me`, { headers: { Cookie: localCookie } }))
+          .status
+      ).toBe(200);
     }, 180_000);
     it("detects a real broken UI inside the production image and posts failure with video evidence", async () => {
       const s = await container(true);
@@ -271,3 +276,54 @@ describe.skipIf(!image)(
     }, 180_000);
   }
 );
+
+async function localAccountFlow(s: Awaited<ReturnType<typeof container>>) {
+  const output = (
+    await s.compose(
+      "exec",
+      "-T",
+      "pr-qa",
+      "canary-pr-qa",
+      "setup-admin",
+      "--origin",
+      s.url
+    )
+  ).stdout;
+  const setupCode = /#setup=([a-f0-9]{64})/.exec(output)?.[1];
+  expect(setupCode).toBeDefined();
+  const credentials = {
+    username: "container-admin",
+    password: "container-password-long-2026",
+  };
+  const request = (path: string, payload: unknown) =>
+    fetch(`${s.url}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: s.url },
+      body: JSON.stringify(payload),
+    });
+  const setup = await request("/auth/setup", { ...credentials, setupCode });
+  expect(setup.status).toBe(200);
+  const cookie = setup.headers.get("set-cookie")!.split(";")[0]!;
+  expect(
+    (await fetch(`${s.url}/me`, { headers: { Cookie: cookie } })).status
+  ).toBe(200);
+  const reset = await s.compose(
+    "exec",
+    "-T",
+    "pr-qa",
+    "sh",
+    "-c",
+    "printf %s 'container-replacement-password-2026' | canary-pr-qa reset-password container-admin"
+  );
+  expect(reset.stdout).toContain("All local sessions revoked");
+  expect(
+    (await fetch(`${s.url}/me`, { headers: { Cookie: cookie } })).status
+  ).toBe(401);
+  expect((await request("/auth/login", credentials)).status).toBe(401);
+  const login = await request("/auth/login", {
+    ...credentials,
+    password: "container-replacement-password-2026",
+  });
+  expect(login.status).toBe(200);
+  return login.headers.get("set-cookie")!.split(";")[0]!;
+}

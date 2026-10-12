@@ -149,7 +149,7 @@ répertoire et le même projet Compose ; ne pas arrêter les services d'autres p
 Dans un répertoire dédié appartenant au compte de déploiement :
 
 ```bash
-git clone --branch feat/autonomous-pr-qa https://github.com/Noext/canary.git canary-pr-qa
+git clone --branch feat/local-password-auth https://github.com/Noext/canary.git canary-pr-qa
 cd canary-pr-qa
 git remote add upstream https://github.com/0xnyn/canary.git
 git remote set-url --push upstream DISABLED
@@ -157,8 +157,8 @@ git rev-parse HEAD
 git status --short
 ```
 
-La branche de déploiement est `feat/autonomous-pr-qa` tant que l'utilisateur n'a
-pas demandé de basculer vers `main` après fusion. Pour un clone existant, inspecter
+La connexion locale est livrée sur `feat/local-password-auth` avant fusion.
+Après fusion, utiliser le `main` de votre fork pour la production. Pour un clone existant, inspecter
 ses remotes et changements locaux ; préserver `.env` et `config/`. Ne pas employer
 `reset --hard` ou écraser des changements locaux. Un nom de projet Compose
 personnalisé peut être fixé avec `COMPOSE_PROJECT_NAME` dans `.env` ; le conserver
@@ -286,7 +286,26 @@ transmis et désactiver le buffering SSE. Ne pas exposer PostgreSQL ou le naviga
 Les webhooks GitHub nécessitent cette URL HTTPS joignable. Les rapports restent
 privés ; `ARTIFACT_PUBLIC` n'active pas d'accès anonyme dans le serveur SQL.
 
-Se connecter avec `QA_API_TOKEN` pour l'amorçage. Pour les identités individuelles,
+Après la première installation ou une mise à jour de l'ancien écran token,
+générer le lien privé de création d'administrateur (remplacer l'origine HTTPS) :
+
+```bash
+docker compose exec -T pr-qa canary-pr-qa setup-admin --origin https://votre-domaine-qa
+```
+
+Ouvrir ce lien sous 15 minutes et créer l'identifiant/mot de passe (minimum
+12 caractères). Ensuite, utiliser la connexion locale ; aucun SSO n'est requis.
+La commande doit être exécutée par l'opérateur du VPS, pas par un visiteur du
+site. Après création, la première installation est fermée définitivement.
+Le lien n'apparaît pas dans les paramètres de requête serveur et l'UI efface son
+fragment ; ne pas partager ce lien dans les logs/rapports ou GitHub.
+
+`QA_API_TOKEN` reste requis pour les fonctionnalités techniques/API existantes,
+mais n'est plus le login principal. La migration ajoute les tables de comptes et
+sessions sans supprimer les jobs ou les volumes. Pour un mot de passe oublié,
+suivre `reset-password` via stdin dans le README ; les sessions sont révoquées.
+Les anciens tokens/JWT se trouvent dans « Accès technique (API / SSO) ».
+Pour les identités techniques individuelles,
 copier `config/users.example.json` vers `config/users.json`, configurer les hashes
 SHA-256 des tokens et les dépôts autorisés, puis
 `QA_USERS_FILE=/app/config/users.json`. Le README documente aussi les JWT OIDC.
@@ -331,8 +350,8 @@ Attendre que la file soit vide et qu'aucun run ne soit actif ; préserver `.env`
 `config/` et les trois volumes. Sur un clone propre de la branche de déploiement :
 
 ```bash
-git fetch origin feat/autonomous-pr-qa
-git merge --ff-only origin/feat/autonomous-pr-qa
+git fetch origin main
+git merge --ff-only origin/main
 ./scripts/pr-qa up
 ```
 

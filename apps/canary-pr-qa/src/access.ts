@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { z } from "zod";
 import type { Config } from "./config.js";
+import type { LocalAuth } from "./local-auth.js";
 
 const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 function keySet(url: string) {
@@ -32,6 +33,7 @@ export interface Principal {
   id: string;
   repos: string[];
   role: "viewer" | "operator" | "admin";
+  username?: string;
 }
 function equal(a: string, b: string) {
   const left = Buffer.from(a);
@@ -56,9 +58,16 @@ export function sessionCookie(user: Principal, config: Config) {
 }
 export async function principal(
   req: IncomingMessage,
-  config: Config
+  config: Config,
+  local?: LocalAuth
 ): Promise<Principal | undefined> {
   const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+  const account = token
+    ? undefined
+    : await local?.principal(req, config.allowedRepos);
+  if (account) {
+    return account;
+  }
   const records = await users(config);
   if (token && equal(token, config.QA_API_TOKEN)) {
     return { id: "bootstrap-admin", role: "admin", repos: config.allowedRepos };
@@ -86,6 +95,9 @@ export async function principal(
         }
       }
     }
+  }
+  if (token) {
+    return;
   }
   return cookiePrincipal(req, config, records);
 }

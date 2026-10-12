@@ -6,6 +6,7 @@ import pg from "pg";
 import { afterEach, expect, it, vi } from "vitest";
 import { completeRun } from "../src/completion.js";
 import { doctor } from "../src/doctor.js";
+import { LocalAuth } from "../src/local-auth.js";
 import { startProductionServer } from "../src/production-server.js";
 import { Queue, SCHEMA_VERSION } from "../src/queue.js";
 import type { RunResult } from "../src/schema.js";
@@ -524,4 +525,235 @@ it("invalidates an already published result when cancellation wins the atomic co
     JSON.parse(await readFile(join(f.dataDir, job.id, "result.json"), "utf8"))
       .outcome
   ).toBe("blocked");
+}, 30_000);
+
+it("creates the first local admin once, authenticates without SSO, revokes sessions and preserves jobs across migration", async () => {
+  const q = await sqlDatabase();
+  const f = await fixture();
+  cleanup.push(f.close);
+  const existing = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "pre-local-auth"
+  );
+  const auth = new LocalAuth(q.pool);
+  const ticket = await auth.issueSetupTicket();
+  const localUsersFile = join(f.dataDir, "legacy-users.json");
+  const viewerToken = "legacy-viewer-token-2026-123456789";
+  await writeFile(
+    localUsersFile,
+    JSON.stringify([
+      {
+        id: "legacy-viewer",
+        role: "viewer",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
+      },
+    ])
+  );
+  const config = {
+    ...f.config,
+    QA_USERS_FILE: localUsersFile,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const submit = (path: string, input: unknown) =>
+    fetch(url + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: url },
+      body: JSON.stringify(input),
+    });
+  expect(await (await fetch(`${url}/auth/status`)).json()).toEqual({
+    initialized: false,
+  });
+  const credentials = {
+    username: "qa-admin",
+    password: "test-password-very-long-2026",
+  };
+  expect(
+    (await submit("/auth/setup", { ...credentials, setupCode: "f".repeat(64) }))
+      .status
+  ).toBe(400);
+  const setup = await submit("/auth/setup", {
+    ...credentials,
+    setupCode: ticket,
+  });
+  expect(setup.status).toBe(200);
+  expect(await setup.json()).toMatchObject({
+    username: "qa-admin",
+    role: "admin",
+    repos: ["fixture/app"],
+  });
+  const cookie = setup.headers.get("set-cookie")!.split(";")[0]!;
+  expect(cookie).toMatch(/^qa_local_session=/);
+  expect(setup.headers.get("set-cookie")).toContain("HttpOnly");
+  expect(
+    (await fetch(`${url}/me`, { headers: { Cookie: cookie } })).status
+  ).toBe(200);
+  expect(await (await fetch(`${url}/auth/status`)).json()).toEqual({
+    initialized: true,
+  });
+  const mixed = await fetch(`${url}/me`, {
+    headers: { Cookie: cookie, Authorization: `Bearer ${viewerToken}` },
+  });
+  expect(await mixed.json()).toMatchObject({
+    id: "legacy-viewer",
+    role: "viewer",
+  });
+  expect(
+    (
+      await fetch(`${url}/me`, {
+        headers: { Cookie: cookie, Authorization: "Bearer invalid-token" },
+      })
+    ).status
+  ).toBe(401);
+
+  await expect(auth.issueSetupTicket()).rejects.toThrow("existe déjà");
+  expect(
+    (await submit("/auth/setup", { ...credentials, setupCode: ticket })).status
+  ).toBe(400);
+  expect(
+    (
+      await submit("/auth/login", {
+        ...credentials,
+        password: "incorrect-password-2026",
+      })
+    ).status
+  ).toBe(401);
+  expect(
+    (
+      await submit("/auth/login", {
+        username: "unknown-account",
+        password: credentials.password,
+      })
+    ).status
+  ).toBe(401);
+  const crossSite = await fetch(`${url}/auth/login`, {
+    method: "POST",
+    headers: { Origin: "https://attacker.invalid" },
+    body: JSON.stringify(credentials),
+  });
+  expect(crossSite.status).toBe(403);
+  const login = await submit("/auth/login", {
+    ...credentials,
+    username: "QA-ADMIN",
+  });
+  expect(login.status).toBe(200);
+  const loginCookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  expect(
+    (
+      await fetch(`${url}/session`, {
+        method: "DELETE",
+        headers: { Cookie: loginCookie, Origin: url },
+      })
+    ).status
+  ).toBe(200);
+  expect(
+    (await fetch(`${url}/me`, { headers: { Cookie: loginCookie } })).status
+  ).toBe(401);
+  const user = await auth.login(credentials);
+  expect(user).toBeDefined();
+  await auth.resetPassword(credentials.username, "replacement-password-2026");
+  expect(
+    (await fetch(`${url}/me`, { headers: { Cookie: cookie } })).status
+  ).toBe(401);
+  await expect(auth.session(user!)).rejects.toThrow("incorrect");
+  expect((await submit("/auth/login", credentials)).status).toBe(401);
+  expect(
+    (
+      await submit("/auth/login", {
+        ...credentials,
+        password: "replacement-password-2026",
+      })
+    ).status
+  ).toBe(200);
+  const stored = await q.pool.query("SELECT password_hash FROM qa_local_users");
+  expect(stored.rows[0].password_hash).toMatch(/^scrypt-v1:/);
+  expect(stored.rows[0].password_hash).not.toContain(
+    "replacement-password-2026"
+  );
+  expect(await q.get(existing.id)).toBeDefined();
+  await q.migrate();
+  expect(await auth.status()).toEqual({ initialized: true });
+  const changedRepos = ["fixture/new-project"];
+  const newestLogin = await auth.login({
+    username: credentials.username,
+    password: "replacement-password-2026",
+  });
+  const newestToken = await auth.session(newestLogin!);
+  const updatedPrincipal = await auth.principal(
+    {
+      headers: { cookie: `qa_local_session=${newestToken}` },
+    } as import("node:http").IncomingMessage,
+    changedRepos
+  );
+  expect(updatedPrincipal?.repos).toEqual(changedRepos);
+  const newTicket = await q.pool.query(
+    "SELECT token_hash FROM qa_setup_ticket"
+  );
+  expect(newTicket.rows).toEqual([]);
+}, 30_000);
+
+it("expires setup links and shares local login rate limits in SQL", async () => {
+  const q = await sqlDatabase();
+  const auth = new LocalAuth(q.pool);
+  const code = await auth.issueSetupTicket();
+  await q.pool.query(
+    "UPDATE qa_setup_ticket SET expires_at=now()-interval '1 second'"
+  );
+  await expect(
+    auth.setup(
+      { username: "qa-admin", password: "test-password-2026", setupCode: code },
+      ["fixture/app"]
+    )
+  ).rejects.toThrow("expiré");
+  const user = await auth.setup(
+    {
+      username: "qa-admin",
+      password: "test-password-2026",
+      setupCode: await auth.issueSetupTicket(),
+    },
+    ["fixture/app"]
+  );
+  const token = await auth.session(user);
+  await q.pool.query(
+    "UPDATE qa_local_sessions SET expires_at=now()-interval '1 second'"
+  );
+  expect(
+    await auth.principal(
+      {
+        headers: { cookie: `qa_local_session=${token}` },
+      } as import("node:http").IncomingMessage,
+      ["fixture/app"]
+    )
+  ).toBeUndefined();
+  await q.pool.query(
+    "INSERT INTO qa_auth_attempts(key,count,expires_at) VALUES('global-login',120,now()+interval '1 minute')"
+  );
+  await q.pool.query(
+    "INSERT INTO qa_auth_attempts(key,count,expires_at) SELECT 'expired-'||n,1,now()-interval '1 minute' FROM generate_series(1,300) n"
+  );
+  await expect(
+    auth.login({ username: "qa-admin", password: "test-password-2026" })
+  ).rejects.toMatchObject({ code: "AUTH_RATE_LIMIT" });
+  expect(
+    (
+      await q.pool.query(
+        "SELECT count(*)::int AS count FROM qa_auth_attempts WHERE expires_at<now()"
+      )
+    ).rows[0].count
+  ).toBeLessThanOrEqual(50);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT key FROM qa_auth_attempts WHERE expires_at>now()"
+      )
+    ).rows
+  ).toEqual([{ key: "global-login" }]);
 }, 30_000);
