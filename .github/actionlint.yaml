@@ -1,0 +1,12 @@
+# Labels of the self-hosted runners this repository targets. actionlint
+# validates `runs-on` against the labels GitHub-hosted runners provide, so a
+# custom label has to be declared here or every `actionlint` run reports it as
+# unknown.
+#
+# `canary-ci` is the extra label of the container provisioned by
+# Noext/infra-agent-cts (role `ghrunner`, CT 126). It exists so that CI can
+# never land on an unrelated self-hosted runner that happens to share
+# `self-hosted`, `linux` and `x64`.
+self-hosted-runner:
+  labels:
+    - canary-ci

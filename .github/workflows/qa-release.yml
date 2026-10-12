@@ -11,7 +11,9 @@ concurrency:
 jobs:
   image:
     if: github.repository == 'Noext/canary'
-    runs-on: ubuntu-latest
+    # Same self-hosted container as ci.yml: see the note on the `check` job
+    # there before changing this or adding a step that needs root.
+    runs-on: [self-hosted, linux, x64, canary-ci]
     timeout-minutes: 40
     permissions:
       contents: read

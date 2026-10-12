@@ -3,6 +3,7 @@ node_modules/
 dist/
 .astro/
 coverage/
+.arcovia-report/
 *.log
 *.tsbuildinfo
 .DS_Store
