@@ -164,6 +164,24 @@ describe("RunDetail", () => {
     );
   });
 
+  it("does not claim an estimate when pricing was never recorded", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        // A result persisted before `pricingConfigured` existed: absent, not
+        // false. Nothing proves a tariff was configured.
+        return Promise.resolve({
+          ...result,
+          usage: { costUsd: 0.5, tokens: 1200 },
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(screen.getByText("1200 tokens · coût non configuré")).toBeVisible()
+    );
+  });
+
   it("refreshes the history when a run is already finished", async () => {
     const onUpdate = vi.fn();
     apiMock.mockImplementation((path: string) => {

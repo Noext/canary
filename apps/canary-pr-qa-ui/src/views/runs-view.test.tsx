@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { NavigationProvider } from "@/app/navigation";
@@ -82,6 +83,15 @@ function element(id: string): HTMLElement {
     throw new Error(`#${id} is missing from the runs screen`);
   }
   return node;
+}
+
+/** A promise the test settles by hand, to land an answer after a teardown. */
+function deferred<T>() {
+  let fail: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((_resolve, reject) => {
+    fail = reject;
+  });
+  return { fail: (reason: unknown) => fail(reason), promise };
 }
 
 function lastSource(): FakeEventSource {
@@ -228,6 +238,42 @@ describe("RunsView history", () => {
     expect(
       screen.getByText("Modifiez votre recherche ou revenez à tous les états.")
     ).toBeVisible();
+  });
+
+  it("loads the history once when StrictMode replays the subscription", async () => {
+    wire.handlers.set("/runs", () => [job()]);
+    render(
+      <StrictMode>
+        <Harness />
+      </StrictMode>
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "fixture/app #1" })
+    ).toBeVisible();
+    // The store starts its load on the first subscription only: a replay must
+    // not fetch the history twice nor lose the rows it already has.
+    expect(wire.calls.filter((call) => call.path === "/runs")).toHaveLength(1);
+  });
+
+  it("keeps the loaded rows and reports a reload that failed", async () => {
+    const user = userEvent.setup();
+    wire.handlers.set("/runs", () => [job()]);
+    render(<Harness />);
+    await screen.findByRole("link", { name: "fixture/app #1" });
+
+    wire.handlers.set("/runs", () => {
+      throw new Error("Liste indisponible");
+    });
+    await user.click(screen.getByRole("button", { name: "Filtrer" }));
+
+    await waitFor(() =>
+      expect(element("error").textContent).toContain("Liste indisponible")
+    );
+    // A rejected reload reports itself instead of blanking a list the operator
+    // can still read.
+    expect(element("runs").textContent).toContain("fixture/app #1");
+    expect(element("historyTable")).not.toHaveAttribute("hidden");
   });
 });
 
@@ -475,6 +521,40 @@ describe("RunDetail", () => {
     view.unmount();
 
     expect(source.readyState).toBe(2);
+  });
+
+  it("ignores the failure of a run the operator already left", async () => {
+    const user = userEvent.setup();
+    const requested = deferred<never>();
+    wire.handlers.set("/runs", () => [
+      job({ status: "running" }),
+      job({ id: otherRunId, pr: 2, status: "running" }),
+    ]);
+    wire.handlers.set(`/runs/${runId}`, () => requested.promise);
+    wire.handlers.set(`/runs/${otherRunId}`, () =>
+      job({ id: otherRunId, pr: 2, status: "running" })
+    );
+    render(<Harness />);
+
+    await user.click(
+      await screen.findByRole("link", { name: "fixture/app #1" })
+    );
+    await waitFor(() =>
+      expect(wire.calls.map((call) => call.path)).toContain(`/runs/${runId}`)
+    );
+    await user.click(screen.getByRole("link", { name: "fixture/app #2" }));
+    await waitFor(() =>
+      expect(element("runTitle").textContent).toBe("fixture/app · PR #2")
+    );
+
+    await act(async () => {
+      requested.fail(new Error("Run not found"));
+    });
+
+    // The selected run is the one on screen: an answer for the run that was
+    // left must not surface as an error of the current one.
+    expect(element("error").textContent).not.toContain("Run not found");
+    expect(element("runTitle").textContent).toBe("fixture/app · PR #2");
   });
 });
 

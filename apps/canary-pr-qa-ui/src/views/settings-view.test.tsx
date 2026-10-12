@@ -114,6 +114,7 @@ let setup: SetupStatus;
 let models: ModelCatalog;
 let modelsFailure: DashboardError | undefined;
 let githubFailure: DashboardError | undefined;
+let manifestFailure: DashboardError | undefined;
 let refreshFailure: DashboardError | undefined;
 let removalWarnings: string[] = [];
 
@@ -123,6 +124,7 @@ beforeEach(() => {
   models = { data: [], defaultModel: "" };
   modelsFailure = undefined;
   githubFailure = undefined;
+  manifestFailure = undefined;
   refreshFailure = undefined;
   removalWarnings = [];
   setup = {
@@ -182,6 +184,9 @@ beforeEach(() => {
           url: "https://github.com/apps/canary-fixture-app/installations/new",
         };
       case "/github/app/manifest":
+        if (manifestFailure) {
+          throw manifestFailure;
+        }
         return MANIFEST;
       case "/github/app/refresh":
         if (refreshFailure) {
@@ -550,6 +555,48 @@ describe("SettingsView", () => {
       method: "POST",
       path: "/github/app/manifest",
     });
+  });
+
+  it("submits the manifest form only once GitHub answered the creation", async () => {
+    const submit = vi
+      .spyOn(HTMLFormElement.prototype, "submit")
+      .mockImplementation(() => undefined);
+    manifestFailure = new DashboardError("GitHub a refusé la création.");
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await screen.findByText(FIRST_RUN_MESSAGE);
+    await user.click(byId(container, "githubCreateButton"));
+
+    await waitFor(() =>
+      expect(byId(container, "githubError")).toHaveTextContent(
+        "GitHub a refusé la création."
+      )
+    );
+    // The submission comes from the handler that received the manifest, so a
+    // creation that never reached GitHub submits nothing and leaves no form
+    // behind for a later reaction to pick up.
+    expect(submit).not.toHaveBeenCalled();
+    expect(container.querySelector(`form[action="${MANIFEST.action}"]`)).toBe(
+      null
+    );
+
+    manifestFailure = undefined;
+    await user.click(byId(container, "githubCreateButton"));
+
+    const form = await waitFor(() => {
+      const found = container.querySelector<HTMLFormElement>(
+        `form[action="${MANIFEST.action}"]`
+      );
+      if (!found) {
+        throw new Error("Le formulaire du manifest n'est pas encore rendu");
+      }
+      return found;
+    });
+    expect(
+      form.querySelector<HTMLInputElement>('input[name="manifest"]')?.value
+    ).toBe(JSON.stringify(MANIFEST.manifest));
+    expect(submit).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a failed connection refresh in the card and the global alert", async () => {

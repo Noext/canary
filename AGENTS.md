@@ -98,15 +98,22 @@ Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the 
 
 ## Revue automatique des PR (Codex)
 
-- Quand un finding remonté par la revue automatique d'une PR est corrigé,
-  répondre dans le thread concerné (voir `pulls/{n}/comments/{id}/replies`) avec
-  le commit qui corrige et la preuve : test ajouté, commande exécutée. Ne jamais
-  corriger un finding en silence.
+- **Trois tours de revue automatique au maximum par PR.** Les findings de ces
+  trois tours sont corrigés et chacun reçoit une réponse dans son thread (voir
+  `pulls/{n}/comments/{id}/replies`) avec le commit qui corrige et sa preuve :
+  test ajouté, commande exécutée, résultat. Ne jamais corriger un finding en
+  silence.
+- **Après le troisième tour, le cycle s'arrête** : plus de `@codex review`, et
+  les remarques suivantes ne sont ni attendues ni traitées dans la PR. Un point
+  encore jugé utile devient une tâche de suivi explicite (issue ou PR dédiée),
+  jamais une quatrième itération. La relecture qui peut encore bloquer la fusion
+  après ce plafond est humaine.
 - Corriger le code, pas le test : affaiblir une assertion pour faire passer la CI
   est un finding en soi. Si le contrat doit réellement changer, le dire dans la
   réponse et le documenter dans la description de la PR.
-- Après avoir poussé les correctifs, demander une nouvelle revue (`@codex review`)
-  pour que les corrections soient relues par le même relecteur.
+- Ne pas relancer de revue automatique pour un correctif de documentation, de
+  commentaire ou de mise en forme : ces changements attendent le tour suivant du
+  même cycle ou la relecture humaine.
 
 ## Frontend PR QA : règles de contribution
 

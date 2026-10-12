@@ -3,7 +3,6 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -52,9 +51,7 @@ export function NavigationProvider({
   initialView?: ViewName;
 }) {
   const { canWrite, isAdmin } = useSession();
-  const [view, setView] = useState<ViewName>(() =>
-    isAllowed(initialView, canWrite, isAdmin) ? initialView : "home"
-  );
+  const [requestedView, setView] = useState<ViewName>(initialView);
   const [requestedRun, setRequestedRun] = useState(initialRun);
 
   const navigate = useCallback(
@@ -70,15 +67,6 @@ export function NavigationProvider({
     },
     [canWrite, isAdmin]
   );
-
-  // The role can change under us (a session refresh, a logout landing back on
-  // the app): never leave a panel open that the current role may not read.
-  useEffect(() => {
-    if (!isAllowed(view, canWrite, isAdmin)) {
-      setView("home");
-      replaceHash(undefined);
-    }
-  }, [canWrite, isAdmin, view]);
 
   const openRun = useCallback((runId: string) => {
     replaceHash(runId);
@@ -98,9 +86,22 @@ export function NavigationProvider({
       navigate,
       openRun,
       requestedRun,
-      view,
+      // Derived rather than corrected by an effect: the role can change under
+      // us (a session refresh), and a panel the current role may not read is
+      // simply never the visible one.
+      view: isAllowed(requestedView, canWrite, isAdmin)
+        ? requestedView
+        : "home",
     }),
-    [consumeRun, navigate, openRun, requestedRun, view]
+    [
+      consumeRun,
+      isAdmin,
+      canWrite,
+      navigate,
+      openRun,
+      requestedRun,
+      requestedView,
+    ]
   );
 
   return (

@@ -1,7 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
-import type { z } from "zod";
-import { api } from "@/api/client";
-import type { runJobListSchema } from "@/api/schemas";
+import { type FormEvent, useState } from "react";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
 import { useSession } from "@/app/session";
@@ -24,16 +21,9 @@ import {
   stateLabel,
   toneFor,
 } from "@/lib/format";
+import { useStore } from "@/lib/store";
 import { modelFromInput, RunDetail } from "./run-detail";
-
-type RunRow = z.infer<typeof runJobListSchema>[number];
-
-interface Filters {
-  search: string;
-  status: string;
-}
-
-const emptyFilters: Filters = { search: "", status: "" };
+import { createRunsStore } from "./runs-store";
 
 /**
  * The history filter offers completed, cancelled and interrupted in the
@@ -58,48 +48,22 @@ export function RunsView() {
   const { report } = useError();
   const { canWrite } = useSession();
   const { consumeRun, openRun, requestedRun } = useNavigation();
-  const [draft, setDraft] = useState<Filters>(emptyFilters);
-  const [applied, setApplied] = useState<Filters>(emptyFilters);
-  const [rows, setRows] = useState<RunRow[]>([]);
-  const [filtered, setFiltered] = useState(false);
-  const [selected, setSelected] = useState<string>();
-
-  const list = useCallback(
-    async (filters: Filters) => {
-      try {
-        const next = await api("/runs", {
-          query: { search: filters.search, status: filters.status },
-        });
-        setRows(next);
-        setFiltered(Boolean(filters.search || filters.status));
-      } catch (failure) {
-        report(failure);
-      }
-    },
-    [report]
+  // The store owns the list and the selection: the subscription React performs
+  // on mount starts the first load, a deep link is consumed once here, and the
+  // filter form and the refresh after a stream frame stay events.
+  const [store] = useState(() =>
+    createRunsStore({ consumeRequest: consumeRun, report, requestedRun })
   );
-
-  useEffect(() => {
-    void list(emptyFilters);
-  }, [list]);
-
-  // A deep link, a row click or a freshly created run all arrive as a request.
-  useEffect(() => {
-    if (!requestedRun) {
-      return;
-    }
-    setSelected(requestedRun);
-    consumeRun();
-  }, [consumeRun, requestedRun]);
-
-  const refresh = useCallback(() => {
-    void list(applied);
-  }, [applied, list]);
+  const { draft, filtered, rows, selected } = useStore(store);
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setApplied(draft);
-    void list(draft);
+    store.submitFilters();
+  }
+
+  function open(runId: string) {
+    openRun(runId);
+    store.select(runId);
   }
 
   return (
@@ -107,7 +71,7 @@ export function RunsView() {
       <RunDetail
         canWrite={canWrite}
         key={selected ?? "empty"}
-        onUpdate={refresh}
+        onUpdate={store.refresh}
         runId={selected}
       />
       <Card className="mt-5">
@@ -127,10 +91,7 @@ export function RunsView() {
             className="mt-0 w-auto min-w-56"
             id="search"
             onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                search: event.target.value,
-              }))
+              store.editDraft({ search: event.target.value })
             }
             placeholder={copy.filters.search}
             value={draft.search}
@@ -140,10 +101,7 @@ export function RunsView() {
             className="mt-0 w-auto"
             id="status"
             onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                status: event.target.value,
-              }))
+              store.editDraft({ status: event.target.value })
             }
             value={draft.status}
           >
@@ -191,7 +149,7 @@ export function RunsView() {
                       href={`#${run.id}`}
                       onClick={(event) => {
                         event.preventDefault();
-                        openRun(run.id);
+                        open(run.id);
                       }}
                     >
                       {`${run.repo} #${run.pr}`}

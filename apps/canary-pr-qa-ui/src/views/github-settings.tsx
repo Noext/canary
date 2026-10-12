@@ -2,10 +2,10 @@ import {
   type FormEvent,
   type ReactNode,
   useCallback,
-  useEffect,
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { api, errorText, post } from "@/api/client";
 import type { GitHubRepository, GitHubStatus } from "@/api/contracts";
 import { githubRemovalSchema } from "@/api/schemas";
@@ -105,15 +105,6 @@ export function GithubSettings(): ReactNode {
   const [manifestPost, setManifestPost] = useState<ManifestPost>();
   const manifestForm = useRef<HTMLFormElement>(null);
 
-  // GitHub only accepts the App manifest as a cross-origin form POST, so the
-  // form is rendered with the fetched manifest and submitted once.
-  useEffect(() => {
-    const form = manifestForm.current;
-    if (manifestPost && form) {
-      form.submit();
-    }
-  }, [manifestPost]);
-
   const run = useCallback(
     async (operation: Operation, action: () => Promise<void>) => {
       setBusy(operation);
@@ -141,10 +132,17 @@ export function GithubSettings(): ReactNode {
           ...(trimmed ? { organization: trimmed } : {}),
         })
       );
-      setManifestPost({
-        action: result.action,
-        value: JSON.stringify(result.manifest),
-      });
+      // GitHub only accepts the App manifest as a cross-origin form POST. The
+      // manifest is submitted from the handler that received it: flushing the
+      // state puts the form in the DOM first, so no reaction to the state is
+      // needed to submit it.
+      flushSync(() =>
+        setManifestPost({
+          action: result.action,
+          value: JSON.stringify(result.manifest),
+        })
+      );
+      manifestForm.current?.submit();
     });
   };
 

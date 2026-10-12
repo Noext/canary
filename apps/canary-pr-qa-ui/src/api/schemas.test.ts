@@ -108,6 +108,42 @@ describe("server payloads", () => {
     expect(status.app).toBeNull();
   });
 
+  it("keeps the nested diagnostic data of a report", () => {
+    const parsed = runResultSchema.parse({
+      id: "44444444-4444-4444-4444-444444444444",
+      outcome: "failed",
+      prUrl: "https://github.com/o/r/pull/3",
+      scenarios: [
+        {
+          artifacts: [],
+          assertions: [{ actual: "Ada", id: "saved", passed: false }],
+          contract: { completedSteps: ["enter"], hash: "h", totalSteps: 2 },
+          diagnostic: { code: "BLOCKED", message: "boom" },
+          outcome: "failed",
+          scenario: {
+            id: "welcome",
+            requirements: [{ behavior: "save", quote: "show(name)" }],
+            steps: [{ id: "enter" }],
+            title: "Welcome",
+          },
+          sessionId: "session-1",
+          steps: [{ index: 0, ok: true, reason: "filled" }],
+        },
+      ],
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const scenario = parsed.scenarios[0];
+    // The <pre id="result"> diagnostic prints this object: nothing may vanish.
+    expect(scenario?.sessionId).toBe("session-1");
+    expect(scenario?.contract).toEqual({
+      completedSteps: ["enter"],
+      hash: "h",
+      totalSteps: 2,
+    });
+    expect(scenario?.steps).toEqual([{ index: 0, ok: true, reason: "filled" }]);
+    expect(scenario?.scenario.steps).toEqual([{ id: "enter" }]);
+  });
+
   it("rejects a response that breaks the contract", () => {
     expect(() =>
       runJobListSchema.parse([{ id: "not-a-run", status: "unknown" }])

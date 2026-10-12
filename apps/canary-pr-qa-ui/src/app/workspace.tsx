@@ -1,13 +1,4 @@
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createContext, type ReactNode, useContext, useMemo } from "react";
 import { api, errorText } from "@/api/client";
 import type {
   GitHubStatus,
@@ -15,11 +6,26 @@ import type {
   Preflight,
   SetupStatus,
 } from "@/api/contracts";
+import { createStore, type Store, useStore } from "@/lib/store";
 import { useSession } from "./session";
+
+interface WorkspaceState {
+  github?: GitHubStatus;
+  /** Set when the GitHub status request failed: the state is unknown, not empty. */
+  githubError?: string;
+  model: string;
+  models?: ModelCatalog;
+  modelsBusy: boolean;
+  modelsError?: string;
+  preflight?: Preflight;
+  preflightBusy: boolean;
+  status?: SetupStatus;
+  /** Set when the setup status request failed, so the UI can retry it. */
+  statusError?: string;
+}
 
 interface WorkspaceContextValue {
   github?: GitHubStatus;
-  /** Set when the GitHub status request failed: the state is unknown, not empty. */
   githubError?: string;
   githubReady: boolean;
   loadGithub(): Promise<void>;
@@ -37,7 +43,6 @@ interface WorkspaceContextValue {
   setPreflight(value: Preflight | undefined): void;
   setPreflightBusy(value: boolean): void;
   status?: SetupStatus;
-  /** Set when the setup status request failed, so the UI can retry it. */
   statusError?: string;
 }
 
@@ -50,160 +55,152 @@ const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(
  * selected model. Kept in one place so the home and "new test" screens never
  * disagree about readiness.
  */
+function createWorkspaceStore(roles: { canWrite: boolean; isAdmin: boolean }) {
+  const flags: CatalogFlags = { autoPicked: false, loaded: false };
+  const store = createStore<WorkspaceState>(
+    { model: "", modelsBusy: false, preflightBusy: false },
+    (self) => {
+      // The mount subscription starts the initial loading; retries are actions.
+      void loadStatus(self);
+      if (roles.canWrite) {
+        void fetchModels(self, flags, false);
+      }
+      if (roles.isAdmin) {
+        void loadGithub(self).catch(() => undefined);
+      }
+    }
+  );
+  return { flags, store };
+}
+
+async function loadStatus(store: Store<WorkspaceState>) {
+  try {
+    const status = await api("/dashboard/status");
+    store.set((current) => ({ ...current, status, statusError: undefined }));
+  } catch (failure) {
+    // Swallowing this would leave `githubReady` false and the New Test screen
+    // silently refusing to launch, with no error and no way to retry.
+    store.set((current) => ({ ...current, statusError: errorText(failure) }));
+  }
+}
+
+async function loadGithub(store: Store<WorkspaceState>) {
+  try {
+    const github = await api("/github/app");
+    store.set((current) => ({ ...current, github, githubError: undefined }));
+  } catch (failure) {
+    // Without this, an admin whose request failed is shown "À connecter" and
+    // the creation form, as if no App existed. The rejection is also
+    // propagated: a mutation whose reload failed must not report success on
+    // the strength of the cached status.
+    store.set((current) => ({ ...current, githubError: errorText(failure) }));
+    throw failure;
+  }
+}
+
+interface CatalogFlags {
+  autoPicked: boolean;
+  loaded: boolean;
+}
+
+async function fetchModels(
+  store: Store<WorkspaceState>,
+  flags: CatalogFlags,
+  force: boolean
+) {
+  // Guards live outside React state: keying them on `modelsBusy` would refetch
+  // the catalogue in a loop, and `loaded` makes the initial load idempotent.
+  if (store.getSnapshot().modelsBusy || (flags.loaded && !force)) {
+    return;
+  }
+  store.set((current) => ({ ...current, modelsBusy: true }));
+  try {
+    const catalog = await api("/models");
+    store.set((current) => {
+      const known = catalog.data.some((entry) => entry.id === current.model);
+      const exposesDefault = catalog.data.some(
+        (entry) => entry.id === catalog.defaultModel
+      );
+      let model = current.model;
+      if (!known) {
+        // A model the provider no longer offers must not stay selected: it
+        // would keep `modelReady` true while the select has no such option.
+        model = "";
+        flags.autoPicked = false;
+      }
+      // The configured default is only auto-selected when the provider really
+      // exposes it: never guess a model on the user's behalf.
+      if (!(model || flags.autoPicked) && exposesDefault) {
+        flags.autoPicked = true;
+        model = catalog.defaultModel;
+      }
+      return {
+        ...current,
+        model,
+        models: catalog,
+        modelsBusy: false,
+        modelsError: undefined,
+      };
+    });
+    flags.loaded = true;
+  } catch (failure) {
+    flags.loaded = false;
+    store.set((current) => ({
+      ...current,
+      modelsBusy: false,
+      modelsError: errorText(failure),
+    }));
+  }
+}
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const { canWrite, isAdmin } = useSession();
-  const [status, setStatus] = useState<SetupStatus>();
-  const [models, setModels] = useState<ModelCatalog>();
-  const [github, setGithub] = useState<GitHubStatus>();
-  const [modelsBusy, setModelsBusy] = useState(false);
-  const [statusError, setStatusError] = useState<string>();
-  const [githubError, setGithubError] = useState<string>();
-  const inFlight = useRef(false);
-  const loaded = useRef(false);
-  const [modelsError, setModelsError] = useState<string>();
-  const [model, setModel] = useState("");
-  const [preflight, setPreflight] = useState<Preflight>();
-  const [preflightBusy, setPreflightBusy] = useState(false);
-  const modelRef = useRef("");
-  const autoPicked = useRef(false);
-
-  /** Mirrors the selected model so the loader can read it without stale state. */
-  const chooseModel = useCallback((value: string) => {
-    modelRef.current = value;
-    setModel(value);
-  }, []);
-
-  const loadStatus = useCallback(async () => {
-    try {
-      setStatus(await api("/dashboard/status"));
-      setStatusError(undefined);
-    } catch (failure) {
-      // Swallowing this would leave `githubReady` false and the New Test screen
-      // silently refusing to launch, with no error and no way to retry.
-      setStatusError(errorText(failure));
-    }
-  }, []);
-
-  const fetchModels = useCallback(
-    async (force: boolean) => {
-      // Guards live in refs: keying them on `modelsBusy` would rebuild this
-      // callback on every toggle, retrigger the effect below and refetch the
-      // catalogue in a loop. `loaded` also makes the initial load idempotent
-      // under StrictMode's double-invoked effects.
-      if (inFlight.current || (loaded.current && !force)) {
-        return;
-      }
-      inFlight.current = true;
-      setModelsBusy(true);
-      try {
-        const catalog = await api("/models");
-        setModels(catalog);
-        setModelsError(undefined);
-        loaded.current = true;
-        const known = catalog.data.some(
-          (entry) => entry.id === modelRef.current
-        );
-        if (!known) {
-          // A model the provider no longer offers must not stay selected: it
-          // would keep `modelReady` true while the select has no such option.
-          chooseModel("");
-          autoPicked.current = false;
-        }
-        const exposesDefault = catalog.data.some(
-          (entry) => entry.id === catalog.defaultModel
-        );
-        // The configured default is only auto-selected when the provider really
-        // exposes it: never guess a model on the user's behalf.
-        if (!(modelRef.current || autoPicked.current) && exposesDefault) {
-          autoPicked.current = true;
-          chooseModel(catalog.defaultModel);
-        }
-      } catch (failure) {
-        setModelsError(
-          failure instanceof Error ? failure.message : String(failure)
-        );
-        loaded.current = false;
-      } finally {
-        inFlight.current = false;
-        setModelsBusy(false);
-      }
-    },
-    [chooseModel]
+  // The store is keyed by the roles it captures: the provider can mount before
+  // the session resolves (and a role can change), so a store built for the
+  // wrong roles must never win. A new store simply starts its loads again on
+  // the next subscription — the alternative is an effect reacting to a role.
+  const workspace = useMemo(
+    () => createWorkspaceStore({ canWrite, isAdmin }),
+    [canWrite, isAdmin]
   );
+  const { flags, store } = workspace;
+  const state = useStore(store);
 
-  const loadModels = useCallback(() => fetchModels(true), [fetchModels]);
-
-  const loadGithub = useCallback(async () => {
-    try {
-      setGithub(await api("/github/app"));
-      setGithubError(undefined);
-    } catch (failure) {
-      // Without this, an admin whose request failed is shown "À connecter" and
-      // the creation form, as if no App existed. The rejection is also
-      // propagated: a mutation whose reload failed must not report success on
-      // the strength of the cached status.
-      setGithubError(errorText(failure));
-      throw failure;
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadStatus();
-  }, [loadStatus]);
-
-  useEffect(() => {
-    if (canWrite) {
-      void fetchModels(false);
-    }
-  }, [canWrite, fetchModels]);
-
-  useEffect(() => {
-    if (isAdmin) {
-      // The failure is carried by `githubError`, not by an unhandled rejection.
-      void loadGithub().catch(() => undefined);
-    }
-  }, [isAdmin, loadGithub]);
+  const actions = useMemo(
+    () => ({
+      loadGithub: () => loadGithub(store),
+      loadModels: () => fetchModels(store, flags, true),
+      loadStatus: () => loadStatus(store),
+      setModel: (value: string) =>
+        store.set((current) => ({ ...current, model: value })),
+      setPreflight: (value: Preflight | undefined) =>
+        store.set((current) => ({ ...current, preflight: value })),
+      setPreflightBusy: (value: boolean) =>
+        store.set((current) => ({ ...current, preflightBusy: value })),
+    }),
+    [flags, store]
+  );
 
   const value = useMemo<WorkspaceContextValue>(
     () => ({
       githubReady:
-        status !== undefined &&
-        status.github.mode !== "missing" &&
-        status.github.repositories.length > 0,
-      modelReady: Boolean(model),
-      modelsBusy,
-      modelsError,
-      preflightBusy,
-      setPreflight,
-      setPreflightBusy,
-      setModel: chooseModel,
-      model,
-      loadGithub,
-      loadModels,
-      loadStatus,
-      ...(github ? { github } : {}),
-      ...(githubError ? { githubError } : {}),
-      ...(models ? { models } : {}),
-      ...(preflight ? { preflight } : {}),
-      ...(status ? { status } : {}),
-      ...(statusError ? { statusError } : {}),
+        state.status !== undefined &&
+        state.status.github.mode !== "missing" &&
+        state.status.github.repositories.length > 0,
+      modelReady: Boolean(state.model),
+      ...actions,
+      ...(state.github ? { github: state.github } : {}),
+      ...(state.githubError ? { githubError: state.githubError } : {}),
+      ...(state.models ? { models: state.models } : {}),
+      ...(state.modelsError ? { modelsError: state.modelsError } : {}),
+      ...(state.preflight ? { preflight: state.preflight } : {}),
+      ...(state.status ? { status: state.status } : {}),
+      ...(state.statusError ? { statusError: state.statusError } : {}),
+      model: state.model,
+      modelsBusy: state.modelsBusy,
+      preflightBusy: state.preflightBusy,
     }),
-    [
-      chooseModel,
-      github,
-      githubError,
-      loadGithub,
-      loadModels,
-      loadStatus,
-      model,
-      models,
-      modelsBusy,
-      modelsError,
-      preflight,
-      preflightBusy,
-      status,
-      statusError,
-    ]
+    [actions, state]
   );
 
   return (
