@@ -23,6 +23,9 @@ export async function githubSetupFixture(
     conversionCount: 0,
     forkHead: false,
     privateFork: false,
+    uninstalls: 0,
+    appDeletions: 0,
+    deleteFails: false,
   };
   const server = createServer((req, res) => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Protocol fixture dispatches deterministic GitHub and QA endpoints.
@@ -86,6 +89,24 @@ export async function githubSetupFixture(
               ]
             : []
         );
+        return;
+      }
+      if (req.method === "DELETE" && path.startsWith("/app")) {
+        if (state.deleteFails) {
+          json(res, { message: "Upstream refused" }, 403);
+          return;
+        }
+        if (path === "/app") {
+          state.appDeletions += 1;
+        } else if (path === "/app/installations/42001") {
+          state.uninstalls += 1;
+        } else {
+          json(res, { message: "Not Found" }, 404);
+          return;
+        }
+        state.installed = false;
+        res.writeHead(204);
+        res.end();
         return;
       }
       if (path === "/app/installations/42001/access_tokens") {

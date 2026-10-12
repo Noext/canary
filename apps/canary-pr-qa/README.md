@@ -213,6 +213,25 @@ Les anciens PAT et paramètres App restent disponibles pour des installations
 techniques existantes, mais l'App gérée par l'UI a priorité une fois créée.
 Le service Compose peut démarrer sans connexion GitHub ; doctor affiche cette
 étape comme **skipped/onboarding pending**, jamais comme accès GitHub validé.
+
+### Supprimer la connexion GitHub
+
+Administrateur, section **GitHub**, bloc **Supprimer la connexion GitHub** :
+
+- **Désinstaller l'App de mes dépôts** : GitHub révoque chaque installation
+  (webhooks et accès retirés). L'App elle-même reste dans vos réglages GitHub et
+  peut être réinstallée à tout moment.
+- **Supprimer l'App GitHub** : GitHub supprime l'App et toutes ses installations.
+  Action **irréversible** ; il faut recréer une App pour reconnecter l'instance.
+
+Les deux actions effèrent la connexion locale (credentials chiffrés,
+installations, sélection de dépôts) et les callbacks manifest/installation en
+attente, avec une entrée d'audit `github.app.disconnected`. Si GitHub refuse la
+suppression (App d'organisation, droits insuffisants, réseau), la connexion
+locale est tout de même effacée et l'API renvoie un avertissement : terminez la
+suppression depuis les réglages GitHub de l'App. Aucun secret n'est renvoyé dans
+la réponse et les runs suivants repassent au mode technique ou à « non
+connecté ». Déconnecter ne supprime aucun volume, run ou preuve.
 La migration SQL version 5 conserve comptes, sessions, runs et preuves.
 
 Les livraisons de webhooks validées sont stockées en inbox SQL,
@@ -316,6 +335,8 @@ Captures réelles des E2E, avec données fictives :
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
+| `GET /github/app`, `POST /github/app/manifest`, `POST /github/app/install`, `POST /github/app/refresh`, `PUT /github/app/repositories` | Onboarding GitHub App réservé à l'admin |
+| `DELETE /github/app` | Déconnecte l'App ; `{"deleteApp":true}` la supprime aussi sur GitHub |
 | `POST /runs` | `{prUrl,previewUrl?,publish?,model?}`, header `Idempotency-Key` facultatif |
 | `GET /runs` | Liste limitée aux projets de l'utilisateur ; `status`, `search` |
 | `GET /runs/:id` | Statut durable et progression |

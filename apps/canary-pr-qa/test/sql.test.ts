@@ -1219,3 +1219,198 @@ it("refuses a preflight with missing preview provenance and a read-only account"
   expect(f.modelRequests).toEqual([]);
   expect(f.outgoing).toEqual([]);
 }, 30_000);
+it("disconnects the connected GitHub App from the admin API, uninstalls it on GitHub and wipes the local connection", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const setup = new GitHubSetup(q.pool, config);
+  const accounts = new LocalAuth(q.pool);
+  const admin = await accounts.setup(
+    {
+      username: "github-remover",
+      password: "github-remover-password-2026",
+      setupCode: await accounts.issueSetupTicket(),
+    },
+    []
+  );
+  const session = await accounts.session(admin);
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const call = (path: string, method = "GET", value?: unknown) =>
+    fetch(`${url}${path}`, {
+      method,
+      redirect: "manual",
+      headers: {
+        Cookie: `qa_local_session=${session}`,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      ...(value ? { body: JSON.stringify(value) } : {}),
+    });
+  await setup.convert(
+    admin.id,
+    await setup.state(admin.id, "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  expect((await setup.status()).app?.id).toBe("95001");
+  const page = await (await call("/")).text();
+  expect(page).toContain('id="githubUninstall"');
+  expect(page).toContain('id="githubDeleteApp"');
+  const response = await call("/github/app", "DELETE", {});
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as Awaited<
+    ReturnType<GitHubSetup["disconnect"]>
+  >;
+  expect(body.app).toBeNull();
+  expect(body.repositories).toEqual([]);
+  expect(body.disconnected).toMatchObject({
+    appDeleted: false,
+    deleteApp: false,
+    uninstalled: ["fixture"],
+    warnings: [],
+  });
+  expect(f.state.uninstalls).toBe(1);
+  expect(f.state.appDeletions).toBe(0);
+  expect(
+    f.requests.find((item) => item.path === "/app/installations/42001")?.auth
+  ).toMatch(/^Bearer /);
+  expect(
+    (await q.pool.query("SELECT count(*)::int AS count FROM qa_github_app"))
+      .rows[0].count
+  ).toBe(0);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT count(*)::int AS count FROM qa_github_repositories"
+      )
+    ).rows[0].count
+  ).toBe(0);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT count(*)::int AS count FROM qa_audit WHERE action='github.app.disconnected'"
+      )
+    ).rows[0].count
+  ).toBe(1);
+  const effective = await new GitHubSetup(q.pool, config).effective();
+  expect(effective.githubInstallations).toBeUndefined();
+  expect(effective.allowedRepos).toEqual([]);
+  expect(await (await call("/me")).json()).toMatchObject({ repos: [] });
+  // The connection is gone: a second removal is a client error, not a no-op.
+  expect((await call("/github/app", "DELETE")).status).toBe(400);
+  const usersFile = join(f.dataDir, "remover-viewer.json");
+  const viewerToken = "github-app-remover-viewer-2026";
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "viewer",
+        role: "viewer",
+        repos: [],
+        tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
+      },
+    ])
+  );
+  const viewerServer = await startProductionServer({
+    ...config,
+    QA_USERS_FILE: usersFile,
+  });
+  cleanup.push(() => viewerServer.shutdown());
+  const viewerUrl = `http://127.0.0.1:${(viewerServer.address() as { port: number }).port}`;
+  expect(
+    (
+      await fetch(`${viewerUrl}/github/app`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${viewerToken}`, Origin: viewerUrl },
+      })
+    ).status
+  ).toBe(403);
+}, 30_000);
+
+it("deletes the GitHub App itself on request and reports a refused remote deletion as a warning", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const setup = new GitHubSetup(q.pool, config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const deleted = await setup.disconnect({ deleteApp: true });
+  expect(deleted.disconnected).toMatchObject({
+    appDeleted: true,
+    deleteApp: true,
+    uninstalled: [],
+    warnings: [],
+  });
+  expect(f.state.appDeletions).toBe(1);
+  // GitHub removes every installation with the App: no per-installation call.
+  expect(f.state.uninstalls).toBe(0);
+  expect((await setup.status()).app).toBeNull();
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  // Reinstall the App on the fixture so the refused deletion has something to remove.
+  f.state.installed = true;
+  await setup.select(["fixture/app"]);
+  f.state.deleteFails = true;
+  const refused = await setup.disconnect({});
+  expect(refused.app).toBeNull();
+  expect(refused.repositories).toEqual([]);
+  expect(refused.disconnected.uninstalled).toEqual([]);
+  expect(refused.disconnected.warnings).toHaveLength(1);
+  expect(refused.disconnected.warnings[0]).toMatch(/HTTP 403 from/);
+  expect(f.state.uninstalls).toBe(0);
+  expect(
+    (await q.pool.query("SELECT count(*)::int AS count FROM qa_github_app"))
+      .rows[0].count
+  ).toBe(0);
+  expect(
+    (
+      await q.pool.query(
+        "SELECT count(*)::int AS count FROM qa_github_repositories"
+      )
+    ).rows[0].count
+  ).toBe(0);
+}, 30_000);
+
+it("closes pending manifest and install callbacks when the App is disconnected", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const setup = new GitHubSetup(q.pool, f.config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  const installState = await setup.state("admin", "install");
+  await setup.disconnect({});
+  expect(
+    (
+      await q.pool.query(
+        "SELECT count(*)::int AS count FROM qa_github_state WHERE actor='admin'"
+      )
+    ).rows[0].count
+  ).toBe(0);
+  await expect(
+    setup.consumeState("admin", installState, "install")
+  ).rejects.toMatchObject({ code: "GITHUB_STATE_INVALID" });
+  expect(f.state.conversionCount).toBe(1);
+}, 30_000);
