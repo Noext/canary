@@ -71,7 +71,7 @@ export const outcomes: Record<string, string> = {
 export const automaticStates: Record<string, string> = {
   waiting: "En attente de la préversion",
   expired: "Délai dépassé",
-  rate_limited: "Limité par GitHub",
+  rate_limited: "Quota horaire atteint",
 };
 
 /** Machine reason codes of an automatic attempt, explained in French. */
@@ -85,7 +85,7 @@ export const automaticReasons: Record<string, string> = {
   PREVIEW_UNAVAILABLE:
     "L’application de test n’a pas répondu ou n’a pas pu être vérifiée. Canary réessaie avec un délai croissant.",
   WEBHOOK_RATE_LIMIT:
-    "GitHub a limité les lancements de ce dépôt. Canary reprendra au prochain événement de la PR.",
+    "Le budget horaire de lancements automatiques de Canary (global ou par dépôt) est atteint. Ce commit n'est pas rejoué automatiquement : attendez la prochaine fenêtre, poussez un nouveau commit ou lancez le test depuis « Nouveau test ».",
 };
 
 export const phases: Record<string, string> = {
@@ -382,7 +382,7 @@ export const automatic = {
   reasonUnknown: (code: string) => `Cause à vérifier : ${code}.`,
   summary: {
     expired: (count: number) => `${count} délai(s) dépassé(s)`,
-    rateLimited: (count: number) => `${count} limité(s) par GitHub`,
+    rateLimited: (count: number) => `${count} refusé(s) par le quota horaire`,
     waiting: (count: number) => `${count} en attente`,
   },
   title: "Lancements automatiques",

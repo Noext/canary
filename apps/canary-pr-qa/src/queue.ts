@@ -147,12 +147,112 @@ export class Queue {
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(9287341)");
+      const job = await this.insertJob(
+        client,
+        repo,
+        pr,
+        sha,
+        owner,
+        input,
+        key,
+        automaticLimits
+      );
+      await client.query("COMMIT");
+      return job;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  /**
+   * Creates the run of a claimed attempt and links it to that attempt in one
+   * transaction. The ownership token and the deadline are re-read under the row
+   * lock, so a worker whose claim expired can never create a run, cancel a run
+   * another worker is using, or promote an attempt that waited past its window.
+   */
+  async promoteAutomatic(input: {
+    delivery: string;
+    key: string;
+    limits: AutomaticRunLimits;
+    pr: number;
+    repo: string;
+    run: RunOptions;
+    sha: string;
+    token: string;
+    waitSeconds: number;
+  }): Promise<{
+    job?: Job;
+    promoted: boolean;
+    reason?: "claim_lost" | "expired" | "missing";
+    row?: DeliveryRow;
+  }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(9287341)");
+      const claimed = await client.query<
+        DeliveryRow & { past_deadline: boolean }
+      >(
+        `SELECT id,payload,status,attempts,reason,claim_token,deadline_at,run_id,updated_at,created_at,
+           (now() >= COALESCE(deadline_at,created_at+make_interval(secs => $2::double precision))) AS past_deadline
+         FROM qa_deliveries WHERE id=$1 FOR UPDATE`,
+        [input.delivery, input.waitSeconds]
+      );
+      const row = claimed.rows[0];
+      if (!row) {
+        await client.query("COMMIT");
+        return { promoted: false, reason: "missing" };
+      }
+      if (row.claim_token !== input.token || row.status !== "pending") {
+        await client.query("COMMIT");
+        return { promoted: false, reason: "claim_lost", row };
+      }
+      if (row.past_deadline) {
+        await client.query("COMMIT");
+        return { promoted: false, reason: "expired", row };
+      }
+      const job = await this.insertJob(
+        client,
+        input.repo,
+        input.pr,
+        input.sha,
+        "github-app",
+        input.run,
+        input.key,
+        input.limits
+      );
+      await client.query(
+        "UPDATE qa_deliveries SET status='processed',run_id=$3,updated_at=now() WHERE id=$1 AND claim_token=$2",
+        [input.delivery, input.token, job.id]
+      );
+      await client.query("COMMIT");
+      return { job, promoted: true };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  /** Debits one hourly budget and inserts the queued job inside the caller's transaction. */
+  private async insertJob(
+    client: pg.PoolClient,
+    repo: string,
+    pr: number,
+    sha: string,
+    owner: string,
+    input: RunOptions,
+    key: string,
+    automaticLimits?: AutomaticRunLimits
+  ): Promise<Job> {
+    {
       const duplicate = await client.query<Job>(
         "SELECT * FROM qa_jobs WHERE idempotency_key=$1 OR ($2 AND owner='github-app' AND lower(repo)=lower($3) AND pr=$4 AND sha=$5) ORDER BY created_at LIMIT 1",
         [key, Boolean(automaticLimits), repo, pr, sha]
       );
       if (duplicate.rows[0]) {
-        await client.query("COMMIT");
         return duplicate.rows[0];
       }
       if (automaticLimits) {
@@ -201,13 +301,7 @@ export class Queue {
         "INSERT INTO qa_audit(actor,action,run_id) VALUES($1,'enqueue',$2)",
         [owner, job.id]
       );
-      await client.query("COMMIT");
       return job;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
     }
   }
   async claim(worker: string): Promise<Job | undefined> {
@@ -329,18 +423,6 @@ export class Queue {
     ).rows[0];
   }
   /**
-   * What the owning worker re-reads before it promotes an attempt: the deadline
-   * and the reasons may have moved while the preview was being verified.
-   */
-  async deliveryClaim(id: string, token: string) {
-    return (
-      await this.pool.query<DeliveryRow>(
-        "SELECT id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at FROM qa_deliveries WHERE id=$1 AND claim_token=$2 AND status='pending'",
-        [id, token]
-      )
-    ).rows[0];
-  }
-  /**
    * A failed probe schedules the next one, but never past the deadline: an
    * attempt whose deadline is closer than the backoff becomes due exactly at the
    * deadline, so expiration is enforced instead of being deferred by up to 300 s.
@@ -370,25 +452,6 @@ export class Queue {
     const result = await this.pool.query(
       "UPDATE qa_deliveries SET status=$3,reason=$4,last_error=$5,updated_at=now() WHERE id=$1 AND claim_token=$2 AND status='pending'",
       [id, token, status, reason, lastError ?? null]
-    );
-    return result.rowCount === 1;
-  }
-  /**
-   * Promotes a claimed attempt into its run. The deadline is rechecked here, in
-   * the same statement that takes ownership into account, because verifying a
-   * preview can outlive the window the attempt was allowed to wait.
-   */
-  async promoteDelivery(
-    id: string,
-    token: string,
-    runId: string,
-    waitSeconds: number
-  ) {
-    const result = await this.pool.query(
-      `UPDATE qa_deliveries SET status='processed',run_id=$3,updated_at=now()
-       WHERE id=$1 AND claim_token=$2 AND status='pending'
-         AND now() < COALESCE(deadline_at,created_at+make_interval(secs => $4::double precision))`,
-      [id, token, runId, waitSeconds]
     );
     return result.rowCount === 1;
   }

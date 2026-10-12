@@ -108,7 +108,10 @@ export function dashboardRoutes(
 
 /** Repositories where automatic runs are switched on; legacy mode allows every repository. */
 function automaticRepos(config: Config) {
-  return config.automaticRepos ?? config.allowedRepos;
+  // The global switch wins over every per-repository opt-in: reporting them as
+  // active would tell an operator that automation is running while the probe loop
+  // refuses each delivery with `auto_disabled`.
+  return config.autoRuns ? (config.automaticRepos ?? config.allowedRepos) : [];
 }
 
 function scopedRepos(user: Principal, repos: string[]) {

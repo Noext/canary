@@ -4,7 +4,7 @@ import type { Config } from "./config.js";
 import { QaError, redact } from "./diagnostics.js";
 import { GitHub } from "./github.js";
 import { resolvePreview } from "./preview.js";
-import type { DeliveryPayload, DeliveryRow, Job, Queue } from "./queue.js";
+import type { DeliveryPayload, DeliveryRow, Queue } from "./queue.js";
 
 const logger = createLogger({ name: "qa-webhook" });
 /** Probe backoff between two attempts to see a preview proving the exact SHA. */
@@ -255,35 +255,25 @@ export async function processDelivery(queue: Queue, config: Config) {
   const repo = value.repo ?? "";
   const pr = value.number ?? 0;
   const sha = value.sha ?? "";
-  // Verifying a preview outlives the claim lease, so the owner re-reads its row
-  // before creating anything: a delivery another worker took over (or one whose
-  // deadline passed during the probe) must not leave a run behind.
-  const claim = await queue.deliveryClaim(delivery, token);
-  if (!claim) {
-    logger.warn(
-      { code: "CLAIM_LOST", delivery, pr, repo, sha },
-      "Preview verified after another worker took the delivery over; no run created"
-    );
-    return;
-  }
-  if (pastDeadline(claim, config)) {
-    await expire(queue, claim, token);
-    return;
-  }
-  let job: Job;
+  let outcome: Awaited<ReturnType<Queue["promoteAutomatic"]>>;
+  // Creating the run and linking it to the attempt happen in one transaction:
+  // a worker whose claim expired (or whose deadline closed during the probe)
+  // creates nothing at all, so it cannot cancel a run another worker is using.
   try {
-    job = await queue.enqueue(
-      repo,
-      pr,
-      sha,
-      "github-app",
-      { prUrl: value.prUrl, publish: true, model: config.OPENAI_MODEL },
-      `webhook:${repo.toLowerCase()}:${pr}:${sha}`,
-      {
+    outcome = await queue.promoteAutomatic({
+      delivery,
+      key: `webhook:${repo.toLowerCase()}:${pr}:${sha}`,
+      limits: {
         global: config.QA_WEBHOOK_MAX_RUNS_PER_HOUR,
         repository: config.QA_WEBHOOK_REPO_MAX_RUNS_PER_HOUR,
-      }
-    );
+      },
+      pr,
+      repo,
+      run: { prUrl: value.prUrl, publish: true, model: config.OPENAI_MODEL },
+      sha,
+      token,
+      waitSeconds: config.QA_AUTO_PREVIEW_WAIT_SECONDS,
+    });
   } catch (error) {
     if (!(error instanceof QaError) || error.code !== "WEBHOOK_RATE_LIMIT") {
       throw error;
@@ -314,21 +304,17 @@ export async function processDelivery(queue: Queue, config: Config) {
     }
     return;
   }
-  if (
-    !(await queue.promoteDelivery(
-      delivery,
-      token,
-      job.id,
-      config.QA_AUTO_PREVIEW_WAIT_SECONDS
-    ))
-  ) {
-    // The deadline closed or another worker took over while the run was being
-    // created: the delivery is no longer this worker's to promote, and the run
-    // must not survive as an orphan of a refused attempt.
-    await queue.cancel(job.id, "webhook");
+  const job = outcome.job;
+  if (!(outcome.promoted && job)) {
+    // The deadline closed while the preview was verified: the attempt expires
+    // and, because nothing was created or linked, there is no run to clean up.
+    if (outcome.reason === "expired" && outcome.row) {
+      await expire(queue, outcome.row, token);
+      return;
+    }
     logger.warn(
-      { code: "PROMOTION_REFUSED", delivery, pr, repo, runId: job.id, sha },
-      "Attempt was no longer promotable; the created run was cancelled"
+      { code: "CLAIM_LOST", delivery, pr, repo, sha },
+      "The delivery was taken over before its run could be linked; no run was created by this worker"
     );
     return;
   }

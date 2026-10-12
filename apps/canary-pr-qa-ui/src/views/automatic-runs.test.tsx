@@ -222,16 +222,16 @@ describe("AutomaticRuns", () => {
     const container = await rendered();
 
     expect(byId(container, "automaticAttempts")).toHaveTextContent(
-      "Limité par GitHub"
+      "Quota horaire atteint"
     );
     expect(byId(container, "automaticAttempts")).toHaveTextContent(
-      "GitHub a limité les lancements de ce dépôt."
+      "Le budget horaire de lancements automatiques de Canary (global ou par dépôt) est atteint. Ce commit n'est pas rejoué automatiquement : attendez la prochaine fenêtre, poussez un nouveau commit ou lancez le test depuis « Nouveau test »."
     );
     expect(byId(container, "automaticAttempts")).not.toHaveTextContent(
       "WEBHOOK_RATE_LIMIT"
     );
     expect(byId(container, "automaticSummary")).toHaveTextContent(
-      "1 limité(s) par GitHub"
+      "1 refusé(s) par le quota horaire"
     );
   });
 

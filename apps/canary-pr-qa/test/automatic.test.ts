@@ -156,7 +156,7 @@ it("reports the effective deadline of a delivery accepted without one", async ()
   expect(await delivery(q, "legacy")).toMatchObject({ status: "pending" });
 }, 30_000);
 
-it("lets only the owning worker promote, expire or reschedule an attempt", async () => {
+it("creates the run only for the worker that owns the attempt", async () => {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -165,47 +165,60 @@ it("lets only the owning worker promote, expire or reschedule an attempt", async
   );
   const first = await q.claimDelivery("token-one", 90);
   expect(first).toMatchObject({ id: "owned" });
-  // The lease expires (a probe that took longer than 90 s, or a restarted
-  // worker): a second worker takes the same delivery over.
+  // The lease expires (a probe longer than 90 s, or a restarted worker): a
+  // second worker takes the same delivery over.
   await due(q);
   expect(await q.claimDelivery("token-two", 90)).toMatchObject({
     id: "owned",
   });
-  const job = await q.enqueue(
-    "fixture/app",
-    1,
-    SHA,
-    "github-app",
-    { prUrl: PR_URL, publish: true, model: "fixture/model" },
-    "webhook:owned"
-  );
-  // Every write from the stale owner is refused, so no run can appear after
-  // another worker already decided what happened to the attempt.
-  expect(await q.deliveryClaim("owned", "token-one")).toBeUndefined();
+  // Every write from the stale owner is refused, and its promotion creates no
+  // run: nothing shared with the new owner can be cancelled or promoted twice.
   expect(
     await q.holdDelivery("owned", "token-one", "PREVIEW_NOT_FOUND", 30, 1800)
   ).toBe(false);
   expect(
     await q.failDelivery("owned", "token-one", "expired", "PREVIEW_NOT_FOUND")
   ).toBe(false);
-  expect(await q.promoteDelivery("owned", "token-one", job.id, 1800)).toBe(
-    false
-  );
+  const stale = await q.promoteAutomatic({
+    delivery: "owned",
+    key: "webhook:owned",
+    limits: { global: 60, repository: 20 },
+    pr: 1,
+    repo: "fixture/app",
+    run: { prUrl: PR_URL, publish: true, model: "fixture/model" },
+    sha: SHA,
+    token: "token-one",
+    waitSeconds: 1800,
+  });
+  expect(stale.promoted).toBe(false);
+  expect(stale.reason).toBe("claim_lost");
+  expect(await q.list(["fixture/app"])).toEqual([]);
   expect(await delivery(q, "owned")).toMatchObject({
     run_id: null,
     status: "pending",
   });
-  // The current owner promotes it normally.
-  expect(await q.promoteDelivery("owned", "token-two", job.id, 1800)).toBe(
-    true
-  );
+  // The current owner promotes it normally, once.
+  const fresh = await q.promoteAutomatic({
+    delivery: "owned",
+    key: "webhook:owned",
+    limits: { global: 60, repository: 20 },
+    pr: 1,
+    repo: "fixture/app",
+    run: { prUrl: PR_URL, publish: true, model: "fixture/model" },
+    sha: SHA,
+    token: "token-two",
+    waitSeconds: 1800,
+  });
+  expect(fresh.promoted).toBe(true);
+  expect(fresh.job).toMatchObject({ owner: "github-app", sha: SHA });
   expect(await delivery(q, "owned")).toMatchObject({
-    run_id: job.id,
+    run_id: fresh.job?.id,
     status: "processed",
   });
+  expect(await q.list(["fixture/app"])).toHaveLength(1);
 }, 30_000);
 
-it("refuses to promote an attempt whose deadline closed during the probe", async () => {
+it("creates no run for an attempt whose deadline closed during the probe", async () => {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -213,21 +226,26 @@ it("refuses to promote an attempt whose deadline closed during the probe", async
     await q.acceptDelivery("late-promotion", "pull_request", attempt, 1800)
   ).toBe(true);
   await q.claimDelivery("token", 90);
-  const job = await q.enqueue(
-    "fixture/app",
-    1,
-    SHA,
-    "github-app",
-    { prUrl: PR_URL, publish: true, model: "fixture/model" },
-    "webhook:late-promotion"
-  );
   // The preview only proved the exact SHA after the wait window elapsed.
   await q.pool.query(
     "UPDATE qa_deliveries SET deadline_at=now()-interval '1 second' WHERE id='late-promotion'"
   );
-  expect(await q.promoteDelivery("late-promotion", "token", job.id, 1800)).toBe(
-    false
-  );
+  const outcome = await q.promoteAutomatic({
+    delivery: "late-promotion",
+    key: "webhook:late-promotion",
+    limits: { global: 60, repository: 20 },
+    pr: 1,
+    repo: "fixture/app",
+    run: { prUrl: PR_URL, publish: true, model: "fixture/model" },
+    sha: SHA,
+    token: "token",
+    waitSeconds: 1800,
+  });
+  expect(outcome.promoted).toBe(false);
+  expect(outcome.reason).toBe("expired");
+  expect(outcome.job).toBeUndefined();
+  // Nothing was created, so the caller has no job to cancel or leak.
+  expect(await q.list(["fixture/app"])).toEqual([]);
   expect(await delivery(q, "late-promotion")).toMatchObject({
     run_id: null,
     status: "pending",
@@ -600,4 +618,26 @@ it("serves /dashboard/automatic scoped to the repositories of the requesting pri
     mode: "technical",
     repositories: ["fixture/app", "other/repo"],
   });
+  // The global switch turns every reported opt-in off: the dashboard must not
+  // announce automatic runs while the probe loop refuses each delivery.
+  const off = { ...config, autoRuns: false };
+  const offServer = await startProductionServer(off);
+  cleanup.push(() => offServer.shutdown());
+  const offUrl = `http://127.0.0.1:${(offServer.address() as { port: number }).port}`;
+  const headers = { Authorization: `Bearer ${config.QA_API_TOKEN}` };
+  const offStatus = (await (
+    await fetch(`${offUrl}/dashboard/status`, { headers })
+  ).json()) as { github: { autoRepos: string[]; repositories: string[] } };
+  expect(offStatus.github).toEqual({
+    autoRepos: [],
+    mode: "technical",
+    repositories: ["fixture/app", "other/repo"],
+  });
+  expect(
+    (await (
+      await fetch(`${offUrl}/dashboard/automatic`, { headers })
+    ).json()) as {
+      enabledRepos: string[];
+    }
+  ).toMatchObject({ enabledRepos: [] });
 }, 30_000);
