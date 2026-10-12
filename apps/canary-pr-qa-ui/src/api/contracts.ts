@@ -59,6 +59,8 @@ export interface RunJob extends Job {
 export interface SetupStatus {
   ai: { defaultModel: string; endpoint: string };
   github: {
+    /** Repositories where automatic runs are switched on (lowercase). */
+    autoRepos: string[];
     mode: "missing" | "technical" | "app";
     repositories: string[];
   };
@@ -70,6 +72,28 @@ export interface SetupStatus {
   };
 }
 
+/** Lifecycle of a pull-request delivery that has no run yet. */
+export type AutomaticState = "waiting" | "expired" | "rate_limited";
+
+export interface AutomaticAttempt {
+  attempts: number;
+  deadlineAt: string;
+  id: string;
+  pr: number;
+  reason: string;
+  repo: string;
+  runId: string | null;
+  sha: string;
+  state: AutomaticState;
+  updatedAt: string;
+}
+
+export interface AutomaticStatus {
+  attempts: AutomaticAttempt[];
+  enabledRepos: string[];
+  summary: { expired: number; rateLimited: number; waiting: number };
+}
+
 export interface Preflight {
   model: string;
   pr: { number: number; repo: string; sha: string; title: string };
@@ -79,6 +103,7 @@ export interface Preflight {
 
 export interface GitHubRepository {
   account: string;
+  auto_run: boolean;
   enabled: boolean;
   full_name: string;
   installation_id: string;

@@ -51,6 +51,27 @@ export const outcomes: Record<string, string> = {
   skipped: "Non testé",
 };
 
+/** Lifecycle of a pull-request delivery that has no run yet. */
+export const automaticStates: Record<string, string> = {
+  waiting: "En attente de la préversion",
+  expired: "Délai dépassé",
+  rate_limited: "Limité par GitHub",
+};
+
+/** Machine reason codes of an automatic attempt, explained in French. */
+export const automaticReasons: Record<string, string> = {
+  PREVIEW_NOT_FOUND:
+    "Aucune application de test publiée pour ce commit. Canary attend son déploiement.",
+  PREVIEW_SHA_MISMATCH:
+    "L’application de test ne présente pas encore ce commit. Canary attend son déploiement.",
+  PREVIEW_HOST_NOT_ALLOWED:
+    "L’adresse de test n’est pas autorisée sur le serveur. Vérifiez les hôtes dans Réglages.",
+  PREVIEW_UNAVAILABLE:
+    "L’application de test n’a pas répondu ou n’a pas pu être vérifiée. Canary réessaie avec un délai croissant.",
+  WEBHOOK_RATE_LIMIT:
+    "GitHub a limité les lancements de ce dépôt. Canary reprendra au prochain événement de la PR.",
+};
+
 export const phases: Record<string, string> = {
   context: "Lecture des changements de la pull request",
   preview: "Vérification de la version de votre application",
@@ -288,6 +309,26 @@ export const runs = {
   videoLabel: (title: string) => `Vidéo du scénario ${title}`,
 } as const;
 
+export const automatic = {
+  attempts: (count: number) =>
+    count === 1 ? "1 tentative" : `${count} tentatives`,
+  deadline: (date: string) => `Délai : ${date}`,
+  empty: "Aucune tentative automatique en attente.",
+  emptyHint:
+    "Canary lancera un test dès qu’une pull request changera sur un dépôt en lancement automatique.",
+  enabledRepos: (count: number) => `${count} dépôt(s) en lancement automatique`,
+  intro:
+    "Canary a détecté ces pull requests et attend une application de test au bon commit.",
+  manualHint: "Un lancement manuel reste possible depuis « Nouveau test ».",
+  reasonUnknown: (code: string) => `Cause à vérifier : ${code}.`,
+  summary: {
+    expired: (count: number) => `${count} délai(s) dépassé(s)`,
+    rateLimited: (count: number) => `${count} limité(s) par GitHub`,
+    waiting: (count: number) => `${count} en attente`,
+  },
+  title: "Lancements automatiques",
+} as const;
+
 export const settings = {
   ai: {
     catalog: (count: number) => `${count} modèles disponibles`,
@@ -305,6 +346,9 @@ export const settings = {
   eyebrowGithub: "Connexion 1 / 2",
   github: {
     appName: (slug: string, id: string) => `${slug} · App #${id}`,
+    autoRunHelp:
+      "Canary démarre un test dès qu’une pull request s’ouvre ou change sur un dépôt coché. Il attend l’application de test au bon commit ; les dépôts non cochés restent testables depuis « Nouveau test ».",
+    autoRunLabel: "Lancer automatiquement une QA à chaque pull request",
     confirmDelete:
       "Supprimer définitivement l'App GitHub ? L'App, ses installations et ses webhooks disparaissent de GitHub : cette action est irréversible.",
     confirmUninstall:

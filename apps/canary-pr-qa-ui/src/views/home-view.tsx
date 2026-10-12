@@ -11,6 +11,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/form";
 import { home, settings, type ViewName } from "@/i18n";
 import { outcomeLabel, stateLabel, type Tone, toneFor } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { AutomaticRuns } from "./automatic-runs";
 
 /**
  * Copy this screen owns. `src/i18n.ts` is shared and edited by several agents
@@ -302,6 +303,8 @@ export function HomeView({
           </span>
         </div>
       </Card>
+
+      <AutomaticRuns />
 
       <Card className="mb-5" hidden={!canWrite} id="onboarding">
         <CardHeader>

@@ -64,6 +64,7 @@ export const runJobListSchema = z.array(
 export const setupStatusSchema = z.object({
   ai: z.object({ defaultModel: z.string(), endpoint: z.string() }),
   github: z.object({
+    autoRepos: z.array(z.string()),
     mode: z.enum(["missing", "technical", "app"]),
     repositories: z.array(z.string()),
   }),
@@ -89,10 +90,40 @@ export const preflightSchema = z.object({
 
 export const githubRepositorySchema = z.object({
   account: z.string(),
+  auto_run: z.boolean(),
   enabled: z.boolean(),
   full_name: z.string(),
   installation_id: z.string(),
   private: z.boolean(),
+});
+
+export const automaticStateSchema = z.enum([
+  "waiting",
+  "expired",
+  "rate_limited",
+]);
+
+export const automaticAttemptSchema = z.object({
+  attempts: z.number(),
+  deadlineAt: z.string(),
+  id: z.string(),
+  reason: z.string(),
+  pr: z.number(),
+  repo: z.string(),
+  runId: z.string().nullable(),
+  sha: z.string(),
+  state: automaticStateSchema,
+  updatedAt: z.string(),
+});
+
+export const automaticStatusSchema = z.object({
+  attempts: z.array(automaticAttemptSchema),
+  enabledRepos: z.array(z.string()),
+  summary: z.object({
+    expired: z.number(),
+    rateLimited: z.number(),
+    waiting: z.number(),
+  }),
 });
 
 export const githubStatusSchema = z.object({
@@ -186,6 +217,7 @@ export const responseSchemas = {
   "/auth/login": principalSchema,
   "/auth/setup": principalSchema,
   "/auth/status": authStatusSchema,
+  "/dashboard/automatic": automaticStatusSchema,
   "/dashboard/status": setupStatusSchema,
   "/github/app": githubStatusSchema,
   "/github/app/install": githubInstallSchema,

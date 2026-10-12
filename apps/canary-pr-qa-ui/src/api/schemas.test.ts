@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  automaticStatusSchema,
   githubStatusSchema,
   runJobListSchema,
   runJobSchema,
@@ -83,10 +84,11 @@ describe("server payloads", () => {
   it("accepts a setup status without the admin-only preview fields", () => {
     const status = setupStatusSchema.parse({
       ai: { defaultModel: "model-x", endpoint: "ai.example.com" },
-      github: { mode: "technical", repositories: ["o/r"] },
+      github: { autoRepos: ["o/r"], mode: "technical", repositories: ["o/r"] },
       preview: { automatic: false, hosts: null, shaPath: null },
     });
     expect(status.preview.hosts).toBeNull();
+    expect(status.github.autoRepos).toEqual(["o/r"]);
   });
 
   it("accepts a GitHub status before any App exists", () => {
@@ -97,6 +99,7 @@ describe("server payloads", () => {
       repositories: [
         {
           account: "o",
+          auto_run: false,
           enabled: true,
           full_name: "o/r",
           installation_id: "42",
@@ -106,6 +109,42 @@ describe("server payloads", () => {
       restriction: [],
     });
     expect(status.app).toBeNull();
+    expect(status.repositories[0]?.auto_run).toBe(false);
+  });
+
+  it("keeps waiting, expired and rate-limited automatic attempts apart", () => {
+    const status = automaticStatusSchema.parse({
+      attempts: [
+        {
+          attempts: 3,
+          deadlineAt: "2026-01-02T03:04:05.000Z",
+          id: "delivery-1",
+          reason: "PREVIEW_NOT_FOUND",
+          pr: 7,
+          repo: "o/r",
+          runId: null,
+          sha: "4".repeat(40),
+          state: "waiting",
+          updatedAt: "2026-01-02T03:04:05.000Z",
+        },
+        {
+          attempts: 6,
+          deadlineAt: "2026-01-02T03:34:05.000Z",
+          id: "delivery-2",
+          reason: "WEBHOOK_RATE_LIMIT",
+          pr: 8,
+          repo: "o/r",
+          runId: null,
+          sha: "5".repeat(40),
+          state: "rate_limited",
+          updatedAt: "2026-01-02T03:34:05.000Z",
+        },
+      ],
+      enabledRepos: ["o/r"],
+      summary: { expired: 1, rateLimited: 1, waiting: 1 },
+    });
+    expect(status.attempts[0]?.state).toBe("waiting");
+    expect(status.summary.expired).toBe(1);
   });
 
   it("rejects a response that breaks the contract", () => {

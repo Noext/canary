@@ -11,6 +11,7 @@ import type {
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { SessionProvider } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
+import { settings } from "@/i18n";
 import { SettingsView } from "./settings-view";
 
 interface ApiCall {
@@ -68,6 +69,7 @@ function connectedGithub(): GitHubStatus {
     repositories: [
       {
         account: "fixture",
+        auto_run: true,
         enabled: true,
         full_name: "fixture/app",
         installation_id: "1",
@@ -91,6 +93,15 @@ function repositoriesOf(body: unknown): string[] {
   }
   const value = body.repositories;
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+/** `undefined` keeps the stored opt-ins, exactly like the server does. */
+function autoReposOf(body: unknown): string[] | undefined {
+  if (typeof body !== "object" || body === null || !("autoRepos" in body)) {
+    return;
+  }
+  const value = body.autoRepos;
+  return Array.isArray(value) ? value.map(String) : undefined;
 }
 
 function byId(container: HTMLElement, id: string): HTMLElement {
@@ -121,7 +132,11 @@ beforeEach(() => {
       defaultModel: "opencode-go/deepseek-v4.1-flash",
       endpoint: "ai.noext.fr",
     },
-    github: { mode: "app", repositories: ["fixture/app"] },
+    github: {
+      autoRepos: ["fixture/app"],
+      mode: "app",
+      repositories: ["fixture/app"],
+    },
     preview: {
       automatic: false,
       hosts: ["preview.example.com"],
@@ -180,10 +195,15 @@ beforeEach(() => {
         return github;
       case "/github/app/repositories": {
         const selected = repositoriesOf(options?.body);
+        const autoRepos = autoReposOf(options?.body);
         github = {
           ...github,
           repositories: github.repositories.map((repository) => ({
             ...repository,
+            auto_run:
+              autoRepos === undefined
+                ? repository.auto_run
+                : autoRepos.includes(repository.full_name),
             enabled: selected.includes(repository.full_name),
           })),
         };
@@ -309,6 +329,7 @@ describe("SettingsView", () => {
       repositories: [
         {
           account: "fixture",
+          auto_run: true,
           enabled: false,
           full_name: "fixture/app",
           installation_id: "1",
@@ -316,6 +337,7 @@ describe("SettingsView", () => {
         },
         {
           account: "fixture",
+          auto_run: true,
           enabled: true,
           full_name: "fixture/private",
           installation_id: "1",
@@ -344,6 +366,15 @@ describe("SettingsView", () => {
     expect(byId(container, "repo-fixture-app")).not.toBeDisabled();
     expect(byId(container, "repo-fixture-private")).toBeDisabled();
     expect(byId(container, "repo-fixture-private")).toBeChecked();
+    expect(byId(container, "repo-auto-fixture-app")).toBeEnabled();
+    expect(byId(container, "repo-auto-fixture-app")).toBeChecked();
+    expect(byId(container, "repo-auto-fixture-private")).toBeDisabled();
+    expect(list).toHaveTextContent(
+      "Lancer automatiquement une QA à chaque pull request"
+    );
+    // The Chromium e2e picks the selection checkbox by `value`: the automatic
+    // run toggle must not answer the same selector.
+    expect(list.querySelectorAll('input[value="fixture/app"]')).toHaveLength(1);
 
     await user.click(byId(container, "repo-fixture-app"));
     await user.click(byId(container, "githubSave"));
@@ -354,7 +385,7 @@ describe("SettingsView", () => {
       )
     );
     expect(calls).toContainEqual({
-      body: { repositories: ["fixture/app"] },
+      body: { autoRepos: ["fixture/app"], repositories: ["fixture/app"] },
       method: "PUT",
       path: "/github/app/repositories",
     });
@@ -364,6 +395,71 @@ describe("SettingsView", () => {
       )
     );
     expect(byId(container, "repo-fixture-app")).toBeChecked();
+  });
+
+  it("sends the automatic-run opt-ins with the repository selection", async () => {
+    github = {
+      app: {
+        id: "95001",
+        origin: "https://qa.example.com",
+        slug: "canary-fixture-app",
+      },
+      lastDelivery: null,
+      legacyConfigured: false,
+      repositories: [
+        {
+          account: "fixture",
+          auto_run: true,
+          enabled: true,
+          full_name: "fixture/app",
+          installation_id: "1",
+          private: false,
+        },
+        {
+          account: "fixture",
+          auto_run: false,
+          enabled: false,
+          full_name: "fixture/other",
+          installation_id: "1",
+          private: false,
+        },
+      ],
+      restriction: [],
+    };
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "githubConnection")).toHaveTextContent(
+        "Connecté · 1 dépôt(s)"
+      )
+    );
+    const toggles = screen.getAllByLabelText(settings.github.autoRunLabel);
+    expect(toggles.map((toggle) => toggle.getAttribute("id"))).toEqual([
+      "repo-auto-fixture-app",
+      "repo-auto-fixture-other",
+    ]);
+    expect(byId(container, "repo-auto-fixture-app")).toBeChecked();
+    expect(byId(container, "repo-auto-fixture-other")).not.toBeChecked();
+
+    await user.click(byId(container, "repo-auto-fixture-app"));
+    await user.click(byId(container, "repo-auto-fixture-other"));
+    await user.click(byId(container, "githubSave"));
+
+    await waitFor(() =>
+      expect(byId(container, "githubMessage")).toHaveTextContent(
+        "Dépôts enregistrés"
+      )
+    );
+    expect(calls).toContainEqual({
+      body: { autoRepos: ["fixture/other"], repositories: ["fixture/app"] },
+      method: "PUT",
+      path: "/github/app/repositories",
+    });
+    await waitFor(() =>
+      expect(byId(container, "repo-auto-fixture-other")).toBeChecked()
+    );
+    expect(byId(container, "repo-auto-fixture-app")).not.toBeChecked();
   });
 
   it("asks for confirmation before uninstalling, then erases only the local connection", async () => {
@@ -594,7 +690,7 @@ describe("SettingsView", () => {
         defaultModel: "opencode-go/deepseek-v4.1-flash",
         endpoint: "ai.noext.fr",
       },
-      github: { mode: "app", repositories: ["fixture/app"] },
+      github: { autoRepos: [], mode: "app", repositories: ["fixture/app"] },
       preview: { automatic: true },
     };
     const { container } = renderSettings();

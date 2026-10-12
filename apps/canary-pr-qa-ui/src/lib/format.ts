@@ -1,5 +1,12 @@
 import type { Outcome, RunStatus } from "@/api/contracts";
-import { outcomes, phases, runStates } from "@/i18n";
+import {
+  automatic,
+  automaticReasons,
+  automaticStates,
+  outcomes,
+  phases,
+  runStates,
+} from "@/i18n";
 
 export type Tone = "failed" | "neutral" | "pending" | "success";
 
@@ -43,6 +50,53 @@ export function phaseLabel(phase: string | null | undefined): string {
     return "";
   }
   return phases[phase] ?? phase;
+}
+
+/**
+ * An automatic attempt that waits is not a failure; only an expired deadline
+ * is. `rate_limited` stays neutral so the block never overstates the problem.
+ */
+export function toneForAutomatic(state: string | null | undefined): Tone {
+  if (state === "expired") {
+    return "failed";
+  }
+  return state === "waiting" ? "pending" : "neutral";
+}
+
+export function automaticStateLabel(state: string | null | undefined): string {
+  if (!state) {
+    return "";
+  }
+  return automaticStates[state] ?? state;
+}
+
+/** An unknown reason code is still shown, never swallowed. */
+export function automaticReasonLabel(
+  reason: string | null | undefined
+): string {
+  if (!reason) {
+    return "";
+  }
+  return automaticReasons[reason] ?? automatic.reasonUnknown(reason);
+}
+
+const repositoryPattern = /^[\w.-]+\/[\w.-]+$/;
+
+/**
+ * Repository names come from GitHub webhook payloads, so the pull-request link
+ * is only built when the name really looks like `owner/name`.
+ */
+export function githubPullUrl(
+  repo: string | null | undefined,
+  pr: number | null | undefined
+): string | undefined {
+  if (!(repo && repositoryPattern.test(repo))) {
+    return;
+  }
+  if (typeof pr !== "number" || !Number.isInteger(pr) || pr <= 0) {
+    return;
+  }
+  return `https://github.com/${repo}/pull/${pr}`;
 }
 
 const phaseGroups: string[][] = [
