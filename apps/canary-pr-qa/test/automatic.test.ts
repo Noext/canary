@@ -79,7 +79,7 @@ it("waits durably for a verifiable preview, then promotes the attempt into a rea
     status: "pending",
   });
   expect(await q.list(["fixture/app"])).toEqual([]);
-  const waiting = await q.automatic(["FIXTURE/APP"]);
+  const waiting = await q.automatic(["FIXTURE/APP"], 1800);
   expect(waiting.attempts).toMatchObject([
     {
       attempts: 1,
@@ -122,10 +122,37 @@ it("waits durably for a verifiable preview, then promotes the attempt into a rea
     { run_id: jobs[0]!.id },
   ]);
   // A promoted attempt is no longer reported as waiting.
-  expect(await q.automatic(["fixture/app"])).toEqual({
+  expect(await q.automatic(["fixture/app"], 1800)).toEqual({
     attempts: [],
     summary: { expired: 0, rateLimited: 0, waiting: 0 },
   });
+}, 30_000);
+
+it("reports the effective deadline of a delivery accepted without one", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  expect(await q.acceptDelivery("legacy", "pull_request", attempt, 1800)).toBe(
+    true
+  );
+  // A delivery stored before `deadline_at` existed (schema v5) keeps a null
+  // deadline: the worker still waits `created_at + QA_AUTO_PREVIEW_WAIT_SECONDS`,
+  // and the dashboard must show that same instant, never `created_at`.
+  await q.pool.query(
+    "UPDATE qa_deliveries SET deadline_at=NULL,created_at=now()-interval '10 seconds' WHERE id='legacy'"
+  );
+  const created = (
+    await q.pool.query<{ created_at: Date }>(
+      "SELECT created_at FROM qa_deliveries WHERE id='legacy'"
+    )
+  ).rows[0]!.created_at;
+  const waiting = await q.automatic(["fixture/app"], 900);
+  expect(Date.parse(waiting.attempts[0]!.deadlineAt)).toBe(
+    created.getTime() + 900_000
+  );
+  // The same rule keeps the worker waiting instead of expiring the attempt.
+  await processDelivery(q, f.config);
+  expect(await delivery(q, "legacy")).toMatchObject({ status: "pending" });
 }, 30_000);
 
 it("expires an attempt past its deadline, warns once and never replays it", async () => {
@@ -155,7 +182,7 @@ it("expires an attempt past its deadline, warns once and never replays it", asyn
       },
     },
   ]);
-  const automatic = await q.automatic(["fixture/app"]);
+  const automatic = await q.automatic(["fixture/app"], 1800);
   expect(automatic.attempts).toMatchObject([
     {
       id: "late",
@@ -202,7 +229,7 @@ it("records auto_disabled attempts when automatic runs are switched off", async 
     attempts: 0,
     status: "auto_disabled",
   });
-  expect(await q.automatic(["fixture/app"])).toEqual({
+  expect(await q.automatic(["fixture/app"], 1800)).toEqual({
     attempts: [],
     summary: { expired: 0, rateLimited: 0, waiting: 0 },
   });
@@ -271,7 +298,7 @@ it("fails the attempt as rate_limited when the durable hourly budget is spent", 
   expect(await audits(q, "automatic.rate_limited")).toMatchObject([
     { details: { delivery: "limited", repo: "fixture/app", sha: SHA } },
   ]);
-  expect(await q.automatic(["fixture/app"])).toMatchObject({
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
     attempts: [{ id: "limited", runId: null, state: "rate_limited" }],
     summary: { expired: 0, rateLimited: 1, waiting: 0 },
   });

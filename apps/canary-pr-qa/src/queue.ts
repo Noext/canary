@@ -326,14 +326,20 @@ export class Queue {
    * listed with the attempts still running; expired/rate-limited rows stay visible
    * for 24 hours. Attempts are not jobs: no `qa_jobs` row exists before promotion.
    */
-  async automatic(repos: string[]) {
+  /**
+   * Attempts the dashboard may show, scoped to `repos`. A pending delivery
+   * accepted before `deadline_at` existed (schema v5 and earlier) has no stored
+   * deadline: it is resolved here with the same rule the worker applies, so the
+   * displayed deadline is the one that actually ends the wait.
+   */
+  async automatic(repos: string[], deadlineSeconds: number) {
     const scope = repos.map((repo) => repo.toLowerCase());
     const rows = (
       await this.pool.query<AutomaticRow>(
-        `SELECT id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at FROM qa_deliveries
+        `SELECT id,payload,status,attempts,reason,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
          WHERE lower(payload->>'repo')=ANY($1::text[]) AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))
          ORDER BY updated_at DESC,created_at DESC LIMIT 50`,
-        [scope]
+        [scope, deadlineSeconds]
       )
     ).rows;
     const counts = (

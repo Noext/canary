@@ -475,7 +475,7 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
   ).toMatchObject([
     { details: { delivery: "rate-limited", repo: "fixture/app", sha: SHA } },
   ]);
-  expect(await q.automatic(["fixture/app"])).toMatchObject({
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
     attempts: [{ id: "rate-limited", runId: null, state: "rate_limited" }],
     summary: { expired: 0, rateLimited: 1, waiting: 0 },
   });

@@ -155,7 +155,10 @@ async function automaticStatus(
   for (const repo of enabledRepos) {
     requireAccess(user, repo);
   }
-  const { attempts, summary } = await queue.automatic(enabledRepos);
+  const { attempts, summary } = await queue.automatic(
+    enabledRepos,
+    effective.QA_AUTO_PREVIEW_WAIT_SECONDS
+  );
   return { attempts, enabledRepos, summary };
 }
 
