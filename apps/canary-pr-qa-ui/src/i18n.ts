@@ -294,6 +294,8 @@ export const newTest = {
   previewLabel: "URL de l'application de test",
   prHelp: "Copiez le lien d'une PR ouverte sur un dépôt connecté à Canary.",
   prLabel: "URL de la pull request",
+  prPlaceholder: "https://github.com/votre-equipe/projet/pull/123",
+  previewPlaceholder: "https://preview-de-votre-pr.example.com",
   publishedNotice:
     "Canary publiera le résultat sur cette PR. Le lancement utilise votre endpoint IA et peut consommer des tokens.",
   summary: (fields: {

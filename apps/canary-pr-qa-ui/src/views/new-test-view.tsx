@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useMemo, useRef, useState } from "react";
 import { api, errorText, post } from "@/api/client";
 import type { ModelCatalog } from "@/api/contracts";
 import { runCreatedSchema } from "@/api/schemas";
@@ -17,6 +17,7 @@ import {
   Select,
 } from "@/components/ui/form";
 import { common, newTest } from "@/i18n";
+import { createStore, useStore } from "@/lib/store";
 
 interface RunInput {
   model: string;
@@ -33,7 +34,40 @@ function buildInput(prUrl: string, preview: string, model: string): RunInput {
   };
 }
 
-const asJson = (value: RunInput) => JSON.stringify(value);
+/** Identity of a run input: exactly the parameters a preflight is verified for. */
+function inputKey(pr: string, preview: string, model: string): string {
+  return JSON.stringify(buildInput(pr, preview, model));
+}
+
+interface RunDraft {
+  pr: string;
+  preview: string;
+}
+
+/**
+ * The last `/runs/preflight` call: the input it ran on and the line to show for
+ * it. The line is bound to that input instead of being cleared by a reaction:
+ * as soon as the form leaves those parameters the message no longer describes
+ * it, so it stops rendering.
+ */
+interface PreflightCall {
+  input: string;
+  message: string;
+  summary?: string;
+}
+
+interface NewTestState {
+  call?: PreflightCall;
+  draft: RunDraft;
+  launchBusy: boolean;
+}
+
+function createNewTestStore() {
+  return createStore<NewTestState>({
+    draft: { pr: "", preview: "" },
+    launchBusy: false,
+  });
+}
 
 /**
  * The catalogue is never guessed, so an empty selection after a successful load
@@ -96,61 +130,93 @@ export function NewTestView() {
   } = useWorkspace();
 
   const form = useRef<HTMLFormElement>(null);
-  const [pr, setPr] = useState("");
-  const [preview, setPreview] = useState("");
-  const [feedback, setFeedback] = useState("");
-  const [summary, setSummary] = useState("");
-  const [launchBusy, setLaunchBusy] = useState(false);
+  // The form and the check it is armed by live in a store: a preflight answer
+  // arrives after the fact and must be compared with the parameters the form
+  // holds then, which is not what the render that sent it captured.
+  const [store] = useState(() => createNewTestStore());
+  const { call, draft, launchBusy } = useStore(store);
 
-  const input = useMemo(
-    () => buildInput(pr, preview, model),
-    [pr, preview, model]
+  const currentKey = useMemo(
+    () => inputKey(draft.pr, draft.preview, model),
+    [draft.pr, draft.preview, model]
   );
-  const latestInput = useRef(input);
+  // The notice and the armed launch belong to the exact input that was checked,
+  // so editing a field is enough to disarm them: nothing has to be cleared.
+  // `preflight` is the verified result the workspace shares with the rest of the
+  // dashboard, the local call only says which input it belongs to.
+  const summary =
+    call?.summary !== undefined &&
+    call.input === currentKey &&
+    preflight !== undefined
+      ? call.summary
+      : undefined;
+  const verified = summary !== undefined;
+  const feedback =
+    call !== undefined && call.input === currentKey ? call.message : "";
 
-  useEffect(() => {
-    const previous = latestInput.current;
-    latestInput.current = input;
-    if (asJson(previous) === asJson(input)) {
-      return;
-    }
-    // Editing a verified field drops the preflight: the launch button may only
-    // stay armed for the exact parameters that were checked.
-    setPreflight(undefined);
-    setSummary("");
-    setFeedback("");
-  }, [input, setPreflight]);
+  const editPr = (value: string) =>
+    store.set((current) => ({
+      ...current,
+      draft: { ...current.draft, pr: value },
+    }));
+
+  const editPreview = (value: string) =>
+    store.set((current) => ({
+      ...current,
+      draft: { ...current.draft, preview: value },
+    }));
 
   const check = async () => {
     if (form.current && !form.current.reportValidity()) {
       return;
     }
-    const requested = latestInput.current;
+    const requested = store.getSnapshot().draft;
+    const requestedKey = inputKey(requested.pr, requested.preview, model);
     clear();
     setPreflight(undefined);
-    setSummary("");
     setPreflightBusy(true);
-    setFeedback(newTest.checkReading);
+    store.set((current) => ({
+      ...current,
+      call: { input: requestedKey, message: newTest.checkReading },
+    }));
     try {
-      const checked = await api("/runs/preflight", post(requested));
-      if (asJson(latestInput.current) !== asJson(requested)) {
-        setFeedback(newTest.checkChanged);
+      const checked = await api(
+        "/runs/preflight",
+        post(buildInput(requested.pr, requested.preview, model))
+      );
+      const edited = store.getSnapshot().draft;
+      const editedKey = inputKey(edited.pr, edited.preview, model);
+      if (editedKey !== requestedKey) {
+        // The answer describes parameters the form no longer holds: say so
+        // instead of arming the launch on a stale preflight. It is never
+        // handed to the workspace.
+        store.set((current) => ({
+          ...current,
+          call: { input: editedKey, message: newTest.checkChanged },
+        }));
         return;
       }
       const host = new URL(checked.preview.url).host;
       setPreflight(checked);
-      setSummary(
-        newTest.summary({
-          host,
-          number: checked.pr.number,
-          repo: checked.pr.repo,
-          sha: checked.pr.sha,
-          title: checked.pr.title,
-        })
-      );
-      setFeedback(newTest.checkReady);
+      store.set((current) => ({
+        ...current,
+        call: {
+          input: requestedKey,
+          message: newTest.checkReady,
+          summary: newTest.summary({
+            host,
+            number: checked.pr.number,
+            repo: checked.pr.repo,
+            sha: checked.pr.sha,
+            title: checked.pr.title,
+          }),
+        },
+      }));
     } catch (failure) {
-      setFeedback(errorText(failure));
+      store.set((current) => ({
+        ...current,
+        call: { input: requestedKey, message: errorText(failure) },
+      }));
       report(failure);
     } finally {
       setPreflightBusy(false);
@@ -159,27 +225,38 @@ export function NewTestView() {
 
   const launch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!preflight) {
-      setFeedback(newTest.checkRequired);
+    if (summary === undefined) {
+      store.set((current) => ({
+        ...current,
+        call: { input: currentKey, message: newTest.checkRequired },
+      }));
       return;
     }
-    setLaunchBusy(true);
-    setFeedback(newTest.launching);
+    const requested = store.getSnapshot().draft;
+    store.set((current) => ({
+      ...current,
+      call: { input: currentKey, message: newTest.launching },
+      launchBusy: true,
+    }));
     try {
       const run = await api("/runs", {
-        body: { ...latestInput.current, publish: true },
+        body: {
+          ...buildInput(requested.pr, requested.preview, model),
+          publish: true,
+        },
         method: "POST",
         schema: runCreatedSchema,
       });
+      // The preflight is consumed by the launch, the "Création du test…" line
+      // stays until the history view replaces this one.
       setPreflight(undefined);
-      setSummary("");
       // Opening the run switches to the history view, which reloads the run
       // list on mount with the created test included.
       openRun(run.id);
     } catch (failure) {
       report(failure);
     } finally {
-      setLaunchBusy(false);
+      store.set((current) => ({ ...current, launchBusy: false }));
     }
   };
 
@@ -226,11 +303,11 @@ export function NewTestView() {
             <Field help={newTest.prHelp} htmlFor="pr" label={newTest.prLabel}>
               <Input
                 id="pr"
-                onChange={(event) => setPr(event.target.value)}
-                placeholder="https://github.com/votre-equipe/projet/pull/123"
+                onChange={(event) => editPr(event.target.value)}
+                placeholder={newTest.prPlaceholder}
                 required
                 type="url"
-                value={pr}
+                value={draft.pr}
               />
             </Field>
             <Field
@@ -240,10 +317,10 @@ export function NewTestView() {
             >
               <Input
                 id="preview"
-                onChange={(event) => setPreview(event.target.value)}
-                placeholder="https://preview-de-votre-pr.example.com"
+                onChange={(event) => editPreview(event.target.value)}
+                placeholder={newTest.previewPlaceholder}
                 type="url"
-                value={preview}
+                value={draft.preview}
               />
             </Field>
             <Field htmlFor="model" label={newTest.modelLabel}>
@@ -284,12 +361,12 @@ export function NewTestView() {
                 {modelState}
               </p>
             </Field>
-            {preflight ? (
+            {summary === undefined ? null : (
               <Notice id="preflightResult">
                 <strong>{newTest.verified}</strong>
                 <p id="preflightSummary">{summary}</p>
               </Notice>
-            ) : null}
+            )}
             <div
               className="text-muted-foreground text-sm"
               id="runFeedback"
@@ -307,7 +384,7 @@ export function NewTestView() {
               </Button>
               <Button
                 disabled={
-                  !(githubReady && modelReady && preflight) ||
+                  !(githubReady && modelReady && verified) ||
                   preflightBusy ||
                   launchBusy
                 }

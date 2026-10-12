@@ -6,6 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardError } from "@/api/client";
 import type {
@@ -126,6 +127,24 @@ const bodiesFor = (path: string) =>
 function RouteProbe() {
   const { requestedRun, view } = useNavigation();
   return <p data-testid="route">{`${view}:${requestedRun ?? ""}`}</p>;
+}
+
+/** The form can be unmounted and mounted again under the same workspace. */
+function RemountableScreen() {
+  const [shown, setShown] = useState(true);
+  return (
+    <>
+      <button
+        id="toggleRunForm"
+        onClick={() => setShown((current) => !current)}
+        type="button"
+      >
+        Basculer le formulaire
+      </button>
+      {shown ? <NewTestView /> : null}
+      <RouteProbe />
+    </>
+  );
 }
 
 function renderScreen() {
@@ -332,6 +351,62 @@ describe("NewTestView", () => {
     );
     expect(byId("startRun")).toBeDisabled();
     expect(byId("runFeedback")).toHaveTextContent("");
+  });
+
+  it("keeps the verified notice bound to the parameters it was checked for", async () => {
+    serve((path) => path === "/runs/preflight", PREFLIGHT);
+    await readyScreen();
+    await verifyAccess();
+
+    await userEvent.selectOptions(byId("model"), "fixture-model");
+    await waitFor(() =>
+      expect(document.getElementById("preflightResult")).toBeNull()
+    );
+
+    // Coming back to the checked parameters arms the launch again: the
+    // preflight belongs to that input, it is not consumed by the first edit.
+    await userEvent.selectOptions(byId("model"), "fixture-alternate-model");
+    await waitFor(() =>
+      expect(document.getElementById("preflightResult")).not.toBeNull()
+    );
+    expect(byId("preflightSummary")).toHaveTextContent("Ajoute le panier");
+    expect(byId("runFeedback")).toHaveTextContent(newTest.checkReady);
+    expect(byId("startRun")).toBeEnabled();
+
+    // The request is built from the trimmed URLs, so a trailing blank is not a
+    // change of parameters and must not disarm the launch.
+    await userEvent.type(byId("preview"), " ");
+    expect(document.getElementById("preflightResult")).not.toBeNull();
+    expect(byId("startRun")).toBeEnabled();
+  });
+
+  it("requires a new check for a form that was mounted again", async () => {
+    serve((path) => path === "/runs/preflight", PREFLIGHT);
+    render(
+      <ErrorProvider>
+        <ErrorAlert />
+        <SessionProvider>
+          <WorkspaceProvider>
+            <NavigationProvider>
+              <RemountableScreen />
+            </NavigationProvider>
+          </WorkspaceProvider>
+        </SessionProvider>
+      </ErrorProvider>
+    );
+    await waitFor(() => expect(byId("model")).toBeEnabled());
+    await verifyAccess();
+    expect(byId("startRun")).toBeEnabled();
+
+    await userEvent.click(byId("toggleRunForm"));
+    await waitFor(() => expect(document.getElementById("runForm")).toBeNull());
+    await userEvent.click(byId("toggleRunForm"));
+    await waitFor(() => expect(byId("runForm")).toBeInTheDocument());
+
+    // The workspace still holds the verified preflight, the empty form does
+    // not: it must check its own input before arming the launch.
+    expect(document.getElementById("preflightResult")).toBeNull();
+    expect(byId("startRun")).toBeDisabled();
   });
 
   it("reports a preflight failure on the feedback line and the alert", async () => {

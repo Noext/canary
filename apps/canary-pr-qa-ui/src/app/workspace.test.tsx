@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace, WorkspaceProvider } from "./workspace";
 
@@ -17,11 +17,16 @@ vi.mock("./session", () => ({ useSession: () => session }));
 
 const setupStatus = {
   ai: { defaultModel: "model-x", endpoint: "ai.example.com" },
-  github: { mode: "app" as const, repositories: ["o/r"] },
+  github: {
+    autoRepos: ["o/r"],
+    mode: "app" as const,
+    repositories: ["o/r"],
+  },
   preview: { automatic: false },
 };
 
 function Probe() {
+  const [rejected, setRejected] = useState("");
   const {
     githubError,
     loadGithub,
@@ -42,9 +47,17 @@ function Probe() {
       <button onClick={() => void loadStatus()} type="button">
         status
       </button>
-      <button onClick={() => void loadGithub()} type="button">
+      <button
+        onClick={() => {
+          loadGithub().catch((failure: unknown) => {
+            setRejected(failure instanceof Error ? failure.message : "failed");
+          });
+        }}
+        type="button"
+      >
         github
       </button>
+      <span data-testid="rejected">{rejected}</span>
       <button onClick={() => void loadModels()} type="button">
         reload
       </button>
@@ -103,6 +116,33 @@ describe("WorkspaceProvider", () => {
     await userEvent.click(screen.getByRole("button", { name: "status" }));
     await waitFor(() =>
       expect(screen.getByTestId("statusError")).toHaveTextContent("")
+    );
+  });
+
+  it("propagates a failed GitHub reload instead of trusting the cache", async () => {
+    session = { canWrite: true, isAdmin: true };
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/models") {
+        return Promise.resolve({
+          data: [{ id: "model-x" }],
+          defaultModel: "model-x",
+        });
+      }
+      if (path === "/github/app") {
+        return Promise.reject(new Error("Reload refusé."));
+      }
+      return Promise.resolve(setupStatus);
+    });
+    renderWorkspace();
+    await waitFor(() =>
+      expect(screen.getByTestId("githubError")).toHaveTextContent(
+        "Reload refusé."
+      )
+    );
+    // A mutation awaiting this call must see the rejection, not a silent pass.
+    await userEvent.click(screen.getByRole("button", { name: "github" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("rejected")).toHaveTextContent("Reload refusé.")
     );
   });
 

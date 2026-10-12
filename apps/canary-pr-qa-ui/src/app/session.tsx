@@ -3,16 +3,22 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
-import { api, DashboardError, post, SESSION_EXPIRED_EVENT } from "@/api/client";
+import { api, post, SESSION_EXPIRED_EVENT } from "@/api/client";
 import type { Principal } from "@/api/contracts";
+import { okSchema } from "@/api/schemas";
 import { auth } from "@/i18n";
+import { createStore, type Store, useStore } from "@/lib/store";
 
 export type SessionPhase = "anonymous" | "authenticated" | "loading";
+
+interface SessionState {
+  initialized: boolean;
+  phase: SessionPhase;
+  user?: Principal;
+}
 
 interface SessionContextValue {
   canWrite: boolean;
@@ -32,6 +38,53 @@ const SessionContext = createContext<SessionContextValue | undefined>(
   undefined
 );
 
+async function loadStatus(store: Store<SessionState>) {
+  try {
+    const status = await api("/auth/status");
+    store.set((current) => ({ ...current, initialized: status.initialized }));
+  } catch {
+    // A failed status probe must not block the login screen.
+    store.set((current) => ({ ...current, initialized: true }));
+  }
+}
+
+async function loadUser(store: Store<SessionState>) {
+  try {
+    const principal = await api("/me");
+    store.set(() => ({
+      initialized: true,
+      phase: "authenticated",
+      user: principal,
+    }));
+  } catch {
+    store.set((current) => ({ ...current, phase: "anonymous" }));
+  }
+}
+
+function createSessionStore(setupCode: string | undefined) {
+  return createStore<SessionState>(
+    { initialized: false, phase: "loading" },
+    (store) => {
+      // The subscription that React performs on mount is what starts the probe.
+      void loadStatus(store);
+      if (setupCode) {
+        // A setup link always wins: never silently resume an existing session.
+        store.set((current) => ({ ...current, phase: "anonymous" }));
+      } else {
+        void loadUser(store);
+      }
+      document.addEventListener(SESSION_EXPIRED_EVENT, () => {
+        store.set((current) => ({
+          ...current,
+          phase: "anonymous",
+          user: undefined,
+        }));
+        void loadStatus(store);
+      });
+    }
+  );
+}
+
 export function SessionProvider({
   children,
   setupCode,
@@ -39,67 +92,20 @@ export function SessionProvider({
   children: ReactNode;
   setupCode?: string;
 }) {
-  const [user, setUser] = useState<Principal>();
-  const [phase, setPhase] = useState<SessionPhase>("loading");
-  const [initialized, setInitialized] = useState(false);
-  const signingIn = useRef(false);
-
-  const loadStatus = useCallback(async () => {
-    try {
-      const status = await api("/auth/status");
-      setInitialized(status.initialized);
-    } catch {
-      setInitialized(true);
-    }
-  }, []);
-
-  const refreshUser = useCallback(async () => {
-    const principal = await api("/me");
-    setUser(principal);
-    setPhase("authenticated");
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void loadStatus();
-    if (setupCode) {
-      // A setup link always wins: never silently resume an existing session.
-      setPhase("anonymous");
-    } else {
-      void refreshUser().catch(() => {
-        if (active) {
-          setPhase("anonymous");
-        }
-      });
-    }
-    return () => {
-      active = false;
-    };
-  }, [loadStatus, refreshUser, setupCode]);
-
-  useEffect(() => {
-    const expire = () => {
-      setUser(undefined);
-      setPhase("anonymous");
-      void loadStatus();
-    };
-    document.addEventListener(SESSION_EXPIRED_EVENT, expire);
-    return () => document.removeEventListener(SESSION_EXPIRED_EVENT, expire);
-  }, [loadStatus]);
+  const [store] = useState(() => createSessionStore(setupCode));
+  const state = useStore(store);
 
   const authenticate = useCallback(
     async (path: "/auth/login" | "/auth/setup", body: unknown) => {
-      signingIn.current = true;
-      try {
-        const principal = await api(path, post(body));
-        setUser(principal);
-        setPhase("authenticated");
-        void loadStatus();
-      } finally {
-        signingIn.current = false;
-      }
+      const principal = await api(path, post(body));
+      store.set(() => ({
+        initialized: true,
+        phase: "authenticated",
+        user: principal,
+      }));
+      void loadStatus(store);
     },
-    [loadStatus]
+    [store]
   );
 
   const login = useCallback(
@@ -120,49 +126,41 @@ export function SessionProvider({
         headers: { Authorization: `Bearer ${token}` },
         method: "POST",
       });
-      setUser(principal);
-      setPhase("authenticated");
-      void loadStatus();
+      store.set(() => ({
+        initialized: true,
+        phase: "authenticated",
+        user: principal,
+      }));
+      void loadStatus(store);
     },
-    [loadStatus]
+    [store]
   );
 
+  const refreshUser = useCallback(() => loadUser(store), [store]);
+
   const logout = useCallback(async () => {
-    try {
-      await api("/session", { method: "DELETE" });
-    } catch (failure) {
-      if (!(failure instanceof DashboardError)) {
-        throw failure;
-      }
-    }
+    // DELETE /session answers {ok:true}, not a principal: without the explicit
+    // schema every logout looked like a contract error and was swallowed, so a
+    // real server-side failure left the cookie valid while the UI reloaded.
+    await api("/session", { method: "DELETE", schema: okSchema });
     window.location.reload();
   }, []);
 
   const value = useMemo<SessionContextValue>(
     () => ({
-      canWrite: user ? user.role !== "viewer" : false,
+      canWrite: state.user ? state.user.role !== "viewer" : false,
       createAdmin,
-      initialized,
-      isAdmin: user?.role === "admin",
+      initialized: state.initialized,
+      isAdmin: state.user?.role === "admin",
       login,
       loginWithToken,
       logout,
-      phase,
+      phase: state.phase,
       refreshUser,
       ...(setupCode ? { setupCode } : {}),
-      ...(user ? { user } : {}),
+      ...(state.user ? { user: state.user } : {}),
     }),
-    [
-      createAdmin,
-      initialized,
-      login,
-      loginWithToken,
-      logout,
-      phase,
-      refreshUser,
-      setupCode,
-      user,
-    ]
+    [createAdmin, login, loginWithToken, logout, refreshUser, setupCode, state]
   );
 
   return (

@@ -1,0 +1,8 @@
+// React standards for the PR QA dashboard: work belongs in event handlers, in
+// derived values, or in a store subscribed through `useSyncExternalStore`.
+// An effect that "reacts" to state is almost always a modelling mistake.
+language js
+
+`useEffect` as $hook where {
+  register_diagnostic(span=$hook, message="useEffect is banned: use an event handler, a derived value, or a store read with useSyncExternalStore", severity="error")
+}

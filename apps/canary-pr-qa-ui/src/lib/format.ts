@@ -156,26 +156,6 @@ export function githubCommentUrl(
   }
 }
 
-export function usageText(
-  usage:
-    | {
-        costUsd: number;
-        pricingConfigured?: boolean | null;
-        tokens: number;
-      }
-    | null
-    | undefined
-): string {
-  if (!usage) {
-    return "";
-  }
-  return `${usage.tokens} tokens · ${
-    usage.pricingConfigured === false
-      ? "coût non configuré"
-      : `coût estimé $${usage.costUsd.toFixed(4)}`
-  }`;
-}
-
 export function isOutcome(value: string | undefined): value is Outcome {
   return value !== undefined && value in outcomes;
 }

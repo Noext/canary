@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { api } from "@/api/client";
+import { useState } from "react";
 import type { RunJob, SetupStatus } from "@/api/contracts";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
@@ -10,8 +9,10 @@ import { Pill } from "@/components/ui/feedback";
 import { Card, CardHeader, CardTitle } from "@/components/ui/form";
 import { common, home, newTest, settings, type ViewName } from "@/i18n";
 import { outcomeLabel, stateLabel, type Tone, toneFor } from "@/lib/format";
+import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AutomaticRuns } from "./automatic-runs";
+import { createHomeStore } from "./home-runs-store";
 
 /** The label of `#welcomeAction`, derived from readiness exactly like the legacy `syncReadiness()`. */
 function welcomeActionLabel(githubReady: boolean, modelReady: boolean): string {
@@ -70,7 +71,7 @@ function Stat({
   hint: string;
   id: string;
   label: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
@@ -191,6 +192,28 @@ function activeStepFor(
 }
 
 /**
+ * The stats say what is happening instead of pretending the account has no
+ * runs: an ellipsis while loading, an em dash when the list could not load.
+ */
+function statValues(
+  loading: boolean,
+  error: string | undefined,
+  counts: { active: number; passed: number; total: number }
+): {
+  active: number | string;
+  passed: number | string;
+  total: number | string;
+} {
+  if (error) {
+    return { active: "—", passed: "—", total: "—" };
+  }
+  if (loading) {
+    return { active: "…", passed: "…", total: "…" };
+  }
+  return counts;
+}
+
+/**
  * Home screen: readiness, the three bootstrap steps, the run counters and the
  * three most recent runs. The counts come from the runs of the whole account,
  * never from the history filters of the runs screen.
@@ -208,30 +231,11 @@ export function HomeView({
   const { models, modelsBusy, modelsError } = useWorkspace();
   const { navigate, openRun } = useNavigation();
   const { report } = useError();
-  const [runs, setRuns] = useState<RunJob[]>();
+  // The store instance belongs to this screen, never to module scope: React's
+  // first subscription starts the request and abandoning the screen aborts it.
+  const [store] = useState(() => createHomeStore(report));
+  const { error, loading, runs: all } = useStore(store);
 
-  useEffect(() => {
-    let active = true;
-    api("/runs")
-      .then((rows) => {
-        if (active) {
-          setRuns(rows);
-        }
-      })
-      .catch((failure: unknown) => {
-        if (!active) {
-          return;
-        }
-        report(failure);
-        setRuns([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [report]);
-
-  const loading = runs === undefined;
-  const all = runs ?? [];
   const recent = all.slice(0, 3);
   const counts = {
     active: all.filter(
@@ -240,6 +244,7 @@ export function HomeView({
     passed: all.filter((run) => run.outcome === "passed").length,
     total: all.length,
   };
+  const stats = statValues(loading, error, counts);
   const returning = canWrite && all.length > 0;
   const readyCount = Number(githubReady) + Number(modelReady);
   const activeStep = activeStepFor(githubReady, modelReady);
@@ -337,19 +342,19 @@ export function HomeView({
           hint={home.stats.totalHint}
           id="countTotal"
           label={home.stats.total}
-          value={counts.total}
+          value={stats.total}
         />
         <Stat
           hint={home.stats.activeHint}
           id="countActive"
           label={home.stats.active}
-          value={counts.active}
+          value={stats.active}
         />
         <Stat
           hint={home.stats.passedHint}
           id="countPassed"
           label={home.stats.passed}
-          value={counts.passed}
+          value={stats.passed}
         />
       </div>
 
@@ -364,14 +369,14 @@ export function HomeView({
             {home.showHistory}
           </Button>
         </CardHeader>
-        {loading ? (
+        {loading || error ? (
           <p className="text-muted-foreground text-sm" role="status">
-            {home.runsLoading}
+            {error ?? home.runsLoading}
           </p>
         ) : null}
         <div
           className="py-6 text-center"
-          hidden={loading || all.length > 0}
+          hidden={loading || Boolean(error) || all.length > 0}
           id="overviewEmpty"
         >
           <div aria-hidden="true" className="text-2xl">

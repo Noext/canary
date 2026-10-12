@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
 import { useSession } from "@/app/session";
 import { useWorkspace } from "@/app/workspace";
@@ -31,6 +32,7 @@ function Logo() {
 
 export function Shell() {
   const { canWrite, isAdmin, logout, user } = useSession();
+  const { report } = useError();
   const { navigate, view } = useNavigation();
   const { githubReady, modelReady, status } = useWorkspace();
   const copy = views[view];
@@ -96,7 +98,9 @@ export function Shell() {
             <button
               className="rounded-md px-2 py-1 text-muted-foreground text-sm underline-offset-4 hover:underline"
               id="logout"
-              onClick={() => void logout()}
+              onClick={() =>
+                void logout().catch((failure: unknown) => report(failure))
+              }
               type="button"
             >
               {shell.logout}

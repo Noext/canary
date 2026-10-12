@@ -187,17 +187,27 @@ const planAssertionSchema = z.object({
   id: z.string(),
 });
 
-const scenarioSummarySchema = z.object({
-  artifacts: z.array(z.string()),
-  assertions: z.array(resultAssertionSchema).optional(),
-  error: z.string().nullish(),
-  outcome: outcomeSchema,
-  scenario: z.object({
-    assertions: z.array(planAssertionSchema).optional(),
-    id: z.string(),
-    title: z.string(),
-  }),
-});
+/**
+ * Passthrough on purpose: the dashboard renders a subset of the report, but the
+ * technical diagnostic prints the whole result. Stripping the undeclared fields
+ * (steps, contract, sessionId, nested diagnostics) removed exactly the data an
+ * operator needs to investigate a failed run.
+ */
+const scenarioSummarySchema = z
+  .object({
+    artifacts: z.array(z.string()),
+    assertions: z.array(resultAssertionSchema).optional(),
+    error: z.string().nullish(),
+    outcome: outcomeSchema,
+    scenario: z
+      .object({
+        assertions: z.array(planAssertionSchema).optional(),
+        id: z.string(),
+        title: z.string(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
 
 export const runResultSchema = z
   .object({

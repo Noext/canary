@@ -1,6 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { api } from "@/api/client";
-import type { AutomaticStatus } from "@/api/contracts";
+import { type ReactNode, useState } from "react";
 import { useError } from "@/app/errors";
 import { useWorkspace } from "@/app/workspace";
 import { Pill } from "@/components/ui/feedback";
@@ -19,12 +17,8 @@ import {
   shortSha,
   toneForAutomatic,
 } from "@/lib/format";
-
-const emptyStatus: AutomaticStatus = {
-  attempts: [],
-  enabledRepos: [],
-  summary: { expired: 0, rateLimited: 0, waiting: 0 },
-};
+import { useStore } from "@/lib/store";
+import { createAutomaticRunsStore } from "./automatic-runs-store";
 
 /**
  * Pull requests Canary picked up by itself and could not run yet: the exact-SHA
@@ -35,43 +29,23 @@ const emptyStatus: AutomaticStatus = {
  */
 export function AutomaticRuns(): ReactNode {
   const { githubReady } = useWorkspace();
-  const { report } = useError();
-  const [status, setStatus] = useState<AutomaticStatus>();
-
-  useEffect(() => {
-    if (!githubReady) {
-      return;
-    }
-    let active = true;
-    api("/dashboard/automatic")
-      .then((next) => {
-        if (active) {
-          setStatus(next);
-        }
-      })
-      .catch((failure: unknown) => {
-        if (!active) {
-          return;
-        }
-        // The alert carries the failure; the block keeps an empty, readable
-        // list instead of a half-rendered one.
-        report(failure);
-        setStatus(emptyStatus);
-      });
-    return () => {
-      active = false;
-    };
-  }, [githubReady, report]);
-
-  // Without GitHub there is no automatic run to report, and the endpoint would
-  // only answer an empty scope.
+  // Without GitHub there is no automatic run to report: the block is not
+  // mounted, so no request is issued for a scope that can only be empty.
   if (!githubReady) {
     return null;
   }
+  return <AutomaticRunsBlock />;
+}
 
-  const loading = status === undefined;
-  const attempts = status?.attempts ?? [];
-  const summary = status?.summary ?? emptyStatus.summary;
+function AutomaticRunsBlock(): ReactNode {
+  const { report } = useError();
+  // The store instance belongs to this screen, never to module scope: React's
+  // first subscription starts the request and abandoning the screen aborts it.
+  const [store] = useState(() => createAutomaticRunsStore(report));
+  const { loading, status } = useStore(store);
+
+  const attempts = status.attempts;
+  const summary = status.summary;
 
   return (
     <Card className="mb-5" id="automaticRuns">
@@ -85,7 +59,7 @@ export function AutomaticRuns(): ReactNode {
           hidden={loading}
           id="automaticEnabledRepos"
         >
-          {automatic.enabledRepos(status?.enabledRepos.length ?? 0)}
+          {automatic.enabledRepos(status.enabledRepos.length)}
         </span>
       </CardHeader>
       <p

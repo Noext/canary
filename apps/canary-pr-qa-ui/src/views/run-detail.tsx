@@ -1,8 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { z } from "zod";
-import { api, errorText, post } from "@/api/client";
+import { useState } from "react";
 import type { RunResult, ScenarioSummary } from "@/api/contracts";
-import { cancelSchema, runJobSchema, runResultSchema } from "@/api/schemas";
 import { useError } from "@/app/errors";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
@@ -10,19 +7,16 @@ import { Card, CardHeader } from "@/components/ui/form";
 import { runs as copy, phaseSteps, resultSummaries } from "@/i18n";
 import {
   githubCommentUrl,
-  isTerminal,
   outcomeLabel,
   phaseIndex,
-  phaseLabel,
   safeArtifactPath,
   shortSha,
   stateLabel,
   toneFor,
-  usageText,
 } from "@/lib/format";
+import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-
-type LiveRun = z.infer<typeof runJobSchema>;
+import { createRunDetailStore } from "./run-detail-store";
 
 /**
  * Runs recorded before model selection existed carry no `input`: the wire
@@ -37,17 +31,6 @@ export function modelFromInput(input: unknown): string {
 }
 
 const errorOutcomes = ["failed", "blocked", "stale"];
-
-function parseFrame(data: string): LiveRun | undefined {
-  let payload: unknown;
-  try {
-    payload = JSON.parse(data);
-  } catch {
-    return;
-  }
-  const parsed = runJobSchema.safeParse(payload);
-  return parsed.success ? parsed.data : undefined;
-}
 
 /** Phase tracker states: real utilities, the stylesheet has no `.done`. */
 const phaseBase = "rounded-full border px-2 py-1";
@@ -69,19 +52,6 @@ function phaseClass(
   return index < phase ? phaseDone : "";
 }
 
-function messageFor(data: LiveRun): string {
-  if (data.error) {
-    return `${copy.liveInterrupted}${data.error}`;
-  }
-  const progress = data.progress ?? {};
-  const base =
-    phaseLabel(progress.phase) || stateLabel(data.status) || copy.eventsLoading;
-  const details = [progress.scenarioId, progress.action].filter(
-    (value): value is string => Boolean(value)
-  );
-  return details.length > 0 ? `${base} · ${details.join(" · ")}` : base;
-}
-
 function summaryFor(result: RunResult): string {
   const base = resultSummaries[result.outcome] ?? copy.resultFallback;
   const error = result.error ? ` ${result.error}` : "";
@@ -98,6 +68,21 @@ function summaryToneFor(
     return "warning";
   }
   return errorOutcomes.includes(result.outcome) ? "error" : "neutral";
+}
+
+/** The token/cost line, whose copy belongs to i18n like the rest. */
+function usageLine(usage: RunResult["usage"]): string {
+  if (!usage) {
+    return "";
+  }
+  return copy.usage(
+    usage.tokens,
+    usage.costUsd,
+    // Only a proven `true` may be labelled as an estimate: results persisted
+    // before the field existed, or any result that omits it, carry no proof
+    // that a tariff was configured.
+    usage.pricingConfigured === true
+  );
 }
 
 /** Bounded rendering of an `actual` value, which is arbitrary JSON. */
@@ -196,6 +181,12 @@ function ScenarioCard({
 /**
  * The selected run: its live progress, its result report and the technical
  * diagnostic every assertion of the end-to-end suite reads.
+ *
+ * The whole run lifecycle lives in the store, which the caller keys on the
+ * selected id: the subscription React performs on mount is what validates the
+ * run and opens its stream, and the one it releases on unmount closes it.
+ * `onUpdate` is captured once — it is the stable refresh of the caller, not a
+ * value that changes per render.
  */
 export function RunDetail({
   canWrite,
@@ -207,120 +198,11 @@ export function RunDetail({
   runId?: string;
 }) {
   const { report } = useError();
-  const [job, setJob] = useState<LiveRun>();
-  const [result, setResult] = useState<RunResult>();
-  const [resultFailure, setResultFailure] = useState<string>();
-  const [live, setLive] = useState<string>(copy.liveConnecting);
-  const [message, setMessage] = useState<string>(copy.eventsLoading);
-  const [cancelling, setCancelling] = useState(false);
-  const update = useRef(onUpdate);
-
-  useEffect(() => {
-    update.current = onUpdate;
-  }, [onUpdate]);
-
-  useEffect(() => {
-    if (!runId) {
-      return;
-    }
-    let active = true;
-    let source: EventSource | undefined;
-    // A finished run publishes its result next to its other artifacts.
-    const loadResult = async () => {
-      try {
-        const payload = await api<RunResult>(
-          `/artifacts/${runId}/result.json`,
-          { schema: runResultSchema }
-        );
-        if (active) {
-          setResult(payload);
-        }
-      } catch (failure) {
-        if (active) {
-          setResultFailure(copy.missingResult + errorText(failure));
-        }
-      }
-    };
-    const watch = () => {
-      source = new EventSource(`/runs/${runId}/events`);
-      source.onopen = () => {
-        if (active) {
-          setLive(copy.liveConnected);
-        }
-      };
-      source.onerror = () => {
-        // A closed source is finished, not reconnecting.
-        if (active && source?.readyState !== EventSource.CLOSED) {
-          setLive(copy.liveReconnecting);
-        }
-      };
-      source.onmessage = (event: MessageEvent<string>) => {
-        if (!active) {
-          return;
-        }
-        const frame = parseFrame(event.data);
-        if (!frame) {
-          source?.close();
-          setLive(copy.liveInvalid);
-          report(new Error(copy.invalidFrame));
-          return;
-        }
-        setJob(frame);
-        setMessage(messageFor(frame));
-        if (isTerminal(frame.status)) {
-          source?.close();
-          setLive(copy.liveDone);
-          void loadResult();
-        }
-        update.current?.();
-      };
-    };
-    // Validate the run first: the stream is opened for a run this account may
-    // read, otherwise an unknown or forbidden id would leave EventSource
-    // reconnecting forever while the interface pretends to follow it.
-    void api<LiveRun>(`/runs/${runId}`, { schema: runJobSchema })
-      .then((initial) => {
-        if (!active) {
-          return;
-        }
-        setJob(initial);
-        setMessage(messageFor(initial));
-        if (isTerminal(initial.status)) {
-          // No stream will fire: the history has to be refreshed from here, or a
-          // run that finished before this request would stay "en cours" in the
-          // table next to a finished detail.
-          setLive(copy.liveDone);
-          void loadResult();
-          update.current?.();
-          return;
-        }
-        watch();
-      })
-      .catch((failure) => {
-        if (active) {
-          report(failure);
-        }
-      });
-    return () => {
-      active = false;
-      source?.close();
-    };
-  }, [report, runId]);
-
-  const cancel = useCallback(async () => {
-    if (!runId) {
-      return;
-    }
-    setCancelling(true);
-    try {
-      await api(`/runs/${runId}/cancel`, { ...post({}), schema: cancelSchema });
-      setMessage(copy.cancelRequested);
-    } catch (failure) {
-      report(failure);
-    } finally {
-      setCancelling(false);
-    }
-  }, [report, runId]);
+  const [store] = useState(() =>
+    createRunDetailStore({ onUpdate, report, runId })
+  );
+  const { cancelling, job, live, message, result, resultFailure } =
+    useStore(store);
 
   const progress = job?.progress;
   const phase = phaseIndex(progress?.phase);
@@ -351,7 +233,7 @@ export function RunDetail({
           disabled={cancelling}
           hidden={!(canWrite && running)}
           id="cancel"
-          onClick={() => void cancel()}
+          onClick={() => void store.cancel()}
           type="button"
           variant="danger"
         >
@@ -398,7 +280,7 @@ export function RunDetail({
         ))}
       </div>
       <p className="mt-3 text-muted-foreground text-sm" id="usage">
-        {usageText(result?.usage)}
+        {usageLine(result?.usage)}
       </p>
       <div className="mt-3 flex flex-wrap gap-4 font-medium text-sm" id="links">
         {result ? (
