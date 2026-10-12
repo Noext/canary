@@ -11,7 +11,13 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Self-hosted: the runner is the LXC container `gh-runner` (CT 126,
+    # 192.168.103.47) provisioned by Noext/infra-agent-cts, role `ghrunner`.
+    # `canary-ci` is a custom label, so this job can never land on an unrelated
+    # self-hosted runner. See the "Self-hosted CI runner" section of the
+    # README for what the container provides — in particular why no step here
+    # may assume `sudo`.
+    runs-on: [self-hosted, linux, x64, canary-ci]
     timeout-minutes: 30
     services:
       postgres:
@@ -44,8 +50,18 @@ jobs:
       - name: Lint and format check (ultracite/biome)
         run: pnpm lint
 
+      # On the self-hosted runner the container already provides Chromium's
+      # system libraries (role `ghrunner`) and the `gh-runner` account has no
+      # sudoers entry, so `--with-deps` would fail there. On a GitHub-hosted
+      # runner the opposite holds. Keep both paths working instead of assuming
+      # one of them.
       - name: Install Playwright browsers (for daemon + canary tests)
-        run: pnpm --filter @usecanary/daemon exec playwright install --with-deps chromium
+        run: |
+          if sudo -n true 2>/dev/null; then
+            pnpm --filter @usecanary/daemon exec playwright install --with-deps chromium
+          else
+            pnpm --filter @usecanary/daemon exec playwright install chromium
+          fi
 
       - run: pnpm check
 
@@ -76,7 +92,8 @@ jobs:
   # the 30-minute check chain.
   architecture:
     name: Architecture gate (arcovia)
-    runs-on: ubuntu-latest
+    # Same runner as `check`: see the note above.
+    runs-on: [self-hosted, linux, x64, canary-ci]
     timeout-minutes: 15
     env:
       ARCOVIA_VERSION: 0.2.2
