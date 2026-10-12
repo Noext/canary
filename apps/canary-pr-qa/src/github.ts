@@ -61,10 +61,17 @@ export class GitHub {
     method = "GET",
     body?: unknown
   ): Promise<unknown> {
-    const token = await githubToken(
-      this.config,
-      /^\/repos\/([^/]+\/[^/]+)/.exec(path)?.[1]
-    );
+    const repo = /^\/repos\/([^/]+\/[^/]+)/.exec(path)?.[1];
+    const publicRead =
+      repo &&
+      this.config.githubInstallations &&
+      !this.config.githubInstallations[repo.toLowerCase()];
+    if (publicRead && method !== "GET") {
+      throw new Error(
+        "GitHub repository is not connected; uninstalled repositories permit only anonymous public reads"
+      );
+    }
+    const token = publicRead ? "" : await githubToken(this.config, repo);
     const result = await fetchText(
       `${this.config.GITHUB_API_URL.replace(/\/$/, "")}${path}`,
       {

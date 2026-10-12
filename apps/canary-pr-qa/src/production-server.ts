@@ -398,7 +398,7 @@ export async function startProductionServer(config: Config) {
       attempts.delete(key);
       res.setHeader("Set-Cookie", sessionCookie(user, config));
       await queue.audit(user.id, "login");
-      json(res, 200, { id: user.id, role: user.role });
+      json(res, 200, user);
       return true;
     }
     return false;

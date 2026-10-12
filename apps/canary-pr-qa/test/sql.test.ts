@@ -13,6 +13,7 @@ import { startProductionServer } from "../src/production-server.js";
 import { Queue, SCHEMA_VERSION } from "../src/queue.js";
 import type { RunResult } from "../src/schema.js";
 import { processDelivery } from "../src/webhook-inbox.js";
+import { startWorker } from "../src/worker.js";
 import { BASE_SHA, fixture, PR_URL, SHA } from "./fixture.js";
 import { githubSetupFixture } from "./github-setup-fixture.js";
 
@@ -165,6 +166,10 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
     headers: admin,
   });
   expect(login.status).toBe(200);
+  expect(await login.clone().json()).toMatchObject({
+    role: "admin",
+    repos: ["fixture/app"],
+  });
   expect(login.headers.get("set-cookie")).toContain("HttpOnly");
   expect(login.headers.get("set-cookie")).toContain("SameSite=Lax");
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
@@ -985,4 +990,127 @@ it("rejects expired or cross-user GitHub states, non-admin changes and missing i
       })
     ).status
   ).toBe(403);
+}, 30_000);
+
+it("retains dashboard App credentials through worker completion when cancellation invalidates a published result", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = { ...f.config, DATABASE_URL: "postgres://fixture" };
+  const setup = new GitHubSetup(q.pool, config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const job = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "app-cancel-after-publish"
+  );
+  const stop = new AbortController();
+  const runner = await import("../src/runner.js");
+  vi.spyOn(runner, "runQa").mockImplementation(async (_input, effective) => {
+    const github = new GitHub(effective);
+    const context = await github.context(PR_URL);
+    await github.status(
+      context,
+      "success",
+      "Fixture published before cancellation"
+    );
+    const commentUrl = await github.comment(
+      context,
+      "Fixture published success"
+    );
+    await q.cancel(job.id, "admin");
+    stop.abort();
+    return {
+      id: job.id,
+      prUrl: PR_URL,
+      sha: SHA,
+      startedAt: "now",
+      outcome: "passed",
+      scenarios: [],
+      publication: { commentUrl, status: "success" },
+    };
+  });
+  await startWorker(config, stop);
+  expect(await q.get(job.id)).toMatchObject({
+    status: "cancelled",
+    outcome: "blocked",
+  });
+  expect(f.outgoing.map((item) => item.payload.state).filter(Boolean)).toEqual([
+    "success",
+    "error",
+  ]);
+  expect(
+    f.outgoing.find((item) => item.path.includes("/issues/comments/"))?.payload
+      .body
+  ).toContain("BLOCKED");
+  const repaired = JSON.parse(
+    await readFile(join(f.dataDir, job.id, "result.json"), "utf8")
+  );
+  expect(repaired.publication.status).toBe("error");
+  expect(repaired.error).not.toContain("repair failed");
+  const invalidations = f.requests.filter(
+    (item) => item.path === `/repos/fixture/app/statuses/${SHA}`
+  );
+  expect(invalidations).toHaveLength(2);
+  expect(
+    invalidations.every(
+      (item) => item.auth === "Bearer fixture-installation-token-42001"
+    )
+  ).toBe(true);
+}, 30_000);
+
+it("reads an uninstalled public fork anonymously while keeping base writes installation-scoped and private forks unavailable", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const setup = new GitHubSetup(q.pool, f.config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  f.state.forkHead = true;
+  const github = new GitHub(await setup.effective());
+  const context = await github.context(PR_URL);
+  expect(context.headRepo).toBe("external/head");
+  expect(
+    context.context.some(
+      (file) => file.ref === SHA && file.content.includes("Public fork content")
+    )
+  ).toBe(true);
+  const forkReads = f.requests.filter((item) =>
+    item.path.startsWith("/repos/external/head/contents/")
+  );
+  expect(forkReads.length).toBeGreaterThan(0);
+  expect(forkReads.every((item) => !item.auth)).toBe(true);
+  const before = f.requests.length;
+  await expect(
+    github.request(`/repos/external/head/statuses/${SHA}`, "POST", {
+      state: "error",
+    })
+  ).rejects.toThrow("not connected");
+  expect(f.requests).toHaveLength(before);
+  await github.status(context, "pending", "Fixture base write");
+  expect(
+    f.requests.find(
+      (item) => item.path === `/repos/fixture/app/statuses/${SHA}`
+    )?.auth
+  ).toBe("Bearer fixture-installation-token-42001");
+  f.state.privateFork = true;
+  const privateContext = await github.context(PR_URL);
+  expect(privateContext.context.some((file) => file.ref === SHA)).toBe(false);
+  expect(
+    privateContext.contextWarnings.some((warning) =>
+      warning.includes("Unavailable context")
+    )
+  ).toBe(true);
 }, 30_000);

@@ -79,7 +79,12 @@ export async function startWorker(
             controller.abort(new Error("Database heartbeat failed"))
           );
       }, 10_000);
+      let effective = config;
       try {
+        effective = await setup.effective();
+        if (!effective.allowedRepos.includes(job.repo.toLowerCase())) {
+          throw new Error("Repository is no longer connected or allowed");
+        }
         const result = await runScope.run(
           {
             id: job.id,
@@ -108,22 +113,21 @@ export async function startWorker(
               }
             },
           },
-          async () => {
-            const effective = await setup.effective();
-            if (!effective.allowedRepos.includes(job.repo.toLowerCase())) {
-              throw new Error("Repository is no longer connected or allowed");
-            }
-            return runQa({ ...job.input, id: job.id }, effective);
-          }
+          () => runQa({ ...job.input, id: job.id }, effective)
         );
-        await completeRun(queue, job.id, worker, result, config);
+        await completeRun(queue, job.id, worker, result, effective);
       } catch (error) {
         logger.error(
-          { runId: job.id, diagnostic: diagnose(error, config) },
+          { runId: job.id, diagnostic: diagnose(error, effective) },
           "Worker run failed"
         );
         await queue
-          .complete(job.id, worker, "blocked", diagnose(error, config).message)
+          .complete(
+            job.id,
+            worker,
+            "blocked",
+            diagnose(error, effective).message
+          )
           .catch(() => undefined);
       } finally {
         clearInterval(heartbeat);

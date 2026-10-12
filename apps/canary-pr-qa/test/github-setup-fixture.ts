@@ -21,6 +21,8 @@ export async function githubSetupFixture(
     permissions: { ...REQUIRED_PERMISSIONS },
     dashboard: "",
     conversionCount: 0,
+    forkHead: false,
+    privateFork: false,
   };
   const server = createServer((req, res) => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Protocol fixture dispatches deterministic GitHub and QA endpoints.
@@ -101,6 +103,14 @@ export async function githubSetupFixture(
         });
         return;
       }
+      if (
+        req.method !== "GET" &&
+        path.startsWith("/repos/fixture/app/") &&
+        req.headers.authorization !== "Bearer fixture-installation-token-42001"
+      ) {
+        json(res, { message: "Installation auth required" }, 401);
+        return;
+      }
       if (path.endsWith("/check-runs") && req.method === "GET") {
         json(res, { check_runs: [] });
         return;
@@ -108,6 +118,23 @@ export async function githubSetupFixture(
       if (path.endsWith("/check-runs") && req.method === "POST") {
         await body(req);
         json(res, { id: 70_002 });
+        return;
+      }
+      if (path.startsWith("/repos/external/head/contents/")) {
+        if (state.privateFork) {
+          json(res, { message: "Not Found" }, 404);
+          return;
+        }
+        if (req.headers.authorization) {
+          json(res, { message: "Fork reads must be anonymous" }, 403);
+          return;
+        }
+        json(res, {
+          encoding: "base64",
+          content: Buffer.from("Public fork content at immutable SHA").toString(
+            "base64"
+          ),
+        });
         return;
       }
       const response = await fetch(`${f.baseUrl}${req.url}`, {
@@ -124,7 +151,14 @@ export async function githubSetupFixture(
           ? { "x-commit-sha": response.headers.get("x-commit-sha")! }
           : {}),
       });
-      res.end(await response.text());
+      const text = await response.text();
+      if (state.forkHead && path === "/repos/fixture/app/pulls/1") {
+        const pr = JSON.parse(text);
+        pr.head.repo.full_name = "external/head";
+        res.end(JSON.stringify(pr));
+      } else {
+        res.end(text);
+      }
     })().catch(() => json(res, { error: "GitHub setup fixture failed" }, 500));
   });
   await new Promise<void>((resolve) =>
