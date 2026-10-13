@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
-import { Canary, compileAction, type Observation } from "./canary.js";
+import {
+  Canary,
+  compileAction,
+  type Observation,
+  PLAN_EVIDENCE_SNAPSHOT_CHARS,
+} from "./canary.js";
 import { type Config, validateConfiguration } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
@@ -9,6 +14,11 @@ import { fixtureCatalog } from "./fixtures.js";
 import { GitHub, type PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
+import {
+  type PlanEvidenceRefusal,
+  planEvidenceDiagnostic,
+  validatePlanEvidence,
+} from "./plan-evidence.js";
 import { trustedPolicy, validateCoverage, validateProvider } from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
@@ -39,14 +49,23 @@ async function discover(
   preview: Preview,
   root: string,
   canary: Canary
-): Promise<Observation> {
+): Promise<{ evidence: string; initialPage: Observation }> {
   const sessionId = await canary.start(`PR ${context.ref.number} discovery`);
   let observation: Observation;
   try {
     observation = await canary.act(
       sessionId,
       "discover-preview",
-      compileAction({ type: "goto", path: preview.url }, preview.url)
+      // L'évidence de validation du plan est relevée en même temps que
+      // l'instantané du modèle, sans second relevé navigateur.
+      compileAction(
+        { type: "goto", path: preview.url },
+        preview.url,
+        undefined,
+        {
+          evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
+        }
+      )
     );
   } catch (error) {
     await canary.abort(sessionId);
@@ -58,7 +77,8 @@ async function discover(
     await canary.abort(sessionId);
     throw error;
   }
-  return observation;
+  const { evidence, ...initialPage } = observation;
+  return { evidence: evidence ?? "", initialPage };
 }
 function completeSource(context: PrContext, path: string, ref: string) {
   return context.context.some(
@@ -146,7 +166,12 @@ async function executePlan(
   github: GitHub
 ) {
   await progress.record({ phase: "discovery" });
-  const initialPage = await discover(context, preview, root, canary);
+  const { evidence, initialPage } = await discover(
+    context,
+    preview,
+    root,
+    canary
+  );
   const payload = {
     pr: context,
     changedFiles: context.files.map((file) => file.filename),
@@ -171,9 +196,75 @@ async function executePlan(
   await progress.record({ phase: "planning" });
   result.plan = await model.json(PLANNER_PROMPT, payload, PlanSchema);
   validatePlan(result.plan, context, config);
+  const planEvidence = validatePlanEvidence(result.plan, {
+    url: initialPage.url,
+    aria: evidence,
+  });
+  const refusals = new Map<string, PlanEvidenceRefusal[]>();
+  for (const refusal of planEvidence.refusals) {
+    const list = refusals.get(refusal.scenarioId) ?? [];
+    list.push(refusal);
+    refusals.set(refusal.scenarioId, list);
+  }
+  // Les cibles non tranchées restent visibles : le contrôle ne prétend jamais
+  // avoir vérifié ce que l'instantané de découverte ne couvre pas.
+  const gaps = planEvidence.incomplete
+    ? [planEvidence.incomplete]
+    : [...new Set(planEvidence.inconclusive.map((item) => item.reason))];
+  if (gaps.length > 0) {
+    const diagnostic = {
+      code: "PLAN_EVIDENCE_INCOMPLETE",
+      message: "Contrôle d'évidence du plan non concluant",
+      hint: `${gaps.join(" ; ")}. Vérifié : cibles role+nom nécessaires sur la page de découverte ; non couverts : types css/text/label/placeholder/testId et nœuds au-delà de 12 niveaux.`,
+    };
+    logger.warn(
+      { runId: result.id, gaps, targets: planEvidence.inconclusive.length },
+      "Contrôle d'évidence du plan non concluant"
+    );
+    await progress.record({ phase: "planning", diagnostic });
+  }
   result.coverage = validateCoverage(result.plan, context, policy, config);
   await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
+    const scenarioRefusals = refusals.get(scenario.id);
+    if (scenarioRefusals) {
+      const { message, hint } = planEvidenceDiagnostic(
+        scenario,
+        scenarioRefusals,
+        planEvidence.inconclusive.filter(
+          (item) => item.scenarioId === scenario.id
+        ).length
+      );
+      const diagnostic = diagnose(
+        new QaError("PLAN_TARGET_MISSING", message, hint),
+        config
+      );
+      logger.warn(
+        {
+          runId: result.id,
+          scenario: scenario.id,
+          targets: scenarioRefusals.map((item) => item.target),
+        },
+        "Scénario refusé avant exécution : cible absente de la page de découverte"
+      );
+      await progress.record({
+        phase: "planning",
+        scenarioId: scenario.id,
+        outcome: "blocked",
+        diagnostic,
+      });
+      result.scenarios.push({
+        scenario,
+        outcome: "blocked",
+        steps: [],
+        assertions: [],
+        artifacts: [],
+        diagnostic,
+        error: diagnostic.message,
+      });
+      await saveReport(root, result, config);
+      continue;
+    }
     logger.info(
       { runId: result.id, scenario: scenario.id },
       "Executing scenario"
@@ -210,6 +301,10 @@ async function executePlan(
       scenarios: [],
     };
     for (const scenario of result.plan.scenarios) {
+      if (refusals.has(scenario.id)) {
+        // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
+        continue;
+      }
       result.baseline.scenarios.push(
         await executeScenario(
           scenario,

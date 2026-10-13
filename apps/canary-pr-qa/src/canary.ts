@@ -11,11 +11,21 @@ import { verifyPreviewUrl } from "./preview.js";
 import { checkBudget, runScope } from "./run-scope.js";
 import type { Action, Assertion, Locator } from "./schema.js";
 
+/** Budget d'instantané transmis au modèle : la planification et l'exécution gardent cette taille. */
+export const MODEL_SNAPSHOT_CHARS = 14_000;
+/**
+ * Plafond de l'instantané conservé comme évidence de validation du plan. Au
+ * plafond, l'instantané est coupé : le contrôle d'évidence est « non concluant »
+ * et ne refuse aucun scénario.
+ */
+export const PLAN_EVIDENCE_SNAPSHOT_CHARS = 200_000;
+
 const MARKER = "CANARY_PR_QA_OBSERVATION:";
 const observationSchema = z.object({
   url: z.string(),
   snapshot: z.string(),
   actual: z.unknown().optional(),
+  evidence: z.string().optional(),
   provenanceUrls: z.array(z.string().url()).max(5).optional(),
 });
 export type Observation = z.infer<typeof observationSchema>;
@@ -137,10 +147,18 @@ function compileInteraction(action: Action): string {
       throw new Error("Unsupported browser action");
   }
 }
+export interface CompileOptions {
+  /**
+   * Budget de l'instantané joint comme évidence de validation du plan. Le même
+   * relevé alimente l'instantané du modèle, tronqué à MODEL_SNAPSHOT_CHARS.
+   */
+  evidenceSnapshotChars?: number;
+}
 export function compileAction(
   action: Action,
   previewUrl: string,
-  assertion?: Assertion
+  assertion?: Assertion,
+  options: CompileOptions = {}
 ): string {
   const preview = new URL(previewUrl);
   let command = "";
@@ -163,13 +181,19 @@ export function compileAction(
   } else if (action.type !== "observe") {
     command = compileInteraction(action);
   }
+  // Un seul relevé de l'arbre d'accessibilité : l'instantané du modèle reste
+  // tronqué comme avant, l'évidence de validation du plan est jointe à part.
+  const evidence = options.evidenceSnapshotChars
+    ? `, evidence: ariaSnapshot.slice(0, ${options.evidenceSnapshotChars})`
+    : "";
   return `const page = await browser.getPage("qa");
 let actual;
 const provenanceUrls = [];
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
-console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: (await page.snapshotForAI({ depth: 12 })).full.slice(0, 14000), actual, provenanceUrls }));`;
+const ariaSnapshot = (await page.snapshotForAI({ depth: 12 })).full;
+console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS})${evidence}, actual, provenanceUrls }));`;
 }
 
 export class Canary {
