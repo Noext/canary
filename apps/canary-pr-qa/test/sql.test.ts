@@ -487,7 +487,7 @@ it("records rate-limited webhook work without enqueueing or automatically retryi
 }, 30_000);
 
 it("migrates an existing install to the current schema version without losing pending deliveries", async () => {
-  expect(SCHEMA_VERSION).toBe(8);
+  expect(SCHEMA_VERSION).toBe(9);
   const q = await sqlDatabase();
   expect(
     await q.acceptDelivery("legacy", "pull_request", {
@@ -511,6 +511,9 @@ it("migrates an existing install to the current schema version without losing pe
   await q.pool.query("DELETE FROM qa_schema WHERE version=$1", [
     SCHEMA_VERSION,
   ]);
+  // The audit index rides with the same version: an install that migrates has to
+  // get it back too, or the attempt detail would scan the whole audit table.
+  await q.pool.query("DROP INDEX IF EXISTS qa_audit_delivery");
   await q.migrate();
   const columns = (
     await q.pool.query<{ column_name: string }>(
@@ -528,6 +531,13 @@ it("migrates an existing install to the current schema version without losing pe
       "updated_at",
     ])
   );
+  expect(
+    (
+      await q.pool.query<{ indexname: string }>(
+        "SELECT indexname FROM pg_indexes WHERE tablename='qa_audit'"
+      )
+    ).rows.map((row) => row.indexname)
+  ).toContain("qa_audit_delivery");
   expect(
     (
       await q.pool.query(

@@ -41,6 +41,8 @@ export interface AutomaticAttempt {
   deadlineAt: string;
   /** Webhook delivery id; stable across probes. */
   id: string;
+  /** Redacted last failure text, set when the attempt was refused. */
+  lastError?: string | null;
   pr: number;
   /** Machine reason of the current state (`PREVIEW_NOT_FOUND`, ...). */
   reason: string;
@@ -51,6 +53,32 @@ export interface AutomaticAttempt {
   sha: string;
   state: AutomaticState;
   updatedAt: string;
+}
+
+/** One recorded step of an automatic attempt, oldest first. */
+export interface AutomaticTimelineEntry {
+  /** Audit action (`automatic.preview_wait`, `automatic.preview_expired`, ...). */
+  action: string;
+  /** ISO instant the step was recorded. */
+  at: string;
+  /** Backoff the step scheduled before the next probe, when it recorded one. */
+  seconds?: number | null;
+}
+
+/**
+ * Everything known about one automatic attempt that never became a run: the
+ * attempt itself, the version proof its preview had to satisfy and the audit
+ * trail of its probes. The title configuration is deployment topology, so it is
+ * reported to administrators only.
+ */
+export interface AutomaticDetail {
+  attempt: AutomaticAttempt;
+  preview?: {
+    shaHeader: string;
+    shaPath?: string | null;
+    template?: string | null;
+  } | null;
+  timeline: AutomaticTimelineEntry[];
 }
 
 export interface AutomaticStatus {
