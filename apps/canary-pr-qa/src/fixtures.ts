@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { type BrowserAuth, BrowserAuthSchema } from "@usecanary/protocol";
 import { z } from "zod";
+import {
+  cookieDomainAllowed,
+  hostAllowed,
+} from "../../canary-daemon/src/network-policy.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import { fetchText } from "./http.js";
@@ -108,13 +112,20 @@ export async function prepareScenario(
   }
 }
 function validateAuth(auth: BrowserAuth, config: Config) {
-  const hosts = config.allowedHosts.map((h) => new URL(`http://${h}`).hostname);
-  if (auth.cookies.some((c) => !hosts.includes(c.domain.replace(/^\./, "")))) {
+  // A cookie carries no port, and one scoped to a parent domain is precisely
+  // what a preview subdomain receives: `cookieDomainAllowed` accepts the base
+  // domain of a `*.preview.example.com` entry for that reason.
+  if (
+    auth.cookies.some(
+      (c) =>
+        !cookieDomainAllowed(c.domain.replace(/^\./, ""), config.allowedHosts)
+    )
+  ) {
     throw new Error("Auth cookie domain outside approved previews");
   }
   if (
     auth.origins.some(
-      (o) => !config.allowedHosts.includes(new URL(o.origin).host)
+      (o) => !hostAllowed(new URL(o.origin), config.allowedHosts)
     )
   ) {
     throw new Error("Auth localStorage origin outside approved previews");

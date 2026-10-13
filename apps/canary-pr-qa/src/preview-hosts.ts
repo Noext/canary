@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import type pg from "pg";
+import { getPublicSuffix } from "tldts";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
@@ -34,7 +35,7 @@ export const PREVIEW_POLICY_FILE = "preview-hosts.json";
 export const MAX_PREVIEW_HOSTS = 50;
 export const MAX_HOST_LENGTH = 253;
 const HOST =
-  /^(?<name>\[[0-9a-f:.]+\]|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?::(?<port>\d{1,5}))?$/;
+  /^(?:\*\.)?(?<name>\[[0-9a-f:.]+\]|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?::(?<port>\d{1,5}))?$/;
 export const previewPolicySchema = z
   .object({
     hosts: z.array(z.string()),
@@ -43,7 +44,13 @@ export const previewPolicySchema = z
   })
   .strict();
 
-function validHost(host: string) {
+/**
+ * Whether one entry is usable, i.e. a `host`, `host:port`, `*.domain` or
+ * `*.domain:port` without scheme, path or credentials. Exported because
+ * `PREVIEW_ALLOWED_HOSTS` is the one list that does not pass
+ * {@link normalizePreviewHosts}, and must be held to the same rule.
+ */
+export function isValidPreviewHost(host: string) {
   if (!host || host.length > MAX_HOST_LENGTH) {
     return false;
   }
@@ -52,13 +59,29 @@ function validHost(host: string) {
     return false;
   }
   const port = match.groups.port;
-  return port === undefined || (Number(port) >= 1 && Number(port) <= 65_535);
+  if (port !== undefined && !(Number(port) >= 1 && Number(port) <= 65_535)) {
+    return false;
+  }
+  if (!host.startsWith("*.")) {
+    return true;
+  }
+  // A wildcard hands one whole label to whoever registers it, so its suffix
+  // must be a domain the administrator controls rather than a shared public
+  // suffix: `*.com`, `*.co.uk` or `*.github.io` would otherwise authorize every
+  // registrant under it. The Public Suffix List answers that question, private
+  // section included (shared hosting counts as shared).
+  const suffix = (match.groups.name ?? "").replace(/^\[|\]$/g, "");
+  const publicSuffix = getPublicSuffix(suffix, { allowPrivateDomains: true });
+  return Boolean(publicSuffix) && publicSuffix !== suffix;
 }
 
 /**
- * Normalizes and validates an administrator-supplied host list. Hosts are exact
- * `host` or `host:port` matches without scheme, path, credentials or wildcard:
- * the list decides which destinations the QA browser may reach.
+ * Normalizes and validates an administrator-supplied host list. Entries are
+ * exact `host` or `host:port` matches, or a `*.domain` / `*.domain:port`
+ * wildcard covering that domain's subdomains at any depth (never the bare
+ * domain, never a shared public suffix, and only for the entry's port). Hosts
+ * carry no scheme, path or credentials: the list decides which destinations the
+ * QA browser may reach.
  */
 export function normalizePreviewHosts(value: unknown): string[] {
   const items = z
@@ -82,12 +105,12 @@ export function normalizePreviewHosts(value: unknown): string[] {
       "Retirez les hôtes inutilisés et limitez la liste aux environnements de test réellement nécessaires."
     );
   }
-  const invalid = hosts.filter((host) => !validHost(host));
+  const invalid = hosts.filter((host) => !isValidPreviewHost(host));
   if (invalid.length) {
     throw new QaError(
       "PREVIEW_HOSTS_INVALID",
       `Hôte(s) invalide(s) : ${invalid.slice(0, 5).join(", ")}`,
-      "Format attendu : hôte ou hôte:port, sans schéma, chemin, identifiants ni joker."
+      "Format attendu : hôte, hôte:port ou *.domaine (sous-domaines), sans schéma, chemin ni identifiants. Un joker doit porter sur un domaine que vous contrôlez : un suffixe public (*.com, *.co.uk, *.github.io) est refusé."
     );
   }
   return hosts;
@@ -101,10 +124,18 @@ export function normalizePreviewHosts(value: unknown): string[] {
  * validator (`validatePreviewUrl`, the egress policy, the Canary session
  * arguments) on the same list instead of threading a second parameter through
  * the run pipeline.
+ *
+ * An entry the loader would refuse never reaches a network boundary: the
+ * environment list is sanitized by `loadConfig`, a dashboard list by
+ * {@link normalizePreviewHosts}, and a published policy by the read that feeds
+ * this call. The filter here is the boundary's own guarantee - `browser` and
+ * `egress` start without the boot-time configuration check that reports a bad
+ * `.env` entry.
  */
 export function applyPreviewHosts(config: Config, hosts: string[]): Config {
-  config.allowedHosts = hosts;
-  config.PREVIEW_ALLOWED_HOSTS = hosts.join(",");
+  const allowed = hosts.filter(isValidPreviewHost);
+  config.allowedHosts = allowed;
+  config.PREVIEW_ALLOWED_HOSTS = allowed.join(",");
   return config;
 }
 
@@ -340,7 +371,11 @@ export const PREVIEW_HOSTS_LOCK = 9_287_347;
 export class PreviewHosts {
   readonly pool: pg.Pool;
   readonly config: Config;
-  /** The `PREVIEW_ALLOWED_HOSTS` default, captured before any override is applied. */
+  /**
+   * The `PREVIEW_ALLOWED_HOSTS` default, captured before any override is applied
+   * and already sanitized by `loadConfig`, so a bad `.env` entry can never be
+   * published back as the list to restore.
+   */
   private readonly environment: string[];
 
   constructor(pool: pg.Pool, config: Config) {

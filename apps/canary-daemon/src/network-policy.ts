@@ -65,6 +65,84 @@ export function privateAddress(input: string): boolean {
     a >= 224
   );
 }
+/** Splits `name` or `name:port`; a bracketed IPv6 literal keeps its brackets. */
+function splitPort(value: string): { name: string; port: string } {
+  const start = value.startsWith("[") ? value.indexOf("]") + 1 : 0;
+  const separator = value.indexOf(":", start);
+  return separator === -1
+    ? { name: value, port: "" }
+    : { name: value.slice(0, separator), port: value.slice(separator + 1) };
+}
+/** The port a scheme implies when the URL does not name one. */
+function defaultPort(protocol: string): number | undefined {
+  if (protocol === "http:" || protocol === "ws:") {
+    return 80;
+  }
+  if (protocol === "https:" || protocol === "wss:") {
+    return 443;
+  }
+  return;
+}
+function matchesName(hostname: string, pattern: string): boolean {
+  if (!pattern.startsWith("*.")) {
+    return hostname === pattern;
+  }
+  // A malformed `*.` authorizes nothing. `endsWith(".")` would otherwise accept
+  // every trailing-dot FQDN (`https://example.com./`), turning a broken entry
+  // into a fail-open one for a caller that passes it straight through, such as
+  // `canary start --network-hosts '*.|'` - the policy schema validates non-empty
+  // strings, not hostnames.
+  const suffix = pattern.slice(2);
+  return suffix !== "" && hostname.endsWith(`.${suffix}`);
+}
+/**
+ * Whether one allowlist entry covers a destination URL.
+ *
+ * An entry is an exact `host` or `host:port` match, or a leading-label wildcard
+ * (`*.example.com`, `*.example.com:8443`). The wildcard covers subdomains at any
+ * depth but never the bare domain.
+ *
+ * `URL` drops the port a scheme implies, so the comparison uses the effective
+ * one: an entry without a port still covers only destinations that name no port
+ * (the default of `http` or `https`), while `*.example.com:443` covers
+ * `https://api.example.com` as well as a spelled-out `:443` - but not
+ * `http://api.example.com`, nor another port.
+ */
+export function hostEntryMatches(url: URL, entry: string): boolean {
+  const { name, port } = splitPort(entry);
+  if (!matchesName(url.hostname, name)) {
+    return false;
+  }
+  if (port === "") {
+    return url.port === "";
+  }
+  const effective =
+    url.port === "" ? defaultPort(url.protocol) : Number(url.port);
+  return Number(port) === effective;
+}
+/** Whether any allowlist entry covers a destination URL. */
+export function hostAllowed(url: URL, hosts: string[]): boolean {
+  return hosts.some((entry) => hostEntryMatches(url, entry));
+}
+/**
+ * Whether a trusted cookie's domain belongs to the allowlist.
+ *
+ * A browser sends a cookie to its domain and to every subdomain of it, so an
+ * entry may be the cookie's own domain or one of its parents: `example.com`
+ * covers a `login.example.com` cookie. A `*.example.com` entry additionally
+ * covers a cookie scoped to the bare `example.com`, which is not an allowed
+ * destination but is exactly the cookie a preview subdomain receives.
+ */
+export function cookieDomainAllowed(domain: string, hosts: string[]): boolean {
+  return hosts.some((entry) => {
+    const name = splitPort(entry).name;
+    return (
+      matchesName(domain, name) ||
+      domain.endsWith(`.${name}`) ||
+      (name.startsWith("*.") && domain === name.slice(2))
+    );
+  });
+}
 export async function networkAllowed(
   input: string,
   hosts: string[],
@@ -83,7 +161,7 @@ export async function networkAllowed(
     !["http:", "https:", "ws:", "wss:"].includes(url.protocol) ||
     url.username ||
     url.password ||
-    !hosts.includes(url.host.toLowerCase())
+    !hostAllowed(url, hosts)
   ) {
     return false;
   }

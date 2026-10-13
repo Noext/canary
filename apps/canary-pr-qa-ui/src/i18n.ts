@@ -718,10 +718,11 @@ export const settings = {
     hostsFallback: "Les hôtes sont définis par l'opérateur du serveur.",
     hostsEditorTitle: "Hôtes autorisés par l'administrateur",
     hostsEditorIntro:
-      "Seuls ces hôtes peuvent être atteints par le navigateur QA. Un hôte s'écrit sans schéma, chemin ni joker ; les changements prennent effet en quelques secondes.",
+      "Seuls ces hôtes peuvent être atteints par le navigateur QA. Un hôte s'écrit sans schéma ni chemin ; le joker \"*.\" couvre les sous-domaines d'un domaine que vous contrôlez (par exemple *.preview.example.com), jamais un suffixe public comme *.co.uk. Les changements prennent effet en quelques secondes.",
     hostsDefault: (hosts: string) => `Liste initiale du serveur : ${hosts}`,
     hostsInput: "Nouvel hôte",
-    hostsPlaceholder: "preview.example.com ou preview.example.com:8443",
+    hostsPlaceholder:
+      "preview.example.com, preview.example.com:8443 ou *.preview.example.com",
     hostsAdd: "Ajouter",
     hostsRemove: (host: string) => `Retirer ${host}`,
     hostsRemoveLabel: "Retirer",
@@ -734,7 +735,7 @@ export const settings = {
       "Ajoutez au moins un hôte : une liste vide bloquerait tous les tests.",
     hostsDuplicate: "Cet hôte est déjà dans la liste.",
     hostsInvalid:
-      "Format attendu : hôte ou hôte:port, sans schéma, chemin ni joker.",
+      "Format attendu : hôte, hôte:port ou *.domaine (sous-domaines d'un domaine que vous contrôlez), sans schéma, chemin ni identifiants.",
     intro:
       "Pour chaque PR, Canary a besoin d'une URL de test présentant exactement ses changements.",
     modeAutomatic:

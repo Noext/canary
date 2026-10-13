@@ -62,7 +62,11 @@ it("forwards approved traffic to a DNS-pinned target and rejects other destinati
   const get = (url: string) =>
     new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = request(
-        { host: "127.0.0.1", port: 3128, path: url },
+        // `agent: false` keeps one test from reusing the keep-alive socket of the
+        // proxy a previous test already closed: every test binds the same port,
+        // and a recycled socket answers with ECONNRESET instead of the policy
+        // verdict under test.
+        { agent: false, host: "127.0.0.1", port: 3128, path: url },
         (res) => {
           let body = "";
           res.on("data", (chunk) => (body += chunk));
@@ -100,7 +104,8 @@ it("denies every destination while the published policy is unreadable, then foll
   const get = (url: string) =>
     new Promise<{ body: string; status: number }>((resolve, reject) => {
       const req = request(
-        { host: "127.0.0.1", path: url, port: 3128 },
+        // See the first helper: no shared keep-alive socket across proxies.
+        { agent: false, host: "127.0.0.1", path: url, port: 3128 },
         (res) => {
           let body = "";
           res.on("data", (chunk) => (body += chunk));
@@ -124,6 +129,44 @@ it("denies every destination while the published policy is unreadable, then foll
   const allowed = await get(`http://${host}/`);
   expect(allowed.status, JSON.stringify(allowed)).toBe(200);
   expect(allowed.body).toBe("reachable");
+});
+
+it("enforces a wildcard entry at the proxy, for its subdomains only", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const upstream = createServer((_req, res) => res.end("reachable"));
+  await new Promise<void>((done) => upstream.listen(0, "127.0.0.1", done));
+  cleanup.push(() => new Promise<void>((done) => upstream.close(() => done())));
+  const port = (upstream.address() as { port: number }).port;
+  // The proxy resolves and pins the address itself, so the local fixture stands
+  // in for the real preview host.
+  vi.spyOn(dns, "lookup").mockResolvedValue([
+    { address: "127.0.0.1", family: 4 },
+  ] as never);
+  const proxy = await startEgressProxy({
+    ...f.config,
+    allowedHosts: [`*.arpilabe.pharmania.fr:${port}`],
+  });
+  cleanup.push(() => new Promise<void>((done) => proxy.close(() => done())));
+  const get = (url: string) =>
+    new Promise<number>((resolve, reject) => {
+      const req = request(
+        // See the first helper: no shared keep-alive socket across proxies.
+        { agent: false, host: "127.0.0.1", path: url, port: 3128 },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode ?? 0));
+        }
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  expect(await get(`http://pr-12.arpilabe.pharmania.fr:${port}/`)).toBe(200);
+  // The wildcard never covers the bare domain, a look-alike suffix, or another
+  // port than the one the administrator wrote.
+  expect(await get(`http://arpilabe.pharmania.fr:${port}/`)).toBe(403);
+  expect(await get(`http://notarpilabe.pharmania.fr:${port}/`)).toBe(403);
+  expect(await get("http://pr-12.arpilabe.pharmania.fr/")).toBe(403);
 });
 
 it("tunnels an approved absolute ws URL and denies unapproved or metadata destinations", async () => {

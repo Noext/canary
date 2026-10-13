@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { hostAllowed } from "../../canary-daemon/src/network-policy.js";
 import { QaError } from "./diagnostics.js";
 import { ModelIdSchema } from "./model-catalog.js";
+import { isValidPreviewHost } from "./preview-hosts.js";
 
 const envSchema = z.object({
   QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
@@ -127,17 +129,30 @@ const envSchema = z.object({
 });
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.parse(env);
+  // The environment list is the one allowlist that does not pass
+  // `normalizePreviewHosts`, so it is split into what this process may enforce
+  // and what it must not. Every process gets its configuration here - including
+  // `browser` and `egress`, which never run the boot check and, without
+  // `QA_POLICY_DIR`, never apply a published policy either - so an entry the
+  // dashboard would refuse can never reach a network boundary. `invalid` is
+  // reported by `validateConfiguration` instead of being dropped in silence.
+  const environmentHosts = parsed.PREVIEW_ALLOWED_HOSTS.split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const allowedHosts = environmentHosts.filter(isValidPreviewHost);
   return {
     ...parsed,
+    PREVIEW_ALLOWED_HOSTS: allowedHosts.join(","),
     QA_DATA_DIR: resolve(parsed.QA_DATA_DIR),
     QA_POLICY_DIR: parsed.QA_POLICY_DIR ? resolve(parsed.QA_POLICY_DIR) : "",
     allowedRepos: parsed.GITHUB_ALLOWED_REPOS.split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
     autoRuns: parsed.QA_AUTO_RUNS === "true",
-    allowedHosts: parsed.PREVIEW_ALLOWED_HOSTS.split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
+    allowedHosts,
+    invalidAllowedHosts: environmentHosts.filter(
+      (host) => !isValidPreviewHost(host)
+    ),
   };
 }
 export type Config = ReturnType<typeof loadConfig> & {
@@ -239,6 +254,13 @@ export function validateConfiguration(config: Config, service = false) {
       "Set PREVIEW_ALLOWED_HOSTS to the exact reachable preview hosts (including ports)"
     );
   }
+  // The `.env` list is already sanitized by `loadConfig`; report what it had to
+  // drop, which is otherwise an allowlist that silently shrank.
+  if (config.invalidAllowedHosts.length) {
+    problems.push(
+      `PREVIEW_ALLOWED_HOSTS entries must be host, host:port, *.domain or *.domain:port over a domain you control: ${config.invalidAllowedHosts.join(", ")}`
+    );
+  }
   if (config.allowedRepos.some((repo) => !/^[\w.-]+\/[\w.-]+$/.test(repo))) {
     problems.push("GITHUB_ALLOWED_REPOS entries must use owner/repository");
   }
@@ -271,11 +293,11 @@ export function validatePreviewUrl(input: string, config: Config): URL {
   ) {
     throw new Error("Invalid preview URL");
   }
-  if (!config.allowedHosts.includes(url.host.toLowerCase())) {
+  if (!hostAllowed(url, config.allowedHosts)) {
     throw new QaError(
       "PREVIEW_HOST_NOT_ALLOWED",
       `Preview host ${url.host} is not in PREVIEW_ALLOWED_HOSTS`,
-      "Add the exact hostname and port to PREVIEW_ALLOWED_HOSTS after verifying it is the intended test environment."
+      "Add the hostname and port to PREVIEW_ALLOWED_HOSTS - exact, or as *.domain to cover its subdomains - after verifying it is the intended test environment."
     );
   }
   return url;
