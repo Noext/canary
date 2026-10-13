@@ -126,6 +126,41 @@ Canary's daemon and TypeScript CLIs (`canary-daemon`, `canary-browser`, and the 
   corriger un finding en silence : ce qui est corrigé reste annoncé dans son fil
   avec son commit et sa preuve.
 
+## Revue de sécurité (Codex security review)
+
+`@codex security review` est un tag **distinct** de `@codex review` : `@codex
+review` cherche les bugs et la qualité, `@codex security review` cherche les
+problèmes de sécurité exploitables.
+
+- **Aucune limite de tours.** Le plafond de trois tours ci-dessus ne s'applique
+  **pas** aux findings de sécurité. Tant que la revue de sécurité remonte un
+  problème de sécurité réel, il est corrigé, un nouveau commit est poussé, et une
+  nouvelle passe est demandée. Le cycle ne s'arrête que lorsque la revue de
+  sécurité ne trouve plus rien.
+- **Chaque finding est corrigé, jamais reporté.** Pas de « tâche de suivi »,
+  pas de PR dédiée, pas de report à plus tard : un problème de sécurité se
+  corrige dans la PR qui l'a introduit, ou la PR ne fusionne pas. Chaque
+  correction reçoit sa réponse dans son thread (`pulls/{n}/comments/{id}/replies`)
+  avec le commit et sa preuve (test ajouté, commande exécutée, résultat).
+- **Ne jamais fermer un finding de sécurité en affaiblissant le code.** Interdit :
+  désactiver un contrôle, retirer/assouplir un test, élargir un scope, élargir
+  une liste d'autorisation ou une CSP, ajouter un `unsafe-*`, pour faire taire le
+  relecteur. Si le contrat doit réellement changer, le dire explicitement dans la
+  réponse et le documenter dans la description de la PR.
+- **Seule sortie de boucle : un faux positif argumenté.** Un finding jugé non
+  exploitable ou erroné se répond avec le raisonnement et la preuve (chemin de
+  code, condition d'accès, test qui démontre l'absence d'exploit). Un faux
+  positif jamais répondu relance le cycle ; un faux positif argumenté par écrit
+  le clôt. Ne jamais ignorer un finding en silence.
+- **Périmètre visé :** contournement d'authentification ou d'autorisation,
+  fuite de secret/credential dans les logs, réponses ou artefacts, injection
+  (SQL, commande, template, prompt), SSRF et contrôle de destination, traversée
+  de chemin, désérialisation non sûre, XSS/CSP, isolation entre projets ou
+  environnements, dépendances vulnérables réellement atteignables par notre
+  code. Les remarques de style, de nommage ou les durcissements théoriques sans
+  chemin d'exploitation ne relancent pas le cycle ; elles restent des findings
+  de `@codex review` soumis au plafond de trois tours.
+
 ## Frontend PR QA : règles de contribution
 
 - Le dashboard est une application React 19 + Vite dans `apps/canary-pr-qa-ui`
