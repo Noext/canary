@@ -12,12 +12,17 @@ afterEach(async () => {
   }
 });
 
+const ARIA = `- form [ref=e1]:
+  - textbox "Name" [ref=e2]
+  - button "Save" [ref=e3]`;
+
 function fakeBrowser() {
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("fixture-session");
   vi.spyOn(Canary.prototype, "act").mockImplementation(async (_id, label) => ({
     url: "http://fixture/",
-    snapshot: "textbox Name, button Save",
-    ...(label.endsWith("assert") ? { actual: "Welcome Ada" } : {}),
+    snapshot: ARIA,
+    evidence: label === "discover-preview" ? ARIA : undefined,
+    actual: label.endsWith("assert") ? "Welcome Ada" : undefined,
   }));
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([
     "video.webm",

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
-import type { Plan } from "./schema.js";
+import type { Plan, Scenario } from "./schema.js";
 
 export const PolicySchema = z
   .object({
@@ -98,6 +98,43 @@ export function approvedSkipCovers(pattern: string, file: string): boolean {
   }
   return segmentsMatch(segments, file.split("/").filter(Boolean));
 }
+export interface ScenarioRefusal {
+  error: QaError;
+  scenario: Scenario;
+}
+/**
+ * A scenario that interacts with the UI must prove the change the interaction
+ * produces. These refusals are per scenario: the runner blocks the offender
+ * alone, never executes it, and keeps the rest of the plan running.
+ */
+export function writeEvidenceRefusals(
+  plan: Plan,
+  policy: Policy
+): ScenarioRefusal[] {
+  if (!policy.requireWriteEvidence) {
+    return [];
+  }
+  const refusals: ScenarioRefusal[] = [];
+  for (const scenario of plan.scenarios) {
+    const interacts = scenario.steps.some((step) =>
+      ["click", "fill", "press", "select", "check"].includes(step.action.type)
+    );
+    const provesChange = scenario.assertions.some((assertion) =>
+      ["transition", "persisted"].includes(assertion.verification)
+    );
+    if (interacts && !provesChange) {
+      refusals.push({
+        scenario,
+        error: new QaError(
+          "WRITE_EVIDENCE_MISSING",
+          `Scenario ${scenario.id} interacts with UI without changed/persisted state evidence`,
+          "Use a transition or persisted assertion on the actual changed output. Static visibility or matching decoy text cannot prove a write."
+        ),
+      });
+    }
+  }
+  return refusals;
+}
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -107,21 +144,6 @@ export function validateCoverage(
   const covered = new Set<string>();
   validateProvider(policy, config);
   for (const scenario of plan.scenarios) {
-    if (
-      policy.requireWriteEvidence &&
-      scenario.steps.some((step) =>
-        ["click", "fill", "press", "select", "check"].includes(step.action.type)
-      ) &&
-      !scenario.assertions.some((assertion) =>
-        ["transition", "persisted"].includes(assertion.verification)
-      )
-    ) {
-      throw new QaError(
-        "WRITE_EVIDENCE_MISSING",
-        `Scenario ${scenario.id} interacts with UI without changed/persisted state evidence`,
-        "Use a transition or persisted assertion on the actual changed output. Static visibility or matching decoy text cannot prove a write."
-      );
-    }
     if (scenario.steps.length + 1 > config.QA_MAX_STEPS) {
       throw new QaError(
         "CONTRACT_BUDGET",
