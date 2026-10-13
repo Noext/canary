@@ -19,7 +19,7 @@ import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { NavigationProvider, useNavigation } from "@/app/navigation";
 import { SessionProvider } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
-import { common, newTest } from "@/i18n";
+import { common, errorMessages, newTest } from "@/i18n";
 import { NewTestView } from "./new-test-view";
 
 const { apiMock } = vi.hoisted(() => ({
@@ -426,13 +426,11 @@ describe("NewTestView", () => {
 
     await waitFor(() =>
       expect(byId("runFeedback")).toHaveTextContent(
-        "Aucune application de test trouvée pour cette PR."
+        errorMessages.PREVIEW_NOT_FOUND!
       )
     );
     expect(byId("runFeedback")).toHaveTextContent("req-42");
-    expect(byId("error")).toHaveTextContent(
-      "Aucune application de test trouvée pour cette PR."
-    );
+    expect(byId("error")).toHaveTextContent(errorMessages.PREVIEW_NOT_FOUND!);
     expect(byId("startRun")).toBeDisabled();
   });
 

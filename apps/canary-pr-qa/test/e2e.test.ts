@@ -1358,7 +1358,7 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     // The known code is explained from the French catalogue, not with the raw
     // English message the server wrote into the report.
     expect(runScreen.text).toContain(
-      "L’application de test ne présente pas le commit de cette PR"
+      "L’application de test répond, mais elle n’annonce pas le commit de cette PR"
     );
     expect(runScreen.text).toContain("À faire :");
     expect(runScreen.text).not.toContain("Preview SHA mismatch");
@@ -1382,9 +1382,11 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     expect(attempt.text).toContain("Lancements automatiques");
     expect(attempt.text).toContain("Pourquoi Canary n’a pas démarré le test");
     expect(attempt.text).toContain(
-      "Aucune application de test publiée pour ce commit"
+      "Canary n’a trouvé aucune application de test pour ce commit"
     );
-    expect(attempt.text).toContain("Déployez le commit attendu");
+    expect(attempt.text).toContain(
+      "Renseignez le modèle d’URL de votre application de test"
+    );
     expect(attempt.text).toContain("3 vérifications effectuées");
     // The two audit steps are the trail that explains the wait.
     expect(attempt.text).toContain(
