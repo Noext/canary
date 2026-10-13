@@ -439,6 +439,8 @@ export const settings = {
     messageSaved:
       "Dépôts enregistrés. Vous pouvez maintenant préparer votre premier test.",
     nameLabel: "Nom de votre App GitHub",
+    noMatch: (query: string) =>
+      `Aucun dépôt ne correspond à « ${query} ». Effacez la recherche pour tout voir.`,
     namePlaceholder: "Canary QA de mon équipe",
     notConnected: "À connecter",
     toFinish: "À terminer",
@@ -456,8 +458,12 @@ export const settings = {
     removalUninstalled: "App désinstallée sur GitHub.",
     removalWarning: (details: string) =>
       `Connexion locale effacée ; l'App GitHub est inchangée. ${details}`,
+    repoCount: (shown: number, total: number) =>
+      `${shown} dépôt(s) affiché(s) sur ${total}`,
     restricted: " · restreint par le serveur",
     reposLegend: "Dépôts utilisés pour la QA",
+    searchLabel: "Rechercher un dépôt",
+    searchPlaceholder: "Nom du dépôt, ex. pharmacia/api",
     saveRepos: "Enregistrer les dépôts sélectionnés",
     title: "Votre connexion GitHub",
     trail: ["1. Créer l'App", "2. Installer", "3. Choisir les dépôts"],

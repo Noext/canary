@@ -35,6 +35,18 @@ const removalCopy: Record<RemovalKind, string> = {
   uninstall: settings.github.confirmUninstall,
 };
 
+/** The list says why it is empty: no repository at all, or none matching. */
+function emptyReposMessage(
+  total: number,
+  shown: number,
+  query: string
+): string {
+  if (total === 0) {
+    return settings.github.emptyRepos;
+  }
+  return shown === 0 ? settings.github.noMatch(query.trim()) : "";
+}
+
 interface ManifestPost {
   action: string;
   value: string;
@@ -101,6 +113,7 @@ export function GithubSettings(): ReactNode {
   const [notice, setNotice] = useState("");
   const [savedMessage, setSavedMessage] = useState<string>();
   const [removal, setRemoval] = useState<RemovalKind>();
+  const [repoQuery, setRepoQuery] = useState("");
   const [edited, setEdited] = useState<Record<string, boolean>>({});
   const [autoEdited, setAutoEdited] = useState<Record<string, boolean>>({});
   const [manifestPost, setManifestPost] = useState<ManifestPost>();
@@ -228,6 +241,19 @@ export function GithubSettings(): ReactNode {
   const app = github?.app ?? null;
   const restriction = github?.restriction ?? [];
   const repositories = github?.repositories ?? [];
+  // The search narrows the rendered rows only: the save path always reads the
+  // whole status, so a filtered-out repository keeps its saved selection.
+  const query = repoQuery.trim().toLowerCase();
+  const visibleRepositories = query
+    ? repositories.filter((repository) =>
+        repository.full_name.toLowerCase().includes(query)
+      )
+    : repositories;
+  const emptyRepos = emptyReposMessage(
+    repositories.length,
+    visibleRepositories.length,
+    repoQuery
+  );
   // The checkbox state is the user's edit when there is one, the server value
   // otherwise: a fresh status never leaves a tick behind.
   const isSelected = (repository: GitHubRepository): boolean =>
@@ -374,13 +400,40 @@ export function GithubSettings(): ReactNode {
             <legend className="font-medium text-sm">
               {settings.github.reposLegend}
             </legend>
-            <div className="mt-2 flex flex-col gap-2" id="githubRepoList">
-              {repositories.length === 0 ? (
-                <p className="text-muted-foreground text-sm">
-                  {settings.github.emptyRepos}
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <div className="min-w-56 flex-1">
+                <Label htmlFor="githubRepoSearch">
+                  {settings.github.searchLabel}
+                </Label>
+                <Input
+                  autoComplete="off"
+                  id="githubRepoSearch"
+                  onChange={(event) => setRepoQuery(event.target.value)}
+                  placeholder={settings.github.searchPlaceholder}
+                  type="search"
+                  value={repoQuery}
+                />
+              </div>
+              <p
+                className="pb-2 text-muted-foreground text-xs"
+                id="githubRepoCount"
+              >
+                {settings.github.repoCount(
+                  visibleRepositories.length,
+                  repositories.length
+                )}
+              </p>
+            </div>
+            <div
+              className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-border"
+              id="githubRepoList"
+            >
+              {emptyRepos ? (
+                <p className="px-3 py-2 text-muted-foreground text-sm">
+                  {emptyRepos}
                 </p>
               ) : (
-                repositories.map((repository) => {
+                visibleRepositories.map((repository) => {
                   const restricted = isRestricted(
                     repository.full_name,
                     restriction
@@ -390,51 +443,62 @@ export function GithubSettings(): ReactNode {
                   const autoId = `repo-auto-${slug}`;
                   return (
                     <div
-                      className="flex flex-col gap-1"
+                      className="flex items-center gap-3 border-border border-t px-3 py-2 first:border-t-0"
                       key={repository.full_name}
                     >
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          checked={isSelected(repository)}
-                          disabled={restricted}
-                          id={inputId}
-                          onChange={(event) =>
-                            setEdited((current) => ({
-                              ...current,
-                              [repository.full_name]: event.target.checked,
-                            }))
-                          }
-                          value={repository.full_name}
-                        />
-                        <Label className="flex-1 font-normal" htmlFor={inputId}>
-                          {repository.full_name}
-                          {restricted ? settings.github.restricted : ""}
-                        </Label>
-                        <Pill>
-                          {repository.private
-                            ? settings.github.private
-                            : settings.github.public}
-                        </Pill>
-                      </div>
-                      <div className="flex items-center gap-2 pl-6">
-                        <Checkbox
-                          checked={isAutoRun(repository)}
-                          disabled={restricted}
-                          id={autoId}
-                          onChange={(event) =>
-                            setAutoEdited((current) => ({
-                              ...current,
-                              [repository.full_name]: event.target.checked,
-                            }))
-                          }
-                        />
+                      <Checkbox
+                        checked={isSelected(repository)}
+                        disabled={restricted}
+                        id={inputId}
+                        onChange={(event) =>
+                          setEdited((current) => ({
+                            ...current,
+                            [repository.full_name]: event.target.checked,
+                          }))
+                        }
+                        value={repository.full_name}
+                      />
+                      <div className="min-w-0 flex-1">
                         <Label
-                          className="flex-1 font-normal text-muted-foreground"
-                          htmlFor={autoId}
+                          className="flex items-center gap-1 font-normal"
+                          htmlFor={inputId}
+                          title={repository.full_name}
                         >
-                          {settings.github.autoRunLabel}
+                          <span className="truncate">
+                            {repository.full_name}
+                          </span>
+                          {restricted ? (
+                            <span className="shrink-0 text-muted-foreground text-xs">
+                              {settings.github.restricted}
+                            </span>
+                          ) : null}
                         </Label>
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <Checkbox
+                            checked={isAutoRun(repository)}
+                            disabled={restricted}
+                            id={autoId}
+                            onChange={(event) =>
+                              setAutoEdited((current) => ({
+                                ...current,
+                                [repository.full_name]: event.target.checked,
+                              }))
+                            }
+                          />
+                          <Label
+                            className="truncate font-normal text-muted-foreground text-xs"
+                            htmlFor={autoId}
+                            title={settings.github.autoRunLabel}
+                          >
+                            {settings.github.autoRunLabel}
+                          </Label>
+                        </div>
                       </div>
+                      <Pill>
+                        {repository.private
+                          ? settings.github.private
+                          : settings.github.public}
+                      </Pill>
                     </div>
                   );
                 })
