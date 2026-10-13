@@ -457,6 +457,10 @@ is root-equivalent inside it, and a runner is **not** ephemeral: `_work`, the pn
 images survive between jobs, so a malicious pull request could poison a cache a later job reuses. The
 container boundary and the egress table are what limit the damage.
 
+The runner's disk needs the same hygiene as its caches: `check` reclaims dangling images and build
+cache older than an hour before it builds, then prunes what it built even when it fails. A job killed
+mid-step otherwise hands the full disk it created — the 2026-10-13 ENOSPC kill — to the next run.
+
 </details>
 
 See [`AGENTS.md`](AGENTS.md) for architecture and orientation, [`CONTRIBUTING.md`](CONTRIBUTING.md)

@@ -71,6 +71,25 @@ jobs:
       - name: Autonomous PR QA E2E (real Chromium, fixture GitHub and AI APIs)
         run: pnpm --filter @usecanary/pr-qa test:e2e
 
+      # The runner is not ephemeral and its Docker daemon is shared with every
+      # other job. A job killed mid-step (run 38362415208, 2026-10-13) was killed
+      # by ENOSPC and never ran a cleanup, so its dangling image and its build
+      # cache stayed on the disk and the next run inherited a full container.
+      # Reclaiming that inheritance before building is what makes the disk heal
+      # itself instead of needing a manual purge.
+      - name: Reclaim disk inherited from a run that was killed before its cleanup
+        run: |
+          docker system df
+          # Dangling only. Without `-a`, a tagged image a sibling job may still
+          # be testing is never a candidate.
+          docker image prune -f
+          # A cache record untouched for over an hour cannot belong to a build
+          # still running here (`check` is capped at 30 minutes), while a sibling
+          # job keeps the warm cache it just produced. Records older than that are
+          # what accumulated to 24.6 GB / 157 entries before this step existed.
+          docker builder prune -f --filter until=1h
+          docker system df
+
       - name: Build production Docker image from a clean context
         run: docker build -f Dockerfile.pr-qa -t canary-pr-qa:test .
 
@@ -78,6 +97,23 @@ jobs:
         run: pnpm --filter @usecanary/pr-qa test:container
         env:
           CANARY_DOCKER_IMAGE: canary-pr-qa:test
+
+      # `if: always()` is the whole point: a job that fails or is killed is the
+      # one that leaves everything behind. This run's build retagged
+      # `canary-pr-qa:test`, so the image it orphaned is reclaimable now instead
+      # of by the next run. No Compose teardown here: the test already runs
+      # `docker compose down --volumes --remove-orphans` on its own random
+      # project, and a second, blind `down` could hit a sibling job.
+      - name: Reclaim what this run built, even when the job fails
+        if: always()
+        run: |
+          docker system df
+          # Dangling only, and never the still-tagged image of a running sibling.
+          docker image prune -f
+          # Unfiltered on purpose: this run is over, so its own build cache has no
+          # reader left, and a build in progress elsewhere keeps its own records.
+          docker builder prune -f
+          docker system df
 
       - name: Preserve container diagnostics
         if: always()
