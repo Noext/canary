@@ -132,6 +132,60 @@ it("answers the MCP handshake and publishes four read-only tools", async () => {
   ]);
 }, 30_000);
 
+it("filters the attempt history by state and date in the database", async () => {
+  const { key, q, url } = await mcpServer();
+  const run = await completedRun(q);
+  const attempt = (number: number) => ({
+    number,
+    prUrl: PR_URL,
+    repo: "fixture/app",
+    sha: SHA,
+  });
+  await q.acceptDelivery("a-waiting", "pull_request", attempt(1), 1800);
+  await q.acceptDelivery("b-promoted", "pull_request", attempt(2), 1800);
+  await q.acceptDelivery("c-discarded", "pull_request", attempt(3), 1800);
+  await q.acceptDelivery("d-expired", "pull_request", attempt(4), 1800);
+  await q.acceptDelivery("e-disabled", "pull_request", attempt(5), 1800);
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='processed',run_id=$1 WHERE id='b-promoted'",
+    [run]
+  );
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='processed' WHERE id='c-discarded'"
+  );
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='expired' WHERE id='d-expired'"
+  );
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='auto_disabled' WHERE id='e-disabled'"
+  );
+  const listed = await tool(url, key, "list_automatic_attempts");
+  expect(listed.body).toMatchObject({ count: 5 });
+  // Every state the tool advertises is reachable, and the filter runs before
+  // the cap: five terminal rows would otherwise fill the page and hide the
+  // older waiting one.
+  for (const state of [
+    "waiting",
+    "promoted",
+    "discarded",
+    "expired",
+    "disabled",
+  ]) {
+    const filtered = await tool(url, key, "list_automatic_attempts", {
+      limit: 1,
+      state,
+    });
+    expect(filtered.body).toMatchObject({
+      attempts: [{ state }],
+      count: 1,
+    });
+  }
+  const dated = await tool(url, key, "list_automatic_attempts", {
+    since: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  expect(dated.body).toMatchObject({ attempts: [], count: 0 });
+}, 30_000);
+
 it("answers the protocol it serves: bad call, unknown method, notification", async () => {
   const { key, url } = await mcpServer();
   const listed = (await (
@@ -174,7 +228,7 @@ it("answers the protocol it serves: bad call, unknown method, notification", asy
   expect(((await malformed.json()) as McpAnswer).error?.code).toBe(-32_700);
 }, 30_000);
 
-it("opens on a bearer key only: no cookie, no session, no other method", async () => {
+it("opens on an API key only: no cookie, no session, no other credential", async () => {
   const { admin, key, url } = await mcpServer();
   const body = JSON.stringify({
     id: 1,
@@ -197,6 +251,14 @@ it("opens on a bearer key only: no cookie, no session, no other method", async (
   }
   const unknown = await call(url, `qa_live_${"A".repeat(32)}`, "tools/list");
   expect(unknown.status).toBe(401);
+  // Credentials that open the whole dashboard do not open the agent endpoint:
+  // it exists for a key an administrator issued to an agent.
+  for (const credential of [
+    admin.Authorization.replace("Bearer ", ""),
+    "not-a-key",
+  ]) {
+    expect((await call(url, credential, "tools/list")).status).toBe(401);
+  }
   // A dashboard session is ambient authority: it must not open the agent
   // endpoint, even when the caller also sends an unrelated bearer token.
   const login = await fetch(`${url}/session`, {

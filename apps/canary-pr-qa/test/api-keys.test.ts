@@ -3,8 +3,11 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApiKeyCreated, ApiKeyRow } from "../src/dashboard/contracts.js";
+import { GitHubSetup } from "../src/github-setup.js";
+import { LocalAuth } from "../src/local-auth.js";
 import { startProductionServer } from "../src/production-server.js";
 import { fixture, PR_URL, pgliteQueue } from "./fixture.js";
+import { githubSetupFixture } from "./github-setup-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -279,6 +282,59 @@ it("accepts a well-formed name, records a use at most once per window, and audit
   );
   // The trail describes the key without publishing its token.
   expect(JSON.stringify(audit)).not.toContain(created.token);
+}, 30_000);
+
+it("gives a new key the repositories in force, not the startup restriction", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    GITHUB_ALLOWED_REPOS: "",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const accounts = new LocalAuth(q.pool);
+  const user = await accounts.setup(
+    {
+      password: "key-scope-2026-abcdef",
+      setupCode: await accounts.issueSetupTicket(),
+      username: "key-scope",
+    },
+    []
+  );
+  const cookie = `qa_local_session=${await accounts.session(user)}`;
+  // An operator who picks repositories in the dashboard leaves
+  // `GITHUB_ALLOWED_REPOS` empty: the environment variable is only a ceiling, so
+  // a key must take the list in force instead of the startup one.
+  const setup = new GitHubSetup(q.pool, config);
+  await setup.convert(
+    user.id,
+    await setup.state(user.id, "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const created = await fetch(`${url}/dashboard/api-keys`, {
+    body: JSON.stringify({ name: "agent" }),
+    headers: { Cookie: cookie },
+    method: "POST",
+  });
+  expect(created.status).toBe(201);
+  const key = (await created.json()) as ApiKeyCreated;
+  expect(key.repos).toEqual(["fixture/app"]);
+  // The key reads straight away: an empty scope would answer nothing at all.
+  const me = await fetch(`${url}/me`, {
+    headers: { Authorization: `Bearer ${key.token}` },
+  });
+  expect(me.status).toBe(200);
+  expect(await me.json()).toMatchObject({
+    id: `key:${key.id}`,
+    repos: ["fixture/app"],
+    role: "viewer",
+  });
 }, 30_000);
 
 it("refuses a non-administrator on every key route", async () => {

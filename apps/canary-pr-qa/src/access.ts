@@ -31,6 +31,12 @@ const UsersSchema = z.array(
     .strict()
 );
 export interface Principal {
+  /**
+   * Set only on the principal an API key stands for. Every other credential —
+   * the service token, a `users.json` token, an OIDC JWT, a session cookie —
+   * leaves it unset, so a surface reserved to agents can tell them apart.
+   */
+  apiKeyId?: string;
   id: string;
   repos: string[];
   role: "viewer" | "operator" | "admin";

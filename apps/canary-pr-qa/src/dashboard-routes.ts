@@ -44,7 +44,8 @@ const API_KEYS_PREFIX = "/dashboard/api-keys";
 export function apiKeysRoute(
   keys: ApiKeys,
   read: (req: IncomingMessage) => Promise<Buffer>,
-  json: (res: ServerResponse, status: number, value: unknown) => void
+  json: (res: ServerResponse, status: number, value: unknown) => void,
+  effectiveRepos: () => Promise<string[]>
 ) {
   /**
    * Administrator-only key management. A key is a read-only viewer for agents,
@@ -73,7 +74,13 @@ export function apiKeysRoute(
         return true;
       }
       if (req.method === "POST") {
-        json(res, 201, await keys.create(user, apiKeyName(await read(req))));
+        json(
+          res,
+          201,
+          await keys.create(user, apiKeyName(await read(req)), [
+            ...new Set(await effectiveRepos()),
+          ])
+        );
         return true;
       }
       return false;
@@ -130,7 +137,9 @@ export function dashboardRoutes(
   json: (res: ServerResponse, status: number, value: unknown) => void,
   keys: ApiKeys
 ) {
-  const apiKeyRoute = apiKeysRoute(keys, read, json);
+  const apiKeyRoute = apiKeysRoute(keys, read, json, async () =>
+    (await setup.effective()).allowedRepos.map((repo) => repo.toLowerCase())
+  );
   /**
    * Administrator-only host list editor. The stored list becomes the list in
    * force for this process and is published for the browser and egress services.

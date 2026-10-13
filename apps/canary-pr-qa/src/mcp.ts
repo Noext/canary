@@ -243,19 +243,13 @@ const tools: Tool[] = [
     run: async (raw, ctx) => {
       const args = listAttemptsArgs.parse(raw);
       try {
-        const { attempts } = await ctx.queue.automatic(
-          scope(ctx.user, args.repo),
-          ctx.config.QA_AUTO_PREVIEW_WAIT_SECONDS
-        );
-        const kept = attempts.filter(
-          (attempt) =>
-            (!args.state || attempt.state === args.state) &&
-            (!args.since || attempt.updatedAt >= args.since)
-        );
-        return text({
-          attempts: kept.slice(0, args.limit ?? DEFAULT_LIMIT),
-          count: kept.length,
+        const attempts = await ctx.queue.attempts(scope(ctx.user, args.repo), {
+          deadlineSeconds: ctx.config.QA_AUTO_PREVIEW_WAIT_SECONDS,
+          limit: args.limit ?? DEFAULT_LIMIT,
+          ...(args.since ? { since: args.since } : {}),
+          ...(args.state ? { state: args.state } : {}),
         });
+        return text({ attempts, count: attempts.length });
       } catch (error) {
         return refusal(error);
       }
@@ -390,9 +384,11 @@ async function handleMessage(
 }
 
 /**
- * `POST /mcp` for AI agents that hold an API key. The endpoint takes a bearer
- * key only: a dashboard session cookie never opens it, so a cross-site request
- * cannot read this service even though the route sits behind the same origin.
+ * `POST /mcp` for AI agents that hold an API key. The endpoint takes an API key
+ * only. Every other credential the server accepts elsewhere — the service
+ * token, a `users.json` token, an OIDC JWT, a session cookie — lacks
+ * `Principal.apiKeyId` and is refused, so a cross-site request cannot read this
+ * service even though the route sits behind the same origin.
  *
  * Stateless by design: no session, no server-to-client stream, one JSON answer
  * per request. A client that needs the full protocol can keep using the CLI.
@@ -438,7 +434,7 @@ export function mcpRoutes(
       json(res, 405, { error: "Method not allowed" });
       return true;
     }
-    if (!/^Bearer \S/i.test(req.headers.authorization ?? "")) {
+    if (!user.apiKeyId) {
       json(res, 401, { error: "Authentication required" });
       return true;
     }

@@ -557,8 +557,9 @@ Le serveur en garde une empreinte et une copie chiffrée : le bouton Copier de l
 liste rend le jeton sans jamais l'afficher à l'écran. Révoquer une clé la refuse
 dès la requête suivante ; la ligne reste pour l'audit.
 
-Une clé est en lecture seule. Elle porte le rôle `viewer` et la liste de dépôts
-de l'instance (`GITHUB_ALLOWED_REPOS`) : elle lit l'historique, jamais ne lance,
+Une clé est en lecture seule. Elle porte le rôle `viewer` et la liste de dépôts en
+vigueur au moment de sa création — la sélection GitHub des réglages,
+plafonnée par `GITHUB_ALLOWED_REPOS` — : elle lit l'historique, jamais ne lance,
 n'annule ou ne supprime un test. La même clé ouvre le serveur MCP du service :
 
 ```bash

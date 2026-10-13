@@ -73,11 +73,22 @@ export class ApiKeys {
     this.pool = pool;
     this.config = config;
   }
-  /** Issue a key and return its token, the only time it is readable in clear. */
-  async create(user: Principal, name: string): Promise<ApiKeyCreated> {
+  /**
+   * Issue a key and return its token, the only time it is readable in clear.
+   *
+   * The caller passes the repositories in force. The environment restriction
+   * (`GITHUB_ALLOWED_REPOS`) is only a ceiling: it is deliberately empty when
+   * the operator picks repositories in the dashboard, so reading it here would
+   * issue a key that can read nothing.
+   */
+  async create(
+    user: Principal,
+    name: string,
+    repos: string[]
+  ): Promise<ApiKeyCreated> {
     const token = `qa_live_${randomBytes(24).toString("base64url")}`;
     const prefix = token.slice(0, 12);
-    const repos = [...this.config.allowedRepos];
+    const scope = [...repos];
     const id = randomUUID();
     const created = (
       await this.pool.query<{ created_at: Date }>(
@@ -88,7 +99,7 @@ export class ApiKeys {
           name,
           prefix,
           sha256(token),
-          JSON.stringify(repos),
+          JSON.stringify(scope),
           encrypt(token, this.config, API_KEYS_LABEL),
           user.id,
         ]
@@ -104,7 +115,7 @@ export class ApiKeys {
       lastUsedAt: null,
       name,
       prefix,
-      repos,
+      repos: scope,
       revokedAt: null,
       token,
     };
@@ -180,7 +191,12 @@ export class ApiKeys {
       "UPDATE qa_api_keys SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at<now()-interval '5 minutes')",
       [row.id]
     );
-    return { id: `key:${row.id}`, role: row.role, repos: row.repos };
+    return {
+      apiKeyId: row.id,
+      id: `key:${row.id}`,
+      repos: row.repos,
+      role: row.role,
+    };
   }
   /** A malformed id is not a capability: it matches nothing, like an absent one. */
   private async find(id: string): Promise<KeyRow> {
