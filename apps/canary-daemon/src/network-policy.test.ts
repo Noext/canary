@@ -66,6 +66,28 @@ describe("hostEntryMatches", () => {
     }
   });
 
+  it("refuses a malformed wildcard instead of failing open", () => {
+    // `endsWith(".")` would accept any trailing-dot FQDN for a bare `*.` entry,
+    // and a standalone session can be started with exactly that list.
+    for (const entry of ["*.", "*"]) {
+      for (const target of [
+        "https://example.com./",
+        "https://evil.test./",
+        "http://preview.test",
+      ]) {
+        expect(
+          hostEntryMatches(url(target), entry.trim()),
+          `${target} ~ ${entry.trim()}`
+        ).toBe(false);
+        expect(cookieDomainAllowed("example.com.", [entry.trim()])).toBe(false);
+      }
+    }
+    // The trailing dot is not a way around an explicit entry either.
+    expect(hostEntryMatches(url("https://example.com./"), "example.com")).toBe(
+      false
+    );
+  });
+
   it("covers subdomains with a wildcard, never the apex or a sibling suffix", () => {
     expect(
       hostEntryMatches(
@@ -166,5 +188,19 @@ describe("networkAllowed", () => {
     expect(
       await networkAllowed("http://169.254.169.254/latest", hosts, true, true)
     ).toBe(false);
+  });
+
+  it("denies every destination for a malformed allowlist entry", async () => {
+    // The end-to-end shape of the same bug: a single bad entry must not become a
+    // blanket pass for trailing-dot FQDNs.
+    for (const target of [
+      "https://example.com./",
+      "https://evil.test./",
+      "https://preview.example.com/",
+    ]) {
+      expect(await networkAllowed(target, ["*."], false, true), target).toBe(
+        false
+      );
+    }
   });
 });

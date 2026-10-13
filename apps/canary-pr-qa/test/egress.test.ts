@@ -62,7 +62,11 @@ it("forwards approved traffic to a DNS-pinned target and rejects other destinati
   const get = (url: string) =>
     new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = request(
-        { host: "127.0.0.1", port: 3128, path: url },
+        // `agent: false` keeps one test from reusing the keep-alive socket of the
+        // proxy a previous test already closed: every test binds the same port,
+        // and a recycled socket answers with ECONNRESET instead of the policy
+        // verdict under test.
+        { agent: false, host: "127.0.0.1", port: 3128, path: url },
         (res) => {
           let body = "";
           res.on("data", (chunk) => (body += chunk));
@@ -100,7 +104,8 @@ it("denies every destination while the published policy is unreadable, then foll
   const get = (url: string) =>
     new Promise<{ body: string; status: number }>((resolve, reject) => {
       const req = request(
-        { host: "127.0.0.1", path: url, port: 3128 },
+        // See the first helper: no shared keep-alive socket across proxies.
+        { agent: false, host: "127.0.0.1", path: url, port: 3128 },
         (res) => {
           let body = "";
           res.on("data", (chunk) => (body += chunk));
@@ -146,7 +151,8 @@ it("enforces a wildcard entry at the proxy, for its subdomains only", async () =
   const get = (url: string) =>
     new Promise<number>((resolve, reject) => {
       const req = request(
-        { host: "127.0.0.1", path: url, port: 3128 },
+        // See the first helper: no shared keep-alive socket across proxies.
+        { agent: false, host: "127.0.0.1", path: url, port: 3128 },
         (res) => {
           res.resume();
           res.on("end", () => resolve(res.statusCode ?? 0));

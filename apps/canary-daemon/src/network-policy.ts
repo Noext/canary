@@ -84,9 +84,16 @@ function defaultPort(protocol: string): number | undefined {
   return;
 }
 function matchesName(hostname: string, pattern: string): boolean {
-  return pattern.startsWith("*.")
-    ? hostname.endsWith(`.${pattern.slice(2)}`)
-    : hostname === pattern;
+  if (!pattern.startsWith("*.")) {
+    return hostname === pattern;
+  }
+  // A malformed `*.` authorizes nothing. `endsWith(".")` would otherwise accept
+  // every trailing-dot FQDN (`https://example.com./`), turning a broken entry
+  // into a fail-open one for a caller that passes it straight through, such as
+  // `canary start --network-hosts '*.|'` - the policy schema validates non-empty
+  // strings, not hostnames.
+  const suffix = pattern.slice(2);
+  return suffix !== "" && hostname.endsWith(`.${suffix}`);
 }
 /**
  * Whether one allowlist entry covers a destination URL.
