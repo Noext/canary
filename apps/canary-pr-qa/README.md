@@ -149,6 +149,23 @@ Une politique `.canary/qa.json` est lue **sur le commit de base** :
 ```
 
 Sans politique, les chemins applicatifs critiques ne peuvent pas être ignorés.
+La documentation n'est jamais critique, même sous un préfixe de `criticalPaths` :
+un fichier ignoré est autorisé sans entrée quand c'est un fichier Markdown (`*.md`,
+`*.mdx`, donc `AGENTS.md` et `apps/web/AGENTS.md`), un fichier sous un arbre
+`docs/` ou `openspec/`, ou un texte de licence (`LICENSE*`, `LICENCE*`).
+`.github/**` en est volontairement exclu : un workflow est une configuration
+exécutable, pas de la prose ; un dépôt qui veut la contrôler l'ajoute lui-même à
+`criticalPaths`. Le code applicatif sous un préfixe critique reste refusé, le
+diagnostic nomme les fichiers refusés et rappelle le remède `.canary/qa.json`.
+
+`approvedSkips[].path` accepte un chemin exact ou un motif : `*` remplace une
+partie d'un segment et `**` couvre zéro ou plusieurs segments, par exemple
+`apps/*/generated.ts` ou `apps/**/generated.ts`. Un motif composé uniquement de
+jokers (`*`, `**`, `*/*`) ou terminé par `/` approuverait tout : il n'approuve
+rien et la run est refusée comme pour un skip non approuvé, sans exception.
+Un chemin exact continue de fonctionner ; la politique reste lue sur le SHA de
+base, donc une PR ne peut pas approuver son propre skip.
+
 Configurer les autres checks GitHub obligatoires pour couvrir les tests unitaires,
 backend, sécurité et builds. Les citations lexicales rendent le contrat vérifiable ;
 elles ne garantissent pas que le modèle a identifié tous les bugs.
