@@ -80,7 +80,7 @@ export async function saveReport(
       (
         item
       ) => `<section><h2>${escapeHtml(item.scenario.title)} — ${escapeHtml(item.outcome)}</h2><p>${escapeHtml(item.scenario.rationale)}</p><p>${escapeHtml(item.error)}</p>${diagnosticHtml(item.diagnostic)}
-<a href="${escapeHtml(item.scenario.id)}/report.html">Canary session report</a>
+${item.artifacts.includes("report.html") ? `<a href="${escapeHtml(item.scenario.id)}/report.html">Canary session report</a>` : ""}
 ${item.artifacts
   .filter((file) => file.endsWith(".webm"))
   .map(

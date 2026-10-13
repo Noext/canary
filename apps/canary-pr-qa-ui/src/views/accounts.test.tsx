@@ -1,6 +1,7 @@
 import { cleanup, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DashboardError } from "@/api/client";
 import type { LocalAccount, Role } from "@/api/contracts";
 import { roles, settings } from "@/i18n";
 import { AccountsSettings } from "./accounts";
@@ -11,7 +12,11 @@ interface ApiCall {
   path: string;
 }
 
-const session = vi.hoisted(() => ({ isAdmin: true, userId: "" }));
+const session = vi.hoisted(() => ({
+  isAdmin: true,
+  refreshUser: vi.fn(),
+  userId: "",
+}));
 
 const workspace = vi.hoisted(() => ({ repositories: [] as string[] }));
 
@@ -20,6 +25,7 @@ const apiMock = vi.fn();
 vi.mock("@/app/session", () => ({
   useSession: () => ({
     isAdmin: session.isAdmin,
+    refreshUser: session.refreshUser,
     user: { id: session.userId, repos: [], role: "admin" },
   }),
 }));
@@ -59,6 +65,8 @@ function bodyOf(
 
 let rows: LocalAccount[] = [];
 let calls: ApiCall[] = [];
+/** Set once a write demoted the caller: the admin-only read is refused after it. */
+let readForbidden = false;
 
 function seed(): void {
   rows = [
@@ -81,8 +89,10 @@ function seed(): void {
 
 beforeEach(() => {
   session.isAdmin = true;
+  session.refreshUser.mockReset();
   session.userId = `local:${ADMIN_ID}`;
   workspace.repositories = ["fixture/app", "fixture/private"];
+  readForbidden = false;
   seed();
   calls = [];
   apiMock.mockReset();
@@ -96,6 +106,9 @@ beforeEach(() => {
         ...(options?.body === undefined ? {} : { body: options.body }),
       });
       if (path === "/accounts" && method === "GET") {
+        if (readForbidden) {
+          throw new DashboardError("Project access denied", { status: 403 });
+        }
         return { accounts: rows };
       }
       if (path === "/accounts" && method === "POST") {
@@ -224,6 +237,38 @@ describe("AccountsSettings", () => {
     expect(byId("accountsNotice").textContent).toBe(
       settings.accounts.saved("reviewer")
     );
+  });
+
+  it("reports a write it can no longer read as applied, and reloads the session", async () => {
+    const user = userEvent.setup();
+    // A second administrator exists: demoting the caller is allowed, and it is
+    // exactly the case where the write outlives the right to re-read the list.
+    rows = [
+      ...rows,
+      {
+        createdAt: "2026-02-10T08:00:00.000Z",
+        id: "33333333-3333-3333-3333-333333333333",
+        repos: [],
+        role: "admin",
+        username: "second-admin",
+      },
+    ];
+    render(<AccountsSettings />);
+    await waitFor(() => expect(byId("accountsList")).toBeTruthy());
+
+    readForbidden = true;
+    await user.selectOptions(byId(`account-role-${ADMIN_ID}`), "operator");
+    await user.click(byId(`account-save-${ADMIN_ID}`));
+
+    await waitFor(() =>
+      expect(byId("accountsNotice").textContent).toBe(
+        settings.accounts.saved("ui-admin")
+      )
+    );
+    // The save is not reported as failed, and the session is asked to reload so
+    // the screen stops offering controls the server would now refuse.
+    expect(byId("accountsError").textContent).toBe("");
+    expect(session.refreshUser).toHaveBeenCalledTimes(1);
   });
 
   it("resets a password through the same account endpoint", async () => {

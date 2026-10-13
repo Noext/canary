@@ -1,5 +1,5 @@
 import { accountPayloadSchema, accountsSchema } from "@/api/account-schemas";
-import { api, errorText, post } from "@/api/client";
+import { api, DashboardError, errorText, post } from "@/api/client";
 import type { LocalAccount, Role } from "@/api/contracts";
 import { settings } from "@/i18n";
 import { createStore, type Store } from "@/lib/store";
@@ -86,14 +86,22 @@ export function reposSummary(account: LocalAccount): string {
     : settings.accounts.reposNone;
 }
 
+/** The list is administrator-only: this refusal means the role is gone. */
+function lostAdminAccess(failure: unknown): boolean {
+  return failure instanceof DashboardError && failure.status === 403;
+}
+
 /**
  * One write: mark the control that started it, reload the authoritative list,
  * then report the notice or the failure. Returns whether it reached the server.
+ * `onAccessLost` runs when the write applied but the caller can no longer read
+ * the list, so the session can be reloaded instead of the screen lying.
  */
-async function runOperation(
+export async function runOperation(
   store: Store<AccountsState>,
   operation: string,
-  action: () => Promise<string>
+  action: () => Promise<string>,
+  onAccessLost: () => void
 ): Promise<boolean> {
   store.set((current) => ({
     ...current,
@@ -103,7 +111,24 @@ async function runOperation(
   }));
   try {
     const message = await action();
-    await reload(store);
+    try {
+      await reload(store);
+    } catch (failure) {
+      // An administrator who demoted themselves — or who was demoted by
+      // another one — keeps the write but loses the read: reporting a failed
+      // save would be a lie, and the session still carries the old role.
+      if (!lostAdminAccess(failure)) {
+        throw failure;
+      }
+      store.set((current) => ({
+        ...current,
+        busy: undefined,
+        error: undefined,
+        notice: message,
+      }));
+      onAccessLost();
+      return true;
+    }
     store.set((current) => ({
       ...current,
       busy: undefined,
@@ -127,57 +152,78 @@ async function runOperation(
  */
 export function accountActions(
   store: Store<AccountsState>,
-  available: string[]
+  available: string[],
+  onAccessLost: () => void
 ): AccountActions {
   return {
     create: (draft) =>
-      runOperation(store, "create", async () => {
-        const username = draft.username.trim().toLowerCase();
-        await api("/accounts", {
-          ...post({
-            password: draft.password,
-            // An administrator follows the GitHub selection, and the whole
-            // allowed list is the subset the server always accepts.
-            repos: draft.role === "admin" ? available : draft.repos,
-            role: draft.role,
-            username,
-          }),
-          schema: accountPayloadSchema,
-        });
-        return settings.accounts.created(username);
-      }),
+      runOperation(
+        store,
+        "create",
+        async () => {
+          const username = draft.username.trim().toLowerCase();
+          await api("/accounts", {
+            ...post({
+              password: draft.password,
+              // An administrator follows the GitHub selection, and the whole
+              // allowed list is the subset the server always accepts.
+              repos: draft.role === "admin" ? available : draft.repos,
+              role: draft.role,
+              username,
+            }),
+            schema: accountPayloadSchema,
+          });
+          return settings.accounts.created(username);
+        },
+        onAccessLost
+      ),
     remove: (account) =>
-      void runOperation(store, `delete-${account.id}`, async () => {
-        await api(`/accounts/${account.id}`, {
-          method: "DELETE",
-          // The reload below carries the schema: this answer is not read.
-          unvalidated: true,
-        });
-        return settings.accounts.deleted(account.username);
-      }),
+      void runOperation(
+        store,
+        `delete-${account.id}`,
+        async () => {
+          await api(`/accounts/${account.id}`, {
+            method: "DELETE",
+            // The reload below carries the schema: this answer is not read.
+            unvalidated: true,
+          });
+          return settings.accounts.deleted(account.username);
+        },
+        onAccessLost
+      ),
     reset: (account, password) =>
-      runOperation(store, `password-${account.id}`, async () => {
-        await api(`/accounts/${account.id}`, {
-          body: { password },
-          method: "PATCH",
-          schema: accountPayloadSchema,
-        });
-        return settings.accounts.passwordResetDone(account.username);
-      }),
+      runOperation(
+        store,
+        `password-${account.id}`,
+        async () => {
+          await api(`/accounts/${account.id}`, {
+            body: { password },
+            method: "PATCH",
+            schema: accountPayloadSchema,
+          });
+          return settings.accounts.passwordResetDone(account.username);
+        },
+        onAccessLost
+      ),
     save: (account, edited) =>
-      void runOperation(store, `save-${account.id}`, async () => {
-        // An administrator follows the GitHub selection, so its own list is
-        // left out of the request: a stored repository the server no longer
-        // allows would otherwise fail a plain role change.
-        await api(`/accounts/${account.id}`, {
-          body:
-            edited.role === "admin"
-              ? { role: edited.role }
-              : { repos: edited.repos, role: edited.role },
-          method: "PATCH",
-          schema: accountPayloadSchema,
-        });
-        return settings.accounts.saved(account.username);
-      }),
+      void runOperation(
+        store,
+        `save-${account.id}`,
+        async () => {
+          // An administrator follows the GitHub selection, so its own list is
+          // left out of the request: a stored repository the server no longer
+          // allows would otherwise fail a plain role change.
+          await api(`/accounts/${account.id}`, {
+            body:
+              edited.role === "admin"
+                ? { role: edited.role }
+                : { repos: edited.repos, role: edited.role },
+            method: "PATCH",
+            schema: accountPayloadSchema,
+          });
+          return settings.accounts.saved(account.username);
+        },
+        onAccessLost
+      ),
   };
 }

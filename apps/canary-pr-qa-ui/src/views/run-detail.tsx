@@ -197,15 +197,20 @@ function ScenarioCard({
         />
       ))}
       {/* The Canary session report holds the steps, commands, console and
-          network of this one scenario; the aggregate report links it too. */}
-      <a
-        className="mt-3 inline-block text-sm underline-offset-4 hover:underline"
-        href={`/artifacts/${runId}/${encodeURIComponent(item.scenario.id)}/report.html`}
-        rel="noopener"
-        target="_blank"
-      >
-        {copy.sessionReport}
-      </a>
+          network of this one scenario; the aggregate report links it too. A
+          scenario stopped before its session started (a planning refusal, a
+          failed preparation, a lost evidence finalization) exported no report:
+          linking it would open a missing artifact. */}
+      {item.artifacts.includes("report.html") ? (
+        <a
+          className="mt-3 inline-block text-sm underline-offset-4 hover:underline"
+          href={`/artifacts/${runId}/${encodeURIComponent(item.scenario.id)}/report.html`}
+          rel="noopener"
+          target="_blank"
+        >
+          {copy.sessionReport}
+        </a>
+      ) : null}
     </article>
   );
 }

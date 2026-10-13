@@ -208,7 +208,7 @@ function CreateForm({
 function AccountsAdmin(): ReactNode {
   const [store] = useState(createAccountsStore);
   const { accounts, busy, error, notice } = useStore(store);
-  const { user } = useSession();
+  const { refreshUser, user } = useSession();
   const { status } = useWorkspace();
 
   const available = status?.github.repositories ?? [];
@@ -219,7 +219,9 @@ function AccountsAdmin(): ReactNode {
   const lastAdmin =
     rows.filter((account) => account.role === "admin").length === 1;
   const ownId = user?.id.replace(/^local:/, "");
-  const actions = accountActions(store, available);
+  // A write can change the caller's own role: the session is reloaded so the
+  // screen stops showing controls the server would now refuse.
+  const actions = accountActions(store, available, () => void refreshUser());
 
   return (
     <>
