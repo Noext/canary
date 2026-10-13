@@ -23,6 +23,8 @@ export const apiKeys = {
     "Une clé reste en lecture seule : elle ne peut ni lancer un test ni modifier vos réglages.",
   receipt: (name: string) =>
     `Jeton de « ${name} » copié dans le presse-papiers.`,
+  repos: (list: string) => `Dépôts : ${list}`,
+  reposNone: "Aucun dépôt : cette clé ne peut rien lire.",
   revoke: "Révoquer",
   revoked: "Révoquée",
   revokedAt: (date: string) => `Révoquée le ${date}`,

@@ -19,7 +19,13 @@ interface McpAnswer {
     content?: { text: string }[];
     isError?: boolean;
     serverInfo?: { name: string; version: string };
-    tools?: { inputSchema?: { type?: string }; name: string }[];
+    tools?: {
+      inputSchema?: {
+        properties?: Record<string, { format?: string }>;
+        type?: string;
+      };
+      name: string;
+    }[];
   };
 }
 
@@ -283,6 +289,20 @@ it("answers the protocol it serves: bad call, unknown method, notification", asy
   ).json()) as McpAnswer;
   expect(badArguments.error?.code).toBe(-32_602);
   expect(badArguments.error?.message).toContain("limit");
+  // A timestamp the database would refuse is a bad argument, not a server
+  // fault: the published schema carries the format the validator enforces.
+  const badDate = (await (
+    await call(url, key, "tools/call", {
+      arguments: { since: "not-a-date" },
+      name: "list_automatic_attempts",
+    })
+  ).json()) as McpAnswer;
+  expect(badDate.error?.code).toBe(-32_602);
+  expect(badDate.error?.message).toContain("since");
+  const attemptTool = listed.result?.tools?.find(
+    (entry) => entry.name === "list_automatic_attempts"
+  );
+  expect(attemptTool?.inputSchema?.properties?.since?.format).toBe("date-time");
   const notification = await call(url, key, "notifications/initialized");
   expect(notification.status).toBe(202);
   expect(await notification.text()).toBe("");

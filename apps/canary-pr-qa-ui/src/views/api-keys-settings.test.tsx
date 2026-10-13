@@ -169,6 +169,39 @@ afterEach(() => {
 });
 
 describe("ApiKeysSettings", () => {
+  it("says when a key covers no repository, and refuses creation until the list is in", async () => {
+    let loaded: (value: ApiKeyRow[]) => void = () => undefined;
+    apiMock.mockImplementation((path, options) => {
+      const call: ApiCall = { method: options?.method ?? "GET", path };
+      calls.push(call);
+      if (path === "/dashboard/api-keys" && call.method === "GET") {
+        return new Promise<ApiKeyRow[]>((resolve) => {
+          loaded = resolve;
+        });
+      }
+      throw new Error(`Unexpected API call ${call.method} ${path}`);
+    });
+    const user = setupUser();
+    const { container } = render(<ApiKeysSettings />);
+
+    const create = byId(container, "apiKeyCreate");
+    const name = byId(container, "apiKeyName");
+    // The first list is still on its way: creating now would let its answer
+    // replace the new key with a list that does not carry it yet.
+    expect(name).toBeDisabled();
+    expect(create).toBeDisabled();
+    await user.click(create);
+    expect(calls.filter((entry) => entry.method === "POST")).toEqual([]);
+
+    loaded([{ ...ACTIVE, id: "key-empty", repos: [] }]);
+    await waitFor(() => expect(name).not.toBeDisabled());
+    expect(byId(container, "apiKeyRepos-key-empty")).toHaveTextContent(
+      settings.apiKeys.reposNone
+    );
+    await user.type(name, "Agent");
+    expect(create).not.toBeDisabled();
+  });
+
   it("lists every key, its prefix, its last use and a revoked marker", async () => {
     const { container } = render(<ApiKeysSettings />);
 
@@ -185,6 +218,11 @@ describe("ApiKeysSettings", () => {
     );
     expect(byId(container, "apiKeyRow-key-1")).toHaveTextContent(
       settings.apiKeys.copy
+    );
+    // The scope belongs to the key: repository selections move, so an operator
+    // reads here what each key still covers.
+    expect(byId(container, "apiKeyRepos-key-1")).toHaveTextContent(
+      settings.apiKeys.repos("fixture/app")
     );
     // A key that was never used says so instead of showing an empty date.
     expect(byId(container, "apiKeyRow-key-2")).toHaveTextContent(

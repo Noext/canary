@@ -272,6 +272,18 @@ function ApiKeyRowItem({
         )}
       </div>
       <p className="mt-1 text-muted-foreground text-xs">{keyMeta(keyRow)}</p>
+      {/*
+        The scope is per key: an operator who changes the repository selection
+        later needs to see which key still reads what, or revoke the wrong one.
+      */}
+      <p
+        className="mt-1 text-muted-foreground text-xs"
+        id={`apiKeyRepos-${keyRow.id}`}
+      >
+        {keyRow.repos.length
+          ? settings.apiKeys.repos(keyRow.repos.join(", "))
+          : settings.apiKeys.reposNone}
+      </p>
     </li>
   );
 }
@@ -289,6 +301,11 @@ export function ApiKeysSettings(): ReactNode {
   const draft = name.trim();
 
   const submit = async () => {
+    // The first list is still on its way: creating now would let its answer
+    // replace the new key with a list that does not carry it yet.
+    if (loading || creating || !draft) {
+      return;
+    }
     if (await store.create(draft)) {
       setName("");
     }
@@ -314,6 +331,7 @@ export function ApiKeysSettings(): ReactNode {
           <div className="min-w-56 flex-1">
             <Label htmlFor="apiKeyName">{settings.apiKeys.nameLabel}</Label>
             <Input
+              disabled={loading}
               id="apiKeyName"
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => {
@@ -327,7 +345,7 @@ export function ApiKeysSettings(): ReactNode {
             />
           </div>
           <Button
-            disabled={creating || !draft}
+            disabled={creating || loading || !draft}
             id="apiKeyCreate"
             onClick={() => void submit()}
             variant="primary"

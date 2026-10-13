@@ -162,7 +162,7 @@ const listAttemptsArgs = z
   .object({
     limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
     repo: z.string().optional(),
-    since: z.string().optional(),
+    since: z.string().datetime({ offset: true }).optional(),
     state: z.enum(ATTEMPT_STATES).optional(),
   })
   .strict();
@@ -265,7 +265,8 @@ const tools: Tool[] = [
         repo: { description: "Dépôt, par exemple owner/name.", type: "string" },
         since: {
           description:
-            "Instant ISO ; les tentatives plus anciennes sont écartées.",
+            "Instant ISO 8601 ; les tentatives plus anciennes sont écartées.",
+          format: "date-time",
           type: "string",
         },
         state: { enum: ATTEMPT_STATES, type: "string" },
