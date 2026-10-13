@@ -277,6 +277,15 @@ describe("AutomaticDetailView", () => {
         automaticDetail.waiting
       )
     );
+    // A waiting attempt is probing the cause a previous probe recorded: that is
+    // what the operator has to act on, so it stays on screen. Only a waiting
+    // attempt with no reason at all is not explained (see the retry test).
+    expect(byId("automaticDetailCause")).toHaveTextContent(
+      automaticReasons.PREVIEW_NOT_FOUND!
+    );
+    expect(byId("automaticDetailAdvice")).toHaveTextContent(
+      automaticAdvice.PREVIEW_NOT_FOUND!
+    );
   });
 
   it("hides the preview block from a viewer who receives no topology", async () => {
@@ -517,6 +526,10 @@ describe("AutomaticDetailView", () => {
     expect(byId("automaticDetailFacts")).toHaveTextContent(
       "0 vérifications effectuées"
     );
+    // Nothing stopped this attempt any more: an empty cause with the fallback
+    // advice would send the operator to a manual run Canary is already doing.
+    expect(document.getElementById("automaticDetailCause")).toBeNull();
+    expect(document.getElementById("automaticDetailAdvice")).toBeNull();
     expect(byId("automaticDetailTimeline")).toHaveTextContent(
       "Relancé depuis le tableau de bord"
     );

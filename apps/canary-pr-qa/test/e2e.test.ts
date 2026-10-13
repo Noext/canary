@@ -1431,6 +1431,12 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     );
     const rearmed = await observed("retried-attempt-detail");
     expect(rearmed.text).toContain("Relancé depuis le tableau de bord");
+    // Nothing stopped it any more: the screen must not keep explaining a cause
+    // and an advice for an attempt that is waiting again with no reason yet.
+    expect(rearmed.text).not.toContain(
+      "Pourquoi Canary n’a pas démarré le test"
+    );
+    expect(rearmed.text).not.toContain("Ce qu’il reste à faire");
     // The row itself is what was re-armed: due again, with its history kept as
     // the attempt's audit trail rather than as a probe count.
     const row = (

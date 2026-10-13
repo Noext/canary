@@ -125,6 +125,12 @@ function AutomaticDetailBody({
     left.at.localeCompare(right.at)
   );
   const diagnosed = diagnosedStates.includes(attempt.state);
+  // A cause exists only once a probe recorded one. An attempt re-armed from this
+  // screen is waiting again with no reason yet: an empty cause and the fallback
+  // advice would tell the operator to start a manual run on a commit Canary is
+  // already probing. The facts below it are still about this attempt, so they
+  // stay, and the waiting notice above says what is happening.
+  const explained = diagnosed && Boolean(attempt.reason);
 
   return (
     <Card id="automaticDetail">
@@ -184,9 +190,10 @@ function AutomaticDetailBody({
         discarded attempt kept the reason of a failed probe from before it ended
         that way, so rendering it here would tell the operator to deploy a commit
         whose test has already started. `disabled` is included: there the reason
-        is the refusal itself, and the advice matches it.
+        is the refusal itself, and the advice matches it. A waiting attempt that
+        has no reason yet is skipped too — see `explained`.
       */}
-      {diagnosed ? (
+      {explained ? (
         <>
           <section className="mt-4" id="automaticDetailCause">
             <h2 className="font-semibold text-sm">
@@ -206,23 +213,21 @@ function AutomaticDetailBody({
                 automaticDetail.adviceFallback}
             </p>
           </section>
-
-          <section className="mt-4" id="automaticDetailFacts">
-            <h2 className="font-semibold text-sm">
-              {automaticDetail.factsTitle}
-            </h2>
-            <ul className="mt-1 text-muted-foreground text-sm">
-              <li>{automaticDetail.attempts(attempt.attempts)}</li>
-              <li>
-                {automaticDetail.deadline(formatDate(attempt.deadlineAt))}
-              </li>
-              <li>
-                {automaticDetail.lastProbe(formatDate(attempt.updatedAt))}
-              </li>
-              <li>{automaticDetail.pinned(attempt.sha)}</li>
-            </ul>
-          </section>
         </>
+      ) : null}
+
+      {diagnosed ? (
+        <section className="mt-4" id="automaticDetailFacts">
+          <h2 className="font-semibold text-sm">
+            {automaticDetail.factsTitle}
+          </h2>
+          <ul className="mt-1 text-muted-foreground text-sm">
+            <li>{automaticDetail.attempts(attempt.attempts)}</li>
+            <li>{automaticDetail.deadline(formatDate(attempt.deadlineAt))}</li>
+            <li>{automaticDetail.lastProbe(formatDate(attempt.updatedAt))}</li>
+            <li>{automaticDetail.pinned(attempt.sha)}</li>
+          </ul>
+        </section>
       ) : null}
 
       {attempt.lastError ? (
