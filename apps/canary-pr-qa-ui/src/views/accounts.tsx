@@ -33,6 +33,7 @@ function AccountsList({
   error,
   lastAdmin,
   ownId,
+  reposKnown,
   rows,
 }: {
   actions: AccountActions;
@@ -41,6 +42,7 @@ function AccountsList({
   error?: string;
   lastAdmin: boolean;
   ownId?: string;
+  reposKnown: boolean;
   rows?: LocalAccount[];
 }): ReactNode {
   if (rows === undefined) {
@@ -70,6 +72,7 @@ function AccountsList({
           key={account.id}
           lastAdmin={lastAdmin}
           {...(ownId === undefined ? {} : { ownId })}
+          reposKnown={reposKnown}
         />
       ))}
     </ul>
@@ -80,10 +83,12 @@ function CreateForm({
   available,
   busy,
   create,
+  reposKnown,
 }: {
   available: string[];
   busy?: string;
   create: (draft: CreateDraft) => Promise<boolean>;
+  reposKnown: boolean;
 }): ReactNode {
   const [draft, setDraft] = useState<CreateDraft>({
     password: "",
@@ -183,6 +188,7 @@ function CreateForm({
             <ReposPicker
               available={available}
               idPrefix="accountsNewRepo"
+              known={reposKnown}
               onChange={(repos) =>
                 setDraft((current) => ({ ...current, repos }))
               }
@@ -194,7 +200,7 @@ function CreateForm({
       </div>
       <Button
         className="mt-3"
-        disabled={busy === "create"}
+        disabled={busy === "create" || (draft.role !== "admin" && !reposKnown)}
         id="accountsCreateSubmit"
         type="submit"
         variant="primary"
@@ -212,6 +218,9 @@ function AccountsAdmin(): ReactNode {
   const { status } = useWorkspace();
 
   const available = status?.github.repositories ?? [];
+  // An unknown selection is not an empty one: writing the fallback would revoke
+  // the repositories of every account whose role is edited before it loads.
+  const reposKnown = status !== undefined;
   const rows = accounts ?? [];
   // The server refuses to delete or demote the last administrator, and to
   // delete the caller's own account: the screen never offers an action it
@@ -253,9 +262,15 @@ function AccountsAdmin(): ReactNode {
         error={error}
         lastAdmin={lastAdmin}
         ownId={ownId}
+        reposKnown={reposKnown}
         rows={accounts}
       />
-      <CreateForm available={available} busy={busy} create={actions.create} />
+      <CreateForm
+        available={available}
+        busy={busy}
+        create={actions.create}
+        reposKnown={reposKnown}
+      />
     </>
   );
 }

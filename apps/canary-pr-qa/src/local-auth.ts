@@ -10,6 +10,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { Principal } from "./access.js";
 import type { Config } from "./config.js";
+import type { LocalAccount } from "./dashboard/contracts.js";
 import { QaError } from "./diagnostics.js";
 
 export const LOCAL_AUTH_MIGRATION = `
@@ -136,7 +137,7 @@ interface AccountRow {
   role: Principal["role"];
   username: string;
 }
-function accountOf(row: AccountRow) {
+function accountOf(row: AccountRow): LocalAccount {
   return {
     id: row.id,
     username: row.username,
@@ -386,7 +387,7 @@ export class LocalAuth {
       client.release();
     }
   }
-  async listAccounts() {
+  async listAccounts(): Promise<LocalAccount[]> {
     const result = await this.pool.query<AccountRow>(
       "SELECT id,username,role,repos,created_at FROM qa_local_users ORDER BY username,id"
     );
@@ -395,7 +396,7 @@ export class LocalAuth {
   async createAccount(
     input: z.infer<typeof AccountCreate>,
     allowedRepos: string[]
-  ) {
+  ): Promise<LocalAccount> {
     const encoded = await passwordHash(input.password);
     const created = await this.pool.query<AccountRow>(
       "INSERT INTO qa_local_users(id,username,password_hash,role,repos) VALUES($1,$2,$3,$4,$5) ON CONFLICT(username) DO NOTHING RETURNING id,username,role,repos,created_at",
@@ -420,7 +421,7 @@ export class LocalAuth {
     id: string,
     input: z.infer<typeof AccountUpdate>,
     allowedRepos: string[]
-  ) {
+  ): Promise<LocalAccount> {
     const encoded =
       input.password === undefined
         ? undefined

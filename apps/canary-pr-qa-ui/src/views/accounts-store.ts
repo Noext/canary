@@ -1,6 +1,6 @@
-import { accountPayloadSchema, accountsSchema } from "@/api/account-schemas";
 import { api, DashboardError, errorText, post } from "@/api/client";
 import type { LocalAccount, Role } from "@/api/contracts";
+import { accountPayloadSchema, okSchema } from "@/api/schemas";
 import { settings } from "@/i18n";
 import { createStore, type Store } from "@/lib/store";
 
@@ -48,7 +48,7 @@ export function createAccountsStore() {
 
 export async function reload(store: Store<AccountsState>) {
   try {
-    const data = await api("/accounts", { schema: accountsSchema });
+    const data = await api("/accounts");
     store.set((current) => ({
       ...current,
       accounts: data.accounts,
@@ -184,8 +184,7 @@ export function accountActions(
         async () => {
           await api(`/accounts/${account.id}`, {
             method: "DELETE",
-            // The reload below carries the schema: this answer is not read.
-            unvalidated: true,
+            schema: okSchema,
           });
           return settings.accounts.deleted(account.username);
         },

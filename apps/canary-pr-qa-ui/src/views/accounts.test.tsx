@@ -18,7 +18,10 @@ const session = vi.hoisted(() => ({
   userId: "",
 }));
 
-const workspace = vi.hoisted(() => ({ repositories: [] as string[] }));
+const workspace = vi.hoisted(() => ({
+  loaded: true,
+  repositories: [] as string[],
+}));
 
 const apiMock = vi.fn();
 
@@ -31,8 +34,12 @@ vi.mock("@/app/session", () => ({
 }));
 
 vi.mock("@/app/workspace", () => ({
+  // `status` is undefined while the workspace is unknown: the screen must then
+  // refuse to write a repository list it cannot know.
   useWorkspace: () => ({
-    status: { github: { repositories: workspace.repositories } },
+    status: workspace.loaded
+      ? { github: { repositories: workspace.repositories } }
+      : undefined,
   }),
 }));
 
@@ -91,6 +98,7 @@ beforeEach(() => {
   session.isAdmin = true;
   session.refreshUser.mockReset();
   session.userId = `local:${ADMIN_ID}`;
+  workspace.loaded = true;
   workspace.repositories = ["fixture/app", "fixture/private"];
   readForbidden = false;
   seed();
@@ -350,6 +358,23 @@ describe("AccountsSettings", () => {
     );
     await user.click(byId(`account-delete-${ADMIN_ID}`));
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+
+  it("refuses to write a repository list it cannot know", async () => {
+    // `/dashboard/status` still pending (or failed): the GitHub selection is
+    // unknown, and `[]` would revoke every repository of the edited account.
+    workspace.loaded = false;
+    const user = userEvent.setup();
+    render(<AccountsSettings />);
+    await waitFor(() => expect(byId("accountsList")).toBeTruthy());
+
+    await user.selectOptions(byId(`account-role-${OPERATOR_ID}`), "viewer");
+    expect(byId(`account-save-${OPERATOR_ID}`)).toBeDisabled();
+    expect(byId("accountsCreateSubmit")).toBeDisabled();
+    expect(byId("accountsNewRepo-unknown").textContent).toBe(
+      settings.accounts.reposUnknown
+    );
+    expect(calls.some((call) => call.method !== "GET")).toBe(false);
   });
 
   it("offers nothing but the reason to a non-administrator", async () => {

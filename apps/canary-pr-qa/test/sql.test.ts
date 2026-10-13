@@ -194,6 +194,15 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
   await writeFile(join(captureRoot, "results.json"), "private results data");
   await writeFile(join(captureRoot, "console.log"), "private console data");
   await writeFile(join(captureRoot, "trace.zip"), "private trace test data");
+  // A scenario id may itself read like raw evidence; only the file name decides.
+  const networkScenario = join(f.dataDir, run.id, "network-errors");
+  const consoleScenario = join(f.dataDir, run.id, "console-errors");
+  await mkdir(networkScenario, { recursive: true });
+  await mkdir(consoleScenario, { recursive: true });
+  await writeFile(join(networkScenario, "report.html"), "network report");
+  await writeFile(join(networkScenario, "network.har"), "private har data");
+  await writeFile(join(consoleScenario, "report.html"), "console report");
+  await writeFile(join(consoleScenario, "console.log"), "console dump");
   for (const path of [
     "scenario/trace.zip",
     "scenario/trace.%7aip",
@@ -224,6 +233,30 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
       })
     ).text()
   ).toBe("fixture session report");
+  for (const [name, body] of [
+    ["network-errors", "network report"],
+    ["console-errors", "console report"],
+  ]) {
+    expect(
+      await (
+        await fetch(`${url}/artifacts/${run.id}/${name}/report.html`, {
+          headers: mixedCaseHeaders,
+        })
+      ).text()
+    ).toBe(body);
+  }
+  for (const path of [
+    "network-errors/network.har",
+    "console-errors/console.log",
+  ]) {
+    expect(
+      (
+        await fetch(`${url}/artifacts/${run.id}/${path}`, {
+          headers: mixedCaseHeaders,
+        })
+      ).status
+    ).toBe(403);
+  }
   for (const path of ["scenario/results.json", "scenario/console.log"]) {
     expect(
       (

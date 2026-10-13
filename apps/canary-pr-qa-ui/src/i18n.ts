@@ -695,6 +695,8 @@ export const settings = {
     reposNone: "Dépôts : aucun",
     reposNoneAvailable:
       "Aucun dépôt autorisé pour le moment : enregistrez vos dépôts dans Réglages → GitHub.",
+    reposUnknown:
+      "Liste des dépôts indisponible : rechargez la page avant de modifier le rôle d'un compte non administrateur.",
     reposTitle: "Dépôts visibles",
     roleLabel: "Rôle",
     save: "Enregistrer",

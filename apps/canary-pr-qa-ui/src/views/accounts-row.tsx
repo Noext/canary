@@ -27,19 +27,31 @@ interface AccountRowProps {
   /** Exactly one administrator exists: this account keeps the rights. */
   lastAdmin: boolean;
   ownId?: string;
+  /** The GitHub selection is loaded; without it, no repository list may be written. */
+  reposKnown: boolean;
 }
 
 export function ReposPicker({
   available,
   idPrefix,
+  known,
   onChange,
   selected,
 }: {
   available: string[];
   idPrefix: string;
+  /** The GitHub selection is loaded: an empty list then means "none allowed". */
+  known: boolean;
   onChange: (repos: string[]) => void;
   selected: string[];
 }): ReactNode {
+  if (!known) {
+    return (
+      <FieldHelp id={`${idPrefix}-unknown`}>
+        {settings.accounts.reposUnknown}
+      </FieldHelp>
+    );
+  }
   if (available.length === 0) {
     return (
       <FieldHelp id={`${idPrefix}-empty`}>
@@ -86,6 +98,7 @@ export function AccountRow({
   busy,
   lastAdmin,
   ownId,
+  reposKnown,
 }: AccountRowProps): ReactNode {
   const [draft, setDraft] = useState<Partial<ReposDraft>>({});
   const [password, setPassword] = useState("");
@@ -155,7 +168,13 @@ export function AccountRow({
           </Select>
         </div>
         <Button
-          disabled={!dirty || busy === `save-${account.id}`}
+          disabled={
+            !dirty ||
+            busy === `save-${account.id}` ||
+            // A role change on a viewer or operator carries its repositories:
+            // writing the empty fallback would revoke its whole access.
+            (role !== "admin" && !reposKnown)
+          }
           id={`account-save-${account.id}`}
           onClick={() => actions.save(account, { repos, role })}
           variant="primary"
@@ -183,6 +202,7 @@ export function AccountRow({
           <ReposPicker
             available={available}
             idPrefix={`account-repos-${account.id}`}
+            known={reposKnown}
             onChange={(next) =>
               setDraft((current) => ({ ...current, repos: next }))
             }

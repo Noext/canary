@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { Principal } from "./access.js";
+import type { AccountPayload, AccountsPayload } from "./dashboard/contracts.js";
 import { AccountCreate, AccountUpdate, type LocalAuth } from "./local-auth.js";
 import type { Queue } from "./queue.js";
 
@@ -33,7 +34,9 @@ export function accountRoutes(
     }
     const body = async () => JSON.parse((await read(req)).toString());
     if (req.method === "GET" && url.pathname === prefix) {
-      json(res, 200, { accounts: await accounts.listAccounts() });
+      json(res, 200, {
+        accounts: await accounts.listAccounts(),
+      } satisfies AccountsPayload);
       return true;
     }
     if (req.method === "POST" && url.pathname === prefix) {
@@ -48,7 +51,7 @@ export function accountRoutes(
         role: account.role,
         repos: account.repos,
       });
-      json(res, 201, { account });
+      json(res, 201, { account } satisfies AccountPayload);
       return true;
     }
     const id = AccountId.safeParse(url.pathname.slice(`${prefix}/`.length));
@@ -61,7 +64,7 @@ export function accountRoutes(
         repos: account.repos,
         passwordChanged: input.password !== undefined,
       });
-      json(res, 200, { account });
+      json(res, 200, { account } satisfies AccountPayload);
       return true;
     }
     if (id.success && req.method === "DELETE") {

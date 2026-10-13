@@ -264,10 +264,14 @@ export async function startProductionServer(config: Config) {
     // The aggregate report and each scenario's Canary session report are the
     // dashboard's own output: an authorized user reads them without the raw
     // evidence policy. That policy only keeps the heavy dumps the reports link
-    // to (trace, HAR, console log, results manifest) out of reach.
+    // to (trace, HAR, console log, results manifest) out of reach. It reads the
+    // file name, never the directories: a scenario may be named `network-errors`
+    // or `console-errors`, and its `report.html` is still a report.
+    const name = path.slice(path.lastIndexOf("/") + 1);
     if (
       config.QA_RAW_EVIDENCE !== "true" &&
-      /\.(har|zip|log)$|\/results\.json$|console|network/i.test(path)
+      (/\.(?:har|zip|log)$/i.test(name) ||
+        /^(?:results\.json$|console[.-]|network[.-])/i.test(name))
     ) {
       json(res, 403, { error: "Raw evidence disabled by data policy" });
       return;
