@@ -58,6 +58,8 @@ export const errorMessages: Record<string, string | undefined> = {
     "Le fournisseur n’a pas renvoyé un catalogue de modèles valide. Vérifiez son endpoint et l’accès Cloudflare.",
   RUN_BUDGET_EXCEEDED:
     "Le test a dépassé le budget de tokens autorisé pour un run.",
+  RUN_NOT_FOUND:
+    "Ce test n’existe pas ou a été purgé. Vérifiez son identifiant dans l’historique.",
   RUN_DEADLINE: "Le test a dépassé le temps maximum autorisé pour un run.",
   STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
   WEBHOOK_RATE_LIMIT:
@@ -111,14 +113,15 @@ export const outcomes: Record<string, string> = {
 
 /**
  * Lifecycle of a pull-request delivery. The first three are what the home block
- * lists; `promoted` and `disabled` are what the detail screen meets when it opens
- * an attempt by its id after the attempt left the list.
+ * lists; the terminal ones are what the detail screen meets when it opens an
+ * attempt by its id after the attempt left the list.
  */
 export const automaticStates: Record<string, string> = {
   waiting: "En attente de la préversion",
   expired: "Délai dépassé",
   rate_limited: "Quota horaire atteint",
   promoted: "Test lancé",
+  discarded: "Sans suite",
   disabled: "Lancements désactivés",
 };
 
@@ -507,6 +510,8 @@ export const automaticDetail = {
   back: "Retour à l’accueil",
   causeTitle: "Pourquoi Canary n’a pas démarré le test",
   deadline: (date: string) => `Délai d’attente atteint le ${date}`,
+  discarded:
+    "Canary a cessé de suivre cette pull request sans lancer de test : elle a été fermée, son commit a changé, ou le dépôt n’est plus sélectionné.",
   factsTitle: "Ce que Canary a tenté",
   githubPr: "Ouvrir la pull request",
   lastErrorTitle: "Dernière erreur enregistrée",

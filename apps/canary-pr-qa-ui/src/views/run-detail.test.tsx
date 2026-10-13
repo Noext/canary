@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DashboardError } from "@/api/client";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { errorMessages, runAdvice, runScreen } from "@/i18n";
 import { RunDetail } from "./run-detail";
@@ -236,6 +237,22 @@ describe("RunDetail", () => {
     expect(FakeEventSource.instances[0]?.url).toBe(`/runs/${RUN_ID}/events`);
   });
 
+  it("keeps an operational failure out of the missing state", async () => {
+    // Only a verdict on the run selects the missing state: a 5xx, a dropped
+    // connection or a broken contract must stay a reportable incident.
+    apiMock.mockRejectedValue(
+      new DashboardError("Le serveur n’a pas répondu (HTTP 502).", {
+        status: 502,
+      })
+    );
+    renderDetail();
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("HTTP 502")
+    );
+    expect(document.getElementById("runMissing")).toBeNull();
+  });
+
   it("never streams a run the account cannot read", async () => {
     apiMock.mockRejectedValue(new Error("Run not found"));
     renderDetail();
@@ -249,7 +266,12 @@ describe("RunDetail", () => {
     // The panel the history mounts has nowhere else to put this: a purged or
     // forbidden run never produces a frame, so the alert alone would leave it
     // showing its initial connection state indefinitely.
-    apiMock.mockRejectedValue(new Error("Run not found"));
+    apiMock.mockRejectedValue(
+      new DashboardError("Ce test n’existe pas ou a été purgé.", {
+        code: "RUN_NOT_FOUND",
+        status: 404,
+      })
+    );
     renderDetail();
 
     await waitFor(() =>
@@ -435,21 +457,32 @@ describe("RunDetail diagnostic", () => {
     expect(block).not.toContain("Accueil");
   });
 
-  it("shows no diagnostic for a run that passed", async () => {
-    apiMock.mockImplementation((path: string) => {
-      if (path.endsWith("/result.json")) {
-        return Promise.resolve({
-          ...result,
-          diagnostic: null,
-          outcome: "passed",
-          scenarios: [],
-        });
-      }
-      return Promise.resolve(job({ outcome: "passed", status: "completed" }));
-    });
-    renderDetail();
+  it("shows no failure diagnostic for an outcome that is not a failure", async () => {
+    // `skipped` is the outcome of a sound run whose plan retained nothing safe
+    // to drive: it is documented as distinct from a failure, so the block must
+    // not flatten it into a red "why did this fail" panel.
+    for (const outcome of ["passed", "skipped"]) {
+      apiMock.mockImplementation((path: string) => {
+        if (path.endsWith("/result.json")) {
+          return Promise.resolve({
+            ...result,
+            diagnostic: null,
+            outcome,
+            scenarios: [],
+          });
+        }
+        return Promise.resolve(job({ outcome, status: "completed" }));
+      });
+      const view = renderDetail();
 
-    await waitFor(() => expect(element("resultSummary")).toBeVisible());
-    expect(document.getElementById("runDiagnostic")).toBeNull();
+      await waitFor(() => expect(element("resultSummary")).toBeVisible());
+      expect(element("resultSummary").textContent).toBe(
+        outcome === "skipped"
+          ? "Aucun scénario n’a été exécuté : le planificateur n’a rien retenu de sûr."
+          : "Les assertions ont réussi sur la version testée."
+      );
+      expect(document.getElementById("runDiagnostic")).toBeNull();
+      view.unmount();
+    }
   });
 });

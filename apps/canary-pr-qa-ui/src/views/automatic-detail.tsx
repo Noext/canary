@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import type { AutomaticDetail } from "@/api/contracts";
+import type { AutomaticDetail, AutomaticState } from "@/api/contracts";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
 import { useSession } from "@/app/session";
@@ -112,6 +112,7 @@ function AutomaticDetailBody({
   const steps = [...timeline].sort((left, right) =>
     left.at.localeCompare(right.at)
   );
+  const diagnosed = diagnosedStates.includes(attempt.state);
 
   return (
     <Card id="automaticDetail">
@@ -150,29 +151,64 @@ function AutomaticDetailBody({
         </Notice>
       ) : null}
 
-      <section className="mt-4" id="automaticDetailCause">
-        <h2 className="font-semibold text-sm">{automaticDetail.causeTitle}</h2>
-        <p className="mt-1 text-muted-foreground text-sm">
-          {automaticReasonLabel(attempt.reason)}
-        </p>
-      </section>
+      {attempt.state === "discarded" ? (
+        <Notice id="automaticDetailDiscarded" tone="neutral">
+          {automaticDetail.discarded}
+        </Notice>
+      ) : null}
 
-      <section className="mt-4" id="automaticDetailAdvice">
-        <h2 className="font-semibold text-sm">{automaticDetail.adviceTitle}</h2>
-        <p className="mt-1 text-muted-foreground text-sm">
-          {automaticAdvice[attempt.reason] ?? automaticDetail.adviceFallback}
-        </p>
-      </section>
+      <PromotedAction
+        canWrite={canWrite}
+        navigate={navigate}
+        openRunScreen={openRunScreen}
+        runId={promotedRunId}
+      />
 
-      <section className="mt-4" id="automaticDetailFacts">
-        <h2 className="font-semibold text-sm">{automaticDetail.factsTitle}</h2>
-        <ul className="mt-1 text-muted-foreground text-sm">
-          <li>{automaticDetail.attempts(attempt.attempts)}</li>
-          <li>{automaticDetail.deadline(formatDate(attempt.deadlineAt))}</li>
-          <li>{automaticDetail.lastProbe(formatDate(attempt.updatedAt))}</li>
-          <li>{automaticDetail.pinned(attempt.sha)}</li>
-        </ul>
-      </section>
+      {/*
+        The cause and the advice explain what stopped this attempt. A promoted or
+        discarded attempt kept the reason of a failed probe from before it ended
+        that way, so rendering it here would tell the operator to deploy a commit
+        whose test has already started. `disabled` is included: there the reason
+        is the refusal itself, and the advice matches it.
+      */}
+      {diagnosed ? (
+        <>
+          <section className="mt-4" id="automaticDetailCause">
+            <h2 className="font-semibold text-sm">
+              {automaticDetail.causeTitle}
+            </h2>
+            <p className="mt-1 text-muted-foreground text-sm">
+              {automaticReasonLabel(attempt.reason)}
+            </p>
+          </section>
+
+          <section className="mt-4" id="automaticDetailAdvice">
+            <h2 className="font-semibold text-sm">
+              {automaticDetail.adviceTitle}
+            </h2>
+            <p className="mt-1 text-muted-foreground text-sm">
+              {automaticAdvice[attempt.reason] ??
+                automaticDetail.adviceFallback}
+            </p>
+          </section>
+
+          <section className="mt-4" id="automaticDetailFacts">
+            <h2 className="font-semibold text-sm">
+              {automaticDetail.factsTitle}
+            </h2>
+            <ul className="mt-1 text-muted-foreground text-sm">
+              <li>{automaticDetail.attempts(attempt.attempts)}</li>
+              <li>
+                {automaticDetail.deadline(formatDate(attempt.deadlineAt))}
+              </li>
+              <li>
+                {automaticDetail.lastProbe(formatDate(attempt.updatedAt))}
+              </li>
+              <li>{automaticDetail.pinned(attempt.sha)}</li>
+            </ul>
+          </section>
+        </>
+      ) : null}
 
       {attempt.lastError ? (
         <Notice className="mt-4" id="automaticDetailError" tone="error">
@@ -183,73 +219,9 @@ function AutomaticDetailBody({
         </Notice>
       ) : null}
 
-      {promotedRunId ? (
-        <div
-          className="mt-4 flex flex-wrap items-center gap-3"
-          id="automaticDetailPromoted"
-        >
-          <span className="text-sm">{automaticDetail.promoted}</span>
-          <Button
-            id="automaticDetailRunCta"
-            onClick={() => openRunScreen(promotedRunId)}
-            variant="primary"
-          >
-            {automaticDetail.promotedCta}
-          </Button>
-        </div>
-      ) : (
-        <ManualRunAction canWrite={canWrite} navigate={navigate} />
-      )}
+      {preview ? <PreviewProof preview={preview} /> : null}
 
-      {preview ? (
-        <section className="mt-4" id="automaticDetailPreview">
-          <h2 className="font-semibold text-sm">
-            {automaticDetail.previewTitle}
-          </h2>
-          <ul className="mt-1 text-muted-foreground text-sm">
-            {preview.template ? (
-              <li>{automaticDetail.previewTemplate(preview.template)}</li>
-            ) : null}
-            {preview.shaHeader ? (
-              <li>{automaticDetail.previewHeader(preview.shaHeader)}</li>
-            ) : null}
-            {preview.shaPath ? (
-              <li>{automaticDetail.previewPath(preview.shaPath)}</li>
-            ) : null}
-            {preview.template || preview.shaHeader || preview.shaPath ? null : (
-              <li>{automaticDetail.previewNone}</li>
-            )}
-          </ul>
-        </section>
-      ) : null}
-
-      <section className="mt-4" id="automaticDetailTimeline">
-        <h2 className="font-semibold text-sm">
-          {automaticDetail.timelineTitle}
-        </h2>
-        {steps.length === 0 ? (
-          <p className="mt-1 text-muted-foreground text-sm">
-            {automaticDetail.timelineEmpty}
-          </p>
-        ) : (
-          <ol className="mt-1 space-y-1 text-sm">
-            {steps.map((entry) => (
-              <li
-                className="flex flex-wrap items-baseline gap-2"
-                key={`${entry.action}-${entry.at}`}
-              >
-                <span>{automaticSteps[entry.action] ?? entry.action}</span>
-                <span className="text-muted-foreground text-xs">
-                  {formatDate(entry.at)}
-                  {typeof entry.seconds === "number"
-                    ? ` · ${entry.seconds} s`
-                    : ""}
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+      <Timeline steps={steps} />
 
       <Button
         className="mt-4"
@@ -259,6 +231,114 @@ function AutomaticDetailBody({
         {automaticDetail.back}
       </Button>
     </Card>
+  );
+}
+
+/**
+ * The states whose recorded reason is what stopped the attempt. `promoted` and
+ * `discarded` are ends that a later probe produced, so their reason is history;
+ * the audit timeline is where that history belongs.
+ */
+const diagnosedStates: AutomaticState[] = [
+  "waiting",
+  "expired",
+  "rate_limited",
+  "disabled",
+];
+
+/** The run a promoted attempt created, or the action that takes its place. */
+function PromotedAction({
+  canWrite,
+  navigate,
+  openRunScreen,
+  runId,
+}: {
+  canWrite: boolean;
+  navigate: (view: "home" | "new") => void;
+  openRunScreen: (runId: string) => void;
+  runId: string | null;
+}): ReactNode {
+  if (!runId) {
+    return <ManualRunAction canWrite={canWrite} navigate={navigate} />;
+  }
+  return (
+    <div
+      className="mt-4 flex flex-wrap items-center gap-3"
+      id="automaticDetailPromoted"
+    >
+      <span className="text-sm">{automaticDetail.promoted}</span>
+      <Button
+        id="automaticDetailRunCta"
+        onClick={() => openRunScreen(runId)}
+        variant="primary"
+      >
+        {automaticDetail.promotedCta}
+      </Button>
+    </div>
+  );
+}
+
+/** The version proof the preview of this attempt had to satisfy. */
+function PreviewProof({
+  preview,
+}: {
+  preview: NonNullable<AutomaticDetail["preview"]>;
+}): ReactNode {
+  const lines = [
+    preview.template
+      ? automaticDetail.previewTemplate(preview.template)
+      : undefined,
+    preview.shaHeader
+      ? automaticDetail.previewHeader(preview.shaHeader)
+      : undefined,
+    preview.shaPath ? automaticDetail.previewPath(preview.shaPath) : undefined,
+  ].filter((line): line is string => line !== undefined);
+  return (
+    <section className="mt-4" id="automaticDetailPreview">
+      <h2 className="font-semibold text-sm">{automaticDetail.previewTitle}</h2>
+      <ul className="mt-1 text-muted-foreground text-sm">
+        {(lines.length > 0 ? lines : [automaticDetail.previewNone]).map(
+          (line) => (
+            <li key={line}>{line}</li>
+          )
+        )}
+      </ul>
+    </section>
+  );
+}
+
+/** The audit trail, oldest first, whatever order the server returned. */
+function Timeline({
+  steps,
+}: {
+  steps: AutomaticDetail["timeline"];
+}): ReactNode {
+  return (
+    <section className="mt-4" id="automaticDetailTimeline">
+      <h2 className="font-semibold text-sm">{automaticDetail.timelineTitle}</h2>
+      {steps.length === 0 ? (
+        <p className="mt-1 text-muted-foreground text-sm">
+          {automaticDetail.timelineEmpty}
+        </p>
+      ) : (
+        <ol className="mt-1 space-y-1 text-sm">
+          {steps.map((entry) => (
+            <li
+              className="flex flex-wrap items-baseline gap-2"
+              key={`${entry.action}-${entry.at}`}
+            >
+              <span>{automaticSteps[entry.action] ?? entry.action}</span>
+              <span className="text-muted-foreground text-xs">
+                {formatDate(entry.at)}
+                {typeof entry.seconds === "number"
+                  ? ` · ${entry.seconds} s`
+                  : ""}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 

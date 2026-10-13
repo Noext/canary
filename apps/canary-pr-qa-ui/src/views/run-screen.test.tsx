@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DashboardError } from "@/api/client";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { NavigationProvider, useNavigation } from "@/app/navigation";
 import { RunScreenView } from "@/views/run-screen";
@@ -155,9 +156,14 @@ describe("RunScreenView", () => {
     // A syntactically valid link whose run was purged, or belongs to another
     // account: no frame will ever arrive, so the screen must say so rather than
     // leave a detail announcing a connection forever.
-    wire.handlers.set(`/runs/${runId}`, () => {
-      throw new Error("Not found");
-    });
+    wire.handlers.set(`/runs/${runId}`, () =>
+      Promise.reject(
+        new DashboardError("Ce test n’existe pas ou a été purgé.", {
+          code: "RUN_NOT_FOUND",
+          status: 404,
+        })
+      )
+    );
     render(<Harness run={runId} />);
 
     await waitFor(() =>
@@ -168,6 +174,25 @@ describe("RunScreenView", () => {
     expect(document.getElementById("detail")).toBeNull();
     expect(document.getElementById("runScreenSeenIn")).toBeNull();
     // The way back stays available: the screen is not a dead end.
+    expect(element("runScreenBack")).toBeInTheDocument();
+  });
+
+  it("keeps an operational failure reportable instead of calling the run missing", async () => {
+    // A 5xx says nothing about the run: replacing the detail would assert it is
+    // gone, and suppress the one message that explains a passing outage.
+    wire.handlers.set(`/runs/${runId}`, () =>
+      Promise.reject(
+        new DashboardError("Le serveur n’a pas répondu (HTTP 502).", {
+          status: 502,
+        })
+      )
+    );
+    render(<Harness run={runId} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("HTTP 502")
+    );
+    expect(document.getElementById("runScreenMissing")).toBeNull();
     expect(element("runScreenBack")).toBeInTheDocument();
   });
 

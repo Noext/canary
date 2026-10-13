@@ -112,7 +112,7 @@ export async function startProductionServer(config: Config) {
   ): Promise<Job> {
     const job = await queue.get(id);
     if (!job) {
-      throw new Error("Run not found");
+      throw runNotFound();
     }
     requireAccess(user, job.repo, write);
     return job;
@@ -244,7 +244,7 @@ export async function startProductionServer(config: Config) {
     const path = canonicalArtifactPath(rawPath);
     const job = await queue.get(id);
     if (!job) {
-      throw new Error("Run not found");
+      throw runNotFound();
     }
     const signed = validArtifactSignature(id, path, url, config);
     if (!signed) {
@@ -634,10 +634,26 @@ export async function startProductionServer(config: Config) {
 }
 
 function apiErrorStatus(diagnostic: { code: string; message: string }) {
+  if (diagnostic.code === "RUN_NOT_FOUND") {
+    return 404;
+  }
   if (["AUTH_RATE_LIMIT", "AUTH_BUSY"].includes(diagnostic.code)) {
     return 429;
   }
   return /access denied|Administrator/i.test(diagnostic.message) ? 403 : 400;
+}
+
+/**
+ * A run the caller asked for that this instance does not have. Its own code lets
+ * the dashboard tell a purged run from a bad moment: only this verdict, and a
+ * refusal by the access check, justify replacing a detail with a missing state.
+ */
+function runNotFound() {
+  return new QaError(
+    "RUN_NOT_FOUND",
+    "Ce test n’existe pas ou a été purgé.",
+    "Vérifiez l’identifiant du test dans l’historique, ou lancez un nouveau test."
+  );
 }
 
 function validInstallation(

@@ -759,7 +759,7 @@ it("serves one automatic attempt with its audit trail, scoped to the caller", as
   });
 }, 30_000);
 
-it("reports a promoted or refused attempt as what it is, not as still waiting", async () => {
+it("reports a promoted, discarded or refused attempt as what it is, not as still waiting", async () => {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -816,6 +816,22 @@ it("reports a promoted or refused attempt as what it is, not as still waiting", 
       "AUTO_RUNS_DISABLED"
     )
   ).toBe(true);
+  // Discarded: the probe loop also closes a delivery whose repository left the
+  // allowlist, whose pull request closed, or whose SHA moved. It is `processed`
+  // with no run, so `run_id` is the only proof that anything started.
+  expect(
+    await q.acceptDelivery(
+      "discarded-attempt",
+      "pull_request",
+      { ...attempt, number: 11 },
+      1800
+    )
+  ).toBe(true);
+  const discardedToken = "token-discarded";
+  expect(await q.claimDelivery(discardedToken, 90)).toMatchObject({
+    id: "discarded-attempt",
+  });
+  expect(await q.processed("discarded-attempt", discardedToken)).toBe(true);
   const server = await startProductionServer(config);
   cleanup.push(() => server.shutdown());
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -834,6 +850,10 @@ it("reports a promoted or refused attempt as what it is, not as still waiting", 
   expect((await read("disabled-attempt")).attempt).toMatchObject({
     reason: "AUTO_RUNS_DISABLED",
     state: "disabled",
+  });
+  expect((await read("discarded-attempt")).attempt).toMatchObject({
+    runId: null,
+    state: "discarded",
   });
   // The list still only reports attempts that wait, expire or hit the budget:
   // neither of these has anything left to check.

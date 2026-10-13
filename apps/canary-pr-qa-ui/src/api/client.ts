@@ -18,16 +18,29 @@ export class DashboardError extends Error {
   readonly code?: string;
   readonly hint?: string;
   readonly requestId?: string;
+  /**
+   * HTTP status of the failed response, when there was one. A few screens need
+   * to tell a verdict on the resource (404, 403) from a bad moment (5xx, no
+   * response, a contract mismatch): only the first is worth replacing a detail
+   * with a missing state.
+   */
+  readonly status?: number;
 
   constructor(
     message: string,
-    details: { code?: string; hint?: string; requestId?: string } = {}
+    details: {
+      code?: string;
+      hint?: string;
+      requestId?: string;
+      status?: number;
+    } = {}
   ) {
     super(message);
     this.name = "DashboardError";
     this.code = details.code;
     this.hint = details.hint;
     this.requestId = details.requestId;
+    this.status = details.status;
   }
 }
 
@@ -127,11 +140,13 @@ export async function api(
           code: details.code,
           hint: details.hint,
           requestId: details.requestId ?? requestId,
+          status: response.status,
         }
       );
     }
     throw new DashboardError(apiErrors.invalidResponse(response.status), {
       requestId,
+      status: response.status,
     });
   }
 

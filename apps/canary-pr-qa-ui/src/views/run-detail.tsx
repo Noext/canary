@@ -41,6 +41,15 @@ export function modelFromInput(input: unknown): string {
 
 const errorOutcomes = ["failed", "blocked", "stale"];
 
+/**
+ * A run that was not browser-tested is not a run that failed.
+ *
+ * `errorOutcomes` is what the diagnostic block is for; `skipped` is the outcome
+ * of a sound run whose plan retained nothing safe to drive, and `passed` needs no
+ * explanation at all. The distinction is documented, so the block must not
+ * flatten it into a red "why did this fail" panel.
+ */
+
 /** Phase tracker states: real utilities, the stylesheet has no `.done`. */
 const phaseBase = "rounded-full border px-2 py-1";
 const phaseDone = "border-pass/40 bg-pass/10 text-pass";
@@ -405,7 +414,7 @@ export function RunDetail({
       >
         {summary}
       </Notice>
-      {result && result.outcome !== "passed" ? (
+      {result && errorOutcomes.includes(result.outcome) ? (
         <RunDiagnosticBlock phase={progress?.phase} result={result} />
       ) : null}
       <div className="mt-4 space-y-3" id="scenarioCards">

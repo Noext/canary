@@ -110,6 +110,7 @@ export const automaticStateSchema = z.enum([
   "expired",
   "rate_limited",
   "promoted",
+  "discarded",
   "disabled",
 ]);
 

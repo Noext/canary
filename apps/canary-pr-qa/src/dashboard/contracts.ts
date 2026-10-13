@@ -32,16 +32,17 @@ export interface SetupStatus {
 }
 
 /**
- * Lifecycle of a pull-request delivery that has no run yet, plus the two states
- * a delivery reaches once it is looked up by its own id: promoted into a run, or
- * refused before any probe. The list only reports the three waiting states; the
- * detail screen can be opened on any of them.
+ * Lifecycle of a pull-request delivery. The list reports the three states that
+ * still have something to check; the detail screen can be opened on the terminal
+ * ones too: promoted into a run, discarded without one (repository left the
+ * allowlist, pull request closed, SHA moved), or refused before any probe.
  */
 export type AutomaticState =
   | "waiting"
   | "expired"
   | "rate_limited"
   | "promoted"
+  | "discarded"
   | "disabled";
 
 export interface AutomaticAttempt {

@@ -338,6 +338,35 @@ describe("AutomaticDetailView", () => {
     expect(screen.getByTestId("route")).toHaveTextContent("run:");
   });
 
+  it("does not keep advising a deploy once the run has started", async () => {
+    // A promoted attempt kept the reason of the probes that failed before it, so
+    // rendering the cause and the advice would tell the operator to deploy and
+    // launch a test that is already running.
+    wire.handler = () =>
+      detail({
+        attempt: {
+          ...detail().attempt,
+          reason: "PREVIEW_NOT_FOUND",
+          runId: "run-9",
+          state: "promoted",
+        },
+      });
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+
+    await waitFor(() =>
+      expect(byId("automaticDetailPromoted")).toBeInTheDocument()
+    );
+    expect(document.getElementById("automaticDetailCause")).toBeNull();
+    expect(document.getElementById("automaticDetailAdvice")).toBeNull();
+    expect(document.getElementById("automaticDetailFacts")).toBeNull();
+    // The history of the probes is still there: that is where it belongs.
+    expect(byId("automaticDetailTimeline")).toBeInTheDocument();
+  });
+
   it("tells a viewer what a refused attempt is instead of still waiting", async () => {
     wire.handler = () =>
       detail({
@@ -359,6 +388,30 @@ describe("AutomaticDetailView", () => {
       )
     );
     expect(document.getElementById("automaticDetailWaiting")).toBeNull();
+  });
+
+  it("explains a discarded attempt without reusing a stale reason", async () => {
+    wire.handler = () =>
+      detail({
+        attempt: {
+          ...detail().attempt,
+          reason: "PREVIEW_NOT_FOUND",
+          state: "discarded",
+        },
+      });
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+
+    await waitFor(() =>
+      expect(byId("automaticDetailDiscarded")).toHaveTextContent(
+        automaticDetail.discarded
+      )
+    );
+    expect(document.getElementById("automaticDetailCause")).toBeNull();
+    expect(document.getElementById("automaticDetailAdvice")).toBeNull();
   });
 
   it("offers a viewer the guidance instead of an action it cannot open", async () => {
