@@ -135,15 +135,21 @@ async function evaluateAssertion(
           config
         )
       : observation.actual;
+  const verification = assertion.verification ?? "state";
   const passed =
     (assertion.kind === "visual"
       ? (actual as { passed: boolean }).passed
       : assertionMatches(assertion, actual)) &&
-    (!["transition", "persisted"].includes(assertion.verification ?? "state") ||
+    (!["transition", "persisted"].includes(verification) ||
       (baselines.has(assertion.id) &&
         !isDeepStrictEqual(baseline, observation.actual))) &&
-    (assertion.verification !== "persisted" ||
-      assertionMatches(assertion, persisted));
+    (verification !== "persisted" || assertionMatches(assertion, persisted));
+  // A transition whose value did not change proves nothing: the element may be
+  // broken or invariant, and the identical baseline cannot tell the two apart.
+  const unchanged =
+    ["transition", "persisted"].includes(verification) &&
+    baselines.has(assertion.id) &&
+    isDeepStrictEqual(baseline, observation.actual);
   if (assertion.kind === "visual") {
     observation.actual = actual;
   }
@@ -156,7 +162,22 @@ async function evaluateAssertion(
   });
   if (!passed) {
     result.outcome = "failed";
-    result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
+    if (unchanged) {
+      // Naming the missing transition, not recopying the assertion description:
+      // "the element still shows X" reads as a regression while actual and
+      // baseline agree, and sends the operator after an innocent element.
+      result.diagnostic = diagnose(
+        new QaError(
+          "TRANSITION_NOT_OBSERVED",
+          `Assertion ${assertion.id}: no change observed — the value after step ${assertion.afterStep ?? "the interaction"} is identical to the baseline probed before it, so the required ${verification} is not demonstrated`,
+          `Require a change only from a value that must change. For an invariance after an interaction, use verification "state" with afterStep set to the interaction step (the element is still there after clicking X).`
+        ),
+        config
+      );
+      result.error = result.diagnostic.message;
+    } else {
+      result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
+    }
   }
 }
 function ensureContractDecision(
