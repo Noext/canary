@@ -107,3 +107,23 @@ export interface Preflight {
   preview: { sha: string; url: string };
   ready: boolean;
 }
+
+/**
+ * One service key, without its secret: the clear token exists only in the answer
+ * that created it. `repos` is what the key may read, never what it may write.
+ */
+export interface ApiKeyRow {
+  createdAt: string;
+  id: string;
+  lastUsedAt: string | null;
+  name: string;
+  /** First characters of the token, all the list ever shows (`qa_live_7f3c`). */
+  prefix: string;
+  repos: string[];
+  revokedAt: string | null;
+}
+
+/** A fresh key: the only answer that carries the token in clear. */
+export interface ApiKeyCreated extends ApiKeyRow {
+  token: string;
+}

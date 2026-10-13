@@ -84,6 +84,30 @@ export const setupStatusSchema = z.object({
   }),
 });
 
+export const apiKeyRowSchema = z.object({
+  createdAt: z.string(),
+  id: z.string(),
+  lastUsedAt: z.string().nullable(),
+  name: z.string(),
+  prefix: z.string(),
+  repos: z.array(z.string()),
+  revokedAt: z.string().nullable(),
+});
+
+export const apiKeyListSchema = z.array(apiKeyRowSchema);
+
+/** A creation answers the token in clear text; no other answer ever carries it. */
+export const apiKeyCreatedSchema = apiKeyRowSchema.extend({
+  token: z.string(),
+});
+
+export const apiKeySecretSchema = z.object({ token: z.string() });
+
+export const apiKeyRevokedSchema = z.object({
+  id: z.string(),
+  revokedAt: z.string(),
+});
+
 export const preflightSchema = z.object({
   model: z.string(),
   pr: z.object({
@@ -304,6 +328,7 @@ export const responseSchemas = {
   "/auth/login": principalSchema,
   "/auth/setup": principalSchema,
   "/auth/status": authStatusSchema,
+  "/dashboard/api-keys": apiKeyListSchema,
   "/dashboard/automatic": automaticStatusSchema,
   "/dashboard/preview-hosts": previewSettingsSchema,
   "/dashboard/status": setupStatusSchema,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@usecanary/logger";
 import pg from "pg";
+import { API_KEYS_MIGRATION } from "./api-keys.js";
 import type {
   AutomaticAttempt,
   AutomaticState,
@@ -33,6 +34,8 @@ export interface Job {
     | "cancelled"
     | "interrupted";
   updated_at: string;
+  /** Model spend recorded at completion; `{}` until the run ends. */
+  usage?: { costUsd?: number; model?: string; tokens?: number } | null;
   worker?: string;
 }
 /** Delivery status that ends an automatic attempt without creating a run. */
@@ -61,7 +64,7 @@ export interface DeliveryRow {
   status: string;
   updated_at: Date;
 }
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -94,6 +97,7 @@ ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NU
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS claim_token text;
 CREATE INDEX IF NOT EXISTS qa_audit_delivery ON qa_audit ((details->>'delivery'));
 ${PREVIEW_HOSTS_MIGRATION}
+${API_KEYS_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {

@@ -84,7 +84,16 @@ function usedStateToken() {
 }
 const CONSUME_STATE =
   "DELETE FROM qa_github_state WHERE actor=$1 AND token_hash=$2 AND phase=$3 AND expires_at>now() RETURNING actor";
-function cryptKey(config: Config) {
+/**
+ * Label that separates stored credentials: it both derives the AES key and tags
+ * the envelope, so one class of credentials never decrypts as another. The
+ * GitHub label is the historical value and must not change.
+ */
+export const GITHUB_CREDENTIALS_LABEL = "github-app-v1";
+export function cryptKey(
+  config: Config,
+  label = GITHUB_CREDENTIALS_LABEL
+): Buffer {
   if (config.QA_API_TOKEN.length < 24) {
     throw failure(
       "GITHUB_ENCRYPTION_KEY",
@@ -92,13 +101,17 @@ function cryptKey(config: Config) {
     );
   }
   return Buffer.from(
-    hkdfSync("sha256", config.QA_API_TOKEN, "canary-pr-qa", "github-app-v1", 32)
+    hkdfSync("sha256", config.QA_API_TOKEN, "canary-pr-qa", label, 32)
   );
 }
-function encrypt(value: unknown, config: Config) {
+export function encrypt(
+  value: unknown,
+  config: Config,
+  label = GITHUB_CREDENTIALS_LABEL
+) {
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", cryptKey(config), iv);
-  cipher.setAAD(Buffer.from("canary-github-app-v1"));
+  const cipher = createCipheriv("aes-256-gcm", cryptKey(config, label), iv);
+  cipher.setAAD(Buffer.from(`canary-${label}`));
   const data = Buffer.concat([
     cipher.update(JSON.stringify(value), "utf8"),
     cipher.final(),
@@ -110,10 +123,11 @@ function encrypt(value: unknown, config: Config) {
     data.toString("base64url"),
   ].join(".");
 }
-function decrypt(
+export function decrypt<T = { pem: string; secret: string }>(
   value: string,
-  config: Config
-): { pem: string; secret: string } {
+  config: Config,
+  label = GITHUB_CREDENTIALS_LABEL
+): T {
   try {
     const [version, iv, tag, data] = value.split(".");
     if (version !== "v1" || !(iv && tag && data)) {
@@ -121,10 +135,10 @@ function decrypt(
     }
     const cipher = createDecipheriv(
       "aes-256-gcm",
-      cryptKey(config),
+      cryptKey(config, label),
       Buffer.from(iv, "base64url")
     );
-    cipher.setAAD(Buffer.from("canary-github-app-v1"));
+    cipher.setAAD(Buffer.from(`canary-${label}`));
     cipher.setAuthTag(Buffer.from(tag, "base64url"));
     return JSON.parse(
       Buffer.concat([

@@ -81,6 +81,29 @@ export interface SetupStatus {
 }
 
 /**
+ * One API key as the dashboard lists it. The token itself is never part of a
+ * row: the list only carries the prefix an operator can recognise.
+ */
+export interface ApiKeyRow {
+  createdAt: string;
+  id: string;
+  lastUsedAt: string | null;
+  name: string;
+  prefix: string;
+  /** Repositories the key can read; the server decides what it may see. */
+  repos: string[];
+  revokedAt: string | null;
+}
+
+/**
+ * The answer of a creation: the clear token travels back once, so the operator
+ * can copy it before the server keeps only its encrypted copy.
+ */
+export interface ApiKeyCreated extends ApiKeyRow {
+  token: string;
+}
+
+/**
  * Lifecycle of a pull-request delivery. The first three are what the home block
  * lists; the terminal ones are what the detail screen meets when it opens an
  * attempt by its id after the attempt left the list.
