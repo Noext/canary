@@ -186,6 +186,76 @@ it("filters the attempt history by state and date in the database", async () => 
   expect(dated.body).toMatchObject({ attempts: [], count: 0 });
 }, 30_000);
 
+it("separates a run that has not ended from evidence retention removed", async () => {
+  const { dataDir, key, q, url } = await mcpServer();
+  // Ended without a result file: the evidence is gone.
+  const id = await completedRun(q);
+  // Queued: the worker has not written a result yet, and retention never
+  // touches an active run, so telling the agent the evidence was purged would
+  // send it looking for data that is still to come.
+  const queued = await q.enqueue(
+    "fixture/app",
+    9,
+    SHA,
+    "alice",
+    { prUrl: PR_URL },
+    "queued-run"
+  );
+  const running = await tool(url, key, "get_run", { id: queued.id });
+  expect(running.isError).toBe(false);
+  expect(running.body).toMatchObject({ resultAvailable: false });
+  expect(String(running.body.note)).toContain("n'est pas terminé");
+  const purged = await tool(url, key, "get_run", { id });
+  expect(purged.body).toMatchObject({ resultAvailable: false });
+  expect(String(purged.body.note)).toContain("rétention");
+  // A result this server cannot read is its own fault, not a lost run: the
+  // agent must not be told the evidence was purged.
+  await mkdir(join(dataDir, id), { recursive: true });
+  await writeFile(join(dataDir, id, "result.json"), "{ not json");
+  const malformed = await call(url, key, "tools/call", {
+    arguments: { id },
+    name: "get_run",
+  });
+  expect(malformed.status).toBe(500);
+  expect(((await malformed.json()) as McpAnswer).error?.code).toBe(-32_603);
+}, 30_000);
+
+it("caps a batched request and answers its calls one at a time", async () => {
+  const { key, url } = await mcpServer();
+  const batch = (count: number) =>
+    JSON.stringify(
+      Array.from({ length: count }, (_, index) => ({
+        id: index + 1,
+        jsonrpc: "2.0",
+        method: "tools/list",
+      }))
+    );
+  const post = (body: string) =>
+    fetch(`${url}/mcp`, {
+      body,
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+  const refused = await post(batch(9));
+  expect(refused.status).toBe(400);
+  expect(((await refused.json()) as McpAnswer).error?.code).toBe(-32_600);
+  const answered = await post(batch(2));
+  expect(answered.status).toBe(200);
+  const payload = (await answered.json()) as McpAnswer[];
+  expect(payload.map((entry) => entry.result?.tools?.length)).toEqual([4, 4]);
+  // A batch of notifications alone is accepted and answers nothing.
+  const silent = await post(
+    JSON.stringify([
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", method: "notifications/cancelled" },
+    ])
+  );
+  expect(silent.status).toBe(202);
+}, 30_000);
+
 it("answers the protocol it serves: bad call, unknown method, notification", async () => {
   const { key, url } = await mcpServer();
   const listed = (await (

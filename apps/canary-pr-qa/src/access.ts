@@ -42,6 +42,8 @@ export interface Principal {
   role: "viewer" | "operator" | "admin";
   username?: string;
 }
+/** The one refusal every surface reports the same way: a repository out of scope. */
+export const ACCESS_DENIED = "Project access denied";
 /** Constant-time comparison for secrets of equal length. */
 export function equal(a: string, b: string) {
   const left = Buffer.from(a);
@@ -152,7 +154,7 @@ export function requireAccess(user: Principal, repo: string, write = false) {
     !user.repos.map((r) => r.toLowerCase()).includes(repo.toLowerCase()) ||
     (write && user.role === "viewer")
   ) {
-    throw new Error("Project access denied");
+    throw new Error(ACCESS_DENIED);
   }
 }
 export function artifactSignature(

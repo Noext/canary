@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
-import { type Principal, requireAccess } from "./access.js";
+import { ACCESS_DENIED, type Principal, requireAccess } from "./access.js";
 import type { Config } from "./config.js";
 import { automaticAttempt, type Job, type Queue } from "./queue.js";
 
@@ -12,6 +12,13 @@ const SERVER_NAME = "canary-pr-qa";
 const SERVER_VERSION = "0.1.0";
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 50;
+/**
+ * Messages one batched request may carry. Older revisions of the protocol
+ * allow a batch, so an agent can send several calls at once; the cap and the
+ * sequential execution keep this process from holding hundreds of run results
+ * in memory at the same time.
+ */
+const MAX_BATCH = 8;
 /**
  * Protocol revisions this stateless subset can serve. A client that asks for
  * another one is answered the default instead, which is what the specification
@@ -90,14 +97,22 @@ function runRow(job: Job) {
 
 /**
  * The persisted result of a run, read from the same file the dashboard serves.
- * Retention deletes the file with the run, so a missing file is an answer, not a
- * failure. Raw evidence (traces, HAR, console, network) stays out of reach: the
- * tools carry the same data policy as the artifact route.
+ * A missing file is an answer: retention deletes it with the run, so the caller
+ * decides what it means. Any other failure — unreadable file, malformed JSON —
+ * is a fault of this server and must not be reported as a purged run, which
+ * would send an agent looking for data that was never lost.
  */
 async function readResult(config: Config, id: string) {
-  return await readFile(join(config.QA_DATA_DIR, id, "result.json"), "utf8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => undefined);
+  const text = await readFile(
+    join(config.QA_DATA_DIR, id, "result.json"),
+    "utf8"
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  });
+  return text === undefined ? undefined : (JSON.parse(text) as unknown);
 }
 
 function text(value: unknown, isError = false): ToolAnswer {
@@ -119,6 +134,19 @@ function refusal(error: unknown) {
     error instanceof Error ? error.message : "Appel refusé par le serveur.",
     true
   );
+}
+
+/**
+ * The one failure a tool answers itself: a repository the presented key does
+ * not cover. Anything else — an unreadable result, a database that stopped
+ * answering — is a fault of this server, and dressing it up as a tool answer
+ * would tell an agent it asked something wrong.
+ */
+function denial(error: unknown) {
+  if (error instanceof Error && error.message === ACCESS_DENIED) {
+    return refusal(error);
+  }
+  throw error;
 }
 
 const listRunsArgs = z
@@ -181,7 +209,7 @@ const tools: Tool[] = [
           runs: jobs.slice(0, limit).map(runRow),
         });
       } catch (error) {
-        return refusal(error);
+        return denial(error);
       }
     },
   },
@@ -207,18 +235,23 @@ const tools: Tool[] = [
         }
         requireAccess(ctx.user, job.repo);
         const result = await readResult(ctx.config, args.id);
-        return text({
-          result: result ?? null,
-          resultAvailable: result !== undefined,
-          run: job,
-          ...(result === undefined
-            ? {
-                note: "Le résultat enregistré n'existe plus : la rétention a purgé les preuves de ce test.",
-              }
-            : {}),
-        });
+        if (result === undefined) {
+          // Retention deletes the run row with its evidence, so a run this
+          // server just returned still has its result to come: only a run that
+          // has already ended can have lost it.
+          const ended = job.status !== "queued" && job.status !== "running";
+          return text({
+            result: null,
+            resultAvailable: false,
+            run: job,
+            note: ended
+              ? "Le résultat enregistré n'existe plus : la rétention a purgé les preuves de ce test."
+              : "Ce test n'est pas terminé : le résultat sera écrit à la fin de l'exécution.",
+          });
+        }
+        return text({ result, resultAvailable: true, run: job });
       } catch (error) {
-        return refusal(error);
+        return denial(error);
       }
     },
   },
@@ -251,7 +284,7 @@ const tools: Tool[] = [
         });
         return text({ attempts, count: attempts.length });
       } catch (error) {
-        return refusal(error);
+        return denial(error);
       }
     },
   },
@@ -287,7 +320,7 @@ const tools: Tool[] = [
           timeline: await ctx.queue.deliveryTimeline(args.id),
         });
       } catch (error) {
-        return refusal(error);
+        return denial(error);
       }
     },
   },
@@ -402,9 +435,27 @@ export function mcpRoutes(
   async function dispatch(res: ServerResponse, body: unknown, user: Principal) {
     const ctx: ToolContext = { config, queue, user };
     if (Array.isArray(body)) {
-      const answers = (
-        await Promise.all(body.map((message) => handleMessage(message, ctx)))
-      ).filter((answer) => answer !== undefined);
+      if (body.length > MAX_BATCH) {
+        json(
+          res,
+          400,
+          rpcError(
+            null,
+            -32_600,
+            `Invalid Request: ${MAX_BATCH} calls at most per request`
+          )
+        );
+        return;
+      }
+      // One call at a time: a batch must not make this process read and hold
+      // every result it names before it answers.
+      const answers: unknown[] = [];
+      for (const message of body) {
+        const answer = await handleMessage(message, ctx);
+        if (answer !== undefined) {
+          answers.push(answer);
+        }
+      }
       if (!answers.length) {
         res.writeHead(202, { "Cache-Control": "no-store" });
         res.end();
