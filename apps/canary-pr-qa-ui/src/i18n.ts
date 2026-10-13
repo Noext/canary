@@ -387,6 +387,9 @@ export const newTest = {
 export const runs = {
   cancel: "Annuler le test",
   cancelRequested: "Annulation demandée. Le worker finalise les preuves.",
+  copyAction: "Copier",
+  copyDone: "Copié",
+  copyFailed: "Copie impossible",
   detailEyebrow: "Test en cours",
   emptyIntro: "Lancez votre premier test depuis « Nouveau test ».",
   emptyTitle: "Aucun test pour le moment",
@@ -425,6 +428,8 @@ export const runs = {
   technicalSummary: "Diagnostic technique et données du run",
   technicalIntro:
     "Le run ID permet de retrouver ce test dans les logs du serveur.",
+  eventsLabel: "Progression du run",
+  resultLabel: "Données du run",
   publicationFailed: " La publication GitHub a échoué.",
   table: {
     commit: "Commit",
