@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { apiKeyListSchema } from "./api-keys";
+import { automaticStatusSchema } from "./automatic";
 
 /**
  * Every response the dashboard consumes is parsed before it reaches a
@@ -103,58 +105,6 @@ export const githubRepositorySchema = z.object({
   full_name: z.string(),
   installation_id: z.string(),
   private: z.boolean(),
-});
-
-export const automaticStateSchema = z.enum([
-  "waiting",
-  "expired",
-  "rate_limited",
-  "promoted",
-  "discarded",
-  "disabled",
-]);
-
-export const automaticAttemptSchema = z.object({
-  attempts: z.number(),
-  deadlineAt: z.string(),
-  id: z.string(),
-  lastError: z.string().nullish(),
-  reason: z.string(),
-  pr: z.number(),
-  repo: z.string(),
-  runId: z.string().nullable(),
-  sha: z.string(),
-  state: automaticStateSchema,
-  updatedAt: z.string(),
-});
-
-/** One recorded step of an attempt, oldest first. */
-export const automaticTimelineEntrySchema = z.object({
-  action: z.string(),
-  at: z.string(),
-  seconds: z.number().nullish(),
-});
-
-export const automaticDetailSchema = z.object({
-  attempt: automaticAttemptSchema,
-  preview: z
-    .object({
-      shaHeader: z.string(),
-      shaPath: z.string().nullish(),
-      template: z.string().nullish(),
-    })
-    .nullish(),
-  timeline: z.array(automaticTimelineEntrySchema),
-});
-
-export const automaticStatusSchema = z.object({
-  attempts: z.array(automaticAttemptSchema),
-  enabledRepos: z.array(z.string()),
-  summary: z.object({
-    expired: z.number(),
-    rateLimited: z.number(),
-    waiting: z.number(),
-  }),
 });
 
 export const githubStatusSchema = z.object({
@@ -304,6 +254,7 @@ export const responseSchemas = {
   "/auth/login": principalSchema,
   "/auth/setup": principalSchema,
   "/auth/status": authStatusSchema,
+  "/dashboard/api-keys": apiKeyListSchema,
   "/dashboard/automatic": automaticStatusSchema,
   "/dashboard/preview-hosts": previewSettingsSchema,
   "/dashboard/status": setupStatusSchema,

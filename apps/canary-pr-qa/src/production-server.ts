@@ -16,6 +16,7 @@ import {
   signedArtifact,
   validArtifactSignature,
 } from "./access.js";
+import { ApiKeys } from "./api-keys.js";
 import { authRoutes } from "./auth-routes.js";
 import {
   type Config,
@@ -31,6 +32,7 @@ import { GitHubSetup } from "./github-setup.js";
 import { githubSetupRoutes } from "./github-setup-routes.js";
 import { importLegacy } from "./legacy.js";
 import { LocalAuth, localCookie } from "./local-auth.js";
+import { mcpRoutes } from "./mcp.js";
 import {
   ModelCatalog,
   ModelIdSchema,
@@ -87,10 +89,11 @@ export async function startProductionServer(config: Config) {
   await previewHosts.load();
   await previewHosts.publish("server");
   const accounts = new LocalAuth(queue.pool);
+  const keys = new ApiKeys(queue.pool, config);
   const setup = new GitHubSetup(queue.pool, config);
   const setupRoute = githubSetupRoutes(setup, queue, rawBody, json);
   async function identify(req: IncomingMessage) {
-    return principal(req, await setup.effective(), accounts);
+    return principal(req, await setup.effective(), accounts, keys);
   }
   const models = new ModelCatalog(config);
   const dashboardRoute = dashboardRoutes(
@@ -100,8 +103,10 @@ export async function startProductionServer(config: Config) {
     queue,
     previewHosts,
     rawBody,
-    json
+    json,
+    keys
   );
+  const mcpRoute = mcpRoutes(queue, config, rawBody, json);
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
   let stopping = false;
@@ -527,7 +532,8 @@ export async function startProductionServer(config: Config) {
       (await dashboardRoute(req, res, url, user)) ||
       (await setupRoute(req, res, url, user)) ||
       (await modelRoute(req, res, url, user)) ||
-      (await accountRoute(req, res, url, user))
+      (await accountRoute(req, res, url, user)) ||
+      (await mcpRoute(req, res, url, user))
     ) {
       return true;
     }
@@ -634,8 +640,11 @@ export async function startProductionServer(config: Config) {
 }
 
 function apiErrorStatus(diagnostic: { code: string; message: string }) {
-  if (diagnostic.code === "RUN_NOT_FOUND") {
+  if (["RUN_NOT_FOUND", "API_KEY_UNKNOWN"].includes(diagnostic.code)) {
     return 404;
+  }
+  if (diagnostic.code === "API_KEY_REVOKED") {
+    return 409;
   }
   if (["AUTH_RATE_LIMIT", "AUTH_BUSY"].includes(diagnostic.code)) {
     return 429;

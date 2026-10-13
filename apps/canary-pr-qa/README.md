@@ -508,6 +508,11 @@ Captures réelles des E2E, avec données fictives :
 | `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
 | `POST /session`, `DELETE /session` | Accès technique / déconnexion et révocation locale |
 | `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
+| `GET /dashboard/api-keys` | Clés API de l'instance, admin seulement : nom, préfixe, dernière utilisation, jamais le jeton |
+| `POST /dashboard/api-keys` | `{name}` ; crée une clé en lecture seule et rend le jeton une seule fois |
+| `POST /dashboard/api-keys/:id/secret` | Rend le jeton à recopier sans l'afficher ; 409 si la clé est révoquée |
+| `DELETE /dashboard/api-keys/:id` | Révocation immédiate ; la clé est refusée à la requête suivante |
+| `POST /mcp` | Serveur MCP des agents IA, clé API en `Authorization: Bearer` uniquement |
 | `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
 | `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
 | `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
@@ -543,6 +548,36 @@ métriques). Chaque identité doit avoir une liste explicite de dépôts. Pour S
 configurer issuer/audience/JWKS et mapper `oidcSubject` à l'identité locale ; les
 JWT d'accès RS256/ES256 sont vérifiés, les claims ne peuvent pas choisir leurs
 droits. L'émission du JWT et le login IdP restent gérés par votre IdP.
+
+## Clés API et serveur MCP
+
+Un administrateur crée des clés API dans **Réglages → Clés API** (ou par l'API
+ci-dessus). Une clé est un jeton `qa_live_…` affiché en entier une seule fois.
+Le serveur en garde une empreinte et une copie chiffrée : le bouton Copier de la
+liste rend le jeton sans jamais l'afficher à l'écran. Révoquer une clé la refuse
+dès la requête suivante ; la ligne reste pour l'audit.
+
+Une clé est en lecture seule. Elle porte le rôle `viewer` et la liste de dépôts en
+vigueur au moment de sa création — la sélection GitHub des réglages,
+plafonnée par `GITHUB_ALLOWED_REPOS` — : elle lit l'historique, jamais ne lance,
+n'annule ou ne supprime un test. La même clé ouvre le serveur MCP du service :
+
+```bash
+claude mcp add --transport http canary-qa https://votre-domaine-qa/mcp \
+  --header "Authorization: Bearer qa_live_…"
+```
+
+`POST /mcp` est sans état et n'accepte qu'une clé API : un cookie de session ne
+l'ouvre pas, ce qui le met hors de portée d'une requête intersite. Quatre outils
+en lecture : `list_runs` (statut, résultat, modèle, coût), `get_run`,
+`list_automatic_attempts` et `get_automatic_attempt` (état, cause, chronologie des
+sondes). `get_run` rend le `result.json` du run — scénarios, assertions, vidéos,
+coût, publication — et reste soumis à la politique de preuves brutes : traces,
+HAR et journaux natifs restent refusés. Un run purgé par la rétention est annoncé
+comme tel, jamais inventé.
+
+Le transport répond en JSON, sans connexion longue : aucun réglage de mise en
+tampon SSE n'est nécessaire côté reverse proxy.
 
 ## Exploitation, panne et données
 

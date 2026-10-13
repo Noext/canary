@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { type Principal, requireAccess } from "./access.js";
+import type { ApiKeys } from "./api-keys.js";
 import type { Config } from "./config.js";
 import type {
   AutomaticDetail,
@@ -35,6 +36,89 @@ const previewHostsSchema = z
     hosts: z.array(z.string().max(MAX_HOST_LENGTH)).max(400),
   })
   .strict();
+const apiKeyNameSchema = z.object({ name: z.string().min(1).max(60) }).strict();
+/** Path segment that decrypts a stored key instead of revoking it. */
+const SECRET_SUFFIX = "/secret";
+const API_KEYS_PREFIX = "/dashboard/api-keys";
+
+export function apiKeysRoute(
+  keys: ApiKeys,
+  read: (req: IncomingMessage) => Promise<Buffer>,
+  json: (res: ServerResponse, status: number, value: unknown) => void,
+  effectiveRepos: () => Promise<string[]>
+) {
+  /**
+   * Administrator-only key management. A key is a read-only viewer for agents,
+   * so the list and the copy action are the administrator's only way to see what
+   * an agent was granted.
+   */
+  return async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    user: Principal
+  ): Promise<boolean> => {
+    if (
+      url.pathname !== API_KEYS_PREFIX &&
+      !url.pathname.startsWith(`${API_KEYS_PREFIX}/`)
+    ) {
+      return false;
+    }
+    if (user.role !== "admin") {
+      json(res, 403, { error: "Administrator required" });
+      return true;
+    }
+    if (url.pathname === API_KEYS_PREFIX) {
+      if (req.method === "GET") {
+        json(res, 200, await keys.list());
+        return true;
+      }
+      if (req.method === "POST") {
+        json(
+          res,
+          201,
+          await keys.create(user, apiKeyName(await read(req)), [
+            ...new Set(await effectiveRepos()),
+          ])
+        );
+        return true;
+      }
+      return false;
+    }
+    const rest = url.pathname.slice(API_KEYS_PREFIX.length + 1);
+    if (rest.endsWith(SECRET_SUFFIX)) {
+      if (req.method !== "POST") {
+        return false;
+      }
+      json(
+        res,
+        200,
+        await keys.secret(user, rest.slice(0, -SECRET_SUFFIX.length))
+      );
+      return true;
+    }
+    if (req.method === "DELETE") {
+      json(res, 200, await keys.revoke(user, rest));
+      return true;
+    }
+    return false;
+  };
+}
+
+/** A name the dashboard can show; a refused body is a request error, not a 500. */
+function apiKeyName(body: Buffer) {
+  const parsed = apiKeyNameSchema.safeParse(
+    JSON.parse(body.toString()) as unknown
+  );
+  if (!parsed.success) {
+    throw new QaError(
+      "API_KEY_NAME",
+      "Le nom de la clé doit contenir 1 à 60 caractères.",
+      "Donnez un nom court qui rappelle l’usage de la clé."
+    );
+  }
+  return parsed.data.name;
+}
 /**
  * Delivery ids are opaque webhook identifiers. The bound is what the caller may
  * put in a path segment; it is not a claim about their shape, so an id the
@@ -50,8 +134,12 @@ export function dashboardRoutes(
   queue: Queue,
   previewHosts: PreviewHosts,
   read: (req: IncomingMessage) => Promise<Buffer>,
-  json: (res: ServerResponse, status: number, value: unknown) => void
+  json: (res: ServerResponse, status: number, value: unknown) => void,
+  keys: ApiKeys
 ) {
+  const apiKeyRoute = apiKeysRoute(keys, read, json, async () =>
+    (await setup.effective()).allowedRepos.map((repo) => repo.toLowerCase())
+  );
   /**
    * Administrator-only host list editor. The stored list becomes the list in
    * force for this process and is published for the browser and egress services.
@@ -158,6 +246,9 @@ export function dashboardRoutes(
       return true;
     }
     if (await automaticRoute(req, res, url, user)) {
+      return true;
+    }
+    if (await apiKeyRoute(req, res, url, user)) {
       return true;
     }
     if (await previewHostRoute(req, res, url, user)) {

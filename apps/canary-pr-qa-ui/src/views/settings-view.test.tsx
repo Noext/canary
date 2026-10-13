@@ -180,6 +180,8 @@ beforeEach(() => {
         return { initialized: true };
       case "/me":
         return admin;
+      case "/dashboard/api-keys":
+        return [];
       case "/dashboard/status":
         return setup;
       case "/models":
@@ -316,6 +318,20 @@ const CONTROL_IDS = [
   "githubConfirmRun",
   "githubConfirmCancel",
   "githubOriginHint",
+  "apiKeysSettings",
+  "apiKeyScope",
+  "apiKeyName",
+  "apiKeyCreate",
+  "apiKeyTokenBlock",
+  "apiKeyToken",
+  "apiKeyTokenCopy",
+  "apiKeyTokenReceipt",
+  "apiKeyTokenWarning",
+  "apiKeyListTitle",
+  "apiKeyEmpty",
+  "apiKeyList",
+  "apiKeyNotice",
+  "apiKeyError",
   "aiConnection",
   "aiEndpoint",
   "aiDefault",

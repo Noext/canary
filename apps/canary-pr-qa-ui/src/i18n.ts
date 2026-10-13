@@ -1,9 +1,12 @@
+import { apiKeys } from "./i18n-api-keys";
+
 /**
  * Every user-visible string of the dashboard.
  *
  * The interface is French only: this module is a single, typed source of truth
  * for the copy, not an i18n framework. Keep keys flat enough that a missing
- * string is a type error at the call site.
+ * string is a type error at the call site. A wide surface (Clés API) keeps its
+ * copy in its own module and is re-exported here.
  */
 
 export type ViewName =
@@ -16,6 +19,11 @@ export type ViewName =
 
 /** Server error codes the interface explains in French. */
 export const errorMessages: Record<string, string | undefined> = {
+  API_KEY_NAME: "Le nom d’une clé doit faire entre 1 et 60 caractères.",
+  API_KEY_REVOKED:
+    "Cette clé a été révoquée : son jeton ne peut plus être copié. Créez-en une nouvelle si vous en avez besoin.",
+  API_KEY_UNKNOWN:
+    "Cette clé n’existe plus sur le serveur. Rechargez la page pour voir la liste à jour.",
   CANARY_START_FAILED:
     "Canary n’a pas pu ouvrir sa session Chromium : le moteur ou son navigateur n’était pas disponible.",
   CONTEXT_INCOMPLETE:
@@ -667,6 +675,7 @@ export const settings = {
     retry: "Vérifier à nouveau l'accès IA",
     title: "Votre fournisseur IA",
   },
+  apiKeys,
   eyebrow: "Connexion 2 / 2",
   eyebrowGithub: "Connexion 1 / 2",
   github: {

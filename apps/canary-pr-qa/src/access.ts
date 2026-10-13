@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { z } from "zod";
+import type { ApiKeys } from "./api-keys.js";
 import type { Config } from "./config.js";
 import type { LocalAuth } from "./local-auth.js";
 
@@ -30,12 +31,21 @@ const UsersSchema = z.array(
     .strict()
 );
 export interface Principal {
+  /**
+   * Set only on the principal an API key stands for. Every other credential —
+   * the service token, a `users.json` token, an OIDC JWT, a session cookie —
+   * leaves it unset, so a surface reserved to agents can tell them apart.
+   */
+  apiKeyId?: string;
   id: string;
   repos: string[];
   role: "viewer" | "operator" | "admin";
   username?: string;
 }
-function equal(a: string, b: string) {
+/** The one refusal every surface reports the same way: a repository out of scope. */
+export const ACCESS_DENIED = "Project access denied";
+/** Constant-time comparison for secrets of equal length. */
+export function equal(a: string, b: string) {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
@@ -59,7 +69,8 @@ export function sessionCookie(user: Principal, config: Config) {
 export async function principal(
   req: IncomingMessage,
   config: Config,
-  local?: LocalAuth
+  local?: LocalAuth,
+  keys?: ApiKeys
 ): Promise<Principal | undefined> {
   const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
   const account = token
@@ -69,37 +80,43 @@ export async function principal(
     return account;
   }
   const records = await users(config);
-  if (token && equal(token, config.QA_API_TOKEN)) {
+  // A request that carries a token is answered by that token alone: a browser
+  // session cookie is never used to rescue a bearer token that matches nothing.
+  return token
+    ? await tokenPrincipal(token, config, records, keys)
+    : cookiePrincipal(req, config, records);
+}
+/** The principal a bearer token stands for, or `undefined` when it stands for none. */
+async function tokenPrincipal(
+  token: string,
+  config: Config,
+  records: Awaited<ReturnType<typeof users>>,
+  keys?: ApiKeys
+): Promise<Principal | undefined> {
+  if (equal(token, config.QA_API_TOKEN)) {
     return { id: "bootstrap-admin", role: "admin", repos: config.allowedRepos };
   }
-  if (token) {
-    const hash = createHash("sha256").update(token).digest("hex");
-    const user = records.find(
-      (u) => u.tokenSha256 && equal(hash, u.tokenSha256)
-    );
-    if (user) {
-      return user;
-    }
-    if (config.QA_OIDC_ISSUER && config.QA_OIDC_JWKS_URL) {
-      const verified = await jwtVerify(token, keySet(config.QA_OIDC_JWKS_URL), {
-        issuer: config.QA_OIDC_ISSUER,
-        audience: config.QA_OIDC_AUDIENCE,
-        algorithms: ["RS256", "ES256"],
-      }).catch(() => undefined);
-      if (verified) {
-        const oidc = records.find(
-          (u) => u.oidcSubject === verified.payload.sub
-        );
-        if (oidc) {
-          return oidc;
-        }
-      }
+  // A service key is checked before `users.json` credentials: this server issued
+  // it, so it alone decides what the agent carrying it may read.
+  const key = await keys?.verify(token);
+  if (key) {
+    return key;
+  }
+  const hash = createHash("sha256").update(token).digest("hex");
+  const user = records.find((u) => u.tokenSha256 && equal(hash, u.tokenSha256));
+  if (user) {
+    return user;
+  }
+  if (config.QA_OIDC_ISSUER && config.QA_OIDC_JWKS_URL) {
+    const verified = await jwtVerify(token, keySet(config.QA_OIDC_JWKS_URL), {
+      issuer: config.QA_OIDC_ISSUER,
+      audience: config.QA_OIDC_AUDIENCE,
+      algorithms: ["RS256", "ES256"],
+    }).catch(() => undefined);
+    if (verified) {
+      return records.find((u) => u.oidcSubject === verified.payload.sub);
     }
   }
-  if (token) {
-    return;
-  }
-  return cookiePrincipal(req, config, records);
 }
 function cookiePrincipal(
   req: IncomingMessage,
@@ -137,7 +154,7 @@ export function requireAccess(user: Principal, repo: string, write = false) {
     !user.repos.map((r) => r.toLowerCase()).includes(repo.toLowerCase()) ||
     (write && user.role === "viewer")
   ) {
-    throw new Error("Project access denied");
+    throw new Error(ACCESS_DENIED);
   }
 }
 export function artifactSignature(

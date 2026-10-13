@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@usecanary/logger";
 import pg from "pg";
+import { API_KEYS_MIGRATION } from "./api-keys.js";
 import type {
   AutomaticAttempt,
   AutomaticState,
@@ -33,6 +34,8 @@ export interface Job {
     | "cancelled"
     | "interrupted";
   updated_at: string;
+  /** Model spend recorded at completion; `{}` until the run ends. */
+  usage?: { costUsd?: number; model?: string; tokens?: number } | null;
   worker?: string;
 }
 /** Delivery status that ends an automatic attempt without creating a run. */
@@ -61,7 +64,7 @@ export interface DeliveryRow {
   status: string;
   updated_at: Date;
 }
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -94,6 +97,7 @@ ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NU
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS claim_token text;
 CREATE INDEX IF NOT EXISTS qa_audit_delivery ON qa_audit ((details->>'delivery'));
 ${PREVIEW_HOSTS_MIGRATION}
+${API_KEYS_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {
@@ -527,6 +531,38 @@ export class Queue {
     };
   }
   /**
+   * The delivery history of one repository scope, newest first, with the state
+   * and the date filter applied by the database. This is not the dashboard
+   * summary: `automatic` answers what still needs attention inside its own
+   * window, so a caller asking about a past state reads here instead.
+   */
+  async attempts(
+    repos: string[],
+    options: {
+      deadlineSeconds: number;
+      limit: number;
+      since?: string;
+      state?: AutomaticState;
+    }
+  ) {
+    const rows = (
+      await this.pool.query<DeliveryRow>(
+        `SELECT id,payload,status,attempts,reason,last_error,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
+         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true'
+           AND ($3::timestamptz IS NULL OR updated_at>=$3)
+           ${options.state ? `AND (${ATTEMPT_STATE_SQL[options.state]})` : ""}
+         ORDER BY updated_at DESC,created_at DESC LIMIT $4`,
+        [
+          repos.map((repo) => repo.toLowerCase()),
+          options.deadlineSeconds,
+          options.since ?? null,
+          options.limit,
+        ]
+      )
+    ).rows;
+    return rows.map(automaticAttempt);
+  }
+  /**
    * One automatic attempt by delivery id, with the same resolved deadline the
    * listing computes. Returns nothing for an unknown id, which is also what an
    * attempt of another tenant looks like once the caller checked its repository.
@@ -587,6 +623,20 @@ const automaticStates: Record<string, AutomaticState> = {
   auto_disabled: "disabled",
   expired: "expired",
   rate_limited: "rate_limited",
+};
+
+/**
+ * The raw delivery status each reported state is built from. Kept beside
+ * `automaticState()` so a filter can never ask for a state the mapping cannot
+ * produce.
+ */
+const ATTEMPT_STATE_SQL: Record<AutomaticState, string> = {
+  discarded: "status='processed' AND run_id IS NULL",
+  disabled: "status='auto_disabled'",
+  expired: "status='expired'",
+  promoted: "status='processed' AND run_id IS NOT NULL",
+  rate_limited: "status='rate_limited'",
+  waiting: "status='pending'",
 };
 
 /**
