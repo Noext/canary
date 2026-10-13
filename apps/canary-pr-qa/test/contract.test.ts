@@ -12,36 +12,43 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(closers.splice(0).map((c) => c()));
 });
-it("refuses a decoy target or skipped interaction even if it displays expected text", async () => {
+it("plays the frozen contract target and never reads a decoy, without asking a model", async () => {
   const f = await fixture();
   closers.push(f.close);
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("test");
-  const act = vi.spyOn(Canary.prototype, "act").mockResolvedValue({
-    url: f.baseUrl,
-    snapshot: "Welcome Ada",
-    actual: "Welcome Ada",
-  });
+  const act = vi
+    .spyOn(Canary.prototype, "act")
+    .mockImplementation(async (_session, label) => ({
+      url: f.baseUrl,
+      snapshot: "Welcome Ada",
+      // La sonde de référence ne voit pas encore la valeur écrite : la seule
+      // preuve acceptée reste le changement observé par l'assertion prévue.
+      ...(label.startsWith("baseline-") ? {} : { actual: "Welcome Ada" }),
+    }));
   vi.spyOn(Canary.prototype, "end").mockResolvedValue(["video.webm"]);
-  vi.spyOn(Model.prototype, "json").mockResolvedValue({
-    reason: "decoy",
-    stepId: "verify",
-    action: {
-      type: "assert",
-      assertionId: "saved",
-      locator: { by: "css", value: "#decoy" },
-    },
-  });
+  const json = vi.spyOn(Model.prototype, "json");
   const result = await executeScenario(
     plan.scenarios[0]!,
     f.baseUrl,
     f.dataDir,
     f.config,
-    new Canary(f.config),
-    new Model(f.config)
+    new Canary(f.config)
   );
-  expect(result.outcome).toBe("blocked");
-  expect(result.diagnostic?.code).toBe("CONTRACT_VIOLATION");
-  expect(act).toHaveBeenCalledTimes(1);
+  expect(json).not.toHaveBeenCalled();
+  expect(result.outcome, result.error).toBe("passed");
+  expect(result.contract?.completedSteps).toEqual(["enter", "save", "verify"]);
+  expect(act.mock.calls.map((call) => call[1])).toEqual([
+    "open-preview",
+    "1-fill",
+    "baseline-saved",
+    "2-click",
+    "3-assert",
+  ]);
+  // Le leurre qui affiche le texte attendu n'est jamais lu : la cible de
+  // l'assertion vient du plan figé, pas de ce que la page propose.
+  const scripts = act.mock.calls.map((call) => call[2]).join("\n");
+  expect(scripts).toContain("#saved");
+  expect(scripts).not.toContain("#decoy");
 });
 it("requires frozen targets and ordered prior interactions for transition assertions", () => {
   const invalid = structuredClone(plan);

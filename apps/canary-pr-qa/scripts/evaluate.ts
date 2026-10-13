@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import corpus from "../evals/corpus.json" with { type: "json" };
 import { loadConfig } from "../src/config.js";
-import { EXECUTOR_PROMPT, PLANNER_PROMPT } from "../src/model.js";
+import { PLANNER_PROMPT } from "../src/model.js";
 import { runQa } from "../src/runner.js";
 import { fixture, PR_URL } from "../test/fixture.js";
 
@@ -143,9 +143,7 @@ async function main() {
     corpusHash: createHash("sha256")
       .update(JSON.stringify(dataset))
       .digest("hex"),
-    promptHash: createHash("sha256")
-      .update(PLANNER_PROMPT + EXECUTOR_PROMPT)
-      .digest("hex"),
+    promptHash: createHash("sha256").update(PLANNER_PROMPT).digest("hex"),
     rows,
     metrics: {
       bugDetectionRate:

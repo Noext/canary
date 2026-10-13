@@ -231,15 +231,11 @@ function validateScenarioContract(
     issue("Duplicate assertion ids");
   }
 }
-export const DecisionSchema = z
-  .object({ reason: text, stepId: text, action: ActionSchema })
-  .strict();
 export type Plan = z.infer<typeof PlanSchema>;
 export type Scenario = z.infer<typeof ScenarioSchema>;
 export type Assertion = z.input<typeof AssertionSchema>;
 export type Action = z.infer<typeof ActionSchema>;
 export type Locator = z.infer<typeof locator>;
-export type Decision = z.infer<typeof DecisionSchema>;
 export type Outcome = "passed" | "failed" | "blocked" | "skipped" | "stale";
 
 export interface Preview {
@@ -253,6 +249,8 @@ export interface StepResult {
   observation: string;
   ok: boolean;
   reason: string;
+  /** Étape du contrat jouée ici : l'hôte exécute le plan, il ne l'interprète pas. */
+  stepId?: string;
 }
 export interface ScenarioResult {
   artifacts: string[];

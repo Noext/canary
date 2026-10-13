@@ -127,7 +127,6 @@ export async function fixture(
     broken?: boolean;
     noSha?: boolean;
     updatedSha?: boolean;
-    earlyFinish?: boolean;
     noScenarios?: boolean;
     listenHost?: string;
     missingDiffAndContext?: boolean;
@@ -343,15 +342,14 @@ export async function fixture(
           };
         }
       } else {
-        const request = JSON.parse(messages[1]?.content ?? "{}");
-        const next = request.nextRequiredStep;
-        value = {
-          reason: "Execute planned form test",
-          stepId: options.earlyFinish ? "$finish" : (next?.id ?? "$finish"),
-          action: options.earlyFinish
-            ? { type: "finish" }
-            : (next?.action ?? { type: "finish" }),
-        };
+        // L'exécuteur rejoue le contrat figé et ne consulte plus le modèle : un
+        // appel d'exécution ici est une régression, jamais une réponse à scripter.
+        json(
+          res,
+          { error: { message: "Unexpected model prompt during execution" } },
+          500
+        );
+        return;
       }
       json(res, {
         choices: [

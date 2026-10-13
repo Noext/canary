@@ -15,7 +15,7 @@ import { saveReport } from "../src/report.js";
 import { runScope } from "../src/run-scope.js";
 import { runQa } from "../src/runner.js";
 import {
-  DecisionSchema,
+  ActionSchema,
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
@@ -102,10 +102,7 @@ describe("validation and deterministic assertions", () => {
   });
   it("rejects arbitrary code, duplicate assertions, zero-assertion scenarios", () => {
     expect(() =>
-      DecisionSchema.parse({
-        reason: "bad",
-        action: { type: "script", code: "process.exit()" },
-      })
+      ActionSchema.parse({ type: "script", code: "process.exit()" })
     ).toThrow();
     const scenario = plan.scenarios[0]!;
     expect(() =>
@@ -255,21 +252,31 @@ describe("runner false-green regressions", () => {
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
   });
-  it("blocks self-declared success without executing planned assertions", async () => {
-    const f = await setup({ earlyFinish: true });
+  it("plays the whole frozen contract without asking a model to decide", async () => {
+    const f = await setup();
     fakeBrowser();
     const result = await runQa(
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    expect(result.outcome).toBe("blocked");
-    expect(result.scenarios[0]?.error).toContain(
-      "before all planned assertions"
-    );
+    expect(result.outcome).toBe("passed");
+    // Le plan est le seul appel modèle : l'exécution rejoue le contrat figé,
+    // elle n'envoie plus la page au modèle à chaque étape.
+    expect(f.modelRequests).toHaveLength(1);
+    expect(result.scenarios[0]?.contract?.completedSteps).toEqual([
+      "enter",
+      "save",
+      "verify",
+    ]);
+    expect(result.scenarios[0]?.steps.map((step) => step.stepId)).toEqual([
+      "enter",
+      "save",
+      "verify",
+    ]);
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
-    ).toBe("error");
+    ).toBe("success");
   });
   it("marks updated PR heads stale rather than posting success", async () => {
     const f = await setup({ updatedSha: true });
