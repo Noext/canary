@@ -119,8 +119,13 @@ export function shortSha(sha: string | null | undefined): string {
   return (sha ?? "").slice(0, 12);
 }
 
+/**
+ * Dates of a French-only interface. The runtime locale of a container is not a
+ * given (it renders `10/13/2026, 6:25:05 AM` under `en-US`), so the locale is
+ * pinned here rather than inherited from the host.
+ */
 export function formatDate(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleString() : "";
+  return value ? new Date(value).toLocaleString("fr-FR") : "";
 }
 
 /**

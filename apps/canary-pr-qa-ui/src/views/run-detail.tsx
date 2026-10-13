@@ -6,8 +6,10 @@ import { Notice, Pill } from "@/components/ui/feedback";
 import { Card, CardHeader } from "@/components/ui/form";
 import {
   runs as copy,
+  errorMessages,
   phaseSteps,
   resultSummaries,
+  runAdvice,
   runDiagnostic,
 } from "@/i18n";
 import {
@@ -60,7 +62,10 @@ function phaseClass(
 
 function summaryFor(result: RunResult): string {
   const base = resultSummaries[result.outcome] ?? copy.resultFallback;
-  const error = result.error ? ` ${result.error}` : "";
+  // A structured diagnostic is rendered in French by the block below; the raw
+  // server error is only the summary when there is nothing else to show, so the
+  // two never repeat the same sentence in two languages.
+  const error = result.error && !result.diagnostic ? ` ${result.error}` : "";
   const publication =
     result.publication?.status === "failed" ? copy.publicationFailed : "";
   return `${base}${error}${publication}`;
@@ -190,8 +195,14 @@ function ScenarioCard({
  *
  * A report written before the diagnostic existed carries none of it — the field
  * is absent or null — so the block gives the generic advice instead of an empty
- * panel. The phase lives on the job, not on the result, and an unreported phase
- * is simply left out.
+ * panel. The expected cause and the next step are shown in French whenever this
+ * build knows the code: the interface is French only, and `diagnose()` writes
+ * its hint in English. An unknown code keeps the server's own wording, so the
+ * advice Canary was given is never swallowed.
+ *
+ * `done` is the marker the runner records when it finishes, not a phase a run
+ * can fail in: announcing it as the phase reached would say nothing, so it is
+ * left out. An intermediate phase (a cancelled or interrupted run) is reported.
  */
 function RunDiagnosticBlock({
   phase,
@@ -200,21 +211,23 @@ function RunDiagnosticBlock({
   phase: string | null | undefined;
   result: RunResult;
 }) {
-  const stoppedPhase = phaseLabel(phase);
+  const diagnostic = result.diagnostic;
   const failedScenarios = result.scenarios.filter((item) =>
     errorOutcomes.includes(item.outcome)
   );
   return (
     <Notice className="mt-3" id="runDiagnostic" tone="error">
       <h3 className="font-semibold text-sm">{runDiagnostic.title}</h3>
-      {result.diagnostic ? (
+      {diagnostic ? (
         <>
           <p className="mt-1" id="runDiagnosticCode">
-            {runDiagnostic.code(result.diagnostic.code)}
+            {runDiagnostic.code(diagnostic.code)}
           </p>
-          <p className="mt-1">{result.diagnostic.message}</p>
+          <p className="mt-1">
+            {errorMessages[diagnostic.code] ?? diagnostic.message}
+          </p>
           <p className="mt-1" id="runDiagnosticHint">
-            {runDiagnostic.hint(result.diagnostic.hint)}
+            {runDiagnostic.hint(runAdvice[diagnostic.code] ?? diagnostic.hint)}
           </p>
         </>
       ) : (
@@ -225,9 +238,9 @@ function RunDiagnosticBlock({
           </p>
         </>
       )}
-      {stoppedPhase ? (
+      {phase && phase !== "done" ? (
         <p className="mt-1" id="runDiagnosticPhase">
-          {runDiagnostic.stoppedAt(stoppedPhase)}
+          {runDiagnostic.stoppedAt(phaseLabel(phase))}
         </p>
       ) : null}
       {failedScenarios.length > 0 ? (
@@ -237,18 +250,30 @@ function RunDiagnosticBlock({
           </p>
           <ul className="mt-1 space-y-1">
             {failedScenarios.map((item) => (
-              <li key={item.scenario.id}>
-                <span className="font-medium">{item.scenario.title}</span>
-                {item.error ? ` — ${item.error}` : null}
-                {item.diagnostic?.hint ? (
-                  <p>{runDiagnostic.hint(item.diagnostic.hint)}</p>
-                ) : null}
-              </li>
+              <FailedScenario item={item} key={item.scenario.id} />
             ))}
           </ul>
         </>
       ) : null}
     </Notice>
+  );
+}
+
+/**
+ * One scenario that stopped on an error, in the same French-first wording as the
+ * run-level cause: its code drives the copy, and its own message and hint are
+ * the fallback for a code this build does not know yet.
+ */
+function FailedScenario({ item }: { item: ScenarioSummary }) {
+  const code = item.diagnostic?.code ?? "";
+  const cause = errorMessages[code] ?? item.error;
+  const advice = runAdvice[code] ?? item.diagnostic?.hint ?? undefined;
+  return (
+    <li>
+      <span className="font-medium">{item.scenario.title}</span>
+      {cause ? ` — ${cause}` : null}
+      {advice ? <p>{runDiagnostic.hint(advice)}</p> : null}
+    </li>
   );
 }
 

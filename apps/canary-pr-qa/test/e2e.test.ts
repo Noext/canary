@@ -1355,8 +1355,13 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     // next step, and the phase the run stopped in.
     expect(runScreen.text).toContain("Pourquoi ce test n’est pas allé au bout");
     expect(runScreen.text).toContain("PREVIEW_SHA_MISMATCH");
+    // The known code is explained from the French catalogue, not with the raw
+    // English message the server wrote into the report.
+    expect(runScreen.text).toContain(
+      "L’application de test ne présente pas le commit de cette PR"
+    );
     expect(runScreen.text).toContain("À faire :");
-    expect(runScreen.text).toContain("Phase atteinte :");
+    expect(runScreen.text).not.toContain("Preview SHA mismatch");
     await act("back-to-history", {
       type: "click",
       locator: { by: "css", value: "#runScreenBack" },

@@ -16,6 +16,34 @@ export type ViewName =
 
 /** Server error codes the interface explains in French. */
 export const errorMessages: Record<string, string | undefined> = {
+  CANARY_START_FAILED:
+    "Canary n’a pas pu ouvrir sa session Chromium : le moteur ou son navigateur n’était pas disponible.",
+  CONTEXT_INCOMPLETE:
+    "Canary n’a pas reçu assez de contexte sur la pull request pour préparer des scénarios sûrs.",
+  CONTRACT_BUDGET:
+    "Le scénario a épuisé son budget d’actions sans terminer ce qui était prévu.",
+  CONTRACT_INCOMPLETE:
+    "Le scénario s’est arrêté avant d’avoir joué toutes les étapes prévues.",
+  CONTRACT_VIOLATION:
+    "Le scénario a été interrompu : une étape ne respectait plus le plan validé.",
+  CRITICAL_COVERAGE_MISSING:
+    "Une partie importante des changements de la pull request n’a pas été couverte par les scénarios.",
+  EVIDENCE_VIDEO_MISSING:
+    "La vidéo de preuve n’a pas pu être produite pour ce scénario.",
+  GITHUB_NOT_CONNECTED: "Aucune App GitHub n’est connectée à cette instance.",
+  MODEL_CATALOG_EMPTY:
+    "Le fournisseur n’a renvoyé aucun modèle utilisable. Vérifiez son endpoint et sa clé.",
+  MODEL_JSON_INVALID:
+    "Le modèle a renvoyé une réponse que Canary n’a pas pu interpréter.",
+  MODEL_NOT_ALLOWED:
+    "Ce modèle n’est pas autorisé sur ce serveur. Choisissez-en un dans la liste.",
+  MODEL_OUTPUT_INCOMPLETE:
+    "La réponse du modèle était incomplète : le plan de test n’a pas pu être finalisé.",
+  MODEL_PROVIDER_DENIED:
+    "Le fournisseur IA a refusé la requête. Vérifiez la clé, le quota et l’autorisation Cloudflare de l’IP du VPS.",
+  PR_CHANGED:
+    "La pull request a changé pendant le test : ce résultat ne correspond plus au dernier commit.",
+  PR_CLOSED: "Cette pull request est fermée.",
   PREVIEW_SHA_MISMATCH:
     "L’application de test ne présente pas le commit de cette PR. Déployez cette version puis vérifiez à nouveau.",
   PREVIEW_NOT_FOUND:
@@ -28,6 +56,14 @@ export const errorMessages: Record<string, string | undefined> = {
     "Ce modèle n’est plus disponible chez votre fournisseur. Actualisez la liste et choisissez explicitement un modèle.",
   MODEL_CATALOG_INVALID:
     "Le fournisseur n’a pas renvoyé un catalogue de modèles valide. Vérifiez son endpoint et l’accès Cloudflare.",
+  RUN_BUDGET_EXCEEDED:
+    "Le test a dépassé le budget de tokens autorisé pour un run.",
+  RUN_DEADLINE: "Le test a dépassé le temps maximum autorisé pour un run.",
+  STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
+  WEBHOOK_RATE_LIMIT:
+    "Le budget horaire de lancements automatiques de Canary (global ou par dépôt) est atteint.",
+  WRITE_EVIDENCE_MISSING:
+    "Les preuves écrites attendues n’ont pas été trouvées pour ce scénario.",
   HTTP_403:
     "L’accès a été refusé. Vérifiez les permissions GitHub ou l’autorisation Cloudflare de l’IP du VPS.",
   HTTP_401:
@@ -508,6 +544,70 @@ export const runDiagnostic = {
   stoppedAt: (phase: string) => `Phase atteinte : ${phase}`,
   title: "Pourquoi ce test n’est pas allé au bout",
 } as const;
+
+/**
+ * The next step to take after a failed run, keyed by the server diagnostic code.
+ * A code this build does not know falls back to the server's own hint, which is
+ * English: the dashboard never hides the advice it was given.
+ */
+export const runAdvice: Record<string, string> = {
+  CANARY_START_FAILED:
+    "Vérifiez que le service browser tourne et dispose de Chromium (docker compose ps), puis relancez le test.",
+  CONTEXT_INCOMPLETE:
+    "Vérifiez que l’App GitHub voit bien les fichiers de cette PR (permissions, dépôt sélectionné), puis relancez.",
+  CONTRACT_BUDGET:
+    "Le plan était trop long pour le budget d’actions du scénario : réduisez le périmètre de la PR ou relancez pour obtenir un plan plus court.",
+  CONTRACT_INCOMPLETE:
+    "Relancez le test ; si l’arrêt se répète, ouvrez le rapport pour voir l’étape manquante et ajustez le scénario.",
+  CONTRACT_VIOLATION:
+    "Un scénario a voulu agir hors du plan validé : ouvrez le rapport, puis corrigez le plan ou les fichiers `.canary` du dépôt.",
+  CRITICAL_COVERAGE_MISSING:
+    "Élargissez le plan de test (fichiers `.canary`) pour couvrir ces changements, puis relancez.",
+  EVIDENCE_VIDEO_MISSING:
+    "Vérifiez l’espace disque et le volume `canary-sessions` du service browser, puis relancez le test.",
+  GITHUB_NOT_CONNECTED:
+    "Connectez votre App GitHub dans Réglages, puis relancez le test.",
+  GITHUB_REPOSITORY_DENIED:
+    "Sélectionnez ce dépôt dans Réglages → GitHub, puis relancez le test.",
+  HTTP_401:
+    "Vérifiez les credentials du service concerné sur le serveur (fournisseur IA ou GitHub), puis relancez.",
+  HTTP_403:
+    "Vérifiez les permissions GitHub et l’autorisation Cloudflare de l’IP de sortie du VPS, puis relancez.",
+  MODEL_CATALOG_EMPTY:
+    "Vérifiez `OPENAI_BASE_URL` et la clé du fournisseur, puis actualisez la liste des modèles dans Réglages.",
+  MODEL_CATALOG_INVALID:
+    "Vérifiez l’endpoint du fournisseur et son autorisation Cloudflare, puis actualisez la liste des modèles.",
+  MODEL_JSON_INVALID:
+    "Relancez le test ; si l’erreur revient, vérifiez que le modèle choisi gère le mode JSON.",
+  MODEL_NOT_ALLOWED:
+    "Choisissez un modèle autorisé par `QA_ALLOWED_MODELS` dans « Nouveau test ».",
+  MODEL_NOT_AVAILABLE:
+    "Actualisez la liste des modèles et choisissez-en un disponible dans « Nouveau test ».",
+  MODEL_OUTPUT_INCOMPLETE:
+    "Relancez le test ; si l’erreur revient, choisissez un modèle plus fiable ou augmentez `QA_RUN_MAX_TOKENS`.",
+  MODEL_PROVIDER_DENIED:
+    "Autorisez l’IP de sortie du VPS chez le fournisseur (Cloudflare), vérifiez la clé, puis relancez.",
+  PR_CHANGED: "Relancez un test sur le dernier commit de la pull request.",
+  PR_CLOSED: "Cette pull request est fermée : il n’y a rien à tester.",
+  PREVIEW_HOST_NOT_ALLOWED:
+    "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
+  PREVIEW_NOT_FOUND:
+    "Déployez le commit attendu, puis lancez un test depuis « Nouveau test ». Sans déploiement automatique, renseignez son URL dans le formulaire.",
+  PREVIEW_SHA_MISMATCH:
+    "Le déploiement ne publie pas ce commit. Attendez sa fin, ou vérifiez l’en-tête ou le chemin de version configuré, puis relancez un test.",
+  PREVIEW_UNAVAILABLE:
+    "Vérifiez que l’adresse de test répond publiquement (et que le service egress y accède), puis relancez un test.",
+  RUN_BUDGET_EXCEEDED:
+    "Augmentez `QA_RUN_MAX_TOKENS` après avoir vérifié les tarifs, ou réduisez le périmètre de la PR.",
+  RUN_DEADLINE:
+    "Vérifiez la phase atteinte dans le rapport, puis augmentez `QA_RUN_TIMEOUT_SECONDS` si le test mérite plus de temps.",
+  STALE_HEAD:
+    "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
+  WEBHOOK_RATE_LIMIT:
+    "Attendez la prochaine fenêtre du quota horaire, ou lancez ce test depuis « Nouveau test ».",
+  WRITE_EVIDENCE_MISSING:
+    "Vérifiez que le scénario écrit bien ses artefacts (fichiers `.canary`), puis relancez le test.",
+};
 
 /** The dedicated full-screen run report. */
 export const runScreen = {
