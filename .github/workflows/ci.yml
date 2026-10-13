@@ -19,17 +19,17 @@ jobs:
     # may assume `sudo`.
     runs-on: [self-hosted, linux, x64, canary-ci]
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
-        env:
-          POSTGRES_USER: canary
-          POSTGRES_PASSWORD: ci-disposable-password
-          POSTGRES_DB: canary
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U canary" --health-interval 5s --health-timeout 3s --health-retries 20
+    # This job used a `services:` PostgreSQL published on the fixed host port
+    # 5432. A host port is a host-wide resource, so a second `check` job could
+    # not start its own database, and the port was reachable from the network the
+    # runner shares. The database is now a container this job starts on a
+    # Docker-assigned free port bound to 127.0.0.1, and `QA_TEST_DATABASE_URL` is
+    # exported by that step. No step of this job may publish a fixed host port
+    # again; see the note in the README table on what the runner provides.
     env:
-      QA_TEST_DATABASE_URL: postgresql://canary:ci-disposable-password@127.0.0.1:5432/canary
+      # Scoped to a run and an attempt, so the teardown only ever addresses the
+      # container this job started and can never match a sibling job's.
+      POSTGRES_CONTAINER: canary-ci-postgres-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -50,6 +50,60 @@ jobs:
       - name: Lint and format check (ultracite/biome)
         run: pnpm lint
 
+      # `pnpm check` runs apps/canary-pr-qa/test/native-postgres.test.ts, which
+      # skips itself when `QA_TEST_DATABASE_URL` is unset: that step is the only
+      # consumer of this database in the job, so the container brackets it.
+      # Nothing needs the port before the container exists, so Docker picks a
+      # free one itself: the `freePort()` probe in
+      # apps/canary-pr-qa/test/container.test.ts exists because that test must
+      # know its port before the first `docker compose up`, which is not the case
+      # here, and a probe would leave a window between closing the socket and
+      # `--publish` actually binding it.
+      - name: Start a disposable PostgreSQL on a Docker-assigned free port
+        env:
+          POSTGRES_IMAGE: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        run: |
+          set -euo pipefail
+          password="ci-disposable-password"
+          # A rerun of this attempt, or a job of this same run killed before its
+          # teardown, must not turn into a name conflict. The name is scoped to a
+          # run and an attempt, so this can never reach a sibling job's container.
+          docker container rm --force --volumes "$POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+          # An empty host port asks Docker for a free one, and 127.0.0.1 keeps the
+          # database off the network the runner shares.
+          docker run --detach --name "$POSTGRES_CONTAINER" \
+            --publish 127.0.0.1::5432 \
+            --env POSTGRES_USER=canary \
+            --env POSTGRES_PASSWORD="$password" \
+            --env POSTGRES_DB=canary \
+            "$POSTGRES_IMAGE"
+          port="$(docker port "$POSTGRES_CONTAINER" 5432/tcp | head -n1 | sed 's/.*://')"
+          # `pg_isready` over the container's own TCP listener, not over its unix
+          # socket: the socket answers while the image is still running initdb,
+          # the TCP listener only once the real server serves connections. The
+          # `sleep` paces the probe, it is never the proof of readiness.
+          ready=no
+          for _ in $(seq 1 60); do
+            if docker exec "$POSTGRES_CONTAINER" pg_isready \
+                 --host 127.0.0.1 --port 5432 --username canary --dbname canary >/dev/null 2>&1; then
+              ready=yes
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != yes ]; then
+            docker logs --tail 50 "$POSTGRES_CONTAINER" || true
+            echo "::error::$POSTGRES_CONTAINER never accepted connections on 127.0.0.1:$port"
+            exit 1
+          fi
+          # The tests below connect to the published port rather than to the
+          # container's loopback, so one connect from the runner proves Docker
+          # really published it here instead of leaving that to fail inside a
+          # test much later.
+          timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port"
+          printf 'QA_TEST_DATABASE_URL=postgresql://canary:%s@127.0.0.1:%s/canary\n' "$password" "$port" >> "$GITHUB_ENV"
+          echo "$POSTGRES_CONTAINER ready on 127.0.0.1:$port"
+
       # On the self-hosted runner the container already provides Chromium's
       # system libraries (role `ghrunner`) and the `gh-runner` account has no
       # sudoers entry, so `--with-deps` would fail there. On a GitHub-hosted
@@ -64,6 +118,17 @@ jobs:
           fi
 
       - run: pnpm check
+
+      # The one step that consumed the database is over. `if: always()` is the
+      # point, and the container is addressed by its run-scoped name rather than
+      # by any filter, so a failing job cannot leak its database and cannot touch
+      # a sibling job's.
+      - name: Stop the disposable PostgreSQL
+        if: always()
+        run: |
+          if docker container inspect "$POSTGRES_CONTAINER" >/dev/null 2>&1; then
+            docker container rm --force --volumes "$POSTGRES_CONTAINER"
+          fi
 
       - name: Install embedded Canary runtime
         run: node apps/canary/dist/cli.js install
