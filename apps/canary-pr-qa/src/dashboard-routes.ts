@@ -77,7 +77,7 @@ export function apiKeysRoute(
     }
     if (url.pathname === API_KEYS_PREFIX) {
       if (req.method === "GET") {
-        json(res, 200, await keys.list());
+        json(res, 200, await keys.list(user));
         return true;
       }
       if (req.method === "POST") {

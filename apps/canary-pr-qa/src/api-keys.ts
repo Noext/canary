@@ -143,20 +143,31 @@ export class ApiKeys {
       token,
     };
   }
+  /**
+   * The keys this caller may hold. A key that reaches further than the caller
+   * is not the caller's to read, to copy or to revoke: `secret()` hands over a
+   * live capability, and copying a wider key would restore exactly the escalation
+   * `issuedScope` refuses at creation. A local administrator covers the whole
+   * selection, so it still sees every key.
+   */
+  private withinScope(user: Principal, repos: string[]) {
+    const mine = new Set(user.repos.map((repo) => repo.toLowerCase()));
+    return repos.every((repo) => mine.has(repo.toLowerCase()));
+  }
   /** Active keys first, then the newest of each group. */
-  async list(): Promise<ApiKeyRow[]> {
+  async list(user: Principal): Promise<ApiKeyRow[]> {
     const rows = (
       await this.pool.query<KeyRow>(
         "SELECT id,name,prefix,role,repos,created_at,last_used_at,revoked_at FROM qa_api_keys ORDER BY (revoked_at IS NULL) DESC, created_at DESC"
       )
     ).rows;
-    return rows.map(keyRow);
+    return rows.filter((row) => this.withinScope(user, row.repos)).map(keyRow);
   }
   async revoke(
     user: Principal,
     id: string
   ): Promise<{ id: string; revokedAt: string }> {
-    const row = await this.find(id);
+    const row = await this.find(user, id);
     const revoked = (
       await this.pool.query<{ revoked_at: Date }>(
         "UPDATE qa_api_keys SET revoked_at=now(),revoked_by=$2 WHERE id=$1 AND revoked_at IS NULL RETURNING revoked_at",
@@ -175,7 +186,7 @@ export class ApiKeys {
   }
   /** Decrypt the stored copy, so an administrator can hand the token over again. */
   async secret(user: Principal, id: string): Promise<{ token: string }> {
-    const row = await this.find(id);
+    const row = await this.find(user, id);
     const token = decrypt<string>(
       row.secret_cipher,
       this.config,
@@ -227,7 +238,7 @@ export class ApiKeys {
     };
   }
   /** A malformed id is not a capability: it matches nothing, like an absent one. */
-  private async find(id: string): Promise<KeyRow> {
+  private async find(user: Principal, id: string): Promise<KeyRow> {
     const row = UUID.test(id)
       ? (
           await this.pool.query<KeyRow>(
@@ -238,6 +249,15 @@ export class ApiKeys {
       : undefined;
     if (!row) {
       throw unknownKey();
+    }
+    // The scope is checked before the revocation state: an out-of-scope key is
+    // not this caller's business, whether it is live or already revoked.
+    if (!this.withinScope(user, row.repos)) {
+      throw new QaError(
+        "API_KEY_SCOPE",
+        "Cette clé couvre un périmètre plus large que le vôtre.",
+        "Demandez à un administrateur qui couvre tous les dépôts de l'instance."
+      );
     }
     if (row.revoked_at) {
       throw revokedKey();

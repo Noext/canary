@@ -522,8 +522,8 @@ Captures réelles des E2E, avec données fictives :
 | `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
 | `GET /dashboard/api-keys` | Clés API de l'instance, admin seulement : nom, préfixe, portée, dernière utilisation, jamais le jeton |
 | `POST /dashboard/api-keys` | `{name,role?}` ; `role` vaut `viewer` (défaut) ou `operator`, jamais `admin` ; rend le jeton une seule fois |
-| `POST /dashboard/api-keys/:id/secret` | Rend le jeton à recopier sans l'afficher ; 409 si la clé est révoquée |
-| `DELETE /dashboard/api-keys/:id` | Révocation immédiate ; la clé est refusée à la requête suivante |
+| `POST /dashboard/api-keys/:id/secret` | Rend le jeton à recopier sans l'afficher ; 409 si la clé est révoquée, 403 si sa portée dépasse celle de l'appelant |
+| `DELETE /dashboard/api-keys/:id` | Révocation immédiate ; la clé est refusée à la requête suivante ; 403 hors de la portée de l'appelant |
 | `POST /mcp` | Serveur MCP des agents IA, clé API en `Authorization: Bearer` uniquement |
 | `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
 | `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
@@ -604,6 +604,13 @@ l'identité qui l'émet : une clé ne dépasse jamais son émetteur. Un administ
 ou lancement — sur les autres dépôts de l'instance, alors qu'un compte local
 administrateur porte toujours la sélection entière. La liste et le journal
 d'audit (`api_key.created`) enregistrent cette portée.
+
+La gestion suit la même règle : `GET /dashboard/api-keys` ne montre à un
+administrateur restreint que les clés dont la portée est comprise dans la sienne,
+et copier le jeton ou révoquer une clé plus large répond `403`
+(`API_KEY_SCOPE`). Sans cela, recopier le jeton d'une clé voisine rendrait la
+capacité que la règle d'émission vient d'interdire — l'administrateur restreint
+ne peut donc administrer que ce qu'il aurait pu émettre.
 
 La même clé ouvre le serveur MCP du service :
 

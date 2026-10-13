@@ -21,7 +21,7 @@ afterEach(async () => {
  * A production server on the in-memory PostgreSQL, the administrator token, and
  * a `users.json` viewer to prove the key routes stay administrator-only.
  */
-async function apiKeysServer(options: { allowedRepos?: string } = {}) {
+async function apiKeysServer(options: { allowedRepos?: string[] } = {}) {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -54,9 +54,9 @@ async function apiKeysServer(options: { allowedRepos?: string } = {}) {
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
     QA_USERS_FILE: usersFile,
-    ...(options.allowedRepos
-      ? { GITHUB_ALLOWED_REPOS: options.allowedRepos }
-      : {}),
+    // `allowedRepos` is what the instance selection resolves to; the environment
+    // string was already parsed when the fixture loaded its config.
+    ...(options.allowedRepos ? { allowedRepos: options.allowedRepos } : {}),
   });
   cleanup.push(() => server.shutdown());
   return {
@@ -448,7 +448,7 @@ it("never lets a key outgrow the administrator who issued it", async () => {
   // only covers one. The key must inherit the smaller scope, or a scoped
   // administrator could hand an agent a write capability on another project.
   const { q, scopedAdmin, url } = await apiKeysServer({
-    allowedRepos: "fixture/app,fixture/other",
+    allowedRepos: ["fixture/app", "fixture/other"],
   });
   const created = await createKey(url, scopedAdmin, "operator");
   expect(created.repos).toEqual(["fixture/app"]);
@@ -512,4 +512,52 @@ it("gives an operator key the launch and nothing else the dashboard writes", asy
   }
   // Read-only work stays open to it.
   expect((await fetch(`${url}/runs/${id}`, { headers: key })).status).toBe(200);
+}, 30_000);
+
+it("hides and refuses a key that reaches beyond the caller's scope", async () => {
+  // The instance covers two repositories; the scoped administrator covers one.
+  // A wider key belongs to a broader administrator, so copying its secret — and
+  // with it a launch capability on the other project — must be out of reach.
+  const { admin, scopedAdmin, url } = await apiKeysServer({
+    allowedRepos: ["fixture/app", "fixture/other"],
+  });
+  const wider = await createKey(url, admin, "operator");
+  expect(wider.repos).toEqual(["fixture/app", "fixture/other"]);
+  const own = await createKey(url, scopedAdmin, "viewer");
+  const listed = await (
+    await fetch(`${url}/dashboard/api-keys`, { headers: scopedAdmin })
+  ).json();
+  expect((listed as ApiKeyRow[]).map((row) => row.id)).toEqual([own.id]);
+  expect(
+    (
+      await fetch(`${url}/dashboard/api-keys/${wider.id}/secret`, {
+        method: "POST",
+        headers: scopedAdmin,
+      })
+    ).status
+  ).toBe(403);
+  expect(
+    (
+      await fetch(`${url}/dashboard/api-keys/${wider.id}`, {
+        method: "DELETE",
+        headers: scopedAdmin,
+      })
+    ).status
+  ).toBe(403);
+  // Its own key stays fully manageable, and the wider one is untouched.
+  expect(
+    (
+      await fetch(`${url}/dashboard/api-keys/${own.id}/secret`, {
+        method: "POST",
+        headers: scopedAdmin,
+      })
+    ).status
+  ).toBe(200);
+  expect(
+    (
+      await (
+        await fetch(`${url}/dashboard/api-keys`, { headers: admin })
+      ).json()
+    ).length
+  ).toBe(2);
 }, 30_000);
