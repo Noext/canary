@@ -347,7 +347,6 @@ async function executePlan(
         root,
         config,
         canary,
-        model,
         (event) => progress.record(event),
         context.ref.repo
       )
@@ -382,7 +381,6 @@ async function executePlan(
           join(root, "_baseline"),
           config,
           canary,
-          model,
           (event) => progress.record(event),
           context.ref.repo
         )

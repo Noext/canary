@@ -11,7 +11,6 @@ import { doctor } from "../src/doctor.js";
 import { executeScenario } from "../src/executor.js";
 import { GitHubSetup } from "../src/github-setup.js";
 import { LocalAuth } from "../src/local-auth.js";
-import { Model } from "../src/model.js";
 import { startProductionServer } from "../src/production-server.js";
 import { Queue } from "../src/queue.js";
 import { saveReport } from "../src/report.js";
@@ -188,8 +187,7 @@ it("rejects static matching output as transition evidence in actual Chromium", a
     f.baseUrl,
     f.dataDir,
     f.config,
-    new Canary(f.config),
-    new Model(f.config)
+    new Canary(f.config)
   );
   expect(alternate.outcome, alternate.error).toBe("failed");
   expect(alternate.assertions[0]).toMatchObject({
@@ -209,8 +207,7 @@ it("checks persistence after real reload and fails a missing storage write", asy
       f.baseUrl,
       f.dataDir,
       f.config,
-      new Canary(f.config),
-      new Model(f.config)
+      new Canary(f.config)
     );
     expect(result.outcome, result.error).toBe(broken ? "failed" : "passed");
     expect(result.assertions[0]?.persisted).toBe(broken ? "" : "Welcome Ada");
@@ -284,7 +281,6 @@ it("installs trusted role cookies before navigation, with no secrets sent to the
       f.dataDir,
       config,
       new Canary(config),
-      new Model(config),
       undefined,
       "fixture/app"
     );
@@ -347,8 +343,7 @@ it("verifies real download and popup events through the immutable scenario contr
     f.baseUrl,
     f.dataDir,
     f.config,
-    new Canary(f.config),
-    new Model(f.config)
+    new Canary(f.config)
   );
   expect(result.outcome, result.error).toBe("passed");
   expect(result.assertions.map((a) => a.actual)).toEqual([
@@ -421,7 +416,6 @@ it("compares real screenshots with a trusted baseline and rejects a changed imag
     f.dataDir,
     config,
     new Canary(config),
-    new Model(config),
     undefined,
     "fixture/app"
   );
@@ -436,7 +430,6 @@ it("compares real screenshots with a trusted baseline and rejects a changed imag
     f.dataDir,
     config,
     new Canary(config),
-    new Model(config),
     undefined,
     "fixture/app"
   );

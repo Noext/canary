@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Canary, type Observation } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { executeScenario } from "../src/executor.js";
-import { Model, PLANNER_PROMPT } from "../src/model.js";
+import { PLANNER_PROMPT } from "../src/model.js";
 import { type Scenario, ScenarioSchema } from "../src/schema.js";
 
 /**
@@ -103,36 +103,12 @@ async function runBanner(
     }
   );
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
-  vi.spyOn(Model.prototype, "json").mockImplementation(((
-    _system: string,
-    payload: unknown
-  ) => {
-    const next = (
-      payload as {
-        nextRequiredStep?: Scenario["steps"][number] | null;
-      }
-    ).nextRequiredStep;
-    return Promise.resolve(
-      next
-        ? {
-            action: next.action,
-            reason: "jouer l'étape figée du contrat",
-            stepId: next.id,
-          }
-        : {
-            action: { type: "finish" },
-            reason: "toutes les assertions prévues ont été jouées",
-            stepId: "$finish",
-          }
-    );
-  }) as unknown as typeof Model.prototype.json);
   return executeScenario(
     bannerScenario(verification),
     preview,
     dataDir,
     config,
-    new Canary(config),
-    new Model(config)
+    new Canary(config)
   );
 }
 

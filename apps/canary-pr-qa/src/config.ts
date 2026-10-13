@@ -89,12 +89,6 @@ const envSchema = z.object({
     .min(128)
     .max(32_768)
     .default(8000),
-  QA_ACTION_MAX_TOKENS: z.coerce
-    .number()
-    .int()
-    .min(128)
-    .max(32_768)
-    .default(4096),
   QA_DOCTOR_MAX_TOKENS: z.coerce
     .number()
     .int()

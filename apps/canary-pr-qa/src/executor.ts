@@ -11,15 +11,8 @@ import {
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
-import { EXECUTOR_PROMPT, type Model } from "./model.js";
 import type { ProgressEvent } from "./progress.js";
-import {
-  type Assertion,
-  type Decision,
-  DecisionSchema,
-  type Scenario,
-  type ScenarioResult,
-} from "./schema.js";
+import type { Assertion, Scenario, ScenarioResult } from "./schema.js";
 import { compareVisual } from "./visual.js";
 
 function finish(result: ScenarioResult) {
@@ -41,9 +34,9 @@ function finish(result: ScenarioResult) {
   }
   result.outcome = "passed";
 }
-async function performDecision(
+async function performStep(
   sessionId: string,
-  decision: Decision,
+  step: Scenario["steps"][number],
   index: number,
   result: ScenarioResult,
   preview: string,
@@ -52,7 +45,7 @@ async function performDecision(
   config: Config,
   repo: string
 ) {
-  const { action } = decision;
+  const { action } = step;
   const assertion =
     action.type === "assert" ||
     action.type === "download" ||
@@ -98,11 +91,12 @@ async function performDecision(
   }
   result.steps.push({
     index,
-    ...decision,
+    stepId: step.id,
+    reason: step.description,
+    action,
     ok: true,
     observation: JSON.stringify(observation),
   });
-  return observation;
 }
 async function evaluateAssertion(
   sessionId: string,
@@ -180,25 +174,6 @@ async function evaluateAssertion(
     }
   }
 }
-function ensureContractDecision(
-  decision: Decision,
-  required: Scenario["steps"][number] | undefined
-) {
-  if (decision.action.type === "observe") {
-    return;
-  }
-  if (
-    !required ||
-    decision.stepId !== required.id ||
-    !isDeepStrictEqual(decision.action, required.action)
-  ) {
-    throw new QaError(
-      "CONTRACT_VIOLATION",
-      "AI action differs from the next required contract step",
-      "Targets, values, actions and ordering are immutable. A blocked scenario cannot be repaired by selecting unrelated matching text."
-    );
-  }
-}
 async function captureBaselines(
   sessionId: string,
   scenario: Scenario,
@@ -228,63 +203,25 @@ async function driveScenario(
   preview: string,
   config: Config,
   canary: Canary,
-  model: Model,
   record: (event: ProgressEvent) => Promise<void>,
   repo: string
 ) {
-  let observation: Observation = await canary.act(
+  await canary.act(
     sessionId,
     "open-preview",
     compileAction({ type: "goto", path: preview }, preview)
   );
   const baselines = new Map<string, unknown>();
-  for (let index = 1; index <= config.QA_MAX_STEPS; index++) {
+  // Le plan est un contrat figé : l'hôte joue chaque étape dans l'ordre, sans
+  // consulter le modèle. Une cible que l'IA choisirait autrement n'existe plus,
+  // et aucun jeton d'exécution n'est dépensé pour recopier le plan.
+  for (const [offset, step] of result.scenario.steps.entries()) {
+    const index = offset + 1;
     const started = Date.now();
-    await record({
-      phase: "execution",
-      scenarioId: result.scenario.id,
-      step: index,
-      action: "model-decision",
-    });
-    const required =
-      result.scenario.steps[result.contract?.completedSteps.length ?? 0];
-    const decision = await model.json(
-      EXECUTOR_PROMPT,
-      {
-        scenario: result.scenario,
-        nextRequiredStep: required ?? null,
-        preview,
-        observation,
-        completedAssertions: result.assertions,
-        history: result.steps.map((step) => ({
-          ...step,
-          observation: step.observation.slice(0, 1500),
-        })),
-        remainingSteps: config.QA_MAX_STEPS - index + 1,
-      },
-      DecisionSchema,
-      config.QA_ACTION_MAX_TOKENS
-    );
-    if (decision.action.type === "blocked") {
-      result.error = decision.action.explanation;
-      await record({
-        phase: "execution",
-        scenarioId: result.scenario.id,
-        step: index,
-        action: "blocked",
-        outcome: "blocked",
-      });
-      return;
-    }
-    if (decision.action.type === "finish") {
-      finish(result);
-      return;
-    }
-    ensureContractDecision(decision, required);
     await captureBaselines(
       sessionId,
       result.scenario,
-      decision.action.type === "observe" ? undefined : required?.id,
+      step.action.type === "observe" ? undefined : step.id,
       baselines,
       preview,
       canary
@@ -293,12 +230,12 @@ async function driveScenario(
       phase: "execution",
       scenarioId: result.scenario.id,
       step: index,
-      action: decision.action.type,
+      action: step.action.type,
     });
     try {
-      observation = await performDecision(
+      await performStep(
         sessionId,
-        decision,
+        step,
         index,
         result,
         preview,
@@ -307,14 +244,14 @@ async function driveScenario(
         config,
         repo
       );
-      if (decision.action.type !== "observe" && required) {
-        result.contract?.completedSteps.push(required.id);
+      if (step.action.type !== "observe") {
+        result.contract?.completedSteps.push(step.id);
       }
       await record({
         phase: "execution",
         scenarioId: result.scenario.id,
         step: index,
-        action: decision.action.type,
+        action: step.action.type,
         outcome: result.outcome === "failed" ? "failed" : "ok",
         durationMs: Date.now() - started,
       });
@@ -322,15 +259,17 @@ async function driveScenario(
       const diagnostic = diagnose(error, config);
       result.steps.push({
         index,
-        ...decision,
+        stepId: step.id,
+        action: step.action,
         ok: false,
+        reason: diagnostic.message,
         observation: diagnostic.message,
       });
       await record({
         phase: "execution",
         scenarioId: result.scenario.id,
         step: index,
-        action: decision.action.type,
+        action: step.action.type,
         outcome: "error",
         diagnostic,
       });
@@ -340,8 +279,7 @@ async function driveScenario(
       return;
     }
   }
-  result.error =
-    "Scenario exhausted its action budget without completing every assertion";
+  finish(result);
 }
 export async function executeScenario(
   scenario: Scenario,
@@ -349,7 +287,6 @@ export async function executeScenario(
   root: string,
   config: Config,
   canary: Canary,
-  model: Model,
   record: (event: ProgressEvent) => Promise<void> = async () =>
     Promise.resolve(),
   repo = ""
@@ -377,7 +314,6 @@ export async function executeScenario(
       preview,
       config,
       canary,
-      model,
       record,
       repo
     );
