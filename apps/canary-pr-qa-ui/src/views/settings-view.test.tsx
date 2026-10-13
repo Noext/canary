@@ -923,6 +923,14 @@ describe("SettingsView", () => {
     expect(byId(container, "previewHostList")).toHaveTextContent(
       "new.example.com:8443"
     );
+    await user.type(
+      byId(container, "previewHostInput"),
+      " *.Preview.Example.com "
+    );
+    await user.click(byId(container, "previewHostAdd"));
+    expect(byId(container, "previewHostList")).toHaveTextContent(
+      "*.preview.example.com"
+    );
     await user.type(byId(container, "previewHostInput"), "PREVIEW.EXAMPLE.COM");
     await user.click(byId(container, "previewHostAdd"));
     expect(byId(container, "previewHostsError")).toHaveTextContent(
@@ -936,7 +944,13 @@ describe("SettingsView", () => {
       )
     );
     expect(calls).toContainEqual({
-      body: { hosts: ["preview.example.com", "new.example.com:8443"] },
+      body: {
+        hosts: [
+          "preview.example.com",
+          "new.example.com:8443",
+          "*.preview.example.com",
+        ],
+      },
       method: "PUT",
       path: "/dashboard/preview-hosts",
     });
@@ -958,6 +972,9 @@ describe("SettingsView", () => {
     for (const value of [
       "https://evil.test/path",
       "evil.test/*",
+      "evil*.test",
+      "*",
+      "*.evil.test/",
       "user@evil.test",
     ]) {
       await user.clear(byId(container, "previewHostInput"));

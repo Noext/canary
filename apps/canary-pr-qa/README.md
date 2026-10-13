@@ -32,6 +32,9 @@ Générer **trois secrets différents** pour `QA_API_TOKEN`, `QA_DB_PASSWORD` et
 - `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` : votre vrai endpoint `/v1`.
 - `PREVIEW_ALLOWED_HOSTS` : tous les hôtes nécessaires à la preview, API, images,
   polices et WebSockets inclus, avec leurs ports lorsqu'ils ne sont pas standards.
+  Un joker `*.domaine` (ou `*.domaine:port`) couvre les sous-domaines de ce
+  domaine, jamais le domaine nu : pour tester `preview.example.com` et ses
+  sous-domaines, listez les deux.
   C'est la **liste initiale** : elle remplit le champ du dashboard et sert de
   repli tant qu'aucune liste n'a été enregistrée. L'administrateur ajoute ou
   retire ensuite des hôtes dans Réglages → « Hôtes autorisés par
@@ -92,7 +95,8 @@ fonctionnelle du modèle ni le succès d'une PR particulière.
 | `db` | File durable, leases, livraisons webhook, journal d'accès | Mot de passe DB ; volume `qa-db` |
 
 Le navigateur est sur un réseau Docker `internal`. Son trafic externe passe par
-le proxy, qui valide les hôtes exacts et les IP résolues avant la connexion : les
+le proxy, qui valide les entrées de l'allowlist (hôtes exacts ou joker
+`*.domaine`) et les IP résolues avant la connexion : les
 endpoints de métadonnées sont toujours refusés ; les IP privées sont refusées par
 défaut. La politique Playwright couvre également sous-ressources, redirections et
 WebSockets, et bloque les service workers. Pour des previews réellement privées,

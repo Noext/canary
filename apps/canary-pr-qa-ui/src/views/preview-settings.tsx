@@ -45,7 +45,10 @@ function sameHosts(left: string[], right: string[]): boolean {
 /**
  * Cheap guard for the input row only: the server owns the allowlist format and
  * its rejection is rendered as-is, so the two can never drift apart silently.
+ * A leading `*.` is the only wildcard the server accepts.
  */
+const HOST_INPUT = /^(?:\*\.)?[a-z0-9[](?:[a-z0-9.:[\]-]*)$/;
+
 function inputProblem(host: string, hosts: string[]): string | undefined {
   if (!host) {
     return settings.preview.hostsEmpty;
@@ -53,7 +56,7 @@ function inputProblem(host: string, hosts: string[]): string | undefined {
   if (hosts.includes(host)) {
     return settings.preview.hostsDuplicate;
   }
-  if (/[\s/@*]|:\/\//.test(host)) {
+  if (!HOST_INPUT.test(host)) {
     return settings.preview.hostsInvalid;
   }
   return;

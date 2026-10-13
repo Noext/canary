@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { browserEnvironment } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
+import { prepareScenario } from "../src/fixtures.js";
 import {
   applyPreviewHosts,
   normalizePreviewHosts,
@@ -15,7 +16,7 @@ import {
   watchPreviewPolicy,
 } from "../src/preview-hosts.js";
 import { startProductionServer } from "../src/production-server.js";
-import { fixture, pgliteQueue } from "./fixture.js";
+import { fixture, pgliteQueue, plan } from "./fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -23,6 +24,7 @@ afterEach(async () => {
     await close();
   }
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 async function sqlDatabase() {
   return await pgliteQueue(cleanup);
@@ -56,7 +58,6 @@ it("accepts only exact host or host:port entries", () => {
     "https://preview.example.com",
     "preview.example.com/path",
     "preview.example.com?x=1",
-    "*.example.com",
     "user@preview.example.com",
     ".preview.example.com",
     "preview.example.com:99999",
@@ -71,6 +72,108 @@ it("accepts only exact host or host:port entries", () => {
       Array.from({ length: 51 }, (_, index) => `preview-${index}.example.com`)
     )
   ).toThrow();
+});
+
+it("accepts a wildcard only as a whole leading label over a real domain", () => {
+  expect(
+    normalizePreviewHosts([
+      " *.Arpilabe.Pharmania.fr ",
+      "*.preview.example.com:8443",
+      "*.preview.example.com",
+    ])
+  ).toEqual([
+    "*.arpilabe.pharmania.fr",
+    "*.preview.example.com:8443",
+    "*.preview.example.com",
+  ]);
+  for (const invalid of [
+    // A bare TLD wildcard would open every registered domain under it.
+    "*.com",
+    "*.fr",
+    "*",
+    "*.",
+    "*example.com",
+    "preview.*.example.com",
+    "*.example.com/path",
+    "*.example.com:99999",
+    "*.user@example.com",
+    "*.[2001:db8::1]",
+  ]) {
+    expect(() => normalizePreviewHosts([invalid]), invalid).toThrow();
+  }
+});
+
+it("covers subdomains with a wildcard, never the bare domain or another port", () => {
+  const config = loadConfig({
+    PREVIEW_ALLOWED_HOSTS: "*.arpilabe.pharmania.fr,*.preview.test:8443",
+  });
+  expect(
+    validatePreviewUrl("https://pr-12.arpilabe.pharmania.fr", config).host
+  ).toBe("pr-12.arpilabe.pharmania.fr");
+  expect(
+    validatePreviewUrl("https://a.b.arpilabe.pharmania.fr", config).host
+  ).toBe("a.b.arpilabe.pharmania.fr");
+  expect(
+    validatePreviewUrl("https://pr-12.preview.test:8443", config).host
+  ).toBe("pr-12.preview.test:8443");
+  for (const denied of [
+    // The wildcard never covers its own apex, a look-alike suffix, or a port
+    // the entry did not authorize.
+    "https://arpilabe.pharmania.fr",
+    "https://notarpilabe.pharmania.fr",
+    "https://pr-12.arpilabe.pharmania.fr:8443",
+    "https://pr-12.preview.test",
+  ]) {
+    expect(() => validatePreviewUrl(denied, config), denied).toThrow();
+  }
+});
+
+it("lets a wildcard entry cover the trusted auth a preview subdomain presents", async () => {
+  const directory = await temporaryDirectory("canary-fixtures-");
+  const file = join(directory, "fixtures.json");
+  await writeFile(
+    file,
+    JSON.stringify({ "fixture/app": { roles: { member: "QA_ROLE_MEMBER" } } })
+  );
+  const config = loadConfig({
+    PREVIEW_ALLOWED_HOSTS: "*.arpilabe.pharmania.fr",
+    QA_FIXTURES_FILE: file,
+  });
+  const scenario = structuredClone(plan.scenarios[0]!);
+  scenario.preconditions = ["role:member"];
+  const auth = (cookieHost: string, origin: string) => ({
+    cookies: [
+      {
+        domain: cookieHost,
+        expires: -1,
+        httpOnly: true,
+        name: "session",
+        path: "/",
+        sameSite: "Lax",
+        secure: true,
+        value: "test-member-secret",
+      },
+    ],
+    origins: [{ localStorage: [], origin }],
+  });
+  const subdomain = "pr-12.arpilabe.pharmania.fr";
+  async function load(cookieHost: string, origin = `https://${subdomain}`) {
+    vi.stubEnv("QA_ROLE_MEMBER", JSON.stringify(auth(cookieHost, origin)));
+    return await prepareScenario(scenario, "fixture/app", config);
+  }
+  await expect(load(subdomain)).resolves.toHaveProperty("auth");
+  await expect(load("arpilabe.pharmania.fr")).rejects.toThrow(
+    "Auth cookie domain outside approved previews"
+  );
+  await expect(load("notarpilabe.pharmania.fr")).rejects.toThrow(
+    "Auth cookie domain outside approved previews"
+  );
+  await expect(
+    load(subdomain, "https://arpilabe.pharmania.fr")
+  ).rejects.toThrow("Auth localStorage origin outside approved previews");
+  await expect(load(subdomain, `https://${subdomain}:8443`)).rejects.toThrow(
+    "Auth localStorage origin outside approved previews"
+  );
 });
 
 it("applies a dashboard list over the environment default in every process", async () => {

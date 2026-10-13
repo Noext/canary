@@ -5,6 +5,7 @@ import { connect, isIP, type Socket } from "node:net";
 import tls from "node:tls";
 import { createLogger } from "@usecanary/logger";
 import {
+  hostAllowed,
   metadataAddress,
   privateAddress,
 } from "../../canary-daemon/src/network-policy.js";
@@ -27,7 +28,7 @@ async function target(input: string, config: Config) {
     !["http:", "https:", "ws:", "wss:"].includes(url.protocol) ||
     url.username ||
     url.password ||
-    !config.allowedHosts.includes(url.host.toLowerCase())
+    !hostAllowed(url.host.toLowerCase(), config.allowedHosts)
   ) {
     throw new Error("Egress host denied");
   }

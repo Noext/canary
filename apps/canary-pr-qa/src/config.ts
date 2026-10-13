@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { hostAllowed } from "../../canary-daemon/src/network-policy.js";
 import { QaError } from "./diagnostics.js";
 import { ModelIdSchema } from "./model-catalog.js";
 
@@ -271,11 +272,11 @@ export function validatePreviewUrl(input: string, config: Config): URL {
   ) {
     throw new Error("Invalid preview URL");
   }
-  if (!config.allowedHosts.includes(url.host.toLowerCase())) {
+  if (!hostAllowed(url.host.toLowerCase(), config.allowedHosts)) {
     throw new QaError(
       "PREVIEW_HOST_NOT_ALLOWED",
       `Preview host ${url.host} is not in PREVIEW_ALLOWED_HOSTS`,
-      "Add the exact hostname and port to PREVIEW_ALLOWED_HOSTS after verifying it is the intended test environment."
+      "Add the hostname and port to PREVIEW_ALLOWED_HOSTS - exact, or as *.domain to cover its subdomains - after verifying it is the intended test environment."
     );
   }
   return url;

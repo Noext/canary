@@ -140,7 +140,7 @@ export function buildProgram(): CommandType {
     .addHelpText("before", `${SESSION_START_LONG_ABOUT}\n`)
     .option(
       "--network-hosts <HOSTS>",
-      "Exact allowed network hosts for every browser request"
+      "Allowed network hosts (exact, or *.domain for subdomains) for every browser request"
     )
     .option(
       "--allow-private",

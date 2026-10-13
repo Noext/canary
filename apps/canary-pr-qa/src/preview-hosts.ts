@@ -34,7 +34,7 @@ export const PREVIEW_POLICY_FILE = "preview-hosts.json";
 export const MAX_PREVIEW_HOSTS = 50;
 export const MAX_HOST_LENGTH = 253;
 const HOST =
-  /^(?<name>\[[0-9a-f:.]+\]|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?::(?<port>\d{1,5}))?$/;
+  /^(?:\*\.)?(?<name>\[[0-9a-f:.]+\]|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?::(?<port>\d{1,5}))?$/;
 export const previewPolicySchema = z
   .object({
     hosts: z.array(z.string()),
@@ -52,13 +52,25 @@ function validHost(host: string) {
     return false;
   }
   const port = match.groups.port;
-  return port === undefined || (Number(port) >= 1 && Number(port) <= 65_535);
+  if (port !== undefined && !(Number(port) >= 1 && Number(port) <= 65_535)) {
+    return false;
+  }
+  if (!host.startsWith("*.")) {
+    return true;
+  }
+  // A wildcard restricts one whole label, so its suffix must be a domain the
+  // administrator can read at a glance: never an IP literal, and never a bare
+  // TLD - `*.com` would open every registered domain under it.
+  const suffix = match.groups.name ?? "";
+  return !suffix.startsWith("[") && suffix.includes(".");
 }
 
 /**
- * Normalizes and validates an administrator-supplied host list. Hosts are exact
- * `host` or `host:port` matches without scheme, path, credentials or wildcard:
- * the list decides which destinations the QA browser may reach.
+ * Normalizes and validates an administrator-supplied host list. Entries are
+ * exact `host` or `host:port` matches, or a `*.domain` / `*.domain:port`
+ * wildcard covering that domain's subdomains at any depth (never the bare
+ * domain, and only for the entry's port). Hosts carry no scheme, path or
+ * credentials: the list decides which destinations the QA browser may reach.
  */
 export function normalizePreviewHosts(value: unknown): string[] {
   const items = z
@@ -87,7 +99,7 @@ export function normalizePreviewHosts(value: unknown): string[] {
     throw new QaError(
       "PREVIEW_HOSTS_INVALID",
       `Hôte(s) invalide(s) : ${invalid.slice(0, 5).join(", ")}`,
-      "Format attendu : hôte ou hôte:port, sans schéma, chemin, identifiants ni joker."
+      "Format attendu : hôte, hôte:port ou *.domaine (sous-domaines), sans schéma, chemin ni identifiants."
     );
   }
   return hosts;
