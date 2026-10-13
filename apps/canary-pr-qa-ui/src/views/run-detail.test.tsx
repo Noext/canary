@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardError } from "@/api/client";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
-import { errorMessages, runAdvice, runScreen } from "@/i18n";
+import { runs as copy, errorMessages, runAdvice, runScreen } from "@/i18n";
 import { RunDetail } from "./run-detail";
 
 const apiMock = vi.fn();
@@ -124,6 +125,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(navigator, "clipboard");
 });
 
 describe("RunDetail", () => {
@@ -484,5 +486,48 @@ describe("RunDetail diagnostic", () => {
       expect(document.getElementById("runDiagnostic")).toBeNull();
       view.unmount();
     }
+  });
+
+  it("copies a JSON block exactly as the dashboard shows it", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    // Defined after `setup`: user-event installs its own clipboard stub.
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(job({ progress: { phase: "coverage" } }));
+    });
+    renderDetail();
+
+    await waitFor(() =>
+      expect(element("result").textContent).toContain('"outcome": "failed"')
+    );
+    const button = screen.getByRole("button", {
+      name: `${copy.copyAction} : ${copy.resultLabel}`,
+    });
+    await user.click(button);
+    // The paste is the block itself, not a re-serialisation that could drift.
+    expect(writeText).toHaveBeenCalledWith(element("result").textContent);
+    expect(button).toHaveTextContent(copy.copyDone);
+
+    // A refused copy says so instead of showing a success nobody can paste from.
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await user.click(button);
+    expect(button).toHaveTextContent(copy.copyFailed);
+  });
+
+  it("offers nothing to copy before the run result is loaded", async () => {
+    apiMock.mockImplementation((path: string) =>
+      Promise.resolve(path.endsWith("/result.json") ? undefined : job())
+    );
+    renderDetail();
+
+    await waitFor(() => expect(element("events")).toHaveTextContent("{"));
+    expect(element("copyResult")).toBeDisabled();
   });
 });
