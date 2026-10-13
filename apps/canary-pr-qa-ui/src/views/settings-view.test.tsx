@@ -304,6 +304,8 @@ const CONTROL_IDS = [
   "githubInstall",
   "githubRefresh",
   "githubRepos",
+  "githubRepoSearch",
+  "githubRepoCount",
   "githubRepoList",
   "githubSave",
   "githubDanger",
@@ -485,6 +487,107 @@ describe("SettingsView", () => {
       )
     );
     expect(byId(container, "repo-fixture-app")).toBeChecked();
+  });
+
+  it("narrows the repository list from the search field", async () => {
+    github = {
+      app: {
+        id: "95001",
+        origin: "https://qa.example.com",
+        slug: "canary-fixture-app",
+      },
+      lastDelivery: null,
+      legacyConfigured: false,
+      repositories: ["api", "scanner", "supabase"].map((name) => ({
+        account: "pharmacia",
+        auto_run: false,
+        enabled: false,
+        full_name: `pharmacia/${name}`,
+        installation_id: "1",
+        private: true,
+      })),
+      restriction: [],
+    };
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "githubRepoList")).toHaveTextContent(
+        "pharmacia/api"
+      )
+    );
+    expect(byId(container, "githubRepoCount")).toHaveTextContent(
+      "3 dépôt(s) affiché(s) sur 3"
+    );
+
+    await user.type(screen.getByLabelText(settings.github.searchLabel), "scan");
+
+    expect(byId(container, "githubRepoList")).toHaveTextContent(
+      "pharmacia/scanner"
+    );
+    expect(byId(container, "githubRepoList")).not.toHaveTextContent(
+      "pharmacia/api"
+    );
+    expect(byId(container, "githubRepoCount")).toHaveTextContent(
+      "1 dépôt(s) affiché(s) sur 3"
+    );
+
+    await user.clear(screen.getByLabelText(settings.github.searchLabel));
+    await user.type(
+      screen.getByLabelText(settings.github.searchLabel),
+      "absent"
+    );
+
+    expect(byId(container, "githubRepoList")).toHaveTextContent(
+      "Aucun dépôt ne correspond à « absent »"
+    );
+  });
+
+  it("saves a selection that the search hides", async () => {
+    github = {
+      app: {
+        id: "95001",
+        origin: "https://qa.example.com",
+        slug: "canary-fixture-app",
+      },
+      lastDelivery: null,
+      legacyConfigured: false,
+      repositories: ["api", "scanner"].map((name) => ({
+        account: "pharmacia",
+        auto_run: false,
+        enabled: true,
+        full_name: `pharmacia/${name}`,
+        installation_id: "1",
+        private: true,
+      })),
+      restriction: [],
+    };
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await waitFor(() =>
+      expect(byId(container, "githubRepoList")).toHaveTextContent(
+        "pharmacia/scanner"
+      )
+    );
+    await user.type(screen.getByLabelText(settings.github.searchLabel), "scan");
+    await user.click(byId(container, "githubSave"));
+
+    await waitFor(() =>
+      expect(byId(container, "githubMessage")).toHaveTextContent(
+        "Dépôts enregistrés"
+      )
+    );
+    // The filter is a view concern: the request still carries every
+    // repository the status reports, including the one it hides.
+    expect(calls).toContainEqual({
+      body: {
+        autoRepos: [],
+        repositories: ["pharmacia/api", "pharmacia/scanner"],
+      },
+      method: "PUT",
+      path: "/github/app/repositories",
+    });
   });
 
   it("sends the automatic-run opt-ins with the repository selection", async () => {
