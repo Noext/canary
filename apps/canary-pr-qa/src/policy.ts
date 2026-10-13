@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
-import type { Plan, Scenario } from "./schema.js";
+import type { Plan } from "./schema.js";
 
 export const PolicySchema = z
   .object({
@@ -35,42 +35,68 @@ export async function trustedPolicy(
     ? PolicySchema.parse({ version: 1 })
     : PolicySchema.parse(JSON.parse(value));
 }
-export interface ScenarioRefusal {
-  error: QaError;
-  scenario: Scenario;
+const DOCUMENTATION_DIRECTORY = /(^|\/)(docs|openspec)\//;
+const MARKDOWN_FILE = /\.mdx?$/i;
+const LICENSE_FILE = /(^|\/)LICEN[CS]E(\.[^/]*)?$/i;
+/**
+ * Documentation is never gated by `criticalPaths`: markdown prose, `docs/` and
+ * `openspec/` trees and licence texts change no runtime behavior, including
+ * when an application keeps them under a critical prefix such as `apps/`.
+ * `.github/` is deliberately not listed here - workflows are executable
+ * configuration, so a repository that wants them gated adds the prefix itself.
+ */
+export function isDocumentationPath(file: string): boolean {
+  return (
+    DOCUMENTATION_DIRECTORY.test(file) ||
+    MARKDOWN_FILE.test(file) ||
+    LICENSE_FILE.test(file)
+  );
+}
+function segmentMatches(pattern: string, segment: string): boolean {
+  if (!pattern.includes("*")) {
+    return pattern === segment;
+  }
+  const source = pattern
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]*");
+  return new RegExp(`^${source}$`).test(segment);
+}
+function segmentsMatch(pattern: string[], file: string[]): boolean {
+  const [head, ...rest] = pattern;
+  if (head === undefined) {
+    return file.length === 0;
+  }
+  if (head === "**") {
+    // `**` spans zero or more segments, including every one of them.
+    return Array.from({ length: file.length + 1 }, (_, index) => index).some(
+      (index) => segmentsMatch(rest, file.slice(index))
+    );
+  }
+  return (
+    file.length > 0 &&
+    segmentMatches(head, file[0] as string) &&
+    segmentsMatch(rest, file.slice(1))
+  );
 }
 /**
- * A scenario that interacts with the UI must prove the change the interaction
- * produces. The runner refuses the scenario alone: it is never executed and
- * never reported as passed, while the rest of the plan still runs.
+ * `approvedSkips[].path` accepts an exact path or a pattern: `*` matches
+ * inside one segment and `**` spans segments, so a wildcard app directory
+ * followed by a file name is honoured. A pattern made only of wildcard
+ * segments, or ending with a slash, would approve every skip and disable this
+ * gate, so it approves nothing and the run is refused exactly like an
+ * unapproved skip.
  */
-export function writeEvidenceRefusals(
-  plan: Plan,
-  policy: Policy
-): ScenarioRefusal[] {
-  if (!policy.requireWriteEvidence) {
-    return [];
+export function approvedSkipCovers(pattern: string, file: string): boolean {
+  const segments = pattern.split("/").filter(Boolean);
+  if (
+    segments.length === 0 ||
+    pattern.endsWith("/") ||
+    segments.every((segment) => segment === "*" || segment === "**")
+  ) {
+    return false;
   }
-  const refusals: ScenarioRefusal[] = [];
-  for (const scenario of plan.scenarios) {
-    const interacts = scenario.steps.some((step) =>
-      ["click", "fill", "press", "select", "check"].includes(step.action.type)
-    );
-    const provesChange = scenario.assertions.some((assertion) =>
-      ["transition", "persisted"].includes(assertion.verification)
-    );
-    if (interacts && !provesChange) {
-      refusals.push({
-        scenario,
-        error: new QaError(
-          "WRITE_EVIDENCE_MISSING",
-          `Scenario ${scenario.id} interacts with UI without changed/persisted state evidence`,
-          "Use a transition or persisted assertion on the actual changed output. Static visibility or matching decoy text cannot prove a write."
-        ),
-      });
-    }
-  }
-  return refusals;
+  return segmentsMatch(segments, file.split("/").filter(Boolean));
 }
 export function validateCoverage(
   plan: Plan,
@@ -81,6 +107,21 @@ export function validateCoverage(
   const covered = new Set<string>();
   validateProvider(policy, config);
   for (const scenario of plan.scenarios) {
+    if (
+      policy.requireWriteEvidence &&
+      scenario.steps.some((step) =>
+        ["click", "fill", "press", "select", "check"].includes(step.action.type)
+      ) &&
+      !scenario.assertions.some((assertion) =>
+        ["transition", "persisted"].includes(assertion.verification)
+      )
+    ) {
+      throw new QaError(
+        "WRITE_EVIDENCE_MISSING",
+        `Scenario ${scenario.id} interacts with UI without changed/persisted state evidence`,
+        "Use a transition or persisted assertion on the actual changed output. Static visibility or matching decoy text cannot prove a write."
+      );
+    }
     if (scenario.steps.length + 1 > config.QA_MAX_STEPS) {
       throw new QaError(
         "CONTRACT_BUDGET",
@@ -116,8 +157,11 @@ export function validateCoverage(
   }
   const denied = plan.skipped.filter(
     (skip) =>
+      !isDocumentationPath(skip.sourceFile) &&
       policy.criticalPaths.some((p) => skip.sourceFile.startsWith(p)) &&
-      !policy.approvedSkips.some((s) => s.path === skip.sourceFile)
+      !policy.approvedSkips.some((s) =>
+        approvedSkipCovers(s.path, skip.sourceFile)
+      )
   );
   if (denied.length) {
     throw new QaError(

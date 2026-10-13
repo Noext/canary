@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RunResult, ScenarioSummary } from "@/api/contracts";
 import { useError } from "@/app/errors";
+import { JsonBlock } from "@/components/json-block";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import { Card, CardHeader } from "@/components/ui/form";
@@ -344,6 +345,8 @@ export function RunDetail({
   const summary = result ? summaryFor(result) : resultFailure;
   const summaryTone = summaryToneFor(result);
   const commentUrl = githubCommentUrl(result?.publication?.commentUrl);
+  const progressJson = job ? JSON.stringify(progress ?? {}, null, 2) : "";
+  const resultJson = result ? JSON.stringify(result, null, 2) : "";
 
   // A purged run, or one belonging to another account, never produces a frame:
   // saying so beats a panel that waits forever for a stream that cannot open.
@@ -457,18 +460,18 @@ export function RunDetail({
         <p id="runIdentifier">
           {runId ? copy.runIdentifierPrefix + runId : ""}
         </p>
-        <pre
-          className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-well p-2 text-xs"
+        <JsonBlock
+          copyId="copyEvents"
           id="events"
-        >
-          {job ? JSON.stringify(progress ?? {}, null, 2) : ""}
-        </pre>
-        <pre
-          className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-well p-2 text-xs"
+          label={copy.eventsLabel}
+          text={progressJson}
+        />
+        <JsonBlock
+          copyId="copyResult"
           id="result"
-        >
-          {result ? JSON.stringify(result, null, 2) : ""}
-        </pre>
+          label={copy.resultLabel}
+          text={resultJson}
+        />
       </details>
     </Card>
   );
