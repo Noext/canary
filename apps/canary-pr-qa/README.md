@@ -385,6 +385,18 @@ ne peut être créé ensuite. Les tentatives de connexion sont limitées en SQL.
 Le cookie porte `Secure` lorsque l'origine configurée ou le proxy indique HTTPS ;
 conserver `X-Forwarded-Proto` sur votre reverse proxy.
 
+Après la première installation, un administrateur crée et gère les autres comptes
+dans le dashboard (section « Comptes utilisateurs ») : identifiant, mot de passe, rôle
+(viewer/operator/admin) et dépôts visibles. Cette gestion est une autorité d'instance :
+elle demande un administrateur dont l'accès couvre tous les dépôts activés. Une identité
+`users.json` ou OIDC limitée à un projet peut lire et lancer sur ce projet, mais nommer
+un compte local administrateur lui donnerait un accès plus large que le sien : l'API
+répond `403 ACCOUNT_SCOPE_REQUIRED`. Changer un mot de passe révoque
+immédiatement toutes les sessions de ce compte. Un dépôt hors de la sélection
+effective est refusé, tout comme un identifiant déjà utilisé. Le dernier
+administrateur ne peut être ni supprimé ni rétrogradé, et personne ne supprime
+son propre compte.
+
 Pour votre installation existante, mettre à jour la branche et l'image sans
 supprimer les volumes, puis lancer `setup-admin`. Aucun mot de passe par défaut
 ou compte public n'est créé. Les comptes techniques existants restent utilisables.
@@ -518,6 +530,10 @@ Captures réelles des E2E, avec données fictives :
 | `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
+| `GET /accounts` | Comptes humains : `{accounts:[{id,username,role,repos,createdAt}]}`, administrateur d'instance uniquement (403 `ACCOUNT_SCOPE_REQUIRED` si son accès ne couvre pas tous les dépôts) |
+| `POST /accounts` | `{username,password,role,repos}` ; 201 `{account}` |
+| `PATCH /accounts/:id` | `{role?,repos?,password?}` ; 200 `{account}`, mot de passe changé = sessions du compte révoquées |
+| `DELETE /accounts/:id` | 200 `{ok:true}` ; dernier admin et compte courant refusés |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
 | `GET /github/app`, `POST /github/app/manifest`, `POST /github/app/install`, `POST /github/app/refresh`, `PUT /github/app/repositories` | Onboarding GitHub App réservé à l'admin |
 | `DELETE /github/app` | Déconnecte l'App ; `{"deleteApp":true}` la supprime aussi sur GitHub |
@@ -543,6 +559,9 @@ nécessaire pour les consulter.
 
 Copier `config/users.example.json` vers `config/users.json`, configurer les vrais
 SHA-256 des tokens individuels et `QA_USERS_FILE=/app/config/users.json`.
+Ce fichier ne sert qu'aux identités techniques (token SHA-256 ou sujet OIDC) :
+il n'est pas modifiable depuis le dashboard, et les comptes humains se créent
+dans Réglages → Comptes utilisateurs, pas ici.
 Rôles : viewer (lecture), operator (lancement/annulation), admin (suppression,
 métriques). Chaque identité doit avoir une liste explicite de dépôts. Pour SSO,
 configurer issuer/audience/JWKS et mapper `oidcSubject` à l'identité locale ; les
@@ -607,8 +626,10 @@ suppressions sont audités en DB. Les sessions natives sont purgées après expo
 réussi afin de ne pas conserver leurs profils/cookies sans limite.
 
 La publication anonyme `ARTIFACT_PUBLIC` n'est pas utilisée par le serveur SQL.
-Les traces/HAR/console bruts sont refusés par défaut ; `QA_RAW_EVIDENCE=true`
-permet leur accès selon les droits du projet. Restreindre les données de test,
+Les rapports (principal et par scénario), vidéos et images sont accessibles à tout
+utilisateur autorisé sur le dépôt ; les dumps bruts (trace, HAR, console,
+`results.json`) sont refusés par défaut et `QA_RAW_EVIDENCE=true` permet leur accès
+selon les mêmes droits. Restreindre les données de test,
 utiliser `QA_ALLOWED_PROVIDER_HOSTS` et les identités par projet. La redaction
 masque les secrets configurés ; elle ne garantit pas l'anonymisation de tout ce
 qu'une application peut afficher dans une vidéo ou un screenshot.
@@ -651,9 +672,10 @@ terminer le job expiré. Il revérifie la propriété avant publication ; une an
 ferme le check du SHA épinglé avec `error`, jamais `success`. Une panne de publication
 rend le run `blocked` et conserve les preuves locales.
 
-Les rapports HTML natifs imbriqués, logs, HAR et ZIP sont des preuves brutes,
-interdites par défaut via HTTP. Le rapport principal et ses vidéos/images restent
-accessibles aux utilisateurs autorisés. N'activez `QA_RAW_EVIDENCE` qu'après avoir
+Les logs, HAR, ZIP et le manifeste `results.json` sont des preuves brutes,
+interdites par défaut via HTTP. Les rapports (principal et par scénario) et leurs
+vidéos/images restent accessibles aux utilisateurs autorisés. N'activez
+`QA_RAW_EVIDENCE` qu'après avoir
 vérifié les données de test. Les clés PEM, états d'authentification et configurations
 montées sont exclus du contexte Docker.
 

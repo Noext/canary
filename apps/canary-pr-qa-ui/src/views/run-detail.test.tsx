@@ -56,7 +56,7 @@ const result = {
   prUrl: "https://github.com/fixture/app/pull/1",
   scenarios: [
     {
-      artifacts: [],
+      artifacts: ["report.html", "trace.zip"],
       assertions: [
         { id: "greeting", passed: true },
         { actual: "Welcome Grace", id: "saved", passed: false },
@@ -145,6 +145,42 @@ describe("RunDetail", () => {
     expect(
       screen.getByText("Le nom est enregistré — Welcome Grace")
     ).toBeVisible();
+  });
+
+  it("links each scenario to its Canary session report", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(screen.getByText("1/2 assertions validées")).toBeVisible()
+    );
+    // The session report is the scenario's own page (steps, commands, console,
+    // network); an authorized user opens it without any raw-evidence setting.
+    expect(
+      screen.getByRole("link", { name: copy.sessionReport })
+    ).toHaveAttribute("href", `/artifacts/${RUN_ID}/welcome/report.html`);
+  });
+
+  it("offers no session report to a scenario that never produced one", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        // A planning refusal or a lost evidence finalization exports no report.
+        return Promise.resolve({
+          ...result,
+          scenarios: [{ ...result.scenarios[0], artifacts: [] }],
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(screen.getByText("1/2 assertions validées")).toBeVisible()
+    );
+    expect(screen.queryByRole("link", { name: copy.sessionReport })).toBeNull();
   });
 
   it("does not open an event stream for a finished run", async () => {

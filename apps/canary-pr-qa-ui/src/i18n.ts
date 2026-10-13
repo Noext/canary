@@ -19,6 +19,8 @@ export type ViewName =
 
 /** Server error codes the interface explains in French. */
 export const errorMessages: Record<string, string | undefined> = {
+  ACCOUNT_SCOPE_REQUIRED:
+    "La gestion des comptes demande un accès à tous les dépôts de l’instance : cette identité n’en couvre qu’une partie.",
   API_KEY_NAME: "Le nom d’une clé doit faire entre 1 et 60 caractères.",
   API_KEY_REVOKED:
     "Cette clé a été révoquée : son jeton ne peut plus être copié. Créez-en une nouvelle si vous en avez besoin.",
@@ -457,6 +459,7 @@ export const runs = {
       configured ? `coût estimé $${costUsd.toFixed(4)}` : "coût non configuré"
     }`,
   videoLabel: (title: string) => `Vidéo du scénario ${title}`,
+  sessionReport: "Rapport de session",
 } as const;
 
 export const automatic = {
@@ -661,6 +664,51 @@ export const runScreen = {
 } as const;
 
 export const settings = {
+  accounts: {
+    confirmDelete: (username: string) =>
+      `Supprimer le compte ${username} ? Ses sessions sont révoquées immédiatement, et cette action est irréversible.`,
+    createCta: "Créer le compte",
+    createTitle: "Créer un compte",
+    created: (username: string) => `Compte ${username} créé.`,
+    createdAt: (date: string) => `Créé le ${date}`,
+    delete: "Supprimer",
+    deleteProtected: "Suppression impossible : c'est votre propre compte.",
+    deleted: (username: string) => `Compte ${username} supprimé.`,
+    empty: "Aucun compte pour le moment.",
+    forbidden: "Seul un administrateur peut gérer les comptes utilisateurs.",
+    intro:
+      "Créez et gérez les comptes locaux qui accèdent à ce tableau de bord : rôle, dépôts visibles et mot de passe.",
+    lastAdmin:
+      "Ce compte est le dernier administrateur : il ne peut être ni supprimé ni rétrogradé.",
+    loading: "Chargement des comptes…",
+    passwordHelp:
+      "12 à 128 caractères. Changer un mot de passe déconnecte ce compte partout.",
+    passwordLabel: "Mot de passe",
+    passwordPlaceholder: "Au moins 12 caractères",
+    passwordReset: "Réinitialiser",
+    passwordResetAria: (username: string) =>
+      `Réinitialiser le mot de passe de ${username}`,
+    passwordResetDone: (username: string) =>
+      `Mot de passe de ${username} réinitialisé. Ses sessions sont révoquées.`,
+    reposFollowGithub: "Dépôts : suit la sélection GitHub",
+    reposHelp:
+      "Ces dépôts limitent les tests que ce compte peut voir. Un compte administrateur suit la sélection de dépôts GitHub : pour ce rôle, cette liste ne s'applique pas.",
+    reposList: (repos: string) => `Dépôts : ${repos}`,
+    reposNone: "Dépôts : aucun",
+    reposNoneAvailable:
+      "Aucun dépôt autorisé pour le moment : enregistrez vos dépôts dans Réglages → GitHub.",
+    reposUnknown:
+      "Liste des dépôts indisponible : rechargez la page avant de modifier le rôle d'un compte non administrateur.",
+    reposTitle: "Dépôts visibles",
+    roleLabel: "Rôle",
+    save: "Enregistrer",
+    saved: (username: string) => `Compte ${username} mis à jour.`,
+    title: "Comptes utilisateurs",
+    usernameHelp:
+      "3 à 64 caractères : lettres, chiffres, point, tiret ou @. L'identifiant est enregistré en minuscules.",
+    usernameLabel: "Identifiant",
+    usernamePlaceholder: "prenom.nom",
+  },
   ai: {
     catalog: (count: number) => `${count} modèles disponibles`,
     catalogAccessible: "Catalogue accessible",

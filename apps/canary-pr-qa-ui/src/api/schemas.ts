@@ -19,7 +19,25 @@ export const principalSchema = z.object({
 
 export const authStatusSchema = z.object({ initialized: z.boolean() });
 
-export const runStatusSchema = z.enum([
+/**
+ * One local account of the dashboard: the setup administrator, or an account an
+ * administrator created in Réglages → Comptes utilisateurs.
+ */
+const localAccountSchema = z.object({
+  createdAt: z.string(),
+  id: z.string(),
+  repos: z.array(z.string()),
+  role,
+  username: z.string(),
+});
+
+const accountsSchema = z.object({
+  accounts: z.array(localAccountSchema),
+});
+
+export const accountPayloadSchema = z.object({ account: localAccountSchema });
+
+const runStatusSchema = z.enum([
   "queued",
   "running",
   "completed",
@@ -28,7 +46,7 @@ export const runStatusSchema = z.enum([
   "interrupted",
 ]);
 
-export const outcomeSchema = z.enum([
+const outcomeSchema = z.enum([
   "passed",
   "failed",
   "blocked",
@@ -170,7 +188,7 @@ const planAssertionSchema = z.object({
 
 /**
 /** The server diagnostic of a failing phase: its code, message and next step. */
-export const diagnosticSchema = z
+const diagnosticSchema = z
   .object({
     code: z.string(),
     hint: z.string(),
@@ -183,7 +201,7 @@ export const diagnosticSchema = z
  * file written by an older build, so a scenario that carries only its code and
  * message stays valid: the run-level diagnostic above is the strict one.
  */
-export const scenarioDiagnosticSchema = z
+const scenarioDiagnosticSchema = z
   .object({
     code: z.string(),
     hint: z.string().nullish(),
@@ -251,6 +269,7 @@ export const errorPayloadSchema = z.object({
 
 /** Path-keyed schemas: adding an endpoint here makes `api()` typed for it. */
 export const responseSchemas = {
+  "/accounts": accountsSchema,
   "/auth/login": principalSchema,
   "/auth/setup": principalSchema,
   "/auth/status": authStatusSchema,

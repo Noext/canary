@@ -127,3 +127,26 @@ export interface ApiKeyRow {
 export interface ApiKeyCreated extends ApiKeyRow {
   token: string;
 }
+
+/**
+ * One local account of the dashboard: the setup administrator, or an account an
+ * administrator created in Réglages → Comptes utilisateurs. `id` is the raw uuid
+ * the accounts endpoints address, without the `local:` prefix a principal wears.
+ */
+export interface LocalAccount {
+  createdAt: string;
+  id: string;
+  repos: string[];
+  role: "admin" | "operator" | "viewer";
+  username: string;
+}
+
+/** `GET /accounts` answers every account the caller may administer. */
+export interface AccountsPayload {
+  accounts: LocalAccount[];
+}
+
+/** The created or updated account `POST /accounts` and `PATCH /accounts/:id` answer with. */
+export interface AccountPayload {
+  account: LocalAccount;
+}

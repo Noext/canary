@@ -189,12 +189,75 @@ it("serves authenticated dashboard, project-scoped API, idempotency and SSE on p
   expect((await q.get(run.id))?.status).toBe("cancelled");
   const captureRoot = join(f.dataDir, run.id, "scenario");
   await mkdir(captureRoot, { recursive: true });
+  await writeFile(join(f.dataDir, run.id, "report.html"), "fixture report");
+  await writeFile(join(captureRoot, "report.html"), "fixture session report");
+  await writeFile(join(captureRoot, "results.json"), "private results data");
+  await writeFile(join(captureRoot, "console.log"), "private console data");
   await writeFile(join(captureRoot, "trace.zip"), "private trace test data");
+  // A scenario id may itself read like raw evidence; only the file name decides.
+  const networkScenario = join(f.dataDir, run.id, "network-errors");
+  const consoleScenario = join(f.dataDir, run.id, "console-errors");
+  await mkdir(networkScenario, { recursive: true });
+  await mkdir(consoleScenario, { recursive: true });
+  await writeFile(join(networkScenario, "report.html"), "network report");
+  await writeFile(join(networkScenario, "network.har"), "private har data");
+  await writeFile(join(consoleScenario, "report.html"), "console report");
+  await writeFile(join(consoleScenario, "console.log"), "console dump");
   for (const path of [
     "scenario/trace.zip",
     "scenario/trace.%7aip",
     "scenario/trace%2ezip",
   ]) {
+    expect(
+      (
+        await fetch(`${url}/artifacts/${run.id}/${path}`, {
+          headers: mixedCaseHeaders,
+        })
+      ).status
+    ).toBe(403);
+  }
+  // The reports are this tool's own output: an authorized user reads the
+  // aggregate report and each scenario's Canary session report without the raw
+  // evidence policy, which only guards the dumps the reports link to.
+  expect(
+    await (
+      await fetch(`${url}/artifacts/${run.id}/report.html`, {
+        headers: mixedCaseHeaders,
+      })
+    ).text()
+  ).toBe("fixture report");
+  expect(
+    await (
+      await fetch(`${url}/artifacts/${run.id}/scenario/report.html`, {
+        headers: mixedCaseHeaders,
+      })
+    ).text()
+  ).toBe("fixture session report");
+  for (const [name, body] of [
+    ["network-errors", "network report"],
+    ["console-errors", "console report"],
+  ]) {
+    expect(
+      await (
+        await fetch(`${url}/artifacts/${run.id}/${name}/report.html`, {
+          headers: mixedCaseHeaders,
+        })
+      ).text()
+    ).toBe(body);
+  }
+  for (const path of [
+    "network-errors/network.har",
+    "console-errors/console.log",
+  ]) {
+    expect(
+      (
+        await fetch(`${url}/artifacts/${run.id}/${path}`, {
+          headers: mixedCaseHeaders,
+        })
+      ).status
+    ).toBe(403);
+  }
+  for (const path of ["scenario/results.json", "scenario/console.log"]) {
     expect(
       (
         await fetch(`${url}/artifacts/${run.id}/${path}`, {

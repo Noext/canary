@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,9 +11,14 @@ import {
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
+import { saveReport } from "../src/report.js";
 import { runScope } from "../src/run-scope.js";
 import { runQa } from "../src/runner.js";
-import { DecisionSchema, PlanSchema } from "../src/schema.js";
+import {
+  DecisionSchema,
+  PlanSchema,
+  type ScenarioResult,
+} from "../src/schema.js";
 import { BASE_SHA, fixture, PR_URL, plan, SHA } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
@@ -431,4 +437,39 @@ it("rejects publication when worker ownership cannot be verified, even after pas
     "error",
   ]);
   expect(f.outgoing.some((r) => r.path.endsWith("/comments"))).toBe(false);
+});
+
+it("links a session report only for the scenarios that produced one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "canary-report-test-"));
+  close.push(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+  const first = plan.scenarios[0]!;
+  const blocked = (
+    scenario: typeof first,
+    artifacts: string[]
+  ): ScenarioResult => ({
+    artifacts,
+    assertions: [],
+    outcome: "blocked",
+    scenario,
+    steps: [],
+  });
+  await saveReport(root, {
+    endedAt: "2026-01-01T00:05:00.000Z",
+    id: "11111111-1111-1111-1111-111111111111",
+    outcome: "blocked",
+    prUrl: PR_URL,
+    scenarios: [
+      blocked(first, ["report.html", "trace.zip"]),
+      // A planning refusal, a failed preparation or a lost evidence
+      // finalization exports no report: its link would always miss.
+      blocked({ ...first, id: "refused" }, []),
+    ],
+    sha: SHA,
+    startedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const html = await readFile(join(root, "report.html"), "utf8");
+  expect(html).toContain('href="welcome/report.html"');
+  expect(html).not.toContain('href="refused/report.html"');
 });

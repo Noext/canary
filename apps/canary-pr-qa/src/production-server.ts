@@ -16,6 +16,7 @@ import {
   signedArtifact,
   validArtifactSignature,
 } from "./access.js";
+import { accountRoutes } from "./account-routes.js";
 import { ApiKeys } from "./api-keys.js";
 import { authRoutes } from "./auth-routes.js";
 import {
@@ -92,6 +93,13 @@ export async function startProductionServer(config: Config) {
   const keys = new ApiKeys(queue.pool, config);
   const setup = new GitHubSetup(queue.pool, config);
   const setupRoute = githubSetupRoutes(setup, queue, rawBody, json);
+  const adminAccountsRoute = accountRoutes(
+    accounts,
+    queue,
+    rawBody,
+    json,
+    async () => (await setup.effective()).allowedRepos
+  );
   async function identify(req: IncomingMessage) {
     return principal(req, await setup.effective(), accounts, keys);
   }
@@ -259,11 +267,17 @@ export async function startProductionServer(config: Config) {
       }
       requireAccess(user, job.repo);
     }
+    // The aggregate report and each scenario's Canary session report are the
+    // dashboard's own output: an authorized user reads them without the raw
+    // evidence policy. That policy only keeps the heavy dumps the reports link
+    // to (trace, HAR, console log, results manifest) out of reach. It reads the
+    // file name, never the directories: a scenario may be named `network-errors`
+    // or `console-errors`, and its `report.html` is still a report.
+    const name = path.slice(path.lastIndexOf("/") + 1);
     if (
       config.QA_RAW_EVIDENCE !== "true" &&
-      /\.(har|zip|log)$|\/results\.json$|\/report\.html$|console|network/i.test(
-        path
-      )
+      (/\.(?:har|zip|log)$/i.test(name) ||
+        /^(?:results\.json$|console[.-]|network[.-])/i.test(name))
     ) {
       json(res, 403, { error: "Raw evidence disabled by data policy" });
       return;
@@ -531,6 +545,7 @@ export async function startProductionServer(config: Config) {
     if (
       (await dashboardRoute(req, res, url, user)) ||
       (await setupRoute(req, res, url, user)) ||
+      (await adminAccountsRoute(req, res, url, user)) ||
       (await modelRoute(req, res, url, user)) ||
       (await accountRoute(req, res, url, user)) ||
       (await mcpRoute(req, res, url, user))
@@ -645,6 +660,10 @@ function apiErrorStatus(diagnostic: { code: string; message: string }) {
   }
   if (diagnostic.code === "API_KEY_REVOKED") {
     return 409;
+  }
+  // A refusal of authority is a 403 by contract, not by message wording.
+  if (diagnostic.code === "ACCOUNT_SCOPE_REQUIRED") {
+    return 403;
   }
   if (["AUTH_RATE_LIMIT", "AUTH_BUSY"].includes(diagnostic.code)) {
     return 429;
