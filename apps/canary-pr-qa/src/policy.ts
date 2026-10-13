@@ -35,6 +35,69 @@ export async function trustedPolicy(
     ? PolicySchema.parse({ version: 1 })
     : PolicySchema.parse(JSON.parse(value));
 }
+const DOCUMENTATION_DIRECTORY = /(^|\/)(docs|openspec)\//;
+const MARKDOWN_FILE = /\.mdx?$/i;
+const LICENSE_FILE = /(^|\/)LICEN[CS]E(\.[^/]*)?$/i;
+/**
+ * Documentation is never gated by `criticalPaths`: markdown prose, `docs/` and
+ * `openspec/` trees and licence texts change no runtime behavior, including
+ * when an application keeps them under a critical prefix such as `apps/`.
+ * `.github/` is deliberately not listed here - workflows are executable
+ * configuration, so a repository that wants them gated adds the prefix itself.
+ */
+export function isDocumentationPath(file: string): boolean {
+  return (
+    DOCUMENTATION_DIRECTORY.test(file) ||
+    MARKDOWN_FILE.test(file) ||
+    LICENSE_FILE.test(file)
+  );
+}
+function segmentMatches(pattern: string, segment: string): boolean {
+  if (!pattern.includes("*")) {
+    return pattern === segment;
+  }
+  const source = pattern
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]*");
+  return new RegExp(`^${source}$`).test(segment);
+}
+function segmentsMatch(pattern: string[], file: string[]): boolean {
+  const [head, ...rest] = pattern;
+  if (head === undefined) {
+    return file.length === 0;
+  }
+  if (head === "**") {
+    // `**` spans zero or more segments, including every one of them.
+    return Array.from({ length: file.length + 1 }, (_, index) => index).some(
+      (index) => segmentsMatch(rest, file.slice(index))
+    );
+  }
+  return (
+    file.length > 0 &&
+    segmentMatches(head, file[0] as string) &&
+    segmentsMatch(rest, file.slice(1))
+  );
+}
+/**
+ * `approvedSkips[].path` accepts an exact path or a pattern: `*` matches
+ * inside one segment and `**` spans segments, so a wildcard app directory
+ * followed by a file name is honoured. A pattern made only of wildcard
+ * segments, or ending with a slash, would approve every skip and disable this
+ * gate, so it approves nothing and the run is refused exactly like an
+ * unapproved skip.
+ */
+export function approvedSkipCovers(pattern: string, file: string): boolean {
+  const segments = pattern.split("/").filter(Boolean);
+  if (
+    segments.length === 0 ||
+    pattern.endsWith("/") ||
+    segments.every((segment) => segment === "*" || segment === "**")
+  ) {
+    return false;
+  }
+  return segmentsMatch(segments, file.split("/").filter(Boolean));
+}
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -94,8 +157,11 @@ export function validateCoverage(
   }
   const denied = plan.skipped.filter(
     (skip) =>
+      !isDocumentationPath(skip.sourceFile) &&
       policy.criticalPaths.some((p) => skip.sourceFile.startsWith(p)) &&
-      !policy.approvedSkips.some((s) => s.path === skip.sourceFile)
+      !policy.approvedSkips.some((s) =>
+        approvedSkipCovers(s.path, skip.sourceFile)
+      )
   );
   if (denied.length) {
     throw new QaError(
