@@ -62,6 +62,8 @@ export const errorMessages: Record<string, string | undefined> = {
     "Ce test n’existe pas ou a été purgé. Vérifiez son identifiant dans l’historique.",
   RUN_DEADLINE: "Le test a dépassé le temps maximum autorisé pour un run.",
   STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
+  TRANSITION_NOT_OBSERVED:
+    "Transition non observée : la valeur relevée après l’étape est identique à celle d’avant, donc le changement attendu n’a pas eu lieu. Ce n’est pas une régression prouvée de l’élément.",
   WEBHOOK_RATE_LIMIT:
     "Le budget horaire de lancements automatiques de Canary (global ou par dépôt) est atteint.",
   WRITE_EVIDENCE_MISSING:
@@ -634,6 +636,8 @@ export const runAdvice: Record<string, string> = {
     "Vérifiez la phase atteinte dans le rapport, puis augmentez `QA_RUN_TIMEOUT_SECONDS` si le test mérite plus de temps.",
   STALE_HEAD:
     "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
+  TRANSITION_NOT_OBSERVED:
+    "Pour affirmer une invariance après une interaction (l’élément est toujours là après le clic X), utilisez `verification: state` avec `afterStep` = l’étape d’interaction ; réservez `transition` aux valeurs qui doivent changer.",
   WEBHOOK_RATE_LIMIT:
     "Attendez la prochaine fenêtre du quota horaire, ou lancez ce test depuis « Nouveau test ».",
   WRITE_EVIDENCE_MISSING:
