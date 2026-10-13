@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -10,8 +10,8 @@ import {
   vi,
 } from "vitest";
 import { DashboardError } from "@/api/client";
-import type { ApiKeyCreated, ApiKeyRow } from "@/api/contracts";
-import { errorMessages, settings } from "@/i18n";
+import type { ApiKeyCreated, ApiKeyRole, ApiKeyRow } from "@/api/contracts";
+import { errorMessages, roles, settings } from "@/i18n";
 import { formatDate } from "@/lib/format";
 import { ApiKeysSettings } from "./api-keys-settings";
 
@@ -44,6 +44,7 @@ const ACTIVE: ApiKeyRow = {
   prefix: "qa_live_7f3c",
   repos: ["fixture/app"],
   revokedAt: null,
+  role: "operator",
 };
 
 const REVOKED: ApiKeyRow = {
@@ -53,6 +54,7 @@ const REVOKED: ApiKeyRow = {
   name: "Ancienne intégration",
   prefix: "qa_live_9a1b",
   revokedAt: "2026-01-04T05:06:07.000Z",
+  role: "viewer",
 };
 
 /** What `POST /dashboard/api-keys/:id/secret` hands back for the active key. */
@@ -68,11 +70,19 @@ function byId(container: HTMLElement, id: string): HTMLElement {
   return element;
 }
 
-function bodyName(body: unknown): string {
-  if (typeof body !== "object" || body === null || !("name" in body)) {
+function bodyField(body: unknown, field: string): string {
+  if (typeof body !== "object" || body === null || !(field in body)) {
     return "";
   }
-  return String(body.name);
+  return String((body as Record<string, unknown>)[field]);
+}
+
+/**
+ * The scope the server would apply to the request: the body's own value, or the
+ * documented default when it carries none.
+ */
+function bodyRole(body: unknown): ApiKeyRole {
+  return bodyField(body, "role") === "operator" ? "operator" : "viewer";
 }
 
 function withClipboard(writeText: (text: string) => Promise<void>) {
@@ -134,8 +144,9 @@ beforeEach(() => {
         ...ACTIVE,
         id: "key-3",
         lastUsedAt: null,
-        name: bodyName(options?.body),
+        name: bodyField(options?.body, "name"),
         prefix: CREATED_TOKEN.slice(0, 12),
+        role: bodyRole(options?.body),
         token: CREATED_TOKEN,
       };
       rows = [created, ...rows];
@@ -270,7 +281,7 @@ describe("ApiKeysSettings", () => {
       expect(byId(container, "apiKeyToken")).toHaveTextContent(CREATED_TOKEN)
     );
     expect(calls).toContainEqual({
-      body: { name: "Agent de veille" },
+      body: { name: "Agent de veille", role: "viewer" },
       method: "POST",
       path: "/dashboard/api-keys",
     });
@@ -295,6 +306,102 @@ describe("ApiKeysSettings", () => {
         settings.apiKeys.receipt("Agent de veille")
       )
     );
+  });
+
+  it("creates a key in the operator scope when that scope is chosen", async () => {
+    const user = setupUser();
+    const { container } = render(<ApiKeysSettings />);
+    await waitFor(() => expect(byId(container, "apiKeyList")).toBeVisible());
+
+    const scope = byId(container, "apiKeyRole");
+    // Le formulaire n'offre jamais l'administration : une clé ne porte que
+    // l'une des deux portées que le serveur accepte.
+    expect(scope).toHaveValue("viewer");
+    expect(
+      within(scope).queryByRole("option", { name: roles.admin })
+    ).toBeNull();
+    expect(byId(container, "apiKeyRoleHelp")).toHaveTextContent(
+      settings.apiKeys.role.help.viewer
+    );
+
+    await user.selectOptions(scope, "operator");
+    // L'aide décrit la portée retenue, et elle seule.
+    expect(byId(container, "apiKeyRoleHelp")).toHaveTextContent(
+      settings.apiKeys.role.help.operator
+    );
+    await user.type(byId(container, "apiKeyName"), "Agent de lancement");
+    await user.click(byId(container, "apiKeyCreate"));
+
+    await waitFor(() =>
+      expect(byId(container, "apiKeyToken")).toHaveTextContent(CREATED_TOKEN)
+    );
+    expect(calls).toContainEqual({
+      body: { name: "Agent de lancement", role: "operator" },
+      method: "POST",
+      path: "/dashboard/api-keys",
+    });
+    // La liste affiche la portée que la création a annoncée.
+    expect(byId(container, "apiKeyRole-key-3")).toHaveTextContent(
+      settings.apiKeys.role.names.operator
+    );
+  });
+
+  it("creates a read-only key when the scope is left alone", async () => {
+    const user = setupUser();
+    const { container } = render(<ApiKeysSettings />);
+    await waitFor(() => expect(byId(container, "apiKeyList")).toBeVisible());
+
+    await user.type(byId(container, "apiKeyName"), "Lecteur");
+    await user.click(byId(container, "apiKeyCreate"));
+
+    await waitFor(() =>
+      expect(byId(container, "apiKeyToken")).toHaveTextContent(CREATED_TOKEN)
+    );
+    expect(calls).toContainEqual({
+      body: { name: "Lecteur", role: "viewer" },
+      method: "POST",
+      path: "/dashboard/api-keys",
+    });
+    expect(byId(container, "apiKeyRole-key-3")).toHaveTextContent(
+      settings.apiKeys.role.names.viewer
+    );
+  });
+
+  it("shows the scope of every key, revoked ones included", async () => {
+    const { container } = render(<ApiKeysSettings />);
+    await waitFor(() => expect(byId(container, "apiKeyList")).toBeVisible());
+
+    expect(byId(container, "apiKeyRole-key-1")).toHaveTextContent(
+      settings.apiKeys.role.names.operator
+    );
+    expect(byId(container, "apiKeyRole-key-2")).toHaveTextContent(
+      settings.apiKeys.role.names.viewer
+    );
+  });
+
+  it("shows the server refusal of an unknown scope and keeps the draft", async () => {
+    // Une portée refusée arrive par le message du serveur : la création ne laisse
+    // ni jeton ni ligne derrière elle, et la saisie reste à l'écran.
+    createFailure = new DashboardError("Portée inconnue.", {
+      code: "API_KEY_ROLE",
+      status: 400,
+    });
+    const user = setupUser();
+    const { container } = render(<ApiKeysSettings />);
+    await waitFor(() => expect(byId(container, "apiKeyList")).toBeVisible());
+
+    await user.selectOptions(byId(container, "apiKeyRole"), "operator");
+    await user.type(byId(container, "apiKeyName"), "Portée refusée");
+    await user.click(byId(container, "apiKeyCreate"));
+
+    await waitFor(() =>
+      expect(byId(container, "apiKeyError")).toHaveTextContent(
+        "Portée inconnue."
+      )
+    );
+    expect(byId(container, "apiKeyName")).toHaveValue("Portée refusée");
+    expect(byId(container, "apiKeyRole")).toHaveValue("operator");
+    expect(byId(container, "apiKeyTokenBlock")).not.toBeVisible();
   });
 
   it("copies a row token without ever showing it", async () => {

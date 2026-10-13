@@ -81,6 +81,13 @@ export interface SetupStatus {
 }
 
 /**
+ * Portée d'une clé API : `viewer` lit les tests et leurs rapports, `operator`
+ * peut en plus lancer un test. Aucune clé n'est `admin` : les réglages restent
+ * réservés aux comptes du dashboard.
+ */
+export type ApiKeyRole = "viewer" | "operator";
+
+/**
  * One API key as the dashboard lists it. The token itself is never part of a
  * row: the list only carries the prefix an operator can recognise.
  */
@@ -93,6 +100,11 @@ export interface ApiKeyRow {
   /** Repositories the key can read; the server decides what it may see. */
   repos: string[];
   revokedAt: string | null;
+  /**
+   * Lecture seule (`viewer`) ou droit de lancer un test (`operator`) : la
+   * portée est figée à la création, une clé ne l'élargit jamais toute seule.
+   */
+  role: ApiKeyRole;
 }
 
 /**

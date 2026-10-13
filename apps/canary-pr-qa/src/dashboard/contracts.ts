@@ -110,7 +110,9 @@ export interface Preflight {
 
 /**
  * One service key, without its secret: the clear token exists only in the answer
- * that created it. `repos` is what the key may read, never what it may write.
+ * that created it. `repos` is what the key may read, never what it may write;
+ * `role` is the portée it was issued with — an `operator` key also starts runs,
+ * and neither portée makes the key a dashboard operator.
  */
 export interface ApiKeyRow {
   createdAt: string;
@@ -121,6 +123,7 @@ export interface ApiKeyRow {
   prefix: string;
   repos: string[];
   revokedAt: string | null;
+  role: "operator" | "viewer";
 }
 
 /** A fresh key: the only answer that carries the token in clear. */

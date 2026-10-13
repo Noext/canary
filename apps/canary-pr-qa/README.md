@@ -520,10 +520,10 @@ Captures réelles des E2E, avec données fictives :
 | `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
 | `POST /session`, `DELETE /session` | Accès technique / déconnexion et révocation locale |
 | `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
-| `GET /dashboard/api-keys` | Clés API de l'instance, admin seulement : nom, préfixe, dernière utilisation, jamais le jeton |
-| `POST /dashboard/api-keys` | `{name}` ; crée une clé en lecture seule et rend le jeton une seule fois |
-| `POST /dashboard/api-keys/:id/secret` | Rend le jeton à recopier sans l'afficher ; 409 si la clé est révoquée |
-| `DELETE /dashboard/api-keys/:id` | Révocation immédiate ; la clé est refusée à la requête suivante |
+| `GET /dashboard/api-keys` | Clés API de l'instance, admin seulement : nom, préfixe, portée, dernière utilisation, jamais le jeton |
+| `POST /dashboard/api-keys` | `{name,role?}` ; `role` vaut `viewer` (défaut) ou `operator`, jamais `admin` ; rend le jeton une seule fois |
+| `POST /dashboard/api-keys/:id/secret` | Rend le jeton à recopier sans l'afficher ; 409 si la clé est révoquée, 403 si sa portée dépasse celle de l'appelant |
+| `DELETE /dashboard/api-keys/:id` | Révocation immédiate ; la clé est refusée à la requête suivante ; 403 hors de la portée de l'appelant |
 | `POST /mcp` | Serveur MCP des agents IA, clé API en `Authorization: Bearer` uniquement |
 | `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
 | `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
@@ -576,10 +576,43 @@ Le serveur en garde une empreinte et une copie chiffrée : le bouton Copier de l
 liste rend le jeton sans jamais l'afficher à l'écran. Révoquer une clé la refuse
 dès la requête suivante ; la ligne reste pour l'audit.
 
-Une clé est en lecture seule. Elle porte le rôle `viewer` et la liste de dépôts en
-vigueur au moment de sa création — la sélection GitHub des réglages,
-plafonnée par `GITHUB_ALLOWED_REPOS` — : elle lit l'historique, jamais ne lance,
-n'annule ou ne supprime un test. La même clé ouvre le serveur MCP du service :
+Une clé lit les dépôts en vigueur au moment de sa création — la sélection GitHub
+des réglages, plafonnée par `GITHUB_ALLOWED_REPOS`, et bornée par ceux de son
+émetteur. Sa **portée** décide de ce qu'elle peut faire de plus :
+
+| Portée | Ce qu'elle peut faire |
+| --- | --- |
+| `viewer` (défaut) | Lire les tests, les rapports et les tentatives automatiques ; rien lancer. |
+| `operator` | La lecture, plus lancer un test et payer son exécution. |
+
+Une clé n'est jamais un opérateur du dashboard, quelle que soit sa portée : le
+principal qu'elle présente reste un lecteur, plus la capacité de lancer. Annuler
+un test, réarmer une tentative automatique, partager un artefact signé, toucher
+aux réglages ou aux comptes lui sont donc refusés (`403`), et le resteront pour
+toute route d'écriture ajoutée plus tard — `GET /me` répond `viewer` pour une clé
+`operator`. Seul `POST /runs` et l'outil MCP `launch_run` honorent la capacité.
+
+Aucune clé n'est `admin` : les réglages, les comptes, la politique de previews et
+la suppression d'un test restent au dashboard. La portée est figée à la création —
+une clé vit avec le droit qu'elle a reçu, sans élargissement silencieux — et la
+liste des clés affiche celle de chacune. Un `POST /runs` avec une clé `viewer` est
+refusé (`403`, `LAUNCH_DENIED`).
+
+Les dépôts d'une clé sont l'intersection de la sélection en vigueur avec ceux de
+l'identité qui l'émet : une clé ne dépasse jamais son émetteur. Un administrateur
+`users.json`/OIDC limité à un projet ne peut donc pas déléguer un accès — lecture
+ou lancement — sur les autres dépôts de l'instance, alors qu'un compte local
+administrateur porte toujours la sélection entière. La liste et le journal
+d'audit (`api_key.created`) enregistrent cette portée.
+
+La gestion suit la même règle : `GET /dashboard/api-keys` ne montre à un
+administrateur restreint que les clés dont la portée est comprise dans la sienne,
+et copier le jeton ou révoquer une clé plus large répond `403`
+(`API_KEY_SCOPE`). Sans cela, recopier le jeton d'une clé voisine rendrait la
+capacité que la règle d'émission vient d'interdire — l'administrateur restreint
+ne peut donc administrer que ce qu'il aurait pu émettre.
+
+La même clé ouvre le serveur MCP du service :
 
 ```bash
 claude mcp add --transport http canary-qa https://votre-domaine-qa/mcp \
@@ -594,6 +627,21 @@ sondes). `get_run` rend le `result.json` du run — scénarios, assertions, vid�
 coût, publication — et reste soumis à la politique de preuves brutes : traces,
 HAR et journaux natifs restent refusés. Un run purgé par la rétention est annoncé
 comme tel, jamais inventé.
+
+`launch_run` (`{prUrl,previewUrl?,publish?,model?,idempotencyKey?}`) est le seul
+outil qui écrit, et il exige une clé `operator` : il passe par le même lanceur que
+`POST /runs`, donc les mêmes contrôles s'appliquent — GitHub connecté, dépôt dans
+le périmètre de la clé, modèle présent au catalogue, hôte de preview autorisé,
+espace disque suffisant. Le SHA testé est celui que GitHub rend pour la PR au
+moment de l'appel, jamais celui qu'un agent annonce ; le run créé appartient à la
+clé (`owner: key:<id>`). `idempotencyKey` est le jeton de reprise de l'agent : le
+même jeton sur le même SHA rend le test déjà créé au lieu d'en payer un second. Un
+refus — portée insuffisante, modèle hors catalogue, URL qui n'est pas une PR,
+dépôt hors périmètre — revient comme une réponse lisible de l'outil, pas comme une
+erreur de protocole, pour que l'agent sache quoi corriger. Un test lancé reste
+facturé : le budget horaire des lancements automatiques
+(`QA_WEBHOOK_MAX_RUNS_PER_HOUR`) ne couvre pas ce chemin, qui suit les droits du
+dashboard.
 
 Le transport répond en JSON, sans connexion longue : aucun réglage de mise en
 tampon SSE n'est nécessaire côté reverse proxy.

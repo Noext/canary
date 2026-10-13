@@ -6,7 +6,7 @@ import type { ApiKeyCreated, ApiKeyRow } from "../src/dashboard/contracts.js";
 import { GitHubSetup } from "../src/github-setup.js";
 import { LocalAuth } from "../src/local-auth.js";
 import { startProductionServer } from "../src/production-server.js";
-import { fixture, PR_URL, pgliteQueue } from "./fixture.js";
+import { fixture, PR_URL, pgliteQueue, SHA } from "./fixture.js";
 import { githubSetupFixture } from "./github-setup-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -21,11 +21,14 @@ afterEach(async () => {
  * A production server on the in-memory PostgreSQL, the administrator token, and
  * a `users.json` viewer to prove the key routes stay administrator-only.
  */
-async function apiKeysServer() {
+async function apiKeysServer(options: { allowedRepos?: string[] } = {}) {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
   const viewerToken = "viewer-token-0123456789-abcdef";
+  // A `users.json` administrator limited to one project: it proves the scope a
+  // new key inherits, which a local administrator (always instance-wide) cannot.
+  const scopedAdminToken = "scoped-admin-token-0123456789";
   const usersFile = join(f.dataDir, "users.json");
   await writeFile(
     usersFile,
@@ -36,6 +39,14 @@ async function apiKeysServer() {
         repos: ["fixture/app"],
         tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
       },
+      {
+        id: "scoped-admin",
+        role: "admin",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256")
+          .update(scopedAdminToken)
+          .digest("hex"),
+      },
     ])
   );
   const server = await startProductionServer({
@@ -43,6 +54,9 @@ async function apiKeysServer() {
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
     QA_USERS_FILE: usersFile,
+    // `allowedRepos` is what the instance selection resolves to; the environment
+    // string was already parsed when the fixture loaded its config.
+    ...(options.allowedRepos ? { allowedRepos: options.allowedRepos } : {}),
   });
   cleanup.push(() => server.shutdown());
   return {
@@ -50,14 +64,19 @@ async function apiKeysServer() {
     url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     admin: { Authorization: `Bearer ${f.config.QA_API_TOKEN}` },
     viewer: { Authorization: `Bearer ${viewerToken}` },
+    scopedAdmin: { Authorization: `Bearer ${scopedAdminToken}` },
   };
 }
 
-async function createKey(url: string, admin: Record<string, string>) {
+async function createKey(
+  url: string,
+  admin: Record<string, string>,
+  role: "operator" | "viewer" = "viewer"
+) {
   const res = await fetch(`${url}/dashboard/api-keys`, {
     method: "POST",
     headers: admin,
-    body: JSON.stringify({ name: "agent" }),
+    body: JSON.stringify({ name: "agent", role }),
   });
   expect(res.status).toBe(201);
   return (await res.json()) as ApiKeyCreated;
@@ -85,6 +104,7 @@ it("issues a key once, keeps only a hash and an encrypted copy, and never shows 
     name: "agent",
     repos: ["fixture/app"],
     revokedAt: null,
+    role: "viewer",
   });
   expect(created.id).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -123,6 +143,7 @@ it("issues a key once, keeps only a hash and an encrypted copy, and never shows 
       prefix: created.prefix,
       repos: ["fixture/app"],
       revokedAt: null,
+      role: "viewer",
     },
   ]);
   expect(JSON.stringify(rows)).not.toContain(created.token);
@@ -370,4 +391,173 @@ it("refuses a non-administrator on every key route", async () => {
       })
     ).status
   ).toBe(200);
+}, 30_000);
+
+it("issues an operator key that starts a run, and keeps the read-only default", async () => {
+  const { url, admin } = await apiKeysServer();
+  const operator = await createKey(url, admin, "operator");
+  expect(operator.role).toBe("operator");
+  const launched = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${operator.token}` },
+    body: JSON.stringify({ prUrl: PR_URL }),
+  });
+  expect(launched.status).toBe(202);
+  const accepted = (await launched.json()) as { id: string };
+  expect(accepted.id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+  );
+  // The run is owned by the key that asked for it, so the audit trail names an
+  // agent and not the administrator who issued the key.
+  const listed = await fetch(`${url}/runs`, {
+    headers: { Authorization: `Bearer ${operator.token}` },
+  });
+  expect(await listed.json()).toMatchObject([
+    { id: accepted.id, owner: `key:${operator.id}`, repo: "fixture/app" },
+  ]);
+}, 30_000);
+
+it("refuses an unknown key scope and defaults an omitted one to read-only", async () => {
+  const { url, admin } = await apiKeysServer();
+  const refused = await fetch(`${url}/dashboard/api-keys`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ name: "agent", role: "admin" }),
+  });
+  expect(refused.status).toBe(400);
+  expect(await refused.json()).toMatchObject({ code: "API_KEY_NAME" });
+  const omitted = await fetch(`${url}/dashboard/api-keys`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ name: "agent" }),
+  });
+  expect(omitted.status).toBe(201);
+  expect((await omitted.json()) as ApiKeyCreated).toMatchObject({
+    role: "viewer",
+  });
+  // A key never grants the dashboard's administrator role: an escalation would
+  // let an agent manage keys, accounts and the preview policy.
+  const rows = (await (
+    await fetch(`${url}/dashboard/api-keys`, { headers: admin })
+  ).json()) as ApiKeyRow[];
+  expect(rows.map((row) => row.role)).toEqual(["viewer"]);
+}, 30_000);
+
+it("never lets a key outgrow the administrator who issued it", async () => {
+  // The instance covers two repositories; the issuing `users.json` administrator
+  // only covers one. The key must inherit the smaller scope, or a scoped
+  // administrator could hand an agent a write capability on another project.
+  const { q, scopedAdmin, url } = await apiKeysServer({
+    allowedRepos: ["fixture/app", "fixture/other"],
+  });
+  const created = await createKey(url, scopedAdmin, "operator");
+  expect(created.repos).toEqual(["fixture/app"]);
+  const key = { Authorization: `Bearer ${created.token}` };
+  const outOfScope = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: key,
+    body: JSON.stringify({ prUrl: "https://github.com/fixture/other/pull/1" }),
+  });
+  expect(outOfScope.status).toBe(403);
+  const launched = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: key,
+    body: JSON.stringify({ prUrl: PR_URL }),
+  });
+  expect(launched.status).toBe(202);
+  // The narrowing is not a silent edit: the audit says what the key received.
+  const audit = (
+    await q.pool.query<{ details: { repos?: string[]; role?: string } }>(
+      "SELECT details FROM qa_audit WHERE action='api_key.created'"
+    )
+  ).rows;
+  expect(audit.map((row) => [row.details.role, row.details.repos])).toEqual([
+    ["operator", ["fixture/app"]],
+  ]);
+}, 30_000);
+
+it("gives an operator key the launch and nothing else the dashboard writes", async () => {
+  const { q, url, admin } = await apiKeysServer();
+  const operator = await createKey(url, admin, "operator");
+  const key = { Authorization: `Bearer ${operator.token}` };
+  // The key is not a dashboard operator: `GET /me` reports it as a reader, and
+  // every write route of the dashboard refuses it by role.
+  expect(
+    await (await fetch(`${url}/me`, { headers: key })).json()
+  ).toMatchObject({ id: `key:${operator.id}`, role: "viewer" });
+  const launched = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: key,
+    body: JSON.stringify({ prUrl: PR_URL }),
+  });
+  expect(launched.status).toBe(202);
+  const { id } = (await launched.json()) as { id: string };
+  await q.acceptDelivery(
+    "delivery-1",
+    "pull_request",
+    { number: 7, prUrl: PR_URL, repo: "fixture/app", sha: SHA },
+    1800
+  );
+  const refused = [
+    { method: "POST", path: `/runs/${id}/cancel` },
+    { method: "POST", path: `/runs/${id}/links` },
+    { method: "POST", path: "/dashboard/automatic/delivery-1/retry" },
+  ];
+  for (const route of refused) {
+    const res = await fetch(`${url}${route.path}`, {
+      method: route.method,
+      headers: key,
+    });
+    expect([route.path, res.status]).toEqual([route.path, 403]);
+  }
+  // Read-only work stays open to it.
+  expect((await fetch(`${url}/runs/${id}`, { headers: key })).status).toBe(200);
+}, 30_000);
+
+it("hides and refuses a key that reaches beyond the caller's scope", async () => {
+  // The instance covers two repositories; the scoped administrator covers one.
+  // A wider key belongs to a broader administrator, so copying its secret — and
+  // with it a launch capability on the other project — must be out of reach.
+  const { admin, scopedAdmin, url } = await apiKeysServer({
+    allowedRepos: ["fixture/app", "fixture/other"],
+  });
+  const wider = await createKey(url, admin, "operator");
+  expect(wider.repos).toEqual(["fixture/app", "fixture/other"]);
+  const own = await createKey(url, scopedAdmin, "viewer");
+  const listed = await (
+    await fetch(`${url}/dashboard/api-keys`, { headers: scopedAdmin })
+  ).json();
+  expect((listed as ApiKeyRow[]).map((row) => row.id)).toEqual([own.id]);
+  expect(
+    (
+      await fetch(`${url}/dashboard/api-keys/${wider.id}/secret`, {
+        method: "POST",
+        headers: scopedAdmin,
+      })
+    ).status
+  ).toBe(403);
+  expect(
+    (
+      await fetch(`${url}/dashboard/api-keys/${wider.id}`, {
+        method: "DELETE",
+        headers: scopedAdmin,
+      })
+    ).status
+  ).toBe(403);
+  // Its own key stays fully manageable, and the wider one is untouched.
+  expect(
+    (
+      await fetch(`${url}/dashboard/api-keys/${own.id}/secret`, {
+        method: "POST",
+        headers: scopedAdmin,
+      })
+    ).status
+  ).toBe(200);
+  expect(
+    (
+      await (
+        await fetch(`${url}/dashboard/api-keys`, { headers: admin })
+      ).json()
+    ).length
+  ).toBe(2);
 }, 30_000);

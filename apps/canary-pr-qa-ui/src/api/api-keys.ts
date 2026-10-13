@@ -14,6 +14,8 @@ const apiKeyRowSchema = z.object({
   prefix: z.string(),
   repos: z.array(z.string()),
   revokedAt: z.string().nullable(),
+  // Une clé n'est jamais administrateur : le serveur refuse toute autre portée.
+  role: z.enum(["viewer", "operator"]),
 });
 
 export const apiKeyListSchema = z.array(apiKeyRowSchema);

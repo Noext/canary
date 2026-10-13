@@ -13,14 +13,12 @@ export const apiKeys = {
   createTitle: "Créer une clé",
   empty: "Aucune clé pour le moment. Créez-en une pour connecter un agent.",
   intro:
-    "Une clé API ouvre un accès en lecture à vos tests : elle sert aux agents et aux outils externes connectés au serveur MCP.",
+    "Une clé API ouvre le serveur MCP aux agents et aux outils externes : elle y lit vos tests, et peut en lancer un si sa portée le permet.",
   lastUsed: (date: string) => `Dernière utilisation : ${date}`,
   lastUsedNever: "Jamais utilisée",
   listTitle: "Clés existantes",
   nameLabel: "Nom de la clé",
   namePlaceholder: "Agent de support, Claude Desktop…",
-  readOnly:
-    "Une clé reste en lecture seule : elle ne peut ni lancer un test ni modifier vos réglages.",
   receipt: (name: string) =>
     `Jeton de « ${name} » copié dans le presse-papiers.`,
   repos: (list: string) => `Dépôts : ${list}`,
@@ -31,6 +29,21 @@ export const apiKeys = {
   revokeDone: (name: string) =>
     `Clé « ${name} » révoquée. Son jeton ne peut plus être copié.`,
   revoking: "Révocation…",
+  role: {
+    help: {
+      operator:
+        "En plus de la lecture, cette clé peut lancer un test — sans pouvoir l'annuler ni toucher à vos réglages.",
+      viewer:
+        "Cette clé lit vos tests, leurs rapports et les tentatives automatiques, sans rien lancer.",
+    },
+    label: "Portée de la clé",
+    names: {
+      operator: "Peut lancer un test",
+      viewer: "Lecture seule",
+    },
+  },
+  scope:
+    "Chaque clé garde la portée choisie à sa création : lecture seule, ou droit de lancer un test. Aucune clé ne modifie vos réglages.",
   title: "Clés API",
   tokenTitle: "Copiez ce jeton maintenant",
   tokenWarning:

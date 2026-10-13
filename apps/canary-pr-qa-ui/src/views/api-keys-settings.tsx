@@ -5,7 +5,7 @@ import {
   apiKeySecretSchema,
 } from "@/api/api-keys";
 import { api, errorText } from "@/api/client";
-import type { ApiKeyCreated, ApiKeyRow } from "@/api/contracts";
+import type { ApiKeyCreated, ApiKeyRole, ApiKeyRow } from "@/api/contracts";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import {
@@ -13,13 +13,21 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  FieldHelp,
   Input,
   Label,
+  Select,
 } from "@/components/ui/form";
 import { common, settings } from "@/i18n";
 import { copyText } from "@/lib/clipboard";
 import { formatDate } from "@/lib/format";
 import { createStore, type Readable, type Store, useStore } from "@/lib/store";
+
+/**
+ * The scopes a key can be created with, default first. No `admin`: the server
+ * refuses it, and the settings of the instance stay out of every key.
+ */
+const apiKeyRoleOptions: ApiKeyRole[] = ["viewer", "operator"];
 
 interface ApiKeysState {
   /** The key just created: its clear token is shown here and nowhere else. */
@@ -36,7 +44,7 @@ interface ApiKeysState {
 interface ApiKeysStore extends Readable<ApiKeysState> {
   copy(key: ApiKeyRow): Promise<void>;
   /** Resolves `true` once the key exists, so a refused name keeps its draft. */
-  create(name: string): Promise<boolean>;
+  create(name: string, role: ApiKeyRole): Promise<boolean>;
   revoke(key: ApiKeyRow): Promise<void>;
 }
 
@@ -62,7 +70,8 @@ async function loadKeys(store: Store<ApiKeysState>) {
 
 async function createKey(
   store: Store<ApiKeysState>,
-  name: string
+  name: string,
+  role: ApiKeyRole
 ): Promise<boolean> {
   store.set((current) => ({
     ...current,
@@ -71,8 +80,10 @@ async function createKey(
     notice: undefined,
   }));
   try {
+    // The scope always travels with the name: the server default would create a
+    // read-only key behind a choice the operator made on screen.
     const created = await api("/dashboard/api-keys", {
-      body: { name },
+      body: { name, role },
       method: "POST",
       schema: apiKeyCreatedSchema,
     });
@@ -180,7 +191,7 @@ function createApiKeysStore(): ApiKeysStore {
 
   return {
     copy: (key) => copySecret(state, key),
-    create: (name) => createKey(state, name),
+    create: (name, role) => createKey(state, name, role),
     getSnapshot: state.getSnapshot,
     revoke: (key) => revokeKey(state, key),
     subscribe: state.subscribe,
@@ -238,6 +249,13 @@ function ApiKeyRowItem({
         <span className="flex flex-wrap items-center gap-2">
           <span className="font-medium text-sm">{keyRow.name}</span>
           <code className="text-muted-foreground text-xs">{keyRow.prefix}</code>
+          {/*
+            La portée est montrée comme le rôle d'un compte : c'est le seul
+            endroit où l'opérateur relit ce qu'une clé peut faire.
+          */}
+          <Pill id={`apiKeyRole-${keyRow.id}`}>
+            {settings.apiKeys.role.names[keyRow.role]}
+          </Pill>
           {revoked ? (
             <Pill id={`apiKeyRevoked-${keyRow.id}`} tone="failed">
               {settings.apiKeys.revoked}
@@ -295,6 +313,9 @@ export function ApiKeysSettings(): ReactNode {
   const { created, creating, error, keys, loading, notice, pending } =
     useStore(store);
   const [name, setName] = useState("");
+  // La portée suit le formulaire, pas les lignes déjà créées : la clé suivante
+  // garde le choix courant, y compris quand la précédente a été refusée.
+  const [role, setRole] = useState<ApiKeyRole>("viewer");
   // The receipt of the copy belongs to the token it copied: a new key always
   // brings a new token, so the previous receipt never follows it.
   const [copied, setCopied] = useState<{ ok: boolean; token: string }>();
@@ -306,7 +327,7 @@ export function ApiKeysSettings(): ReactNode {
     if (loading || creating || !draft) {
       return;
     }
-    if (await store.create(draft)) {
+    if (await store.create(draft, role)) {
       setName("");
     }
   };
@@ -322,7 +343,7 @@ export function ApiKeysSettings(): ReactNode {
       </CardHeader>
       <CardDescription>{settings.apiKeys.intro}</CardDescription>
       <p className="mt-2 text-sm" id="apiKeyScope">
-        {settings.apiKeys.readOnly}
+        {settings.apiKeys.scope}
       </p>
 
       <div className="mt-4 border-border border-t pt-4">
@@ -343,6 +364,25 @@ export function ApiKeysSettings(): ReactNode {
               placeholder={settings.apiKeys.namePlaceholder}
               value={name}
             />
+          </div>
+          <div className="min-w-48">
+            <Label htmlFor="apiKeyRole">{settings.apiKeys.role.label}</Label>
+            <Select
+              disabled={loading}
+              id="apiKeyRole"
+              onChange={(event) => setRole(event.target.value as ApiKeyRole)}
+              value={role}
+            >
+              {apiKeyRoleOptions.map((option) => (
+                <option key={option} value={option}>
+                  {settings.apiKeys.role.names[option]}
+                </option>
+              ))}
+            </Select>
+            {/* L'aide est celle de la portée sélectionnée, jamais les deux. */}
+            <FieldHelp id="apiKeyRoleHelp">
+              {settings.apiKeys.role.help[role]}
+            </FieldHelp>
           </div>
           <Button
             disabled={creating || loading || !draft}

@@ -36,7 +36,14 @@ const previewHostsSchema = z
     hosts: z.array(z.string().max(MAX_HOST_LENGTH)).max(400),
   })
   .strict();
-const apiKeyNameSchema = z.object({ name: z.string().min(1).max(60) }).strict();
+const apiKeySchema = z
+  .object({
+    name: z.string().min(1).max(60),
+    // Absent means read-only: a caller that never heard of the scope cannot
+    // grant more than the default by omission.
+    role: z.enum(["operator", "viewer"]).default("viewer"),
+  })
+  .strict();
 /** Path segment that decrypts a stored key instead of revoking it. */
 const SECRET_SUFFIX = "/secret";
 const API_KEYS_PREFIX = "/dashboard/api-keys";
@@ -48,9 +55,9 @@ export function apiKeysRoute(
   effectiveRepos: () => Promise<string[]>
 ) {
   /**
-   * Administrator-only key management. A key is a read-only viewer for agents,
-   * so the list and the copy action are the administrator's only way to see what
-   * an agent was granted.
+   * Administrator-only key management. A key reads the repositories it was
+   * issued for, and an `operator` key also starts runs, so the list and the copy
+   * action are the administrator's only way to see what an agent was granted.
    */
   return async (
     req: IncomingMessage,
@@ -70,16 +77,20 @@ export function apiKeysRoute(
     }
     if (url.pathname === API_KEYS_PREFIX) {
       if (req.method === "GET") {
-        json(res, 200, await keys.list());
+        json(res, 200, await keys.list(user));
         return true;
       }
       if (req.method === "POST") {
+        const input = apiKeyInput(await read(req));
         json(
           res,
           201,
-          await keys.create(user, apiKeyName(await read(req)), [
-            ...new Set(await effectiveRepos()),
-          ])
+          await keys.create(
+            user,
+            input.name,
+            issuedScope(user, await effectiveRepos()),
+            input.role
+          )
         );
         return true;
       }
@@ -105,19 +116,32 @@ export function apiKeysRoute(
   };
 }
 
-/** A name the dashboard can show; a refused body is a request error, not a 500. */
-function apiKeyName(body: Buffer) {
-  const parsed = apiKeyNameSchema.safeParse(
-    JSON.parse(body.toString()) as unknown
+/**
+ * The repositories a new key may carry: the selection in force, never more than
+ * the issuer's own scope. A `users.json` or OIDC administrator limited to one
+ * project would otherwise mint a key that reads — and now *launches runs on* —
+ * repositories it cannot reach itself. Reading outside its scope was already a
+ * leak; the `operator` scope turns that leak into paid work on another project.
+ * A local administrator always carries the whole selection, so this only ever
+ * narrows the scope of an identity that is itself restricted.
+ */
+function issuedScope(user: Principal, effective: string[]) {
+  const mine = new Set(user.repos.map((repo) => repo.toLowerCase()));
+  return [...new Set(effective.map((repo) => repo.toLowerCase()))].filter(
+    (repo) => mine.has(repo)
   );
+}
+/** A name and scope the dashboard can show; a refused body is a request error, not a 500. */
+function apiKeyInput(body: Buffer) {
+  const parsed = apiKeySchema.safeParse(JSON.parse(body.toString()) as unknown);
   if (!parsed.success) {
     throw new QaError(
       "API_KEY_NAME",
-      "Le nom de la clé doit contenir 1 à 60 caractères.",
-      "Donnez un nom court qui rappelle l’usage de la clé."
+      "Le nom de la clé doit contenir 1 à 60 caractères, et sa portée être « viewer » ou « operator ».",
+      "Donnez un nom court qui rappelle l’usage de la clé, et une portée connue."
     );
   }
-  return parsed.data.name;
+  return parsed.data;
 }
 /**
  * Delivery ids are opaque webhook identifiers. The bound is what the caller may
