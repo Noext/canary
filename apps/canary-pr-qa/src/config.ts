@@ -4,6 +4,7 @@ import { z } from "zod";
 import { hostAllowed } from "../../canary-daemon/src/network-policy.js";
 import { QaError } from "./diagnostics.js";
 import { ModelIdSchema } from "./model-catalog.js";
+import { isValidPreviewHost } from "./preview-hosts.js";
 
 const envSchema = z.object({
   QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
@@ -240,6 +241,18 @@ export function validateConfiguration(config: Config, service = false) {
       "Set PREVIEW_ALLOWED_HOSTS to the exact reachable preview hosts (including ports)"
     );
   }
+  // The `.env` list is the only allowlist that does not pass
+  // `normalizePreviewHosts`, so the boot check holds it to the same rule: an
+  // entry it refuses is dropped before any network boundary sees it, and
+  // starting would otherwise hide a typo such as `*.co.uk`.
+  const invalidHosts = config.allowedHosts.filter(
+    (host) => !isValidPreviewHost(host)
+  );
+  if (invalidHosts.length) {
+    problems.push(
+      `PREVIEW_ALLOWED_HOSTS entries must be host, host:port, *.domain or *.domain:port over a domain you control: ${invalidHosts.join(", ")}`
+    );
+  }
   if (config.allowedRepos.some((repo) => !/^[\w.-]+\/[\w.-]+$/.test(repo))) {
     problems.push("GITHUB_ALLOWED_REPOS entries must use owner/repository");
   }
@@ -272,7 +285,7 @@ export function validatePreviewUrl(input: string, config: Config): URL {
   ) {
     throw new Error("Invalid preview URL");
   }
-  if (!hostAllowed(url.host.toLowerCase(), config.allowedHosts)) {
+  if (!hostAllowed(url, config.allowedHosts)) {
     throw new QaError(
       "PREVIEW_HOST_NOT_ALLOWED",
       `Preview host ${url.host} is not in PREVIEW_ALLOWED_HOSTS`,

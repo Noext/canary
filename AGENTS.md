@@ -248,7 +248,7 @@ Renseigner au minimum :
 | `OPENAI_API_KEY` | Clé active fournie par l'opérateur ; ne pas réutiliser une ancienne clé temporaire de test |
 | `OPENAI_MODEL` | **`opencode-go/deepseek-v4.1-flash`** |
 | `QA_ALLOWED_PROVIDER_HOSTS` | `ai.noext.fr` ; toute politique fournisseur du dépôt testé doit également autoriser ce host |
-| `PREVIEW_ALLOWED_HOSTS` | Hôtes de preview autorisés au démarrage (hôte, hôte:port, ou joker `*.domaine` pour ses sous-domaines, sans joker partiel) : **liste initiale** et repli. L'administrateur l'édite ensuite dans Réglages du dashboard ; la liste enregistrée est publiée aux services `browser`/`egress` par le volume `qa-policy` |
+| `PREVIEW_ALLOWED_HOSTS` | Hôtes de preview autorisés au démarrage (hôte, hôte:port, ou joker `*.domaine` pour ses sous-domaines, sans joker partiel ni suffixe public type `*.co.uk`) : **liste initiale** et repli. Une entrée refusée par cette règle ne démarre pas (`CONFIG_INVALID`) et n'est jamais appliquée par `browser`/`egress`. L'administrateur l'édite ensuite dans Réglages du dashboard ; la liste enregistrée est publiée aux services `browser`/`egress` par le volume `qa-policy` |
 | `ARTIFACT_BASE_URL` | Origine HTTPS du dashboard si les rapports doivent être accessibles depuis les liens GitHub ; pas de suffixe `/artifacts` |
 | `QA_AUTO_RUNS` | `true` par défaut : un PR non brouillon sur un dépôt connecté et opt-in lance le run ; `false` enregistre les tentatives `auto_disabled` (audit `automatic.disabled`) sans exécuter |
 | `QA_AUTO_PREVIEW_WAIT_SECONDS` | Attente de la preuve du SHA complet, en secondes (60-86400, défaut 1800) ; au-delà, tentative `expired`, audit `automatic.preview_expired`, jamais rejouée |

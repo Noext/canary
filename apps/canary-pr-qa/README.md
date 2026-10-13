@@ -34,7 +34,10 @@ Générer **trois secrets différents** pour `QA_API_TOKEN`, `QA_DB_PASSWORD` et
   polices et WebSockets inclus, avec leurs ports lorsqu'ils ne sont pas standards.
   Un joker `*.domaine` (ou `*.domaine:port`) couvre les sous-domaines de ce
   domaine, jamais le domaine nu : pour tester `preview.example.com` et ses
-  sous-domaines, listez les deux.
+  sous-domaines, listez les deux. Le domaine doit vous appartenir — un suffixe
+  public (`*.com`, `*.co.uk`, `*.github.io`) est refusé par le serveur et par
+  `doctor` — et `*.domaine:443` couvre `https://sous.domaine`, puisque le schéma
+  implique déjà ce port.
   C'est la **liste initiale** : elle remplit le champ du dashboard et sert de
   repli tant qu'aucune liste n'a été enregistrée. L'administrateur ajoute ou
   retire ensuite des hôtes dans Réglages → « Hôtes autorisés par

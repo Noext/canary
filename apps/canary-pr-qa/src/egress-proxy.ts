@@ -28,7 +28,7 @@ async function target(input: string, config: Config) {
     !["http:", "https:", "ws:", "wss:"].includes(url.protocol) ||
     url.username ||
     url.password ||
-    !hostAllowed(url.host.toLowerCase(), config.allowedHosts)
+    !hostAllowed(url, config.allowedHosts)
   ) {
     throw new Error("Egress host denied");
   }

@@ -73,26 +73,56 @@ function splitPort(value: string): { name: string; port: string } {
     ? { name: value, port: "" }
     : { name: value.slice(0, separator), port: value.slice(separator + 1) };
 }
+/** The port a scheme implies when the URL does not name one. */
+function defaultPort(protocol: string): number | undefined {
+  if (protocol === "http:" || protocol === "ws:") {
+    return 80;
+  }
+  if (protocol === "https:" || protocol === "wss:") {
+    return 443;
+  }
+  return;
+}
+function matchesName(hostname: string, pattern: string): boolean {
+  return pattern.startsWith("*.")
+    ? hostname.endsWith(`.${pattern.slice(2)}`)
+    : hostname === pattern;
+}
 /**
- * Matches one allowlist entry against the `host` of a destination.
+ * Whether one allowlist entry covers a destination URL.
  *
  * An entry is an exact `host` or `host:port` match, or a leading-label wildcard
  * (`*.example.com`, `*.example.com:8443`). The wildcard covers subdomains at any
- * depth but never the bare domain, and its port must match the entry's exactly:
- * `*.example.com` does not cover `api.example.com:8443`, just like the exact
- * entry `example.com` does not cover `example.com:8443`.
+ * depth but never the bare domain.
+ *
+ * `URL` drops the port a scheme implies, so the comparison uses the effective
+ * one: an entry without a port still covers only destinations that name no port
+ * (the default of `http` or `https`), while `*.example.com:443` covers
+ * `https://api.example.com` as well as a spelled-out `:443` - but not
+ * `http://api.example.com`, nor another port.
  */
-export function hostEntryMatches(host: string, entry: string): boolean {
-  if (!entry.startsWith("*.")) {
-    return entry === host;
+export function hostEntryMatches(url: URL, entry: string): boolean {
+  const { name, port } = splitPort(entry);
+  if (!matchesName(url.hostname, name)) {
+    return false;
   }
-  const suffix = splitPort(entry.slice(2));
-  const target = splitPort(host);
-  return target.port === suffix.port && target.name.endsWith(`.${suffix.name}`);
+  if (port === "") {
+    return url.port === "";
+  }
+  const effective =
+    url.port === "" ? defaultPort(url.protocol) : Number(url.port);
+  return Number(port) === effective;
 }
-/** Whether any allowlist entry covers the `host` of a destination. */
-export function hostAllowed(host: string, hosts: string[]): boolean {
-  return hosts.some((entry) => hostEntryMatches(host, entry));
+/** Whether any allowlist entry covers a destination URL. */
+export function hostAllowed(url: URL, hosts: string[]): boolean {
+  return hosts.some((entry) => hostEntryMatches(url, entry));
+}
+/**
+ * Whether any entry covers a bare hostname. Cookies carry no port, so a trusted
+ * cookie domain is matched against the entries' names, ignoring their ports.
+ */
+export function hostnameAllowed(hostname: string, hosts: string[]): boolean {
+  return hosts.some((entry) => matchesName(hostname, splitPort(entry).name));
 }
 export async function networkAllowed(
   input: string,
@@ -112,7 +142,7 @@ export async function networkAllowed(
     !["http:", "https:", "ws:", "wss:"].includes(url.protocol) ||
     url.username ||
     url.password ||
-    !hostAllowed(url.host.toLowerCase(), hosts)
+    !hostAllowed(url, hosts)
   ) {
     return false;
   }

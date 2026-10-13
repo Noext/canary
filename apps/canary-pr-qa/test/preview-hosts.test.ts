@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { browserEnvironment } from "../src/canary.js";
-import { loadConfig, validatePreviewUrl } from "../src/config.js";
+import {
+  loadConfig,
+  validateConfiguration,
+  validatePreviewUrl,
+} from "../src/config.js";
 import { prepareScenario } from "../src/fixtures.js";
 import {
   applyPreviewHosts,
@@ -87,9 +91,16 @@ it("accepts a wildcard only as a whole leading label over a real domain", () => 
     "*.preview.example.com",
   ]);
   for (const invalid of [
-    // A bare TLD wildcard would open every registered domain under it.
+    // A wildcard hands one label to whoever registers it, so a shared public
+    // suffix would open every domain beneath it, ICANN section or private one.
     "*.com",
     "*.fr",
+    "*.co.uk",
+    "*.github.io",
+    "*.vercel.app",
+    "*.s3.amazonaws.com",
+    // It never covers an IP literal, and never a partial label.
+    "*.127.0.0.1",
     "*",
     "*.",
     "*example.com",
@@ -100,6 +111,33 @@ it("accepts a wildcard only as a whole leading label over a real domain", () => 
     "*.[2001:db8::1]",
   ]) {
     expect(() => normalizePreviewHosts([invalid]), invalid).toThrow();
+  }
+});
+
+it("holds the environment list to the rule the dashboard edit enforces", () => {
+  const base = {
+    GITHUB_ALLOWED_REPOS: "fixture/app",
+    OPENAI_BASE_URL: "https://ai.example/v1",
+    OPENAI_MODEL: "test-model",
+  };
+  const good = loadConfig({
+    ...base,
+    PREVIEW_ALLOWED_HOSTS: "*.arpilabe.pharmania.fr",
+  });
+  expect(() => validateConfiguration(good)).not.toThrow();
+  for (const entry of ["*.co.uk", "*.com", "https://preview.example.com"]) {
+    const config = loadConfig({ ...base, PREVIEW_ALLOWED_HOSTS: entry });
+    // Loading stays permissive, so doctor can name the offending entry instead
+    // of failing at parse time...
+    expect(config.allowedHosts).toEqual([entry]);
+    expect(() => validateConfiguration(config), entry).toThrow(
+      /PREVIEW_ALLOWED_HOSTS entries must be/
+    );
+    // ...and enforcement drops it everywhere, including the containers that
+    // start without this check.
+    expect(applyPreviewHosts(config, config.allowedHosts).allowedHosts).toEqual(
+      []
+    );
   }
 });
 
@@ -123,6 +161,25 @@ it("covers subdomains with a wildcard, never the bare domain or another port", (
     "https://notarpilabe.pharmania.fr",
     "https://pr-12.arpilabe.pharmania.fr:8443",
     "https://pr-12.preview.test",
+  ]) {
+    expect(() => validatePreviewUrl(denied, config), denied).toThrow();
+  }
+});
+
+it("accepts the default port a scheme implies when the entry names it", () => {
+  const config = loadConfig({
+    PREVIEW_ALLOWED_HOSTS: "*.preview.test:443,preview.example.com:80",
+  });
+  expect(validatePreviewUrl("https://pr-12.preview.test", config).host).toBe(
+    "pr-12.preview.test"
+  );
+  expect(validatePreviewUrl("http://preview.example.com", config).host).toBe(
+    "preview.example.com"
+  );
+  for (const denied of [
+    // The other scheme's default is a different port.
+    "http://pr-12.preview.test",
+    "https://preview.example.com",
   ]) {
     expect(() => validatePreviewUrl(denied, config), denied).toThrow();
   }
