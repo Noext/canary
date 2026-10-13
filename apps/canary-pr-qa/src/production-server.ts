@@ -16,6 +16,7 @@ import {
   signedArtifact,
   validArtifactSignature,
 } from "./access.js";
+import { accountRoutes } from "./account-routes.js";
 import { ApiKeys } from "./api-keys.js";
 import { authRoutes } from "./auth-routes.js";
 import {
@@ -92,6 +93,7 @@ export async function startProductionServer(config: Config) {
   const keys = new ApiKeys(queue.pool, config);
   const setup = new GitHubSetup(queue.pool, config);
   const setupRoute = githubSetupRoutes(setup, queue, rawBody, json);
+  const adminAccountsRoute = accountRoutes(accounts, queue, rawBody, json);
   async function identify(req: IncomingMessage) {
     return principal(req, await setup.effective(), accounts, keys);
   }
@@ -533,6 +535,7 @@ export async function startProductionServer(config: Config) {
     if (
       (await dashboardRoute(req, res, url, user)) ||
       (await setupRoute(req, res, url, user)) ||
+      (await adminAccountsRoute(req, res, url, user)) ||
       (await modelRoute(req, res, url, user)) ||
       (await accountRoute(req, res, url, user)) ||
       (await mcpRoute(req, res, url, user))

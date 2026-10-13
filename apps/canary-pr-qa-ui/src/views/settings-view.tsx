@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AccountsSettings } from "./accounts";
 import { AiSettings } from "./ai-settings";
 import { ApiKeysSettings } from "./api-keys-settings";
 import { GithubSettings } from "./github-settings";
@@ -13,6 +14,7 @@ export function SettingsView(): ReactNode {
           <AiSettings />
           <PreviewSettings />
           <ApiKeysSettings />
+          <AccountsSettings />
         </div>
       </div>
     </section>

@@ -10,6 +10,7 @@ import { defineConfig } from "vitest/config";
  */
 const apiTarget = process.env.QA_API_TARGET ?? "http://127.0.0.1:8787";
 const apiPaths = [
+  "/accounts",
   "/artifacts",
   "/auth",
   "/dashboard/status",

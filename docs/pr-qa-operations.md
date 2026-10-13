@@ -36,7 +36,11 @@ initiale est fermée après le premier compte. Les connexions locales ne nécess
 pas de SSO ; les accès techniques existants sont conservés dans une section dédiée.
 La récupération de mot de passe via stdin (`reset-password`) est documentée dans
 le README et révoque les sessions du compte. Ne jamais purger la DB pour récupérer
-l'accès. Connecter GitHub depuis la section GitHub du dashboard : créer l’App, confirmer
+l'accès. Les autres comptes humains (rôle, dépôts, mot de passe) se créent et se
+modifient dans la section « Comptes utilisateurs » du dashboard, réservée aux administrateurs ;
+`config/users.json` ne concerne que les identités techniques (token SHA-256 ou
+sujet OIDC) et n'est pas modifiable depuis le dashboard.
+Connecter GitHub depuis la section GitHub du dashboard : créer l’App, confirmer
 sur GitHub, installer, actualiser et sélectionner les dépôts. Aucun PAT requis
 pour ce parcours. Le dashboard montre les phases
 et actions par SSE à `/runs/:id/events`, les diagnostics et les preuves. Le modèle

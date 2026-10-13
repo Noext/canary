@@ -1041,6 +1041,11 @@ it("creates and installs the GitHub App from the dashboard, selects a repository
     expect(welcomeLayout.actual).toBe(true);
     await click("settings-navigation", "#welcomeAction");
     await text("github-not-connected", "#githubConnection", "À connecter");
+    // The accounts screen is served by the same origin as the API: it proves the
+    // route, the schema and the admin gate work in a real browser, not just in
+    // the unit tests.
+    await text("accounts-card", "#accountsSettings", "Comptes utilisateurs");
+    await text("accounts-list", "#accountsList", "ui-github-admin");
     // Redirect only the external GitHub form to the protocol fixture. Production
     // still posts the real manifest and processes real HTTP callback/state flow.
     await canary.act(

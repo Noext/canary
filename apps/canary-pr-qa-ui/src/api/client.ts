@@ -57,7 +57,7 @@ export function errorText(value: unknown): string {
 export interface ApiOptions {
   body?: unknown;
   headers?: Record<string, string>;
-  method?: "DELETE" | "GET" | "POST" | "PUT";
+  method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   query?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
   /**

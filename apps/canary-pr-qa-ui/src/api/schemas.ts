@@ -19,6 +19,25 @@ export const principalSchema = z.object({
 
 export const authStatusSchema = z.object({ initialized: z.boolean() });
 
+/**
+ * One local account of the dashboard: the setup administrator, or an account an
+ * administrator created here.
+ */
+export const localAccountSchema = z.object({
+  createdAt: z.string(),
+  id: z.string(),
+  repos: z.array(z.string()),
+  role,
+  username: z.string(),
+});
+
+export const accountsSchema = z.object({
+  accounts: z.array(localAccountSchema),
+});
+
+/** The created or updated account `POST` and `PATCH` answer with. */
+export const accountPayloadSchema = z.object({ account: localAccountSchema });
+
 export const runStatusSchema = z.enum([
   "queued",
   "running",
@@ -251,6 +270,7 @@ export const errorPayloadSchema = z.object({
 
 /** Path-keyed schemas: adding an endpoint here makes `api()` typed for it. */
 export const responseSchemas = {
+  "/accounts": accountsSchema,
   "/auth/login": principalSchema,
   "/auth/setup": principalSchema,
   "/auth/status": authStatusSchema,

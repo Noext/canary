@@ -131,6 +131,27 @@ export interface AutomaticAttempt {
   updatedAt: string;
 }
 
+/**
+ * One local account of the dashboard. The id is the raw uuid the accounts
+ * endpoints address; the setup-created administrator is one of these.
+ */
+export interface LocalAccount {
+  createdAt: string;
+  id: string;
+  repos: string[];
+  role: Role;
+  username: string;
+}
+
+export interface AccountsPayload {
+  accounts: LocalAccount[];
+}
+
+/** A created or updated account, as `POST` and `PATCH` answer it. */
+export interface AccountPayload {
+  account: LocalAccount;
+}
+
 /** One recorded step of an automatic attempt, oldest first. */
 export interface AutomaticTimelineEntry {
   /** Audit action (`automatic.preview_wait`, `automatic.preview_expired`, ...). */

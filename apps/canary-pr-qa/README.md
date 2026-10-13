@@ -385,6 +385,14 @@ ne peut être créé ensuite. Les tentatives de connexion sont limitées en SQL.
 Le cookie porte `Secure` lorsque l'origine configurée ou le proxy indique HTTPS ;
 conserver `X-Forwarded-Proto` sur votre reverse proxy.
 
+Après la première installation, un administrateur crée et gère les autres comptes
+dans le dashboard (section « Comptes utilisateurs ») : identifiant, mot de passe, rôle
+(viewer/operator/admin) et dépôts visibles. Changer un mot de passe révoque
+immédiatement toutes les sessions de ce compte. Un dépôt hors de la sélection
+effective est refusé, tout comme un identifiant déjà utilisé. Le dernier
+administrateur ne peut être ni supprimé ni rétrogradé, et personne ne supprime
+son propre compte.
+
 Pour votre installation existante, mettre à jour la branche et l'image sans
 supprimer les volumes, puis lancer `setup-admin`. Aucun mot de passe par défaut
 ou compte public n'est créé. Les comptes techniques existants restent utilisables.
@@ -518,6 +526,10 @@ Captures réelles des E2E, avec données fictives :
 | `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
+| `GET /accounts` | Comptes humains : `{accounts:[{id,username,role,repos,createdAt}]}`, admin uniquement |
+| `POST /accounts` | `{username,password,role,repos}` ; 201 `{account}` |
+| `PATCH /accounts/:id` | `{role?,repos?,password?}` ; 200 `{account}`, mot de passe changé = sessions du compte révoquées |
+| `DELETE /accounts/:id` | 200 `{ok:true}` ; dernier admin et compte courant refusés |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |
 | `GET /github/app`, `POST /github/app/manifest`, `POST /github/app/install`, `POST /github/app/refresh`, `PUT /github/app/repositories` | Onboarding GitHub App réservé à l'admin |
 | `DELETE /github/app` | Déconnecte l'App ; `{"deleteApp":true}` la supprime aussi sur GitHub |
@@ -543,6 +555,9 @@ nécessaire pour les consulter.
 
 Copier `config/users.example.json` vers `config/users.json`, configurer les vrais
 SHA-256 des tokens individuels et `QA_USERS_FILE=/app/config/users.json`.
+Ce fichier ne sert qu'aux identités techniques (token SHA-256 ou sujet OIDC) :
+il n'est pas modifiable depuis le dashboard, et les comptes humains se créent
+dans Réglages → Comptes utilisateurs, pas ici.
 Rôles : viewer (lecture), operator (lancement/annulation), admin (suppression,
 métriques). Chaque identité doit avoir une liste explicite de dépôts. Pour SSO,
 configurer issuer/audience/JWKS et mapper `oidcSubject` à l'identité locale ; les

@@ -176,6 +176,18 @@ beforeEach(() => {
     calls.push(call);
 
     switch (path) {
+      case "/accounts":
+        return {
+          accounts: [
+            {
+              createdAt: "2026-01-01T00:00:00.000Z",
+              id: "11111111-1111-1111-1111-111111111111",
+              repos: ["fixture/app"],
+              role: "admin",
+              username: "ui-admin",
+            },
+          ],
+        };
       case "/auth/status":
         return { initialized: true };
       case "/me":
@@ -292,6 +304,13 @@ const FIRST_RUN_MESSAGE =
 
 /** Every control the legacy dashboard exposes on this screen, and the e2e hooks. */
 const CONTROL_IDS = [
+  "accountsCreate",
+  "accountsCreateSubmit",
+  "accountsList",
+  "accountsNewPassword",
+  "accountsNewRole",
+  "accountsSettings",
+  "accountsUsername",
   "githubSettings",
   "githubConnection",
   "githubMessage",
@@ -381,7 +400,7 @@ describe("SettingsView", () => {
     );
   });
 
-  it("renders every control the GitHub, AI and preview cards promise", async () => {
+  it("renders every control the GitHub, AI, preview and accounts cards promise", async () => {
     const { container } = renderSettings();
 
     await screen.findByText(FIRST_RUN_MESSAGE);
