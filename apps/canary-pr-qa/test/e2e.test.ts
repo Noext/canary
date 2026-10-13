@@ -1350,9 +1350,10 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       path: `/#run=${job.id}`,
     });
     const runScreen = await observed("blocked-run-detail");
-    // The link is read once and stripped, so a refresh never replays it: the
-    // screen is what proves the deep link was honoured, not the URL.
-    expect(runScreen.url).not.toContain("#");
+    // A link this dashboard wrote stays in the URL: the operator reloads the
+    // link they are reading, so the screen keeps its own address instead of
+    // falling back home on the second refresh.
+    expect(runScreen.url).toContain(`#run=${job.id}`);
     expect(runScreen.text).toContain("Détail du test");
     // The cause the operator could not see before: the server diagnostic, its
     // next step, and the phase the run stopped in.
@@ -1365,6 +1366,16 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     );
     expect(runScreen.text).toContain("À faire :");
     expect(runScreen.text).not.toContain("Preview SHA mismatch");
+    // What the operator actually does with that link: reload it.
+    const reloadedRun = await canary.act(
+      session,
+      "run-link-survives-a-reload",
+      `const page=await browser.getPage("qa"); await page.waitForSelector("#runScreen",{timeout:15000}); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#runDiagnostic",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(reloadedRun.url).toContain(`#run=${job.id}`);
+    expect(String(reloadedRun.actual)).toContain(
+      "Pourquoi ce test n’est pas allé au bout"
+    );
     await act("back-to-history", {
       type: "click",
       locator: { by: "css", value: "#runScreenBack" },
@@ -1372,9 +1383,10 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     const history = await observed("history-after-back");
     expect(history.url).not.toContain("#run=");
     expect(history.text).toContain("Vos tests");
-    // A deep link is read once at load, like the legacy `#<uuid>` link: reach
-    // it on a fresh document instead of a same-document hash change the
-    // dashboard deliberately does not act on.
+    // Leaving the screen cleared its hash, which is what keeps a quoted link
+    // from outliving the panel it opened. The dashboard reads a hash once at
+    // load and does not act on a same-document change: reach the home panel on
+    // a fresh document.
     await act("fresh-document", { type: "goto", path: "/?reload=1" });
     // The failure is actionable where the operator first meets it: the home
     // block offers the same retry as the detail screen, on the same attempt.
@@ -1390,7 +1402,7 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       path: "/#automatic=e2e-attempt",
     });
     const attempt = await observed("expired-attempt-detail");
-    expect(attempt.url).not.toContain("#");
+    expect(attempt.url).toContain("#automatic=e2e-attempt");
     expect(attempt.text).toContain("Lancements automatiques");
     expect(attempt.text).toContain("Pourquoi Canary n’a pas démarré le test");
     expect(attempt.text).toContain(
@@ -1407,6 +1419,15 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     expect(attempt.text).toContain("Délai d’attente dépassé");
     // Deployment topology is administrator-only, but this session is admin.
     expect(attempt.text).toContain("Preuve de version exigée");
+    // The link the operator shares is the one they reload: both the screen and
+    // its address have to come back, not the home panel.
+    const reloadedAttempt = await canary.act(
+      session,
+      "automatic-link-survives-a-reload",
+      `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#automaticDetailCause",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(reloadedAttempt.url).toContain("#automatic=e2e-attempt");
+    expect(String(reloadedAttempt.actual)).toContain("Délai d’attente dépassé");
     // An expired attempt is not a dead end any more: the screen the operator is
     // already reading re-arms it, on the same commit, with a fresh window. The
     // assertion polls the state pill, so the click's write is what is measured.
