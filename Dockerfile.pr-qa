@@ -2,9 +2,32 @@ FROM node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527
 WORKDIR /app
 RUN corepack enable
 ENV HUSKY=0
+# Dependencies are installed from the manifests alone, in their own layer, so that a
+# source-only edit does not invalidate it: pnpm reads nothing but these files (root
+# manifests plus every workspace manifest), while `COPY . .` used to key the install
+# layer on the whole tree, making every commit re-download and re-link 1010 packages.
+# A workspace added later needs its package.json added here by hand: pnpm silently
+# drops a workspace whose manifest is missing, so the filtered build below would then
+# build less than the workspace contains instead of failing. `pnpm install` also reads
+# .npmrc and .pnpmfile.cjs when present, and any `patches/` directory named by
+# pnpm.patchedDependencies; add them here if they ever appear.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/canary/package.json ./apps/canary/
+COPY apps/canary-browser/package.json ./apps/canary-browser/
+COPY apps/canary-daemon/package.json ./apps/canary-daemon/
+COPY apps/canary-pr-qa/package.json ./apps/canary-pr-qa/
+COPY apps/canary-pr-qa-ui/package.json ./apps/canary-pr-qa-ui/
+COPY apps/canary-ui/package.json ./apps/canary-ui/
+COPY apps/create-canary/package.json ./apps/create-canary/
+COPY packages/cli-kit/package.json ./packages/cli-kit/
+COPY packages/config/package.json ./packages/config/
+COPY packages/daemon-client/package.json ./packages/daemon-client/
+COPY packages/logger/package.json ./packages/logger/
+COPY packages/protocol/package.json ./packages/protocol/
+RUN corepack pnpm install --frozen-lockfile
+# Sources last: an edit anywhere below only invalidates this copy and the build.
 COPY . .
-RUN corepack pnpm install --frozen-lockfile \
-    && corepack pnpm --filter @usecanary/pr-qa... build
+RUN corepack pnpm --filter @usecanary/pr-qa... build
 
 FROM node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 ENV NODE_ENV=production PLAYWRIGHT_BROWSERS_PATH=/ms-playwright QA_DATA_DIR=/data QA_HOST=0.0.0.0
