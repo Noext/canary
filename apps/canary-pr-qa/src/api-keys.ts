@@ -21,6 +21,13 @@ CREATE INDEX IF NOT EXISTS qa_api_key_live ON qa_api_keys(revoked_at, created_at
  */
 export const API_KEYS_LABEL = "api-keys-v1";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * What a key may do. `viewer` reads the runs of its repositories; `operator`
+ * also starts one through the MCP `launch_run` tool. `admin` is deliberately
+ * absent: an administrator key would be an escalation of the dashboard's own
+ * role, and no agent needs it.
+ */
+export type ApiKeyRole = "operator" | "viewer";
 interface KeyRow {
   created_at: Date;
   id: string;
@@ -58,13 +65,15 @@ function keyRow(row: KeyRow): ApiKeyRow {
     prefix: row.prefix,
     repos: row.repos,
     revokedAt: row.revoked_at?.toISOString() ?? null,
+    role: row.role === "operator" ? "operator" : "viewer",
   };
 }
 
 /**
- * Service keys an administrator issues for agents. A key is a read-only viewer
- * of the repositories of this instance, its token is stored as a hash and an
- * encrypted copy, and every use of the management API leaves an audit trail.
+ * Service keys an administrator issues for agents. A key reads the repositories
+ * of this instance, and an `operator` key also starts runs; its token is stored
+ * as a hash and an encrypted copy, and every use of the management API leaves
+ * an audit trail.
  */
 export class ApiKeys {
   private readonly pool: pg.Pool;
@@ -80,11 +89,15 @@ export class ApiKeys {
    * (`GITHUB_ALLOWED_REPOS`) is only a ceiling: it is deliberately empty when
    * the operator picks repositories in the dashboard, so reading it here would
    * issue a key that can read nothing.
+   *
+   * The scope is the administrator's choice at creation and never changes after:
+   * widening a live key would widen every agent that already holds it.
    */
   async create(
     user: Principal,
     name: string,
-    repos: string[]
+    repos: string[],
+    role: ApiKeyRole = "viewer"
   ): Promise<ApiKeyCreated> {
     const token = `qa_live_${randomBytes(24).toString("base64url")}`;
     const prefix = token.slice(0, 12);
@@ -93,12 +106,13 @@ export class ApiKeys {
     const created = (
       await this.pool.query<{ created_at: Date }>(
         `INSERT INTO qa_api_keys(id,name,prefix,token_hash,role,repos,secret_cipher,created_by)
-         VALUES($1,$2,$3,$4,'viewer',$5,$6,$7) RETURNING created_at`,
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`,
         [
           id,
           name,
           prefix,
           sha256(token),
+          role,
           JSON.stringify(scope),
           encrypt(token, this.config, API_KEYS_LABEL),
           user.id,
@@ -108,7 +122,7 @@ export class ApiKeys {
     if (!created) {
       throw new Error("API key insert returned no row");
     }
-    await this.audit("api_key.created", user.id, { id, name, prefix });
+    await this.audit("api_key.created", user.id, { id, name, prefix, role });
     return {
       createdAt: created.created_at.toISOString(),
       id,
@@ -117,6 +131,7 @@ export class ApiKeys {
       prefix,
       repos: scope,
       revokedAt: null,
+      role,
       token,
     };
   }

@@ -5,7 +5,9 @@ import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
 import { ACCESS_DENIED, type Principal, requireAccess } from "./access.js";
 import type { Config } from "./config.js";
+import { QaError } from "./diagnostics.js";
 import { automaticAttempt, type Job, type Queue } from "./queue.js";
+import { accepted, type RunLauncher, runInputSchema } from "./run-launch.js";
 
 const logger = createLogger({ name: "qa-mcp" });
 const SERVER_NAME = "canary-pr-qa";
@@ -54,6 +56,8 @@ interface ToolAnswer {
 }
 interface ToolContext {
   config: Config;
+  /** The one run-creation path, shared with `POST /runs`. */
+  launcher: RunLauncher;
   queue: Queue;
   user: Principal;
 }
@@ -148,6 +152,25 @@ function denial(error: unknown) {
   }
   throw error;
 }
+/**
+ * A launch is an action, so every refusal on that path is something the caller
+ * can act on: a repository out of scope, a pull-request URL that is not one, a
+ * model outside the catalog, a preview host the policy refuses, a full volume.
+ * The server's own faults still travel as faults: only the diagnostics this
+ * service raised for a caller are answered as text.
+ */
+function launchDenial(error: unknown) {
+  if (error instanceof QaError) {
+    return text(`${error.message} ${error.hint}`, true);
+  }
+  return denial(error);
+}
+/** A key that may read but not act: the answer names the missing capability. */
+const READ_ONLY_KEY = [
+  "Cette clé API est en lecture seule : elle ne peut pas lancer de test.",
+  "Demandez à l’administrateur une clé de portée « opérateur » (Réglages → Clés API),",
+  "puis relancez cet appel avec son jeton.",
+].join(" ");
 
 const listRunsArgs = z
   .object({
@@ -167,6 +190,15 @@ const listAttemptsArgs = z
   })
   .strict();
 const getAttemptArgs = z.object({ id: z.string().min(1) }).strict();
+/**
+ * The run contract plus the caller's own retry token. The token is an argument
+ * here where the dashboard sends it as an `Idempotency-Key` header: an agent that
+ * retries a call it never saw answered must re-answer the run it already paid
+ * for, not create a second one.
+ */
+const launchRunArgs = runInputSchema
+  .extend({ idempotencyKey: z.string().min(1).max(150).optional() })
+  .strict();
 
 const LIMIT_SCHEMA = {
   description: "Nombre d'entrées à rendre, 200 au plus.",
@@ -176,8 +208,10 @@ const LIMIT_SCHEMA = {
 };
 
 /**
- * The four read-only tools an AI agent gets with an API key. They answer with
- * the records the dashboard already reads, so the two surfaces cannot disagree.
+ * The read-only tools an AI agent gets with an API key, plus the one action a
+ * key of the `operator` scope may take: starting a run. They answer with the
+ * records the dashboard already reads, and `launch_run` goes through the same
+ * launcher as `POST /runs`, so the two surfaces cannot disagree.
  */
 const tools: Tool[] = [
   {
@@ -325,6 +359,66 @@ const tools: Tool[] = [
       }
     },
   },
+  {
+    description:
+      "Lance un test QA sur une pull request et rend l’identifiant du test créé. Le SHA testé est celui que GitHub donne à la PR au moment de l’appel. Réservé aux clés API de portée « opérateur ».",
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        idempotencyKey: {
+          description:
+            "Jeton de reprise propre à l’appelant : le même jeton sur le même SHA rend le test déjà créé au lieu d’en payer un second.",
+          type: "string",
+        },
+        model: {
+          description:
+            "Identifiant du modèle, tel que publié par le catalogue de l’instance ; par défaut le modèle configuré.",
+          type: "string",
+        },
+        prUrl: {
+          description:
+            "URL GitHub de la pull request, par exemple https://github.com/owner/repo/pull/123.",
+          format: "uri",
+          type: "string",
+        },
+        previewUrl: {
+          description:
+            "URL de la preview du SHA de la PR. Sans elle, le service cherche un déploiement réussi de cette PR.",
+          format: "uri",
+          type: "string",
+        },
+        publish: {
+          default: true,
+          description:
+            "Publier le rapport sur la pull request ; false pour un test privé.",
+          type: "boolean",
+        },
+      },
+      required: ["prUrl"],
+      type: "object",
+    },
+    name: "launch_run",
+    run: async (raw, ctx) => {
+      const { idempotencyKey, ...args } = launchRunArgs.parse(raw);
+      if (ctx.user.role === "viewer") {
+        return text(READ_ONLY_KEY, true);
+      }
+      try {
+        const job = await ctx.launcher.launch(ctx.user, args, idempotencyKey);
+        return text({
+          ...accepted(job),
+          model: job.input.model ?? null,
+          note: "Le test est en file, pas terminé : suivez-le avec get_run, qui rend le résultat une fois l’exécution finie.",
+          pr: job.pr,
+          repo: job.repo,
+          sha: job.sha,
+          status: job.status,
+        });
+      } catch (error) {
+        return launchDenial(error);
+      }
+    },
+  },
 ];
 
 function rpcError(id: unknown, code: number, message: string) {
@@ -430,11 +524,12 @@ async function handleMessage(
 export function mcpRoutes(
   queue: Queue,
   config: Config,
+  launcher: RunLauncher,
   read: (req: IncomingMessage, max?: number) => Promise<Buffer>,
   json: (res: ServerResponse, status: number, value: unknown) => void
 ) {
   async function dispatch(res: ServerResponse, body: unknown, user: Principal) {
-    const ctx: ToolContext = { config, queue, user };
+    const ctx: ToolContext = { config, launcher, queue, user };
     if (Array.isArray(body)) {
       if (body.length > MAX_BATCH) {
         json(

@@ -30,7 +30,7 @@ interface McpAnswer {
 }
 
 /** A production server on the in-memory PostgreSQL, plus a key to read it. */
-async function mcpServer() {
+async function mcpServer(role: "operator" | "viewer" = "viewer") {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -43,7 +43,7 @@ async function mcpServer() {
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const admin = { Authorization: `Bearer ${f.config.QA_API_TOKEN}` };
   const created = await fetch(`${url}/dashboard/api-keys`, {
-    body: JSON.stringify({ name: "agent" }),
+    body: JSON.stringify({ name: "agent", role }),
     headers: admin,
     method: "POST",
   });
@@ -117,7 +117,7 @@ async function completedRun(
   return queued.id;
 }
 
-it("answers the MCP handshake and publishes four read-only tools", async () => {
+it("answers the MCP handshake and publishes the read tools and the one action", async () => {
   const { url, key } = await mcpServer();
   const handshake = await call(url, key, "initialize", {
     capabilities: {},
@@ -133,6 +133,7 @@ it("answers the MCP handshake and publishes four read-only tools", async () => {
   expect(listed.result?.tools?.map((entry) => entry.name).sort()).toEqual([
     "get_automatic_attempt",
     "get_run",
+    "launch_run",
     "list_automatic_attempts",
     "list_runs",
   ]);
@@ -251,7 +252,7 @@ it("caps a batched request and answers its calls one at a time", async () => {
   const answered = await post(batch(2));
   expect(answered.status).toBe(200);
   const payload = (await answered.json()) as McpAnswer[];
-  expect(payload.map((entry) => entry.result?.tools?.length)).toEqual([4, 4]);
+  expect(payload.map((entry) => entry.result?.tools?.length)).toEqual([5, 5]);
   // A batch of notifications alone is accepted and answers nothing.
   const silent = await post(
     JSON.stringify([
@@ -475,4 +476,78 @@ it("gives the automatic attempts and the audit trail of one attempt", async () =
     id: "delivery-absent",
   });
   expect(absent.isError).toBe(true);
+}, 30_000);
+
+it("refuses a launch to a read-only key and leaves the queue untouched", async () => {
+  const { key, q, url } = await mcpServer();
+  const refused = await tool(url, key, "launch_run", { prUrl: PR_URL });
+  expect(refused.isError).toBe(true);
+  expect(String(refused.body.message)).toContain("lecture seule");
+  expect(await q.list(["fixture/app"])).toEqual([]);
+}, 30_000);
+
+it("queues a run for an operator key, through the gates the dashboard applies", async () => {
+  const { key, q, url } = await mcpServer("operator");
+  const launched = await tool(url, key, "launch_run", {
+    model: "fixture-alternate-model",
+    prUrl: PR_URL,
+  });
+  expect(launched.isError).toBe(false);
+  expect(launched.body).toMatchObject({
+    model: "fixture-alternate-model",
+    pr: 1,
+    repo: "fixture/app",
+    sha: SHA,
+    status: "queued",
+  });
+  expect(launched.body.statusUrl).toBe(`/runs/${String(launched.body.id)}`);
+  // The run the action names is the run the read surface lists: the two tools
+  // must not be able to disagree about what was created.
+  const listed = await tool(url, key, "list_runs");
+  expect(listed.body.runs).toMatchObject([
+    {
+      id: launched.body.id,
+      model: "fixture-alternate-model",
+      pr: 1,
+      repo: "fixture/app",
+      sha: SHA,
+      status: "queued",
+    },
+  ]);
+  expect(await q.list(["fixture/app"])).toHaveLength(1);
+}, 30_000);
+
+it("answers a refused launch with a diagnostic, not a server fault", async () => {
+  const { key, url } = await mcpServer("operator");
+  // A model outside the catalog, a URL that is not a pull request and a
+  // repository the key does not cover are all caller faults: an agent must read
+  // what to fix instead of a protocol error it cannot act on.
+  const unknownModel = await tool(url, key, "launch_run", {
+    model: "not-in-catalog",
+    prUrl: PR_URL,
+  });
+  expect(unknownModel.isError).toBe(true);
+  expect(String(unknownModel.body.message)).toContain(
+    "absent from the current provider catalog"
+  );
+  const badUrl = await tool(url, key, "launch_run", {
+    prUrl: "https://github.com/fixture/app",
+  });
+  expect(badUrl.isError).toBe(true);
+  expect(String(badUrl.body.message)).toContain("owner/repo/pull");
+  const outOfScope = await tool(url, key, "launch_run", {
+    prUrl: "https://github.com/other/app/pull/2",
+  });
+  expect(outOfScope.isError).toBe(true);
+  expect(String(outOfScope.body.message)).toContain("access denied");
+}, 30_000);
+
+it("re-answers a retried launch instead of paying for a second run", async () => {
+  const { key, q, url } = await mcpServer("operator");
+  const args = { idempotencyKey: "retry-1", prUrl: PR_URL };
+  const first = await tool(url, key, "launch_run", args);
+  const retried = await tool(url, key, "launch_run", args);
+  expect(retried.isError).toBe(false);
+  expect(retried.body.id).toBe(first.body.id);
+  expect(await q.list(["fixture/app"])).toHaveLength(1);
 }, 30_000);

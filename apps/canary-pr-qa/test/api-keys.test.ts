@@ -53,11 +53,15 @@ async function apiKeysServer() {
   };
 }
 
-async function createKey(url: string, admin: Record<string, string>) {
+async function createKey(
+  url: string,
+  admin: Record<string, string>,
+  role: "operator" | "viewer" = "viewer"
+) {
   const res = await fetch(`${url}/dashboard/api-keys`, {
     method: "POST",
     headers: admin,
-    body: JSON.stringify({ name: "agent" }),
+    body: JSON.stringify({ name: "agent", role }),
   });
   expect(res.status).toBe(201);
   return (await res.json()) as ApiKeyCreated;
@@ -85,6 +89,7 @@ it("issues a key once, keeps only a hash and an encrypted copy, and never shows 
     name: "agent",
     repos: ["fixture/app"],
     revokedAt: null,
+    role: "viewer",
   });
   expect(created.id).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -123,6 +128,7 @@ it("issues a key once, keeps only a hash and an encrypted copy, and never shows 
       prefix: created.prefix,
       repos: ["fixture/app"],
       revokedAt: null,
+      role: "viewer",
     },
   ]);
   expect(JSON.stringify(rows)).not.toContain(created.token);
@@ -370,4 +376,54 @@ it("refuses a non-administrator on every key route", async () => {
       })
     ).status
   ).toBe(200);
+}, 30_000);
+
+it("issues an operator key that starts a run, and keeps the read-only default", async () => {
+  const { url, admin } = await apiKeysServer();
+  const operator = await createKey(url, admin, "operator");
+  expect(operator.role).toBe("operator");
+  const launched = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${operator.token}` },
+    body: JSON.stringify({ prUrl: PR_URL }),
+  });
+  expect(launched.status).toBe(202);
+  const accepted = (await launched.json()) as { id: string };
+  expect(accepted.id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+  );
+  // The run is owned by the key that asked for it, so the audit trail names an
+  // agent and not the administrator who issued the key.
+  const listed = await fetch(`${url}/runs`, {
+    headers: { Authorization: `Bearer ${operator.token}` },
+  });
+  expect(await listed.json()).toMatchObject([
+    { id: accepted.id, owner: `key:${operator.id}`, repo: "fixture/app" },
+  ]);
+}, 30_000);
+
+it("refuses an unknown key scope and defaults an omitted one to read-only", async () => {
+  const { url, admin } = await apiKeysServer();
+  const refused = await fetch(`${url}/dashboard/api-keys`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ name: "agent", role: "admin" }),
+  });
+  expect(refused.status).toBe(400);
+  expect(await refused.json()).toMatchObject({ code: "API_KEY_NAME" });
+  const omitted = await fetch(`${url}/dashboard/api-keys`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ name: "agent" }),
+  });
+  expect(omitted.status).toBe(201);
+  expect((await omitted.json()) as ApiKeyCreated).toMatchObject({
+    role: "viewer",
+  });
+  // A key never grants the dashboard's administrator role: an escalation would
+  // let an agent manage keys, accounts and the preview policy.
+  const rows = (await (
+    await fetch(`${url}/dashboard/api-keys`, { headers: admin })
+  ).json()) as ApiKeyRow[];
+  expect(rows.map((row) => row.role)).toEqual(["viewer"]);
 }, 30_000);

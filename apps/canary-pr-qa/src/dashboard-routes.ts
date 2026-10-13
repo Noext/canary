@@ -36,7 +36,14 @@ const previewHostsSchema = z
     hosts: z.array(z.string().max(MAX_HOST_LENGTH)).max(400),
   })
   .strict();
-const apiKeyNameSchema = z.object({ name: z.string().min(1).max(60) }).strict();
+const apiKeySchema = z
+  .object({
+    name: z.string().min(1).max(60),
+    // Absent means read-only: a caller that never heard of the scope cannot
+    // grant more than the default by omission.
+    role: z.enum(["operator", "viewer"]).default("viewer"),
+  })
+  .strict();
 /** Path segment that decrypts a stored key instead of revoking it. */
 const SECRET_SUFFIX = "/secret";
 const API_KEYS_PREFIX = "/dashboard/api-keys";
@@ -48,9 +55,9 @@ export function apiKeysRoute(
   effectiveRepos: () => Promise<string[]>
 ) {
   /**
-   * Administrator-only key management. A key is a read-only viewer for agents,
-   * so the list and the copy action are the administrator's only way to see what
-   * an agent was granted.
+   * Administrator-only key management. A key reads the repositories it was
+   * issued for, and an `operator` key also starts runs, so the list and the copy
+   * action are the administrator's only way to see what an agent was granted.
    */
   return async (
     req: IncomingMessage,
@@ -74,12 +81,16 @@ export function apiKeysRoute(
         return true;
       }
       if (req.method === "POST") {
+        const input = apiKeyInput(await read(req));
         json(
           res,
           201,
-          await keys.create(user, apiKeyName(await read(req)), [
-            ...new Set(await effectiveRepos()),
-          ])
+          await keys.create(
+            user,
+            input.name,
+            [...new Set(await effectiveRepos())],
+            input.role
+          )
         );
         return true;
       }
@@ -105,19 +116,17 @@ export function apiKeysRoute(
   };
 }
 
-/** A name the dashboard can show; a refused body is a request error, not a 500. */
-function apiKeyName(body: Buffer) {
-  const parsed = apiKeyNameSchema.safeParse(
-    JSON.parse(body.toString()) as unknown
-  );
+/** A name and scope the dashboard can show; a refused body is a request error, not a 500. */
+function apiKeyInput(body: Buffer) {
+  const parsed = apiKeySchema.safeParse(JSON.parse(body.toString()) as unknown);
   if (!parsed.success) {
     throw new QaError(
       "API_KEY_NAME",
-      "Le nom de la clé doit contenir 1 à 60 caractères.",
-      "Donnez un nom court qui rappelle l’usage de la clé."
+      "Le nom de la clé doit contenir 1 à 60 caractères, et sa portée être « viewer » ou « operator ».",
+      "Donnez un nom court qui rappelle l’usage de la clé, et une portée connue."
     );
   }
-  return parsed.data.name;
+  return parsed.data;
 }
 /**
  * Delivery ids are opaque webhook identifiers. The bound is what the caller may

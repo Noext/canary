@@ -520,8 +520,8 @@ Captures réelles des E2E, avec données fictives :
 | `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
 | `POST /session`, `DELETE /session` | Accès technique / déconnexion et révocation locale |
 | `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
-| `GET /dashboard/api-keys` | Clés API de l'instance, admin seulement : nom, préfixe, dernière utilisation, jamais le jeton |
-| `POST /dashboard/api-keys` | `{name}` ; crée une clé en lecture seule et rend le jeton une seule fois |
+| `GET /dashboard/api-keys` | Clés API de l'instance, admin seulement : nom, préfixe, portée, dernière utilisation, jamais le jeton |
+| `POST /dashboard/api-keys` | `{name,role?}` ; `role` vaut `viewer` (défaut) ou `operator`, jamais `admin` ; rend le jeton une seule fois |
 | `POST /dashboard/api-keys/:id/secret` | Rend le jeton à recopier sans l'afficher ; 409 si la clé est révoquée |
 | `DELETE /dashboard/api-keys/:id` | Révocation immédiate ; la clé est refusée à la requête suivante |
 | `POST /mcp` | Serveur MCP des agents IA, clé API en `Authorization: Bearer` uniquement |
@@ -576,10 +576,22 @@ Le serveur en garde une empreinte et une copie chiffrée : le bouton Copier de l
 liste rend le jeton sans jamais l'afficher à l'écran. Révoquer une clé la refuse
 dès la requête suivante ; la ligne reste pour l'audit.
 
-Une clé est en lecture seule. Elle porte le rôle `viewer` et la liste de dépôts en
-vigueur au moment de sa création — la sélection GitHub des réglages,
-plafonnée par `GITHUB_ALLOWED_REPOS` — : elle lit l'historique, jamais ne lance,
-n'annule ou ne supprime un test. La même clé ouvre le serveur MCP du service :
+Une clé lit toujours les dépôts en vigueur au moment de sa création — la
+sélection GitHub des réglages, plafonnée par `GITHUB_ALLOWED_REPOS` — : elle lit
+l'historique. Sa **portée** décide de ce qu'elle peut faire de plus :
+
+| Portée | Ce qu'elle peut faire |
+| --- | --- |
+| `viewer` (défaut) | Lire les tests, les rapports et les tentatives automatiques ; rien lancer. |
+| `operator` | La lecture, plus `launch_run` : démarrer un test et payer son exécution. |
+
+Aucune clé n'est `admin` : les réglages, les comptes, la politique de previews et
+la suppression d'un test restent au dashboard. La portée est figée à la création —
+une clé vit avec le droit qu'elle a reçu, sans élargissement silencieux — et la
+liste des clés affiche celle de chacune. Le rôle voyage aussi dans `GET /me`, et
+un `POST /runs` avec une clé `viewer` reste refusé (`403`).
+
+La même clé ouvre le serveur MCP du service :
 
 ```bash
 claude mcp add --transport http canary-qa https://votre-domaine-qa/mcp \
@@ -594,6 +606,21 @@ sondes). `get_run` rend le `result.json` du run — scénarios, assertions, vid�
 coût, publication — et reste soumis à la politique de preuves brutes : traces,
 HAR et journaux natifs restent refusés. Un run purgé par la rétention est annoncé
 comme tel, jamais inventé.
+
+`launch_run` (`{prUrl,previewUrl?,publish?,model?,idempotencyKey?}`) est le seul
+outil qui écrit, et il exige une clé `operator` : il passe par le même lanceur que
+`POST /runs`, donc les mêmes contrôles s'appliquent — GitHub connecté, dépôt dans
+le périmètre de la clé, modèle présent au catalogue, hôte de preview autorisé,
+espace disque suffisant. Le SHA testé est celui que GitHub rend pour la PR au
+moment de l'appel, jamais celui qu'un agent annonce ; le run créé appartient à la
+clé (`owner: key:<id>`). `idempotencyKey` est le jeton de reprise de l'agent : le
+même jeton sur le même SHA rend le test déjà créé au lieu d'en payer un second. Un
+refus — portée insuffisante, modèle hors catalogue, URL qui n'est pas une PR,
+dépôt hors périmètre — revient comme une réponse lisible de l'outil, pas comme une
+erreur de protocole, pour que l'agent sache quoi corriger. Un test lancé reste
+facturé : le budget horaire des lancements automatiques
+(`QA_WEBHOOK_MAX_RUNS_PER_HOUR`) ne couvre pas ce chemin, qui suit les droits du
+dashboard.
 
 Le transport répond en JSON, sans connexion longue : aucun réglage de mise en
 tampon SSE n'est nécessaire côté reverse proxy.

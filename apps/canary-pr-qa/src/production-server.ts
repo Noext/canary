@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, statfs } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
@@ -19,29 +19,22 @@ import {
 import { accountRoutes } from "./account-routes.js";
 import { ApiKeys } from "./api-keys.js";
 import { authRoutes } from "./auth-routes.js";
-import {
-  type Config,
-  validateConfiguration,
-  validatePreviewUrl,
-} from "./config.js";
+import { type Config, validateConfiguration } from "./config.js";
 import { dashboard, dashboardAssets } from "./dashboard.js";
 import { dashboardRoutes } from "./dashboard-routes.js";
 import { diagnose, QaError } from "./diagnostics.js";
-import { GitHub, parsePrUrl } from "./github.js";
+import { parsePrUrl } from "./github.js";
 import { verifyWebhook } from "./github-app.js";
 import { GitHubSetup } from "./github-setup.js";
 import { githubSetupRoutes } from "./github-setup-routes.js";
 import { importLegacy } from "./legacy.js";
 import { LocalAuth, localCookie } from "./local-auth.js";
 import { mcpRoutes } from "./mcp.js";
-import {
-  ModelCatalog,
-  ModelIdSchema,
-  runModelConfig,
-} from "./model-catalog.js";
+import { ModelCatalog } from "./model-catalog.js";
 import { PreviewHosts } from "./preview-hosts.js";
 import { type Job, Queue } from "./queue.js";
 import { purgeRun } from "./retention.js";
+import { accepted, RunLauncher, runInputSchema } from "./run-launch.js";
 import { canonicalArtifactPath, serveArtifact } from "./server.js";
 import {
   durableCost,
@@ -51,14 +44,6 @@ import {
 } from "./telemetry.js";
 
 const logger = createLogger({ name: "qa-api" });
-const inputSchema = z
-  .object({
-    prUrl: z.string().url(),
-    previewUrl: z.string().url().optional(),
-    publish: z.boolean().default(true),
-    model: ModelIdSchema.optional(),
-  })
-  .strict();
 function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, {
     "Content-Type": "application/json",
@@ -104,6 +89,14 @@ export async function startProductionServer(config: Config) {
     return principal(req, await setup.effective(), accounts, keys);
   }
   const models = new ModelCatalog(config);
+  // One launcher for the dashboard endpoint and the MCP tool: an agent cannot
+  // reach a run by a path that skips a gate the dashboard applies.
+  const launcher = new RunLauncher({
+    config,
+    effective: () => setup.effective(),
+    models,
+    queue,
+  });
   const dashboardRoute = dashboardRoutes(
     setup,
     config,
@@ -114,7 +107,7 @@ export async function startProductionServer(config: Config) {
     json,
     keys
   );
-  const mcpRoute = mcpRoutes(queue, config, rawBody, json);
+  const mcpRoute = mcpRoutes(queue, config, launcher, rawBody, json);
   const streams = new Set<ServerResponse>();
   const attempts = new Map<string, { count: number; until: number }>();
   let stopping = false;
@@ -139,63 +132,25 @@ export async function startProductionServer(config: Config) {
       .catch(() => undefined);
     return { ...job, progress };
   }
+  /**
+   * `POST /runs`: the dashboard's own way to start a run. It reads the request
+   * and hands the work to the launcher the MCP `launch_run` tool shares, so the
+   * two surfaces cannot drift apart.
+   */
   async function enqueue(
     req: IncomingMessage,
     res: ServerResponse,
     user: Principal
   ) {
-    const effective = await setup.effective();
-    const github = new GitHub(effective);
-    if (
-      !(
-        (effective.GITHUB_TOKEN || effective.GITHUB_APP_ID) &&
-        effective.allowedRepos.length
-      )
-    ) {
-      throw new QaError(
-        "GITHUB_NOT_CONNECTED",
-        "Connectez GitHub et sélectionnez au moins un dépôt avant de lancer une QA.",
-        "Utilisez la section GitHub du dashboard administrateur."
-      );
-    }
-    const input = inputSchema.parse(
+    const input = runInputSchema.parse(
       JSON.parse((await rawBody(req)).toString())
     );
-    const ref = parsePrUrl(input.prUrl);
-    requireAccess(user, ref.repo, true);
-    const selected = runModelConfig(config, input.model).OPENAI_MODEL;
-    await models.require(selected);
-    if (!effective.allowedRepos.includes(ref.repo.toLowerCase())) {
-      throw new Error("Repository not allowed");
-    }
-    if (input.previewUrl) {
-      validatePreviewUrl(input.previewUrl, config);
-    }
-    const disk = await statfs(config.QA_DATA_DIR);
-    if (disk.bavail * disk.bsize < 500_000_000) {
-      throw new Error("Storage low: fewer than 500 MB available");
-    }
-    const pr = await github.pr(input.prUrl);
     const supplied = req.headers["idempotency-key"];
     if (supplied && (typeof supplied !== "string" || supplied.length > 150)) {
       throw new Error("Invalid idempotency key");
     }
-    const key = supplied
-      ? `${user.id}:${ref.repo}:${ref.number}:${pr.data.head.sha}:${supplied}`
-      : randomUUID();
-    const job = await queue.enqueue(
-      ref.repo,
-      ref.number,
-      pr.data.head.sha,
-      user.id,
-      { ...input, model: selected },
-      key
-    );
-    json(res, 202, {
-      id: job.id,
-      statusUrl: `/runs/${job.id}`,
-      reportUrl: `/artifacts/${job.id}/report.html`,
-    });
+    const job = await launcher.launch(user, input, supplied || undefined);
+    json(res, 202, accepted(job));
   }
   async function webhook(req: IncomingMessage, res: ServerResponse) {
     const effective = await setup.effective();
