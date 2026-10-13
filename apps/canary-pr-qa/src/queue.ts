@@ -8,6 +8,7 @@ import type {
 import { QaError } from "./diagnostics.js";
 import { GITHUB_SETUP_MIGRATION } from "./github-setup.js";
 import { LOCAL_AUTH_MIGRATION } from "./local-auth.js";
+import { PREVIEW_HOSTS_MIGRATION } from "./preview-hosts.js";
 import type { RunOptions } from "./runner.js";
 
 interface AutomaticRunLimits {
@@ -59,7 +60,7 @@ export interface DeliveryRow {
   status: string;
   updated_at: Date;
 }
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -90,6 +91,7 @@ ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS last_error text;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS run_id uuid;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS claim_token text;
+${PREVIEW_HOSTS_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
 export class Queue {

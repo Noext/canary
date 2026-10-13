@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { PREVIEW_POLICY_FILE } from "../src/preview-hosts.js";
 import type { RunResult } from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
 import { githubSetupFixture } from "./github-setup-fixture.js";
@@ -192,8 +193,40 @@ describe.skipIf(!image)(
           })
         ).status
       ).toBe(200);
+      // The administrator edits the preview host allowlist in the dashboard. The
+      // saved list is published to the volume the browser and egress containers
+      // mount read-only, and it must survive an API restart.
+      const extraHost = "extra.preview.invalid";
+      const saved = (await (
+        await fetch(`${s.url}/dashboard/preview-hosts`, {
+          method: "PUT",
+          headers: auth,
+          body: JSON.stringify({
+            hosts: [new URL(s.inside).host, extraHost],
+          }),
+        })
+      ).json()) as { hosts: string[] };
+      expect(saved.hosts).toEqual([new URL(s.inside).host, extraHost]);
+      const policy = async () =>
+        (
+          await s.compose(
+            "exec",
+            "-T",
+            "egress",
+            "cat",
+            `/policy/${PREVIEW_POLICY_FILE}`
+          )
+        ).stdout;
+      expect(JSON.parse(await policy())).toMatchObject({
+        hosts: [new URL(s.inside).host, extraHost],
+      });
       await s.compose("restart", "pr-qa", "worker");
       await s.waitHealthy();
+      // A restart republishes the stored list instead of dropping back to the
+      // environment default the containers were started with.
+      expect(JSON.parse(await policy())).toMatchObject({
+        hosts: [new URL(s.inside).host, extraHost],
+      });
       const status = (await (
         await fetch(`${s.url}/github/app`, { headers: auth })
       ).json()) as { app: { id: string } };
@@ -240,6 +273,35 @@ describe.skipIf(!image)(
       expect(
         checked.checks.every((c: { status: string }) => c.status === "passed")
       ).toBe(true);
+      // The documented `./scripts/pr-qa doctor` runs inside `worker`, so the policy
+      // probe must test the shared volume there and not an environment-only
+      // fallback: an unwritable qa-policy volume would leave browser/egress stale.
+      const workerChecked = JSON.parse(
+        (
+          await s.compose(
+            "exec",
+            "-T",
+            "worker",
+            "canary-pr-qa",
+            "doctor",
+            "--json",
+            "--skip-browser",
+            "--pr",
+            PR_URL,
+            "--preview",
+            s.inside
+          )
+        ).stdout
+      );
+      const policyCheck = workerChecked.checks.find(
+        (check: { name: string }) => check.name === "preview-policy"
+      );
+      expect(policyCheck, JSON.stringify(workerChecked.checks)).toMatchObject({
+        status: "passed",
+      });
+      expect(String(policyCheck.message)).toContain(
+        "host(s) published and readable"
+      );
       expect(
         (await fetch(`${s.url}/runs`, { method: "POST", body: "{}" })).status
       ).toBe(401);

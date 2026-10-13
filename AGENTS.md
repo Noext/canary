@@ -248,7 +248,7 @@ Renseigner au minimum :
 | `OPENAI_API_KEY` | Clé active fournie par l'opérateur ; ne pas réutiliser une ancienne clé temporaire de test |
 | `OPENAI_MODEL` | **`opencode-go/deepseek-v4.1-flash`** |
 | `QA_ALLOWED_PROVIDER_HOSTS` | `ai.noext.fr` ; toute politique fournisseur du dépôt testé doit également autoriser ce host |
-| `PREVIEW_ALLOWED_HOSTS` | Hôtes exacts nécessaires aux previews, API, images, polices et WebSockets, avec les ports non standards ; remplacer l'exemple |
+| `PREVIEW_ALLOWED_HOSTS` | Hôtes de preview autorisés au démarrage (hôte ou hôte:port, sans joker) : **liste initiale** et repli. L'administrateur l'édite ensuite dans Réglages du dashboard ; la liste enregistrée est publiée aux services `browser`/`egress` par le volume `qa-policy` |
 | `ARTIFACT_BASE_URL` | Origine HTTPS du dashboard si les rapports doivent être accessibles depuis les liens GitHub ; pas de suffixe `/artifacts` |
 | `QA_AUTO_RUNS` | `true` par défaut : un PR non brouillon sur un dépôt connecté et opt-in lance le run ; `false` enregistre les tentatives `auto_disabled` (audit `automatic.disabled`) sans exécuter |
 | `QA_AUTO_PREVIEW_WAIT_SECONDS` | Attente de la preuve du SHA complet, en secondes (60-86400, défaut 1800) ; au-delà, tentative `expired`, audit `automatic.preview_expired`, jamais rejouée |
@@ -316,7 +316,9 @@ service cherche un déploiement réussi de la PR au bon SHA/environnement.
 
 Si la preview utilise des IP privées, `QA_ALLOW_PRIVATE_PREVIEWS=true` nécessite
 une liste d'hôtes précise. Ne jamais y autoriser les services de contrôle ou des
-endpoints de métadonnées. Pour une interface nécessitant un login, configurer les
+endpoints de métadonnées. Cette liste se règle dans Réglages du dashboard
+(administrateur) ; `PREVIEW_ALLOWED_HOSTS` n'est que la liste initiale. Pour une
+interface nécessitant un login, configurer les
 rôles/storage states et les fixtures de test de confiance via
 `config/fixtures.example.json` et `QA_FIXTURES_FILE=/app/config/fixtures.json`.
 Ne pas deviner de comptes de production. Le README détaille ces préconditions.
@@ -347,8 +349,10 @@ Une vérification sautée avec `--offline` / `--skip-browser` reste non validée
 | `egress` | Proxy avec contrôles de destinations et DNS/IP épinglés |
 | `db` | PostgreSQL, file durable, leases, inbox et audit |
 
-Le navigateur est isolé sur un réseau Docker interne. Le déploiement garde trois
-volumes : `qa-data`, `canary-sessions`, `qa-db`. `config/` est monté en lecture
+Le navigateur est isolé sur un réseau Docker interne. Le déploiement garde quatre
+volumes : `qa-data`, `canary-sessions`, `qa-db` et `qa-policy` (liste d'hôtes
+publiée par `pr-qa`, lue par `browser`/`egress` et sondée par le doctor du
+`worker` ; recréée au démarrage de `pr-qa`). `config/` est monté en lecture
 seule. Vérifier que les fichiers de configuration nécessaires sont lisibles par
 l'UID 1000 sans rendre les clés accessibles à tous.
 
@@ -446,7 +450,7 @@ et procédures ciblées sont dans le [guide de dépannage](docs/pr-qa-operations
 
 Suspendre les nouvelles soumissions et les webhooks avant une mise à jour.
 Attendre que la file soit vide et qu'aucun run ne soit actif ; préserver `.env`,
-`config/` et les trois volumes. Sur un clone propre de la branche de déploiement :
+`config/` et les quatre volumes. Sur un clone propre de la branche de déploiement :
 
 ```bash
 git fetch origin main

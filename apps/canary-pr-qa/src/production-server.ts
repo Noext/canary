@@ -36,6 +36,7 @@ import {
   ModelIdSchema,
   runModelConfig,
 } from "./model-catalog.js";
+import { PreviewHosts } from "./preview-hosts.js";
 import { type Job, Queue } from "./queue.js";
 import { purgeRun } from "./retention.js";
 import { canonicalArtifactPath, serveArtifact } from "./server.js";
@@ -80,6 +81,11 @@ export async function startProductionServer(config: Config) {
   const queue = new Queue(config.DATABASE_URL);
   await queue.migrate();
   await importLegacy(queue, config);
+  // The dashboard-managed host list replaces the environment default for this
+  // process and is republished so the browser and egress containers enforce it.
+  const previewHosts = new PreviewHosts(queue.pool, config);
+  await previewHosts.load();
+  await previewHosts.publish("server");
   const accounts = new LocalAuth(queue.pool);
   const setup = new GitHubSetup(queue.pool, config);
   const setupRoute = githubSetupRoutes(setup, queue, rawBody, json);
@@ -92,6 +98,7 @@ export async function startProductionServer(config: Config) {
     config,
     models,
     queue,
+    previewHosts,
     rawBody,
     json
   );

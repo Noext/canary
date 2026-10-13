@@ -61,6 +61,13 @@ export const runJobListSchema = z.array(
   runJobSchema.omit({ error: true, progress: true })
 );
 
+export const previewSettingsSchema = z.object({
+  hosts: z.array(z.string()),
+  hostsDefault: z.array(z.string()),
+  shaHeader: z.string().nullish(),
+  shaPath: z.string().nullish(),
+});
+
 export const setupStatusSchema = z.object({
   ai: z.object({ defaultModel: z.string(), endpoint: z.string() }),
   github: z.object({
@@ -71,6 +78,7 @@ export const setupStatusSchema = z.object({
   preview: z.object({
     automatic: z.boolean(),
     hosts: z.array(z.string()).nullish(),
+    hostsDefault: z.array(z.string()).nullish(),
     shaHeader: z.string().nullish(),
     shaPath: z.string().nullish(),
   }),
@@ -249,6 +257,7 @@ export const responseSchemas = {
   "/auth/setup": principalSchema,
   "/auth/status": authStatusSchema,
   "/dashboard/automatic": automaticStatusSchema,
+  "/dashboard/preview-hosts": previewSettingsSchema,
   "/dashboard/status": setupStatusSchema,
   "/github/app": githubStatusSchema,
   "/github/app/install": githubInstallSchema,

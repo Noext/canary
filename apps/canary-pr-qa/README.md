@@ -32,6 +32,16 @@ Générer **trois secrets différents** pour `QA_API_TOKEN`, `QA_DB_PASSWORD` et
 - `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` : votre vrai endpoint `/v1`.
 - `PREVIEW_ALLOWED_HOSTS` : tous les hôtes nécessaires à la preview, API, images,
   polices et WebSockets inclus, avec leurs ports lorsqu'ils ne sont pas standards.
+  C'est la **liste initiale** : elle remplit le champ du dashboard et sert de
+  repli tant qu'aucune liste n'a été enregistrée. L'administrateur ajoute ou
+  retire ensuite des hôtes dans Réglages → « Hôtes autorisés par
+  l'administrateur » (audit `preview.hosts.updated` / `preview.hosts.reset`), sans
+  redémarrage : la liste est publiée aux services `browser` et `egress` via le
+  volume `qa-policy`. Ces deux services **n'élargissent jamais** la liste : tant
+  que la politique publiée est absente ou illisible, toutes les destinations sont
+  refusées (`PREVIEW_POLICY_MISSING` / `PREVIEW_POLICY_INVALID`) jusqu'à la
+  republication par l'API ; `doctor` compare le fichier publié et la liste en
+  vigueur (`preview-policy-current`).
 - La preview doit exposer le SHA Git complet dans `x-commit-sha`, ou dans le JSON
   `{"sha":"..."}` du chemin `PREVIEW_SHA_PATH`. Cela s'applique également aux
   previews trouvées via les déploiements GitHub. Un header peut être injecté au
@@ -75,10 +85,10 @@ fonctionnelle du modèle ni le succès d'une PR particulière.
 
 | Service | Responsabilité | Secrets / persistance |
 | --- | --- | --- |
-| `pr-qa` | API, dashboard, sessions utilisateurs, webhooks, SSE | Identités et GitHub ; volume `qa-data` |
-| `worker` | Planification, contrat, exécution et publication | IA/GitHub, fixtures ; `qa-data`, sessions en lecture |
-| `browser` | Moteur Canary, Playwright, QuickJS, Chromium | Token de service ; aucune clé IA/GitHub ; `canary-sessions` |
-| `egress` | Proxy DNS vérifié, connexions vers IP épinglées | Aucun secret de contrôle |
+| `pr-qa` | API, dashboard, sessions utilisateurs, webhooks, SSE | Identités et GitHub ; volumes `qa-data`, `qa-policy` |
+| `worker` | Planification, contrat, exécution et publication | IA/GitHub, fixtures ; `qa-data`, sessions en lecture, `qa-policy` pour le doctor |
+| `browser` | Moteur Canary, Playwright, QuickJS, Chromium | Token de service ; aucune clé IA/GitHub ; `canary-sessions`, `qa-policy` en lecture |
+| `egress` | Proxy DNS vérifié, connexions vers IP épinglées | Aucun secret de contrôle ; `qa-policy` en lecture |
 | `db` | File durable, leases, livraisons webhook, journal d'accès | Mot de passe DB ; volume `qa-db` |
 
 Le navigateur est sur un réseau Docker `internal`. Son trafic externe passe par
@@ -317,9 +327,10 @@ parcours manuel reste disponible : une URL de PR et une preview vérifiable
 continuent de fonctionner pour tout ce que l'automatisation a sauté.
 
 L'opérateur doit toujours fournir une preview joignable exposant le SHA complet
-(en-tête ou JSON selon `PREVIEW_SHA_PATH`), autoriser ses hôtes dans
-`PREVIEW_ALLOWED_HOSTS` et laisser GitHub livrer les webhooks sur une origine
-HTTPS publique. L'automatisation ne devine ni l'URL ni le SHA.
+(en-tête ou JSON selon `PREVIEW_SHA_PATH`), autoriser ses hôtes dans la liste
+initiale `PREVIEW_ALLOWED_HOSTS` ou depuis le dashboard, et laisser GitHub livrer
+les webhooks sur une origine HTTPS publique. L'automatisation ne devine ni l'URL
+ni le SHA.
 
 Un PAT reste possible : lecture Contents/Deployments et écriture PR/statuses.
 Les Checks et l'upsert de commentaire Bot sont réservés au mode GitHub App.
@@ -409,7 +420,11 @@ GitHub, choisir un modèle disponible ou tester une PR. Les états sont dérivé
 des accès et du catalogue réellement chargé, sans simuler une génération IA.
 
 1. **Réglages** : créer/installer l'App, choisir les dépôts ; vérifier l'accès au
-   fournisseur et consulter les contraintes des previews.
+   fournisseur et consulter les contraintes des previews. La carte « Hôtes
+   autorisés par l'administrateur » ajoute ou retire les hôtes de preview
+   (ajout, retrait, enregistrement, retour à la liste du serveur) ; la liste est
+   appliquée au navigateur et au proxy de sortie en quelques secondes, sans
+   redémarrage, et chaque changement est audité.
 2. **Nouveau test** : coller l'URL de PR, l'URL de son application de test si elle
    n'est pas fournie par GitHub, puis choisir votre modèle.
 3. **Vérifier les accès** : lecture de la PR et contrôle de la preview au même SHA.
@@ -493,9 +508,11 @@ legacy sont marqués interrompus.
 docker compose up -d --scale worker=2
 ```
 
-Trois volumes : données, sessions, PostgreSQL. Sauvegarder `qa-data` et faire un
+Trois volumes de données plus le volume de politique : `qa-data`, `canary-sessions`,
+`qa-db` et `qa-policy`. Sauvegarder `qa-data` et faire un
 `pg_dump` cohérent de la DB ; tester une restauration dans un projet Compose
-séparé. **Ne pas utiliser `down -v` sur l'installation de production.**
+séparé. `qa-policy` ne contient que la liste d'hôtes publiée et se recrée au
+démarrage de `pr-qa`. **Ne pas utiliser `down -v` sur l'installation de production.**
 La rétention supprime les runs terminaux après `QA_RETENTION_DAYS` ou lorsque
 `QA_STORAGE_MAX_GB` est dépassé ; les runs actifs sont préservés. Les accès et
 suppressions sont audités en DB. Les sessions natives sont purgées après export

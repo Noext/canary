@@ -25,6 +25,7 @@ services:
     environment:
       QA_DATA_DIR: /data
       QA_HOST: 0.0.0.0
+      QA_POLICY_DIR: /policy
       DATABASE_URL: postgresql://canary:${QA_DB_PASSWORD}@db:5432/canary
       QA_BROWSER_SERVICE_URL: http://browser:8790
     ports:
@@ -35,6 +36,7 @@ services:
     volumes:
       - qa-data:/data
       - canary-sessions:/home/node/.canary/sessions:ro
+      - qa-policy:/policy
       - ./config:/app/config:ro
     networks: [control, external]
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -59,6 +61,7 @@ services:
     env_file: ${QA_ENV_FILE:-.env}
     environment:
       QA_DATA_DIR: /data
+      QA_POLICY_DIR: /policy
       DATABASE_URL: postgresql://canary:${QA_DB_PASSWORD}@db:5432/canary
       QA_BROWSER_SERVICE_URL: http://browser:8790
     depends_on:
@@ -69,6 +72,9 @@ services:
     volumes:
       - qa-data:/data
       - canary-sessions:/home/node/.canary/sessions:ro
+      # The documented `./scripts/pr-qa doctor` runs in this container: it probes
+      # the shared policy volume the API publishes into.
+      - qa-policy:/policy
       - ./config:/app/config:ro
     init: true
     restart: unless-stopped
@@ -86,12 +92,14 @@ services:
       QA_BROWSER_SERVICE_TOKEN: ${QA_BROWSER_SERVICE_TOKEN:?Generate a random browser service token}
       PREVIEW_ALLOWED_HOSTS: ${PREVIEW_ALLOWED_HOSTS}
       QA_ALLOW_PRIVATE_PREVIEWS: ${QA_ALLOW_PRIVATE_PREVIEWS:-false}
+      QA_POLICY_DIR: /policy
       CANARY_EGRESS_PROXY: http://egress:3128
     depends_on:
       egress: {condition: service_healthy}
     networks: [control]
     volumes:
       - canary-sessions:/home/node/.canary/sessions
+      - qa-policy:/policy:ro
     init: true
     restart: unless-stopped
     stop_grace_period: 45s
@@ -113,8 +121,11 @@ services:
     environment:
       PREVIEW_ALLOWED_HOSTS: ${PREVIEW_ALLOWED_HOSTS}
       QA_ALLOW_PRIVATE_PREVIEWS: ${QA_ALLOW_PRIVATE_PREVIEWS:-false}
+      QA_POLICY_DIR: /policy
     networks: [control, external]
     extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - qa-policy:/policy:ro
     init: true
     restart: unless-stopped
     mem_limit: 256m
@@ -134,3 +145,4 @@ volumes:
   qa-data:
   canary-sessions:
   qa-db:
+  qa-policy:

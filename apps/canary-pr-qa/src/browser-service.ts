@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Canary } from "./canary.js";
 import type { Config } from "./config.js";
 import { diagnose } from "./diagnostics.js";
+import { watchPreviewPolicy } from "./preview-hosts.js";
 
 const commandSchema = z
   .object({
@@ -17,7 +18,12 @@ export async function startBrowserService(config: Config) {
       "QA_BROWSER_SERVICE_TOKEN must have at least 32 characters"
     );
   }
-  const native = new Canary({ ...config, QA_BROWSER_SERVICE_URL: "" });
+  // The service owns this process's configuration: it never talks to itself, and
+  // the policy watcher and the Canary instance must share one object, because the
+  // watcher mutates it and `browserEnvironment` reads it at every command.
+  config.QA_BROWSER_SERVICE_URL = "";
+  const policy = watchPreviewPolicy(config);
+  const native = new Canary(config);
   let active = 0;
   const server = createServer((req, res) => {
     void handle().catch((error) => {
@@ -46,6 +52,12 @@ export async function startBrowserService(config: Config) {
         res.end(JSON.stringify({ code: 0, stdout: "", stderr: "" }));
         return;
       }
+      if (input.args[0] === "session" && input.args[1] === "start") {
+        // A context keeps the host list it was started with, and the dashboard
+        // edit is already in force: re-read the published policy so a run started
+        // right after an edit never installs the previous list for its whole life.
+        await policy.sync();
+      }
       active++;
       try {
         const result = await native.command(input.args, input.script);
@@ -56,10 +68,14 @@ export async function startBrowserService(config: Config) {
       }
     }
   });
+  // The first read is awaited, so a session cannot start on the boot environment
+  // list while the dashboard policy is already published.
+  await policy.sync();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.QA_BROWSER_PORT, config.QA_BROWSER_HOST, resolve);
   });
+  server.on("close", () => policy.stop());
   return server;
 }
 

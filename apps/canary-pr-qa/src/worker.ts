@@ -5,6 +5,7 @@ import { completeRun } from "./completion.js";
 import type { Config } from "./config.js";
 import { diagnose } from "./diagnostics.js";
 import { GitHubSetup } from "./github-setup.js";
+import { PreviewHosts } from "./preview-hosts.js";
 import { Queue } from "./queue.js";
 import { retain } from "./retention.js";
 import { runScope } from "./run-scope.js";
@@ -19,6 +20,15 @@ export async function startWorker(
   const queue = new Queue(config.DATABASE_URL);
   await queue.migrate();
   const setup = new GitHubSetup(queue.pool, config);
+  const previewHosts = new PreviewHosts(queue.pool, config);
+  await previewHosts
+    .load()
+    .catch((error) =>
+      logger.warn(
+        { diagnostic: diagnose(error, config) },
+        "Preview host list refresh failed"
+      )
+    );
   const worker = randomUUID();
   let active: AbortController | undefined;
   const shutdown = () => {
@@ -29,6 +39,7 @@ export async function startWorker(
   process.once("SIGINT", shutdown);
   let lastRetention = 0;
   let lastGitHubSync = 0;
+  let lastPreviewHosts = 0;
   try {
     while (!stop.signal.aborted) {
       if (Date.now() - lastGitHubSync > 60_000) {
@@ -43,6 +54,17 @@ export async function startWorker(
               )
             );
         }
+      }
+      if (Date.now() - lastPreviewHosts > 15_000) {
+        lastPreviewHosts = Date.now();
+        await previewHosts
+          .load()
+          .catch((error) =>
+            logger.warn(
+              { diagnostic: diagnose(error, config) },
+              "Preview host list refresh failed"
+            )
+          );
       }
       await processDelivery(queue, await setup.effective()).catch((error) =>
         logger.warn(
@@ -81,6 +103,16 @@ export async function startWorker(
       }, 10_000);
       let effective = config;
       try {
+        // A list edited just before this run applies to this run, not to the next
+        // worker iteration: preview validation must see the current hosts.
+        await previewHosts
+          .load()
+          .catch((error) =>
+            logger.warn(
+              { diagnostic: diagnose(error, config) },
+              "Preview host list refresh failed"
+            )
+          );
         effective = await setup.effective();
         if (!effective.allowedRepos.includes(job.repo.toLowerCase())) {
           throw new Error("Repository is no longer connected or allowed");
