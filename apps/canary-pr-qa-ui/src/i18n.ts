@@ -19,6 +19,8 @@ export type ViewName =
 
 /** Server error codes the interface explains in French. */
 export const errorMessages: Record<string, string | undefined> = {
+  ACCOUNT_SCOPE_REQUIRED:
+    "La gestion des comptes demande un accès à tous les dépôts de l’instance : cette identité n’en couvre qu’une partie.",
   API_KEY_NAME: "Le nom d’une clé doit faire entre 1 et 60 caractères.",
   API_KEY_REVOKED:
     "Cette clé a été révoquée : son jeton ne peut plus être copié. Créez-en une nouvelle si vous en avez besoin.",

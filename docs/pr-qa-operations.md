@@ -37,7 +37,9 @@ pas de SSO ; les accès techniques existants sont conservés dans une section d�
 La récupération de mot de passe via stdin (`reset-password`) est documentée dans
 le README et révoque les sessions du compte. Ne jamais purger la DB pour récupérer
 l'accès. Les autres comptes humains (rôle, dépôts, mot de passe) se créent et se
-modifient dans la section « Comptes utilisateurs » du dashboard, réservée aux administrateurs ;
+modifient dans la section « Comptes utilisateurs » du dashboard, réservée à un
+administrateur dont l'accès couvre tous les dépôts activés (une identité limitée à un
+projet reçoit 403 `ACCOUNT_SCOPE_REQUIRED`) ;
 `config/users.json` ne concerne que les identités techniques (token SHA-256 ou
 sujet OIDC) et n'est pas modifiable depuis le dashboard.
 Connecter GitHub depuis la section GitHub du dashboard : créer l’App, confirmer

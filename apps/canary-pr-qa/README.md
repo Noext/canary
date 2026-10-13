@@ -387,7 +387,11 @@ conserver `X-Forwarded-Proto` sur votre reverse proxy.
 
 Après la première installation, un administrateur crée et gère les autres comptes
 dans le dashboard (section « Comptes utilisateurs ») : identifiant, mot de passe, rôle
-(viewer/operator/admin) et dépôts visibles. Changer un mot de passe révoque
+(viewer/operator/admin) et dépôts visibles. Cette gestion est une autorité d'instance :
+elle demande un administrateur dont l'accès couvre tous les dépôts activés. Une identité
+`users.json` ou OIDC limitée à un projet peut lire et lancer sur ce projet, mais nommer
+un compte local administrateur lui donnerait un accès plus large que le sien : l'API
+répond `403 ACCOUNT_SCOPE_REQUIRED`. Changer un mot de passe révoque
 immédiatement toutes les sessions de ce compte. Un dépôt hors de la sélection
 effective est refusé, tout comme un identifiant déjà utilisé. Le dernier
 administrateur ne peut être ni supprimé ni rétrogradé, et personne ne supprime
@@ -526,7 +530,7 @@ Captures réelles des E2E, avec données fictives :
 | `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
-| `GET /accounts` | Comptes humains : `{accounts:[{id,username,role,repos,createdAt}]}`, admin uniquement |
+| `GET /accounts` | Comptes humains : `{accounts:[{id,username,role,repos,createdAt}]}`, administrateur d'instance uniquement (403 `ACCOUNT_SCOPE_REQUIRED` si son accès ne couvre pas tous les dépôts) |
 | `POST /accounts` | `{username,password,role,repos}` ; 201 `{account}` |
 | `PATCH /accounts/:id` | `{role?,repos?,password?}` ; 200 `{account}`, mot de passe changé = sessions du compte révoquées |
 | `DELETE /accounts/:id` | 200 `{ok:true}` ; dernier admin et compte courant refusés |

@@ -27,6 +27,9 @@ it("lets an administrator create, scope, rotate and delete human accounts while 
   const f = await fixture();
   cleanup.push(f.close);
   const viewerToken = "accounts-viewer-token-2026-abcdefgh";
+  // An administrator scoped to one project: it may read that project, but the
+  // instance-wide account API is not its to hold.
+  const scopedToken = "accounts-scoped-admin-token-2026";
   const usersFile = join(f.dataDir, "accounts-users.json");
   await writeFile(
     usersFile,
@@ -36,6 +39,12 @@ it("lets an administrator create, scope, rotate and delete human accounts while 
         role: "viewer",
         repos: ["fixture/app"],
         tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
+      },
+      {
+        id: "scoped-admin",
+        role: "admin",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256").update(scopedToken).digest("hex"),
       },
     ])
   );
@@ -55,6 +64,8 @@ it("lets an administrator create, scope, rotate and delete human accounts while 
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
     QA_USERS_FILE: usersFile,
+    // Two repositories: the scoped administrator below covers only one of them.
+    allowedRepos: ["fixture/app", "fixture/other"],
   });
   cleanup.push(() => server.shutdown());
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -127,6 +138,38 @@ it("lets an administrator create, scope, rotate and delete human accounts while 
       })
     ).status
   ).toBe(403);
+  // An administrator limited to one project may not name accounts: every local
+  // administrator follows the whole selection, so it could escape its scope.
+  for (const [path, method] of [
+    ["/accounts", "GET"],
+    ["/accounts", "POST"],
+  ] as const) {
+    const scoped = await fetch(`${url}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${scopedToken}`,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      ...(method === "POST"
+        ? {
+            body: JSON.stringify({
+              username: "escaped-admin",
+              password: "escaped-password-2026",
+              role: "admin",
+              repos: [],
+            }),
+          }
+        : {}),
+    });
+    expect(scoped.status).toBe(403);
+    expect(await scoped.json()).toMatchObject({
+      code: "ACCOUNT_SCOPE_REQUIRED",
+    });
+  }
+  expect(
+    (await fetch(`${url}/accounts`, { headers: { Cookie: cookie } })).status
+  ).toBe(200);
 
   const created = await call("/accounts", "POST", {
     username: "Ops.Team",

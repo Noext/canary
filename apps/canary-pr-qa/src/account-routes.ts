@@ -2,10 +2,17 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { Principal } from "./access.js";
 import type { AccountPayload, AccountsPayload } from "./dashboard/contracts.js";
+import { QaError } from "./diagnostics.js";
 import { AccountCreate, AccountUpdate, type LocalAuth } from "./local-auth.js";
 import type { Queue } from "./queue.js";
 
 const AccountId = z.string().uuid();
+
+/** The administrator's scope covers every repository this instance enabled. */
+function coversInstance(repos: string[], allowed: string[]) {
+  const scope = new Set(repos.map((repo) => repo.toLowerCase()));
+  return allowed.every((repo) => scope.has(repo.toLowerCase()));
+}
 
 /**
  * Administrative CRUD over the human accounts of `qa_local_users`, mounted
@@ -16,7 +23,8 @@ export function accountRoutes(
   accounts: LocalAuth,
   queue: Queue,
   read: (req: IncomingMessage) => Promise<Buffer>,
-  json: (res: ServerResponse, status: number, value: unknown) => void
+  json: (res: ServerResponse, status: number, value: unknown) => void,
+  allowedRepos: () => Promise<string[]>
 ) {
   return async (
     req: IncomingMessage,
@@ -31,6 +39,18 @@ export function accountRoutes(
     if (user.role !== "admin") {
       json(res, 403, { error: "Administrator required" });
       return true;
+    }
+    // Managing accounts is an instance-wide power: it names local
+    // administrators, and every local administrator follows the whole
+    // selection. A scoped administrator — a `users.json` or OIDC admin limited
+    // to one project — could otherwise mint an account that outranks its own
+    // scope and reach runs it may not read.
+    if (!coversInstance(user.repos, await allowedRepos())) {
+      throw new QaError(
+        "ACCOUNT_SCOPE_REQUIRED",
+        "La gestion des comptes demande un accès à tous les dépôts de l'instance.",
+        "Utilisez un compte local administrateur, ou élargissez la portée de cette identité."
+      );
     }
     const body = async () => JSON.parse((await read(req)).toString());
     if (req.method === "GET" && url.pathname === prefix) {
