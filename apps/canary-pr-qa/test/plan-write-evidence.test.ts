@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
 import { runQa } from "../src/runner.js";
 import type { Plan, Scenario } from "../src/schema.js";
-import { fixture, PR_URL } from "./fixture.js";
+import { BASE_SHA, fixture, PR_URL } from "./fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -212,4 +212,27 @@ it("ignores the write-evidence rule when the trusted policy disables it", async 
   expect(
     result.scenarios[0]?.steps.some((step) => step.action.type === "click")
   ).toBe(true);
+});
+
+it("keeps a write-refused scenario out of the baseline run", async () => {
+  const f = await fixture({
+    plans: [planWith(staticScenario, switchViewScenario("state"))],
+  });
+  cleanup.push(f.close);
+  fakeBrowser();
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    { ...f.config, QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline` }
+  );
+  expect(result.baseline?.sha).toBe(BASE_SHA);
+  expect(result.baseline?.scenarios.map((item) => item.scenario.id)).toEqual([
+    "static-banner",
+  ]);
+  expect(
+    result.scenarios.map((item) => [item.scenario.id, item.outcome])
+  ).toEqual([
+    ["static-banner", "passed"],
+    ["switch-view", "blocked"],
+  ]);
+  expect(result.outcome).toBe("blocked");
 });

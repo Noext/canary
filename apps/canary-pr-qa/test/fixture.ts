@@ -224,6 +224,18 @@ export async function fixture(
       );
       return;
     }
+    if (path === "/baseline") {
+      // Préversion de base : même hôte, autre SHA annoncé, pour exercer le tour
+      // de comparaison `QA_BASELINE_URL_TEMPLATE` sans changer d'infrastructure.
+      res.writeHead(200, {
+        "Content-Type": "text/html",
+        "x-commit-sha": BASE_SHA,
+      });
+      res.end(
+        '<!doctype html><html lang="en"><title>QA baseline fixture</title><h1>Baseline</h1></html>'
+      );
+      return;
+    }
     if (path === "/download") {
       res.writeHead(200, {
         "Content-Type": "text/plain",
