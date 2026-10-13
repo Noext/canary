@@ -278,7 +278,16 @@ function PromotedAction({
   );
 }
 
-/** The version proof the preview of this attempt had to satisfy. */
+/**
+ * The version proof the preview of this attempt had to satisfy, and — first —
+ * how Canary was supposed to find the application at all.
+ *
+ * The two questions are separate and both decide the outcome: without a URL
+ * model, Canary falls back to the GitHub deployments of the pull request, which
+ * is exactly the difference between "aucune application trouvée" and "cette
+ * application n'annonce pas le commit". Stating the fallback even when a header
+ * or a JSON path is configured is what makes that difference readable.
+ */
 function PreviewProof({
   preview,
 }: {
@@ -287,7 +296,7 @@ function PreviewProof({
   const lines = [
     preview.template
       ? automaticDetail.previewTemplate(preview.template)
-      : undefined,
+      : automaticDetail.previewNone,
     preview.shaHeader
       ? automaticDetail.previewHeader(preview.shaHeader)
       : undefined,
@@ -297,11 +306,9 @@ function PreviewProof({
     <section className="mt-4" id="automaticDetailPreview">
       <h2 className="font-semibold text-sm">{automaticDetail.previewTitle}</h2>
       <ul className="mt-1 text-muted-foreground text-sm">
-        {(lines.length > 0 ? lines : [automaticDetail.previewNone]).map(
-          (line) => (
-            <li key={line}>{line}</li>
-          )
-        )}
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
       </ul>
     </section>
   );

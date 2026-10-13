@@ -172,7 +172,7 @@ describe("AutomaticRuns", () => {
       "En attente de la préversion"
     );
     expect(byId(container, "automaticAttempts")).toHaveTextContent(
-      "Aucune application de test publiée pour ce commit."
+      "Canary n’a trouvé aucune application de test pour ce commit"
     );
     expect(byId(container, "automaticAttempts")).toHaveTextContent(
       "3 tentatives"

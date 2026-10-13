@@ -288,6 +288,41 @@ describe("AutomaticDetailView", () => {
     expect(document.getElementById("automaticDetailPreview")).toBeNull();
   });
 
+  it("says which URL model was in force, including when there is none", async () => {
+    // The user's case: a deployment exists, but Canary was never told how to
+    // find it. Without this line the screen shows the version proof it would
+    // have checked and nothing about the URL it never had.
+    wire.handler = () => detail({ preview: { shaHeader: "x-commit-sha" } });
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+
+    await waitFor(() =>
+      expect(byId("automaticDetailPreview")).toHaveTextContent(
+        automaticDetail.previewNone
+      )
+    );
+    expect(byId("automaticDetailPreview")).toHaveTextContent(
+      automaticDetail.previewHeader("x-commit-sha")
+    );
+  });
+
+  it("tells a URL it could not check from an URL that proves the wrong commit", () => {
+    // Two different situations that both read as "votre déploiement ne marche
+    // pas" once they share a sentence: no URL at all, versus a URL that answers
+    // without announcing this commit.
+    expect(automaticReasons.PREVIEW_NOT_FOUND).not.toBe(
+      automaticReasons.PREVIEW_SHA_MISMATCH
+    );
+    expect(automaticAdvice.PREVIEW_NOT_FOUND).not.toBe(
+      automaticAdvice.PREVIEW_SHA_MISMATCH
+    );
+    expect(automaticReasons.PREVIEW_NOT_FOUND).toContain("aucune URL");
+    expect(automaticReasons.PREVIEW_SHA_MISMATCH).toContain("répond");
+  });
+
   it("shows the preview proof to an administrator who receives it", async () => {
     wire.handler = () =>
       detail({

@@ -44,10 +44,10 @@ export const errorMessages: Record<string, string | undefined> = {
   PR_CHANGED:
     "La pull request a changé pendant le test : ce résultat ne correspond plus au dernier commit.",
   PR_CLOSED: "Cette pull request est fermée.",
-  PREVIEW_SHA_MISMATCH:
-    "L’application de test ne présente pas le commit de cette PR. Déployez cette version puis vérifiez à nouveau.",
   PREVIEW_NOT_FOUND:
-    "Aucune application de test trouvée pour cette PR. Renseignez son URL dans le formulaire.",
+    "Canary ne connaît l’URL d’aucune application de test pour ce commit : aucun modèle d’URL n’est configuré et GitHub n’annonce aucun déploiement pour ce commit.",
+  PREVIEW_SHA_MISMATCH:
+    "L’application de test répond, mais elle n’annonce pas le commit de cette PR : Canary ne peut pas prouver que la version servie est bien celle-ci.",
   PREVIEW_HOST_NOT_ALLOWED:
     "Cette adresse de test n’est pas autorisée sur le serveur. Consultez les hôtes dans Réglages.",
   GITHUB_REPOSITORY_DENIED:
@@ -125,16 +125,23 @@ export const automaticStates: Record<string, string> = {
   disabled: "Lancements désactivés",
 };
 
-/** Machine reason codes of an automatic attempt, explained in French. */
+/**
+ * Machine reason codes of an automatic attempt, explained in French. The two
+ * preview codes are deliberately distinct: one says Canary has no URL to check,
+ * the other says the URL it checked does not prove the commit. Telling them
+ * apart is what stops "déployez le commit" being read as "votre déploiement a
+ * échoué" when the deployment was simply never located, or never announced
+ * which commit it serves.
+ */
 export const automaticReasons: Record<string, string> = {
   AUTO_REPO_DISABLED:
     "Les lancements automatiques sont désactivés pour ce dépôt : Canary n’a vérifié aucune application de test.",
   AUTO_RUNS_DISABLED:
     "Les lancements automatiques sont désactivés sur le serveur : Canary n’a rien vérifié.",
   PREVIEW_NOT_FOUND:
-    "Aucune application de test publiée pour ce commit. Canary attend son déploiement.",
+    "Canary n’a trouvé aucune application de test pour ce commit : il ne connaît aucune URL à vérifier (aucun modèle d’URL configuré, aucun déploiement GitHub pour ce commit).",
   PREVIEW_SHA_MISMATCH:
-    "L’application de test ne présente pas encore ce commit. Canary attend son déploiement.",
+    "L’application de test répond, mais elle n’annonce pas ce commit : Canary ne peut pas prouver que la version servie est celle de la pull request.",
   PREVIEW_HOST_NOT_ALLOWED:
     "L’adresse de test n’est pas autorisée sur le serveur. Vérifiez les hôtes dans Réglages.",
   PREVIEW_UNAVAILABLE:
@@ -486,9 +493,9 @@ export const automaticAdvice: Record<string, string> = {
   PREVIEW_HOST_NOT_ALLOWED:
     "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
   PREVIEW_NOT_FOUND:
-    "Déployez le commit attendu, puis lancez le test depuis « Nouveau test ». Sans déploiement automatique, renseignez son URL dans le formulaire.",
+    "Renseignez le modèle d’URL de votre application de test dans Réglages (l’application à tester), ou son URL exacte dans « Nouveau test », puis relancez le test : sans modèle, Canary ne devine pas les sous-domaines de vos previews.",
   PREVIEW_SHA_MISMATCH:
-    "Le déploiement ne publie pas encore ce commit. Attendez sa fin, ou vérifiez l’en-tête ou le chemin de version configuré, puis relancez un test.",
+    "Faites publier le SHA complet du commit par l’application de test — un en-tête HTTP ou un chemin JSON — et vérifiez lequel des deux est configuré dans Réglages, puis relancez le test.",
   PREVIEW_UNAVAILABLE:
     "Vérifiez que l’adresse de test répond publiquement, puis lancez le test depuis « Nouveau test » pour voir le diagnostic complet.",
   WEBHOOK_RATE_LIMIT:
@@ -522,7 +529,7 @@ export const automaticDetail = {
   pinned: (sha: string) => `Commit attendu : ${sha}`,
   previewHeader: (header: string) => `En-tête HTTP de version : ${header}`,
   previewNone:
-    "Aucun modèle d’URL n’est configuré : Canary lit les déploiements GitHub de la pull request.",
+    "Aucun modèle d’URL n’est configuré : Canary ne peut pas deviner l’adresse de vos previews ; il lit les déploiements GitHub de la pull request.",
   previewPath: (path: string) => `Chemin JSON de version : ${path}`,
   previewTitle: "Preuve de version exigée",
   previewTemplate: (template: string) => `Modèle d’URL : ${template}`,
@@ -605,9 +612,9 @@ export const runAdvice: Record<string, string> = {
   PREVIEW_HOST_NOT_ALLOWED:
     "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
   PREVIEW_NOT_FOUND:
-    "Déployez le commit attendu, puis lancez un test depuis « Nouveau test ». Sans déploiement automatique, renseignez son URL dans le formulaire.",
+    "Renseignez le modèle d’URL de votre application de test dans Réglages (l’application à tester), ou son URL exacte dans « Nouveau test », puis relancez le test : sans modèle, Canary ne devine pas les sous-domaines de vos previews.",
   PREVIEW_SHA_MISMATCH:
-    "Le déploiement ne publie pas ce commit. Attendez sa fin, ou vérifiez l’en-tête ou le chemin de version configuré, puis relancez un test.",
+    "L’application de test répond mais ne publie pas son commit : exposez le SHA complet dans l’en-tête ou le chemin JSON configuré dans Réglages, puis relancez un test.",
   PREVIEW_UNAVAILABLE:
     "Vérifiez que l’adresse de test répond publiquement (et que le service egress y accède), puis relancez un test.",
   RUN_BUDGET_EXCEEDED:
