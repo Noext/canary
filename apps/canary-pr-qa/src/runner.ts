@@ -9,7 +9,12 @@ import { fixtureCatalog } from "./fixtures.js";
 import { GitHub, type PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
-import { trustedPolicy, validateCoverage, validateProvider } from "./policy.js";
+import {
+  trustedPolicy,
+  validateCoverage,
+  validateProvider,
+  writeEvidenceRefusals,
+} from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
@@ -169,11 +174,55 @@ async function executePlan(
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });
-  result.plan = await model.json(PLANNER_PROMPT, payload, PlanSchema);
+  result.plan = await model.json(
+    PLANNER_PROMPT,
+    payload,
+    PlanSchema,
+    config.QA_PLAN_MAX_TOKENS,
+    (candidate) => {
+      const refusals = writeEvidenceRefusals(candidate, policy);
+      return refusals.length
+        ? `Plan rejected: ${refusals
+            .map((item) => `${item.error.message}. ${item.error.hint}`)
+            .join(" ")} Return the complete corrected plan.`
+        : undefined;
+    }
+  );
   validatePlan(result.plan, context, config);
   result.coverage = validateCoverage(result.plan, context, policy, config);
+  const refusals = new Map(
+    writeEvidenceRefusals(result.plan, policy).map((item) => [
+      item.scenario.id,
+      item.error,
+    ])
+  );
   await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
+    const refusal = refusals.get(scenario.id);
+    if (refusal) {
+      const diagnostic = diagnose(refusal, config);
+      logger.warn(
+        { runId: result.id, scenario: scenario.id, diagnostic },
+        "Scenario refused without change evidence"
+      );
+      result.scenarios.push({
+        scenario,
+        outcome: "blocked",
+        steps: [],
+        assertions: [],
+        artifacts: [],
+        diagnostic,
+        error: diagnostic.message,
+      });
+      await progress.record({
+        phase: "execution",
+        scenarioId: scenario.id,
+        outcome: "blocked",
+        diagnostic,
+      });
+      await saveReport(root, result, config);
+      continue;
+    }
     logger.info(
       { runId: result.id, scenario: scenario.id },
       "Executing scenario"
