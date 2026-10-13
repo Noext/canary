@@ -42,6 +42,11 @@ function copyState(
  *
  * The feedback is derived from the text last copied, not from a timer: no effect
  * is needed for a label that resets itself when the block changes.
+ *
+ * The button keeps naming the action it performs, and the outcome is announced
+ * by a polite status region next to it: `aria-label` overrides the visible text,
+ * so a screen-reader user would otherwise hear "Copier" whatever happened, and a
+ * name that changes under a focused button is not a reliable announcement.
  */
 function CopyButton({
   id,
@@ -53,23 +58,28 @@ function CopyButton({
   text: string;
 }) {
   const [copied, setCopied] = useState<{ ok: boolean; text: string }>();
-  const feedback = copyFeedback[copyState(copied, text)];
+  const state = copyState(copied, text);
 
   const handleCopy = async () => {
     setCopied({ ok: await copyText(text), text });
   };
 
   return (
-    <Button
-      aria-label={`${copy.copyAction} : ${label}`}
-      disabled={!text}
-      id={id}
-      onClick={() => void handleCopy()}
-      size="sm"
-      variant="quiet"
-    >
-      {feedback}
-    </Button>
+    <>
+      <Button
+        aria-label={`${copy.copyAction} : ${label}`}
+        disabled={!text}
+        id={id}
+        onClick={() => void handleCopy()}
+        size="sm"
+        variant="quiet"
+      >
+        {copyFeedback[state]}
+      </Button>
+      <span className="sr-only" id={`${id}Status`} role="status">
+        {state === "idle" ? "" : `${copyFeedback[state]} : ${label}`}
+      </span>
+    </>
   );
 }
 

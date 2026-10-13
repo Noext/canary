@@ -510,15 +510,26 @@ describe("RunDetail diagnostic", () => {
     const button = screen.getByRole("button", {
       name: `${copy.copyAction} : ${copy.resultLabel}`,
     });
+    const status = element("copyResultStatus");
+    expect(status).toHaveAttribute("role", "status");
+    expect(status.textContent).toBe("");
+
     await user.click(button);
     // The paste is the block itself, not a re-serialisation that could drift.
     expect(writeText).toHaveBeenCalledWith(element("result").textContent);
     expect(button).toHaveTextContent(copy.copyDone);
+    // The button keeps naming the action: `aria-label` overrides its text, so a
+    // screen reader hears the outcome from the status region, not from here.
+    expect(button).toHaveAccessibleName(
+      `${copy.copyAction} : ${copy.resultLabel}`
+    );
+    expect(status.textContent).toBe(`${copy.copyDone} : ${copy.resultLabel}`);
 
     // A refused copy says so instead of showing a success nobody can paste from.
     writeText.mockRejectedValueOnce(new Error("denied"));
     await user.click(button);
     expect(button).toHaveTextContent(copy.copyFailed);
+    expect(status.textContent).toBe(`${copy.copyFailed} : ${copy.resultLabel}`);
   });
 
   it("offers nothing to copy before the run result is loaded", async () => {
