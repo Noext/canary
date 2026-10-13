@@ -14,12 +14,12 @@ afterEach(async () => {
 });
 
 interface McpAnswer {
-  error?: { code: number; message: string };
+  error?: { code: number; message?: string };
   result?: {
     content?: { text: string }[];
     isError?: boolean;
     serverInfo?: { name: string; version: string };
-    tools?: { name: string }[];
+    tools?: { inputSchema?: { type?: string }; name: string }[];
   };
 }
 
@@ -130,6 +130,48 @@ it("answers the MCP handshake and publishes four read-only tools", async () => {
     "list_automatic_attempts",
     "list_runs",
   ]);
+}, 30_000);
+
+it("answers the protocol it serves: bad call, unknown method, notification", async () => {
+  const { key, url } = await mcpServer();
+  const listed = (await (
+    await call(url, key, "tools/list")
+  ).json()) as McpAnswer;
+  for (const entry of listed.result?.tools ?? []) {
+    expect(entry).toMatchObject({ inputSchema: { type: "object" } });
+  }
+  const unknownMethod = (await (
+    await call(url, key, "resources/list")
+  ).json()) as McpAnswer;
+  expect(unknownMethod.error?.code).toBe(-32_601);
+  const unknownTool = (await (
+    await call(url, key, "tools/call", { arguments: {}, name: "nope" })
+  ).json()) as McpAnswer;
+  expect(unknownTool.error?.code).toBe(-32_602);
+  // The published schema is the one the server enforces: a limit over the
+  // maximum is a protocol error, not an empty answer an agent would read as
+  // "there is nothing".
+  const badArguments = (await (
+    await call(url, key, "tools/call", {
+      arguments: { limit: 5000 },
+      name: "list_runs",
+    })
+  ).json()) as McpAnswer;
+  expect(badArguments.error?.code).toBe(-32_602);
+  expect(badArguments.error?.message).toContain("limit");
+  const notification = await call(url, key, "notifications/initialized");
+  expect(notification.status).toBe(202);
+  expect(await notification.text()).toBe("");
+  const malformed = await fetch(`${url}/mcp`, {
+    body: "{",
+    headers: {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+    },
+    method: "POST",
+  });
+  expect(malformed.status).toBe(400);
+  expect(((await malformed.json()) as McpAnswer).error?.code).toBe(-32_700);
 }, 30_000);
 
 it("opens on a bearer key only: no cookie, no session, no other method", async () => {

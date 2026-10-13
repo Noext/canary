@@ -1,11 +1,11 @@
 import { type ReactNode, useState } from "react";
-import { api, errorText } from "@/api/client";
-import type { ApiKeyCreated, ApiKeyRow } from "@/api/contracts";
 import {
   apiKeyCreatedSchema,
   apiKeyRevokedSchema,
   apiKeySecretSchema,
-} from "@/api/schemas";
+} from "@/api/api-keys";
+import { api, errorText } from "@/api/client";
+import type { ApiKeyCreated, ApiKeyRow } from "@/api/contracts";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import {

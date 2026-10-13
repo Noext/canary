@@ -1,6 +1,6 @@
+import { automaticDetailSchema } from "@/api/automatic";
 import { api, DashboardError } from "@/api/client";
 import type { AutomaticDetail } from "@/api/contracts";
-import { automaticDetailSchema } from "@/api/schemas";
 import {
   createStore,
   failureMessage,
