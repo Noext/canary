@@ -591,6 +591,13 @@ une clé vit avec le droit qu'elle a reçu, sans élargissement silencieux — e
 liste des clés affiche celle de chacune. Le rôle voyage aussi dans `GET /me`, et
 un `POST /runs` avec une clé `viewer` reste refusé (`403`).
 
+Les dépôts d'une clé sont l'intersection de la sélection en vigueur avec ceux de
+l'identité qui l'émet : une clé ne dépasse jamais son émetteur. Un administrateur
+`users.json`/OIDC limité à un projet ne peut donc pas déléguer un accès — lecture
+ou lancement — sur les autres dépôts de l'instance, alors qu'un compte local
+administrateur porte toujours la sélection entière. La liste et le journal
+d'audit (`api_key.created`) enregistrent cette portée.
+
 La même clé ouvre le serveur MCP du service :
 
 ```bash

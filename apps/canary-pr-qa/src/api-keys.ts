@@ -122,7 +122,13 @@ export class ApiKeys {
     if (!created) {
       throw new Error("API key insert returned no row");
     }
-    await this.audit("api_key.created", user.id, { id, name, prefix, role });
+    await this.audit("api_key.created", user.id, {
+      id,
+      name,
+      prefix,
+      repos: scope,
+      role,
+    });
     return {
       createdAt: created.created_at.toISOString(),
       id,

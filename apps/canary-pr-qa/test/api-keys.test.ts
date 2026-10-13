@@ -21,11 +21,14 @@ afterEach(async () => {
  * A production server on the in-memory PostgreSQL, the administrator token, and
  * a `users.json` viewer to prove the key routes stay administrator-only.
  */
-async function apiKeysServer() {
+async function apiKeysServer(options: { allowedRepos?: string } = {}) {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
   const viewerToken = "viewer-token-0123456789-abcdef";
+  // A `users.json` administrator limited to one project: it proves the scope a
+  // new key inherits, which a local administrator (always instance-wide) cannot.
+  const scopedAdminToken = "scoped-admin-token-0123456789";
   const usersFile = join(f.dataDir, "users.json");
   await writeFile(
     usersFile,
@@ -36,6 +39,14 @@ async function apiKeysServer() {
         repos: ["fixture/app"],
         tokenSha256: createHash("sha256").update(viewerToken).digest("hex"),
       },
+      {
+        id: "scoped-admin",
+        role: "admin",
+        repos: ["fixture/app"],
+        tokenSha256: createHash("sha256")
+          .update(scopedAdminToken)
+          .digest("hex"),
+      },
     ])
   );
   const server = await startProductionServer({
@@ -43,6 +54,9 @@ async function apiKeysServer() {
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
     QA_USERS_FILE: usersFile,
+    ...(options.allowedRepos
+      ? { GITHUB_ALLOWED_REPOS: options.allowedRepos }
+      : {}),
   });
   cleanup.push(() => server.shutdown());
   return {
@@ -50,6 +64,7 @@ async function apiKeysServer() {
     url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     admin: { Authorization: `Bearer ${f.config.QA_API_TOKEN}` },
     viewer: { Authorization: `Bearer ${viewerToken}` },
+    scopedAdmin: { Authorization: `Bearer ${scopedAdminToken}` },
   };
 }
 
@@ -426,4 +441,37 @@ it("refuses an unknown key scope and defaults an omitted one to read-only", asyn
     await fetch(`${url}/dashboard/api-keys`, { headers: admin })
   ).json()) as ApiKeyRow[];
   expect(rows.map((row) => row.role)).toEqual(["viewer"]);
+}, 30_000);
+
+it("never lets a key outgrow the administrator who issued it", async () => {
+  // The instance covers two repositories; the issuing `users.json` administrator
+  // only covers one. The key must inherit the smaller scope, or a scoped
+  // administrator could hand an agent a write capability on another project.
+  const { q, scopedAdmin, url } = await apiKeysServer({
+    allowedRepos: "fixture/app,fixture/other",
+  });
+  const created = await createKey(url, scopedAdmin, "operator");
+  expect(created.repos).toEqual(["fixture/app"]);
+  const key = { Authorization: `Bearer ${created.token}` };
+  const outOfScope = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: key,
+    body: JSON.stringify({ prUrl: "https://github.com/fixture/other/pull/1" }),
+  });
+  expect(outOfScope.status).toBe(403);
+  const launched = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: key,
+    body: JSON.stringify({ prUrl: PR_URL }),
+  });
+  expect(launched.status).toBe(202);
+  // The narrowing is not a silent edit: the audit says what the key received.
+  const audit = (
+    await q.pool.query<{ details: { repos?: string[]; role?: string } }>(
+      "SELECT details FROM qa_audit WHERE action='api_key.created'"
+    )
+  ).rows;
+  expect(audit.map((row) => [row.details.role, row.details.repos])).toEqual([
+    ["operator", ["fixture/app"]],
+  ]);
 }, 30_000);

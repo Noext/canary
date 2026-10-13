@@ -88,7 +88,7 @@ export function apiKeysRoute(
           await keys.create(
             user,
             input.name,
-            [...new Set(await effectiveRepos())],
+            issuedScope(user, await effectiveRepos()),
             input.role
           )
         );
@@ -116,6 +116,21 @@ export function apiKeysRoute(
   };
 }
 
+/**
+ * The repositories a new key may carry: the selection in force, never more than
+ * the issuer's own scope. A `users.json` or OIDC administrator limited to one
+ * project would otherwise mint a key that reads — and now *launches runs on* —
+ * repositories it cannot reach itself. Reading outside its scope was already a
+ * leak; the `operator` scope turns that leak into paid work on another project.
+ * A local administrator always carries the whole selection, so this only ever
+ * narrows the scope of an identity that is itself restricted.
+ */
+function issuedScope(user: Principal, effective: string[]) {
+  const mine = new Set(user.repos.map((repo) => repo.toLowerCase()));
+  return [...new Set(effective.map((repo) => repo.toLowerCase()))].filter(
+    (repo) => mine.has(repo)
+  );
+}
 /** A name and scope the dashboard can show; a refused body is a request error, not a 500. */
 function apiKeyInput(body: Buffer) {
   const parsed = apiKeySchema.safeParse(JSON.parse(body.toString()) as unknown);
