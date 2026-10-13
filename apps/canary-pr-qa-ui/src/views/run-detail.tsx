@@ -196,6 +196,16 @@ function ScenarioCard({
           src={`/artifacts/${runId}/${encodeURIComponent(item.scenario.id)}/${video.path}`}
         />
       ))}
+      {/* The Canary session report holds the steps, commands, console and
+          network of this one scenario; the aggregate report links it too. */}
+      <a
+        className="mt-3 inline-block text-sm underline-offset-4 hover:underline"
+        href={`/artifacts/${runId}/${encodeURIComponent(item.scenario.id)}/report.html`}
+        rel="noopener"
+        target="_blank"
+      >
+        {copy.sessionReport}
+      </a>
     </article>
   );
 }

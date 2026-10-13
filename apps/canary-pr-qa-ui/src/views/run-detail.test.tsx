@@ -147,6 +147,24 @@ describe("RunDetail", () => {
     ).toBeVisible();
   });
 
+  it("links each scenario to its Canary session report", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(screen.getByText("1/2 assertions validées")).toBeVisible()
+    );
+    // The session report is the scenario's own page (steps, commands, console,
+    // network); an authorized user opens it without any raw-evidence setting.
+    expect(
+      screen.getByRole("link", { name: copy.sessionReport })
+    ).toHaveAttribute("href", `/artifacts/${RUN_ID}/welcome/report.html`);
+  });
+
   it("does not open an event stream for a finished run", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.endsWith("/result.json")) {

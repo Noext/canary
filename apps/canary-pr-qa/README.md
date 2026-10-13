@@ -607,8 +607,10 @@ suppressions sont audités en DB. Les sessions natives sont purgées après expo
 réussi afin de ne pas conserver leurs profils/cookies sans limite.
 
 La publication anonyme `ARTIFACT_PUBLIC` n'est pas utilisée par le serveur SQL.
-Les traces/HAR/console bruts sont refusés par défaut ; `QA_RAW_EVIDENCE=true`
-permet leur accès selon les droits du projet. Restreindre les données de test,
+Les rapports (principal et par scénario), vidéos et images sont accessibles à tout
+utilisateur autorisé sur le dépôt ; les dumps bruts (trace, HAR, console,
+`results.json`) sont refusés par défaut et `QA_RAW_EVIDENCE=true` permet leur accès
+selon les mêmes droits. Restreindre les données de test,
 utiliser `QA_ALLOWED_PROVIDER_HOSTS` et les identités par projet. La redaction
 masque les secrets configurés ; elle ne garantit pas l'anonymisation de tout ce
 qu'une application peut afficher dans une vidéo ou un screenshot.
@@ -651,9 +653,10 @@ terminer le job expiré. Il revérifie la propriété avant publication ; une an
 ferme le check du SHA épinglé avec `error`, jamais `success`. Une panne de publication
 rend le run `blocked` et conserve les preuves locales.
 
-Les rapports HTML natifs imbriqués, logs, HAR et ZIP sont des preuves brutes,
-interdites par défaut via HTTP. Le rapport principal et ses vidéos/images restent
-accessibles aux utilisateurs autorisés. N'activez `QA_RAW_EVIDENCE` qu'après avoir
+Les logs, HAR, ZIP et le manifeste `results.json` sont des preuves brutes,
+interdites par défaut via HTTP. Les rapports (principal et par scénario) et leurs
+vidéos/images restent accessibles aux utilisateurs autorisés. N'activez
+`QA_RAW_EVIDENCE` qu'après avoir
 vérifié les données de test. Les clés PEM, états d'authentification et configurations
 montées sont exclus du contexte Docker.
 

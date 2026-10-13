@@ -82,12 +82,16 @@ Les fichiers natifs `results.json` de chaque session ne sont pas le `result.json
 agrégé. Les profils/sessions natives sont purgés après export réussi. Les captures
 provisoires du doctor sont supprimées après vérification, même en cas d'erreur.
 
-Les artefacts HTTP nécessitent un utilisateur autorisé ou un lien signé valable
-5 minutes. `ARTIFACT_PUBLIC` n'active pas la lecture anonyme dans le serveur SQL.
-Les traces/HAR/logs et rapports natifs imbriqués sont refusés par défaut ; le
-rapport principal et ses vidéos/images sont accessibles selon les droits du projet.
-N'activer `QA_RAW_EVIDENCE=true` qu'après contrôle des données de test. Les chemins
-encodés sont normalisés avant la politique ; les encodages ambigus sont refusés.
+Les artefacts HTTP nécessitent un utilisateur autorisé sur le dépôt du run, ou un
+lien signé valable 5 minutes. `ARTIFACT_PUBLIC` n'active pas la lecture anonyme
+dans le serveur SQL. Le rapport principal, le rapport de session Canary de chaque
+scénario, les vidéos et les images sont servis à ces utilisateurs sans réglage
+supplémentaire : les onglets Console et Network du rapport de session, qui les
+résument, le sont donc aussi. `QA_RAW_EVIDENCE=true` ouvre en plus les dumps
+bruts que les rapports référencent (`trace.zip`, HAR, `console.log`,
+`results.json`), refusés sinon. N'activer ce flag qu'après contrôle des données de
+test. Les chemins encodés sont normalisés avant la politique ; les encodages
+ambigus sont refusés.
 
 ## Tentatives automatiques en attente ou expirées
 

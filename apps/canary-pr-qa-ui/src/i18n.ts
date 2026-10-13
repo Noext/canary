@@ -457,6 +457,7 @@ export const runs = {
       configured ? `coût estimé $${costUsd.toFixed(4)}` : "coût non configuré"
     }`,
   videoLabel: (title: string) => `Vidéo du scénario ${title}`,
+  sessionReport: "Rapport de session",
 } as const;
 
 export const automatic = {
