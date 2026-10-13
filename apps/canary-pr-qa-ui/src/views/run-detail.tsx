@@ -4,11 +4,17 @@ import { useError } from "@/app/errors";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import { Card, CardHeader } from "@/components/ui/form";
-import { runs as copy, phaseSteps, resultSummaries } from "@/i18n";
+import {
+  runs as copy,
+  phaseSteps,
+  resultSummaries,
+  runDiagnostic,
+} from "@/i18n";
 import {
   githubCommentUrl,
   outcomeLabel,
   phaseIndex,
+  phaseLabel,
   safeArtifactPath,
   shortSha,
   stateLabel,
@@ -179,6 +185,74 @@ function ScenarioCard({
 }
 
 /**
+ * Why the run did not go all the way: the server diagnostic, the phase it
+ * stopped in and the scenarios that stopped on an error.
+ *
+ * A report written before the diagnostic existed carries none of it — the field
+ * is absent or null — so the block gives the generic advice instead of an empty
+ * panel. The phase lives on the job, not on the result, and an unreported phase
+ * is simply left out.
+ */
+function RunDiagnosticBlock({
+  phase,
+  result,
+}: {
+  phase: string | null | undefined;
+  result: RunResult;
+}) {
+  const stoppedPhase = phaseLabel(phase);
+  const failedScenarios = result.scenarios.filter((item) =>
+    errorOutcomes.includes(item.outcome)
+  );
+  return (
+    <Notice className="mt-3" id="runDiagnostic" tone="error">
+      <h3 className="font-semibold text-sm">{runDiagnostic.title}</h3>
+      {result.diagnostic ? (
+        <>
+          <p className="mt-1" id="runDiagnosticCode">
+            {runDiagnostic.code(result.diagnostic.code)}
+          </p>
+          <p className="mt-1">{result.diagnostic.message}</p>
+          <p className="mt-1" id="runDiagnosticHint">
+            {runDiagnostic.hint(result.diagnostic.hint)}
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="mt-1">{runDiagnostic.fallback}</p>
+          <p className="mt-1" id="runDiagnosticHint">
+            {runDiagnostic.hintMissing}
+          </p>
+        </>
+      )}
+      {stoppedPhase ? (
+        <p className="mt-1" id="runDiagnosticPhase">
+          {runDiagnostic.stoppedAt(stoppedPhase)}
+        </p>
+      ) : null}
+      {failedScenarios.length > 0 ? (
+        <>
+          <p className="mt-2">
+            {runDiagnostic.scenarios(failedScenarios.length)}
+          </p>
+          <ul className="mt-1 space-y-1">
+            {failedScenarios.map((item) => (
+              <li key={item.scenario.id}>
+                <span className="font-medium">{item.scenario.title}</span>
+                {item.error ? ` — ${item.error}` : null}
+                {item.diagnostic?.hint ? (
+                  <p>{runDiagnostic.hint(item.diagnostic.hint)}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </Notice>
+  );
+}
+
+/**
  * The selected run: its live progress, its result report and the technical
  * diagnostic every assertion of the end-to-end suite reads.
  *
@@ -274,6 +348,9 @@ export function RunDetail({
       >
         {summary}
       </Notice>
+      {result && result.outcome !== "passed" ? (
+        <RunDiagnosticBlock phase={progress?.phase} result={result} />
+      ) : null}
       <div className="mt-4 space-y-3" id="scenarioCards">
         {result?.scenarios.map((item) => (
           <ScenarioCard item={item} key={item.scenario.id} runId={result.id} />

@@ -115,6 +115,7 @@ export const automaticAttemptSchema = z.object({
   attempts: z.number(),
   deadlineAt: z.string(),
   id: z.string(),
+  lastError: z.string().nullish(),
   reason: z.string(),
   pr: z.number(),
   repo: z.string(),
@@ -122,6 +123,25 @@ export const automaticAttemptSchema = z.object({
   sha: z.string(),
   state: automaticStateSchema,
   updatedAt: z.string(),
+});
+
+/** One recorded step of an attempt, oldest first. */
+export const automaticTimelineEntrySchema = z.object({
+  action: z.string(),
+  at: z.string(),
+  seconds: z.number().nullish(),
+});
+
+export const automaticDetailSchema = z.object({
+  attempt: automaticAttemptSchema,
+  preview: z
+    .object({
+      shaHeader: z.string(),
+      shaPath: z.string().nullish(),
+      template: z.string().nullish(),
+    })
+    .nullish(),
+  timeline: z.array(automaticTimelineEntrySchema),
 });
 
 export const automaticStatusSchema = z.object({
@@ -196,6 +216,29 @@ const planAssertionSchema = z.object({
 });
 
 /**
+/** The server diagnostic of a failing phase: its code, message and next step. */
+export const diagnosticSchema = z
+  .object({
+    code: z.string(),
+    hint: z.string(),
+    message: z.string(),
+  })
+  .passthrough();
+
+/**
+ * The diagnostic a report stores for one scenario. `hint` is read back from a
+ * file written by an older build, so a scenario that carries only its code and
+ * message stays valid: the run-level diagnostic above is the strict one.
+ */
+export const scenarioDiagnosticSchema = z
+  .object({
+    code: z.string(),
+    hint: z.string().nullish(),
+    message: z.string(),
+  })
+  .passthrough();
+
+/**
  * Passthrough on purpose: the dashboard renders a subset of the report, but the
  * technical diagnostic prints the whole result. Stripping the undeclared fields
  * (steps, contract, sessionId, nested diagnostics) removed exactly the data an
@@ -205,6 +248,7 @@ const scenarioSummarySchema = z
   .object({
     artifacts: z.array(z.string()),
     assertions: z.array(resultAssertionSchema).optional(),
+    diagnostic: scenarioDiagnosticSchema.nullish(),
     error: z.string().nullish(),
     outcome: outcomeSchema,
     scenario: z
@@ -219,6 +263,7 @@ const scenarioSummarySchema = z
 
 export const runResultSchema = z
   .object({
+    diagnostic: diagnosticSchema.nullish(),
     endedAt: z.string().nullish(),
     error: z.string().nullish(),
     id: z.string(),

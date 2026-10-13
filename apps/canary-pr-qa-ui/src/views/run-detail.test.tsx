@@ -73,6 +73,38 @@ const result = {
   startedAt: "2026-01-01T00:00:00.000Z",
 };
 
+function element(id: string): HTMLElement {
+  const node = document.getElementById(id);
+  if (!node) {
+    throw new Error(`#${id} is missing from the run detail`);
+  }
+  return node;
+}
+
+/** A run the server stopped, with the fields the diagnostic block reads. */
+function mockBlocked(
+  resultOverrides: Record<string, unknown>,
+  jobOverrides: Record<string, unknown> = {}
+) {
+  apiMock.mockImplementation((path: string) => {
+    if (path.endsWith("/result.json")) {
+      return Promise.resolve({
+        ...result,
+        outcome: "blocked",
+        ...resultOverrides,
+      });
+    }
+    return Promise.resolve(
+      job({
+        outcome: "blocked",
+        progress: { phase: "preview" },
+        status: "failed",
+        ...jobOverrides,
+      })
+    );
+  });
+}
+
 function renderDetail(onUpdate?: () => void) {
   return render(
     <ErrorProvider>
@@ -210,5 +242,124 @@ describe("RunDetail", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Run not found")
     );
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+});
+
+describe("RunDetail diagnostic", () => {
+  it("gives the server code, its message and the next step of a blocked run", async () => {
+    mockBlocked({
+      diagnostic: {
+        code: "PREVIEW_SHA_MISMATCH",
+        hint: "Redéployez la version de test sur le commit attendu, puis relancez.",
+        message:
+          "La version servie ne porte pas le SHA complet de la pull request.",
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    expect(element("runDiagnostic").textContent).toContain(
+      "Pourquoi ce test n’est pas allé au bout"
+    );
+    // A stopped run is an error, not a warning: the block never plays it down.
+    expect(element("runDiagnostic").className).toContain("border-destructive");
+    expect(element("runDiagnosticCode").textContent).toBe(
+      "Code : PREVIEW_SHA_MISMATCH"
+    );
+    expect(element("runDiagnostic").textContent).toContain(
+      "La version servie ne porte pas le SHA complet de la pull request."
+    );
+    expect(element("runDiagnosticHint").textContent).toBe(
+      "À faire : Redéployez la version de test sur le commit attendu, puis relancez."
+    );
+    // The phase belongs to the job: it is what says how far the run got.
+    expect(element("runDiagnosticPhase").textContent).toBe(
+      "Phase atteinte : Vérification de la version de votre application"
+    );
+  });
+
+  it("gives the generic next step when the report carries no diagnostic", async () => {
+    // An older report omits the field, a replayed one may carry null: both mean
+    // the server recorded no cause, so both get the same advice.
+    for (const diagnostic of [undefined, null]) {
+      mockBlocked({ diagnostic });
+      const view = renderDetail();
+
+      await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+      expect(element("runDiagnosticHint").textContent).toBe(
+        "Relancez un test sur le même commit après avoir corrigé la cause, ou ouvrez le rapport pour le déroulé complet."
+      );
+      expect(document.getElementById("runDiagnosticCode")).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it("omits the reached phase when the job has not reported one", async () => {
+    mockBlocked(
+      {
+        diagnostic: {
+          code: "PREVIEW_SHA_MISMATCH",
+          hint: "Redéployez la version de test sur le commit attendu, puis relancez.",
+          message:
+            "La version servie ne porte pas le SHA complet de la pull request.",
+        },
+      },
+      { progress: undefined }
+    );
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    expect(document.getElementById("runDiagnosticPhase")).toBeNull();
+  });
+
+  it("repeats the diagnostic of the scenarios that stopped on an error", async () => {
+    mockBlocked({
+      scenarios: [
+        {
+          artifacts: [],
+          diagnostic: {
+            code: "SCENARIO_STEP_FAILED",
+            hint: "Vérifiez le formulaire de connexion.",
+            message: "Le clic est resté sans effet.",
+          },
+          error: "Le bouton de connexion n’a pas répondu",
+          outcome: "failed",
+          scenario: { id: "login", title: "Connexion" },
+        },
+        {
+          artifacts: [],
+          outcome: "passed",
+          scenario: { id: "welcome", title: "Accueil" },
+        },
+      ],
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    const block = element("runDiagnostic").textContent ?? "";
+    // Only the scenario that really stopped is counted and listed.
+    expect(block).toContain("1 scénario s’est arrêté sur une erreur");
+    expect(block).toContain("Connexion");
+    expect(block).toContain("Le bouton de connexion n’a pas répondu");
+    expect(block).toContain("À faire : Vérifiez le formulaire de connexion.");
+    expect(block).not.toContain("Accueil");
+  });
+
+  it("shows no diagnostic for a run that passed", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve({
+          ...result,
+          diagnostic: null,
+          outcome: "passed",
+          scenarios: [],
+        });
+      }
+      return Promise.resolve(job({ outcome: "passed", status: "completed" }));
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("resultSummary")).toBeVisible());
+    expect(document.getElementById("runDiagnostic")).toBeNull();
   });
 });

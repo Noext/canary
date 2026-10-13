@@ -1237,6 +1237,164 @@ it("presents actual assertions and a playable video instead of raw JSON in the d
     throw error;
   }
 }, 180_000);
+
+it("explains a blocked run and an expired automatic attempt on their own deep links", async () => {
+  await dashboardDatabase();
+  const f = await fixture();
+  closers.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  closers.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const queue = new Queue(config.DATABASE_URL);
+  // The preview answers, but never publishes the pinned SHA: the run is blocked
+  // and its report must name that cause instead of a generic failure.
+  const job = await queue.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "explained-run"
+  );
+  await queue.claim("worker");
+  const blocked = await runQa(
+    { id: job.id, prUrl: PR_URL, previewUrl: f.baseUrl, publish: false },
+    { ...config, PREVIEW_SHA_HEADER: "x-absent" }
+  );
+  expect(blocked.outcome, blocked.error).toBe("blocked");
+  expect(blocked.diagnostic?.code).toBe("PREVIEW_SHA_MISMATCH");
+  await queue.complete(job.id, "worker", blocked.outcome);
+  // An attempt that waited out its whole window: the two audit steps are what
+  // the screen has to explain.
+  await queue.pool.query(
+    `INSERT INTO qa_deliveries(id,event,payload,status,attempts,reason,deadline_at,updated_at)
+     VALUES($1,'pull_request',$2::jsonb,'expired',3,'PREVIEW_NOT_FOUND',now(),now())`,
+    [
+      "e2e-attempt",
+      JSON.stringify({
+        number: 1,
+        prUrl: PR_URL,
+        repo: "fixture/app",
+        sha: SHA,
+      }),
+    ]
+  );
+  await queue.audit("webhook", "automatic.preview_wait", undefined, {
+    backoffSeconds: 30,
+    delivery: "e2e-attempt",
+    pr: 1,
+    reason: "PREVIEW_NOT_FOUND",
+    repo: "fixture/app",
+    sha: SHA,
+  });
+  await queue.audit("webhook", "automatic.preview_expired", undefined, {
+    attempts: 3,
+    delivery: "e2e-attempt",
+    pr: 1,
+    repo: "fixture/app",
+    sha: SHA,
+  });
+  const login = await fetch(`${url}/session`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+  });
+  const value = login.headers
+    .get("set-cookie")!
+    .split(";")[0]!
+    .slice("qa_session=".length);
+  const hosts = [...config.allowedHosts, new URL(url).host];
+  const canary = new Canary({
+    ...config,
+    allowedHosts: hosts,
+    PREVIEW_ALLOWED_HOSTS: hosts.join(","),
+  });
+  const session = await canary.start("Explain a failed run", {
+    cookies: [
+      {
+        name: "qa_session",
+        value,
+        domain: "127.0.0.1",
+        path: "/",
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+        expires: -1,
+      },
+    ],
+    origins: [],
+  });
+  const act = (label: string, action: Parameters<typeof compileAction>[0]) =>
+    canary.act(session, label, compileAction(action, url));
+  // One observation per screen: the accessible text of the document, which is
+  // what the operator reads and what the assertions below pin.
+  const observed = async (label: string) => {
+    const step = await canary.act(
+      session,
+      label,
+      `const page=await browser.getPage("qa"); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    // `url` is the observation's own field; the innerText travels in `actual`.
+    return { text: String(step.actual ?? ""), url: step.url };
+  };
+  try {
+    await act("blocked-run-link", {
+      type: "goto",
+      path: `/#run=${job.id}`,
+    });
+    const runScreen = await observed("blocked-run-detail");
+    // The link is read once and stripped, so a refresh never replays it: the
+    // screen is what proves the deep link was honoured, not the URL.
+    expect(runScreen.url).not.toContain("#");
+    expect(runScreen.text).toContain("Détail du test");
+    // The cause the operator could not see before: the server diagnostic, its
+    // next step, and the phase the run stopped in.
+    expect(runScreen.text).toContain("Pourquoi ce test n’est pas allé au bout");
+    expect(runScreen.text).toContain("PREVIEW_SHA_MISMATCH");
+    expect(runScreen.text).toContain("À faire :");
+    expect(runScreen.text).toContain("Phase atteinte :");
+    await act("back-to-history", {
+      type: "click",
+      locator: { by: "css", value: "#runScreenBack" },
+    });
+    const history = await observed("history-after-back");
+    expect(history.url).not.toContain("#run=");
+    expect(history.text).toContain("Vos tests");
+    // A deep link is read once at load, like the legacy `#<uuid>` link: reach
+    // it on a fresh document instead of a same-document hash change the
+    // dashboard deliberately does not act on.
+    await act("fresh-document", { type: "goto", path: "/?reload=1" });
+    await act("expired-attempt-link", {
+      type: "goto",
+      path: "/#automatic=e2e-attempt",
+    });
+    const attempt = await observed("expired-attempt-detail");
+    expect(attempt.url).not.toContain("#");
+    expect(attempt.text).toContain("Lancements automatiques");
+    expect(attempt.text).toContain("Pourquoi Canary n’a pas démarré le test");
+    expect(attempt.text).toContain(
+      "Aucune application de test publiée pour ce commit"
+    );
+    expect(attempt.text).toContain("Déployez le commit attendu");
+    expect(attempt.text).toContain("3 vérifications effectuées");
+    // The two audit steps are the trail that explains the wait.
+    expect(attempt.text).toContain(
+      "Application de test absente ou sans la bonne version"
+    );
+    expect(attempt.text).toContain("Délai d’attente dépassé");
+    // Deployment topology is administrator-only, but this session is admin.
+    expect(attempt.text).toContain("Preuve de version exigée");
+    await canary.end(session, join(f.dataDir, "failed-run-evidence"));
+  } catch (error) {
+    await canary.abort(session);
+    throw error;
+  }
+}, 180_000);
+
 it("removes the connected GitHub App from the dashboard only after an explicit confirmation", async () => {
   await dashboardDatabase();
   const f = await githubSetupFixture();

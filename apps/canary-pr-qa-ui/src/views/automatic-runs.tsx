@@ -1,6 +1,8 @@
 import { type ReactNode, useState } from "react";
 import { useError } from "@/app/errors";
+import { useNavigation } from "@/app/navigation";
 import { useWorkspace } from "@/app/workspace";
+import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/feedback";
 import {
   Card,
@@ -39,6 +41,7 @@ export function AutomaticRuns(): ReactNode {
 
 function AutomaticRunsBlock(): ReactNode {
   const { report } = useError();
+  const { openAutomatic } = useNavigation();
   // The store instance belongs to this screen, never to module scope: React's
   // first subscription starts the request and abandoning the screen aborts it.
   const [store] = useState(() => createAutomaticRunsStore(report));
@@ -126,6 +129,14 @@ function AutomaticRunsBlock(): ReactNode {
                   formatDate(attempt.deadlineAt)
                 )}`}
               </p>
+              <Button
+                className="mt-2"
+                id={`automaticAttempt-${attempt.id}`}
+                onClick={() => openAutomatic(attempt.id)}
+                variant="quiet"
+              >
+                {automatic.detail}
+              </Button>
             </li>
           );
         })}

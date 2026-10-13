@@ -6,7 +6,13 @@
  * string is a type error at the call site.
  */
 
-export type ViewName = "home" | "new" | "runs" | "settings";
+export type ViewName =
+  | "home"
+  | "new"
+  | "runs"
+  | "settings"
+  | "automatic"
+  | "run";
 
 /** Server error codes the interface explains in French. */
 export const errorMessages: Record<string, string | undefined> = {
@@ -76,6 +82,10 @@ export const automaticStates: Record<string, string> = {
 
 /** Machine reason codes of an automatic attempt, explained in French. */
 export const automaticReasons: Record<string, string> = {
+  AUTO_REPO_DISABLED:
+    "Les lancements automatiques sont désactivés pour ce dépôt : Canary n’a vérifié aucune application de test.",
+  AUTO_RUNS_DISABLED:
+    "Les lancements automatiques sont désactivés sur le serveur : Canary n’a rien vérifié.",
   PREVIEW_NOT_FOUND:
     "Aucune application de test publiée pour ce commit. Canary attend son déploiement.",
   PREVIEW_SHA_MISMATCH:
@@ -141,6 +151,18 @@ export const views: Record<
     breadcrumb: "Réglages",
     intro: "Vos connexions et les dépôts que Canary peut tester.",
     title: "Réglages de votre espace",
+  },
+  automatic: {
+    breadcrumb: "Lancements automatiques",
+    intro:
+      "Ce qui a été tenté, pourquoi le test n’a pas démarré et ce qu’il reste à faire.",
+    title: "Pourquoi ce test n’a pas démarré",
+  },
+  run: {
+    breadcrumb: "Détail du test",
+    intro:
+      "La phase atteinte, la cause de l’arrêt et les preuves enregistrées.",
+    title: "Détail du test",
   },
 };
 
@@ -374,6 +396,7 @@ export const automatic = {
   attempts: (count: number) =>
     count === 1 ? "1 tentative" : `${count} tentatives`,
   deadline: (date: string) => `Délai : ${date}`,
+  detail: "Voir le détail",
   empty: "Aucune tentative automatique en attente.",
   emptyHint:
     "Canary lancera un test dès qu’une pull request changera sur un dépôt en lancement automatique.",
@@ -388,6 +411,110 @@ export const automatic = {
     waiting: (count: number) => `${count} en attente`,
   },
   title: "Lancements automatiques",
+} as const;
+
+/**
+ * One line per audit action an automatic attempt records. An action this build
+ * does not know still renders its raw name: the trail is never hidden.
+ */
+export const automaticSteps: Record<string, string> = {
+  "automatic.disabled":
+    "Lancements automatiques désactivés sur le serveur : aucune vérification n’a été faite.",
+  "automatic.preview_expired":
+    "Délai d’attente dépassé : la tentative s’arrête sans lancer de test.",
+  "automatic.preview_wait":
+    "Application de test absente ou sans la bonne version : nouvelle vérification programmée.",
+  "automatic.promoted": "Application de test vérifiée : le test a démarré.",
+  "automatic.rate_limited":
+    "Budget horaire de lancements automatiques atteint : le test n’a pas démarré.",
+  "automatic.repo_disabled":
+    "Lancements automatiques désactivés pour ce dépôt : aucune vérification n’a été faite.",
+  "webhook.rate_limited": "Refusé par le quota horaire du serveur.",
+};
+
+/** The next step an operator must take, keyed by the reason code recorded. */
+export const automaticAdvice: Record<string, string> = {
+  AUTO_REPO_DISABLED:
+    "Réactivez ce dépôt dans Réglages → GitHub, puis lancez le test depuis « Nouveau test » : une tentative expirée n’est jamais rejouée.",
+  AUTO_RUNS_DISABLED:
+    "Réactivez les lancements automatiques sur le serveur (QA_AUTO_RUNS), ou lancez ce test depuis « Nouveau test ».",
+  PREVIEW_HOST_NOT_ALLOWED:
+    "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
+  PREVIEW_NOT_FOUND:
+    "Déployez le commit attendu, puis lancez le test depuis « Nouveau test ». Sans déploiement automatique, renseignez son URL dans le formulaire.",
+  PREVIEW_SHA_MISMATCH:
+    "Le déploiement ne publie pas encore ce commit. Attendez sa fin, ou vérifiez l’en-tête ou le chemin de version configuré, puis relancez un test.",
+  PREVIEW_UNAVAILABLE:
+    "Vérifiez que l’adresse de test répond publiquement, puis lancez le test depuis « Nouveau test » pour voir le diagnostic complet.",
+  WEBHOOK_RATE_LIMIT:
+    "Attendez la prochaine fenêtre du quota horaire, ou lancez ce test depuis « Nouveau test ».",
+};
+
+/**
+ * The dedicated screen of one automatic attempt: what Canary tried, why it
+ * stopped, and what the operator has to do next.
+ */
+export const automaticDetail = {
+  adviceFallback:
+    "Lancez ce test depuis « Nouveau test » : une tentative en échec n’est jamais rejouée automatiquement.",
+  adviceTitle: "Ce qu’il reste à faire",
+  attempts: (count: number) =>
+    count === 1
+      ? "1 vérification effectuée"
+      : `${count} vérifications effectuées`,
+  back: "Retour à l’accueil",
+  causeTitle: "Pourquoi Canary n’a pas démarré le test",
+  deadline: (date: string) => `Délai d’attente atteint le ${date}`,
+  factsTitle: "Ce que Canary a tenté",
+  githubPr: "Ouvrir la pull request",
+  lastErrorTitle: "Dernière erreur enregistrée",
+  lastProbe: (date: string) => `Dernière vérification : ${date}`,
+  loading: "Chargement du détail de la tentative…",
+  missing:
+    "Cette tentative est introuvable : elle a peut-être été purgée. Rouvrez l’accueil pour voir les tentatives en cours.",
+  pinned: (sha: string) => `Commit attendu : ${sha}`,
+  previewHeader: (header: string) => `En-tête HTTP de version : ${header}`,
+  previewNone:
+    "Aucun modèle d’URL n’est configuré : Canary lit les déploiements GitHub de la pull request.",
+  previewPath: (path: string) => `Chemin JSON de version : ${path}`,
+  previewTitle: "Preuve de version exigée",
+  previewTemplate: (template: string) => `Modèle d’URL : ${template}`,
+  promoted:
+    "Cette tentative a fini par trouver son application de test : le test a démarré.",
+  promotedCta: "Voir le détail du test",
+  runCta: "Lancer un test manuellement",
+  timelineEmpty: "Aucune étape enregistrée pour cette tentative.",
+  timelineTitle: "Déroulé des vérifications",
+  waiting:
+    "Cette tentative attend encore : Canary continue de vérifier l’application de test.",
+} as const;
+
+/**
+ * The "why did it fail" block shared by the inline run panel and the dedicated
+ * run screen: the server diagnostic, the phase it stopped in, and the failing
+ * scenarios.
+ */
+export const runDiagnostic = {
+  code: (code: string) => `Code : ${code}`,
+  fallback:
+    "Aucun code d’erreur n’a été enregistré pour ce test. Consultez le rapport et la vidéo ci-dessous.",
+  hint: (hint: string) => `À faire : ${hint}`,
+  hintMissing:
+    "Relancez un test sur le même commit après avoir corrigé la cause, ou ouvrez le rapport pour le déroulé complet.",
+  scenarios: (count: number) =>
+    count === 1
+      ? "1 scénario s’est arrêté sur une erreur"
+      : `${count} scénarios se sont arrêtés sur une erreur`,
+  stoppedAt: (phase: string) => `Phase atteinte : ${phase}`,
+  title: "Pourquoi ce test n’est pas allé au bout",
+} as const;
+
+/** The dedicated full-screen run report. */
+export const runScreen = {
+  back: "Retour à l’historique",
+  missing:
+    "Ce test est introuvable : il a peut-être été purgé, ou il appartient à un dépôt auquel vous n’avez pas accès.",
+  seenIn: "Ouvrir dans l’historique",
 } as const;
 
 export const settings = {
