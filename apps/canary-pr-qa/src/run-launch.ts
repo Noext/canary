@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import { z } from "zod";
-import { type Principal, requireAccess } from "./access.js";
+import { mayLaunch, type Principal, requireAccess } from "./access.js";
 import { type Config, validatePreviewUrl } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import { GitHub, parsePrUrl } from "./github.js";
@@ -125,7 +125,16 @@ export class RunLauncher {
       );
     }
     const ref = pullRequest(input.prUrl);
-    requireAccess(user, ref.repo, true);
+    // Reading the scope first keeps "not your repository" distinct from "your
+    // key may not act", and the capability is what an agent key was issued for.
+    requireAccess(user, ref.repo);
+    if (!mayLaunch(user)) {
+      throw new QaError(
+        "LAUNCH_DENIED",
+        "Ce compte ne peut pas lancer de test.",
+        "Un compte ou une clé API de portée « opérateur » peut lancer un test."
+      );
+    }
     const selected = runModelConfig(this.config, input.model).OPENAI_MODEL;
     await this.models.require(selected);
     if (!effective.allowedRepos.includes(ref.repo.toLowerCase())) {

@@ -576,20 +576,27 @@ Le serveur en garde une empreinte et une copie chiffrée : le bouton Copier de l
 liste rend le jeton sans jamais l'afficher à l'écran. Révoquer une clé la refuse
 dès la requête suivante ; la ligne reste pour l'audit.
 
-Une clé lit toujours les dépôts en vigueur au moment de sa création — la
-sélection GitHub des réglages, plafonnée par `GITHUB_ALLOWED_REPOS` — : elle lit
-l'historique. Sa **portée** décide de ce qu'elle peut faire de plus :
+Une clé lit les dépôts en vigueur au moment de sa création — la sélection GitHub
+des réglages, plafonnée par `GITHUB_ALLOWED_REPOS`, et bornée par ceux de son
+émetteur. Sa **portée** décide de ce qu'elle peut faire de plus :
 
 | Portée | Ce qu'elle peut faire |
 | --- | --- |
 | `viewer` (défaut) | Lire les tests, les rapports et les tentatives automatiques ; rien lancer. |
-| `operator` | La lecture, plus `launch_run` : démarrer un test et payer son exécution. |
+| `operator` | La lecture, plus lancer un test et payer son exécution. |
+
+Une clé n'est jamais un opérateur du dashboard, quelle que soit sa portée : le
+principal qu'elle présente reste un lecteur, plus la capacité de lancer. Annuler
+un test, réarmer une tentative automatique, partager un artefact signé, toucher
+aux réglages ou aux comptes lui sont donc refusés (`403`), et le resteront pour
+toute route d'écriture ajoutée plus tard — `GET /me` répond `viewer` pour une clé
+`operator`. Seul `POST /runs` et l'outil MCP `launch_run` honorent la capacité.
 
 Aucune clé n'est `admin` : les réglages, les comptes, la politique de previews et
 la suppression d'un test restent au dashboard. La portée est figée à la création —
 une clé vit avec le droit qu'elle a reçu, sans élargissement silencieux — et la
-liste des clés affiche celle de chacune. Le rôle voyage aussi dans `GET /me`, et
-un `POST /runs` avec une clé `viewer` reste refusé (`403`).
+liste des clés affiche celle de chacune. Un `POST /runs` avec une clé `viewer` est
+refusé (`403`, `LAUNCH_DENIED`).
 
 Les dépôts d'une clé sont l'intersection de la sélection en vigueur avec ceux de
 l'identité qui l'émet : une clé ne dépasse jamais son émetteur. Un administrateur

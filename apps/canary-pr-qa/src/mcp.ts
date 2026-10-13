@@ -3,7 +3,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
-import { ACCESS_DENIED, type Principal, requireAccess } from "./access.js";
+import {
+  ACCESS_DENIED,
+  mayLaunch,
+  type Principal,
+  requireAccess,
+} from "./access.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import { automaticAttempt, type Job, type Queue } from "./queue.js";
@@ -400,7 +405,7 @@ const tools: Tool[] = [
     name: "launch_run",
     run: async (raw, ctx) => {
       const { idempotencyKey, ...args } = launchRunArgs.parse(raw);
-      if (ctx.user.role === "viewer") {
+      if (!mayLaunch(ctx.user)) {
         return text(READ_ONLY_KEY, true);
       }
       try {

@@ -23,9 +23,11 @@ export const API_KEYS_LABEL = "api-keys-v1";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * What a key may do. `viewer` reads the runs of its repositories; `operator`
- * also starts one through the MCP `launch_run` tool. `admin` is deliberately
- * absent: an administrator key would be an escalation of the dashboard's own
- * role, and no agent needs it.
+ * also starts one. It is a declared portée, never the principal's dashboard
+ * role: a key stays a reader there, so cancelling a run, re-arming an automatic
+ * attempt and touching the settings remain out of its reach. `admin` is
+ * deliberately absent — an administrator key would be an escalation of the
+ * dashboard's own role, and no agent needs it.
  */
 export type ApiKeyRole = "operator" | "viewer";
 interface KeyRow {
@@ -214,9 +216,14 @@ export class ApiKeys {
     );
     return {
       apiKeyId: row.id,
+      // A key never becomes a dashboard operator. Its declared portée is read,
+      // plus `canLaunch` when it was issued to start runs; keeping `role` at
+      // `viewer` is what makes every dashboard write surface refuse it without
+      // enumerating those surfaces — and forgetting one later.
+      canLaunch: row.role === "operator",
       id: `key:${row.id}`,
       repos: row.repos,
-      role: row.role,
+      role: "viewer",
     };
   }
   /** A malformed id is not a capability: it matches nothing, like an absent one. */

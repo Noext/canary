@@ -37,6 +37,14 @@ export interface Principal {
    * leaves it unset, so a surface reserved to agents can tell them apart.
    */
   apiKeyId?: string;
+  /**
+   * The one capability a service key may hold beyond reading: starting a run.
+   * It is deliberately not the principal's `role` — a key is never a dashboard
+   * operator, so every write surface of the dashboard (cancel a run, re-arm an
+   * automatic attempt, share an artifact) refuses it by role, including those
+   * added later. Only this declared capability opens a launch.
+   */
+  canLaunch?: boolean;
   id: string;
   repos: string[];
   role: "viewer" | "operator" | "admin";
@@ -156,6 +164,14 @@ export function requireAccess(user: Principal, repo: string, write = false) {
   ) {
     throw new Error(ACCESS_DENIED);
   }
+}
+/**
+ * Whether this principal may start a run. An agent key carries exactly the
+ * capability it was issued with, whatever its repositories; a dashboard session
+ * follows its role, as it always has.
+ */
+export function mayLaunch(user: Principal) {
+  return user.apiKeyId ? user.canLaunch === true : user.role !== "viewer";
 }
 export function artifactSignature(
   id: string,

@@ -32,7 +32,7 @@ export const apiKeys = {
   role: {
     help: {
       operator:
-        "En plus de la lecture, cette clé peut lancer un test ; elle ne touche jamais vos réglages.",
+        "En plus de la lecture, cette clé peut lancer un test — sans pouvoir l'annuler ni toucher à vos réglages.",
       viewer:
         "Cette clé lit vos tests, leurs rapports et les tentatives automatiques, sans rien lancer.",
     },

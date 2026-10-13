@@ -6,7 +6,7 @@ import type { ApiKeyCreated, ApiKeyRow } from "../src/dashboard/contracts.js";
 import { GitHubSetup } from "../src/github-setup.js";
 import { LocalAuth } from "../src/local-auth.js";
 import { startProductionServer } from "../src/production-server.js";
-import { fixture, PR_URL, pgliteQueue } from "./fixture.js";
+import { fixture, PR_URL, pgliteQueue, SHA } from "./fixture.js";
 import { githubSetupFixture } from "./github-setup-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -474,4 +474,42 @@ it("never lets a key outgrow the administrator who issued it", async () => {
   expect(audit.map((row) => [row.details.role, row.details.repos])).toEqual([
     ["operator", ["fixture/app"]],
   ]);
+}, 30_000);
+
+it("gives an operator key the launch and nothing else the dashboard writes", async () => {
+  const { q, url, admin } = await apiKeysServer();
+  const operator = await createKey(url, admin, "operator");
+  const key = { Authorization: `Bearer ${operator.token}` };
+  // The key is not a dashboard operator: `GET /me` reports it as a reader, and
+  // every write route of the dashboard refuses it by role.
+  expect(
+    await (await fetch(`${url}/me`, { headers: key })).json()
+  ).toMatchObject({ id: `key:${operator.id}`, role: "viewer" });
+  const launched = await fetch(`${url}/runs`, {
+    method: "POST",
+    headers: key,
+    body: JSON.stringify({ prUrl: PR_URL }),
+  });
+  expect(launched.status).toBe(202);
+  const { id } = (await launched.json()) as { id: string };
+  await q.acceptDelivery(
+    "delivery-1",
+    "pull_request",
+    { number: 7, prUrl: PR_URL, repo: "fixture/app", sha: SHA },
+    1800
+  );
+  const refused = [
+    { method: "POST", path: `/runs/${id}/cancel` },
+    { method: "POST", path: `/runs/${id}/links` },
+    { method: "POST", path: "/dashboard/automatic/delivery-1/retry" },
+  ];
+  for (const route of refused) {
+    const res = await fetch(`${url}${route.path}`, {
+      method: route.method,
+      headers: key,
+    });
+    expect([route.path, res.status]).toEqual([route.path, 403]);
+  }
+  // Read-only work stays open to it.
+  expect((await fetch(`${url}/runs/${id}`, { headers: key })).status).toBe(200);
 }, 30_000);

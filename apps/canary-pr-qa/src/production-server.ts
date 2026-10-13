@@ -617,7 +617,7 @@ function apiErrorStatus(diagnostic: { code: string; message: string }) {
     return 409;
   }
   // A refusal of authority is a 403 by contract, not by message wording.
-  if (diagnostic.code === "ACCOUNT_SCOPE_REQUIRED") {
+  if (["ACCOUNT_SCOPE_REQUIRED", "LAUNCH_DENIED"].includes(diagnostic.code)) {
     return 403;
   }
   if (["AUTH_RATE_LIMIT", "AUTH_BUSY"].includes(diagnostic.code)) {
