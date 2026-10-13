@@ -96,6 +96,12 @@ export async function api<T>(
   path: string,
   options: ApiOptions & { schema: z.ZodType<T> }
 ): Promise<T>;
+/**
+ * A write whose answer the caller does not read, for an id-carrying path the
+ * typed map cannot know: the change it makes is observed by reloading the
+ * resource it touched, and that read is the one carrying a schema.
+ */
+export async function api(path: string, options?: ApiOptions): Promise<unknown>;
 export async function api(
   path: string,
   options: ApiOptions & { schema?: z.ZodType<unknown> } = {}

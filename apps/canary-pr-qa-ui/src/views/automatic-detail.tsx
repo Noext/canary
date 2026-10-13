@@ -6,12 +6,18 @@ import { useSession } from "@/app/session";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import { Card, CardHeader } from "@/components/ui/form";
-import { automaticAdvice, automaticDetail, automaticSteps } from "@/i18n";
+import {
+  automatic,
+  automaticAdvice,
+  automaticDetail,
+  automaticSteps,
+} from "@/i18n";
 import {
   automaticReasonLabel,
   automaticStateLabel,
   formatDate,
   githubPullUrl,
+  retryableAutomatic,
   shortSha,
   toneForAutomatic,
 } from "@/lib/format";
@@ -39,7 +45,7 @@ export function AutomaticDetailView(): ReactNode {
       requested: requestedAutomatic,
     })
   );
-  const { detail, error, loading, missing } = useStore(store);
+  const { detail, error, loading, missing, retrying } = useStore(store);
 
   if (missing) {
     return (
@@ -86,7 +92,9 @@ export function AutomaticDetailView(): ReactNode {
       canWrite={canWrite}
       detail={detail}
       navigate={navigate}
+      onRetry={store.retry}
       openRunScreen={openRunScreen}
+      retrying={Boolean(retrying)}
     />
   );
 }
@@ -95,12 +103,16 @@ function AutomaticDetailBody({
   canWrite,
   detail,
   navigate,
+  onRetry,
   openRunScreen,
+  retrying,
 }: {
   canWrite: boolean;
   detail: AutomaticDetail;
   navigate: (view: "home" | "new") => void;
+  onRetry: () => void;
   openRunScreen: (runId: string) => void;
+  retrying: boolean;
 }): ReactNode {
   const { attempt, preview, timeline } = detail;
   const prUrl = githubPullUrl(attempt.repo, attempt.pr);
@@ -160,7 +172,10 @@ function AutomaticDetailBody({
       <PromotedAction
         canWrite={canWrite}
         navigate={navigate}
+        onRetry={onRetry}
         openRunScreen={openRunScreen}
+        retryable={retryableAutomatic(attempt.state)}
+        retrying={retrying}
         runId={promotedRunId}
       />
 
@@ -246,20 +261,34 @@ const diagnosedStates: AutomaticState[] = [
   "disabled",
 ];
 
-/** The run a promoted attempt created, or the action that takes its place. */
+/** The run a promoted attempt created, or the actions that take its place. */
 function PromotedAction({
   canWrite,
   navigate,
+  onRetry,
   openRunScreen,
+  retryable,
+  retrying,
   runId,
 }: {
   canWrite: boolean;
   navigate: (view: "home" | "new") => void;
+  onRetry: () => void;
   openRunScreen: (runId: string) => void;
+  retryable: boolean;
+  retrying: boolean;
   runId: string | null;
 }): ReactNode {
   if (!runId) {
-    return <ManualRunAction canWrite={canWrite} navigate={navigate} />;
+    return (
+      <FailedAttemptActions
+        canWrite={canWrite}
+        navigate={navigate}
+        onRetry={onRetry}
+        retryable={retryable}
+        retrying={retrying}
+      />
+    );
   }
   return (
     <div
@@ -350,18 +379,26 @@ function Timeline({
 }
 
 /**
- * The action of an attempt that never started a run.
+ * The actions of an attempt that never started a run: re-arm it on the same
+ * commit, or start a run by hand with an explicit URL. Both answer "what now?",
+ * and only a failure that a probe can still fix offers the retry.
  *
- * `Nouveau test` is open to writers only: the navigation guard would silently
- * send a viewer back to the home screen, so a viewer is told what to ask for
- * instead of being offered a button that does nothing.
+ * They are open to writers only: the navigation guard would silently send a
+ * viewer back to the home screen, so a viewer is told what to ask for instead of
+ * being offered a button that does nothing.
  */
-function ManualRunAction({
+function FailedAttemptActions({
   canWrite,
   navigate,
+  onRetry,
+  retryable,
+  retrying,
 }: {
   canWrite: boolean;
   navigate: (view: "home" | "new") => void;
+  onRetry: () => void;
+  retryable: boolean;
+  retrying: boolean;
 }): ReactNode {
   if (!canWrite) {
     return (
@@ -374,12 +411,21 @@ function ManualRunAction({
     );
   }
   return (
-    <Button
-      className="mt-4"
-      id="automaticDetailRunCta"
-      onClick={() => navigate("new")}
-    >
-      {automaticDetail.runCta}
-    </Button>
+    <div className="mt-4 flex flex-wrap items-center gap-3">
+      <Button id="automaticDetailRunCta" onClick={() => navigate("new")}>
+        {automaticDetail.runCta}
+      </Button>
+      {retryable ? (
+        <Button
+          disabled={retrying}
+          id="automaticDetailRetry"
+          onClick={onRetry}
+          title={automatic.retryTitle}
+          variant="primary"
+        >
+          {retrying ? automatic.retrying : automatic.retry}
+        </Button>
+      ) : null}
+    </div>
   );
 }

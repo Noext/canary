@@ -11,7 +11,14 @@ export interface AutomaticRunsState {
   /** Message of a failed `/dashboard/automatic`, so the block can explain it. */
   error?: string;
   loading: boolean;
+  /** Attempt being re-armed: its button reports the wait instead of firing twice. */
+  retrying?: string;
   status: AutomaticStatus;
+}
+
+export interface AutomaticRunsStore extends Readable<AutomaticRunsState> {
+  /** Re-arms a failed attempt and reloads the list with the state it now has. */
+  retry(id: string): void;
 }
 
 const emptyStatus: AutomaticStatus = {
@@ -22,17 +29,17 @@ const emptyStatus: AutomaticStatus = {
 
 async function loadAutomatic(
   store: Store<AutomaticRunsState>,
-  signal: AbortSignal,
-  report: (failure: unknown) => void
+  report: (failure: unknown) => void,
+  signal?: AbortSignal
 ) {
   try {
     const status = await api("/dashboard/automatic", { signal });
-    if (signal.aborted) {
+    if (signal?.aborted) {
       return;
     }
     store.set((current) => ({ ...current, loading: false, status }));
   } catch (failure) {
-    if (signal.aborted) {
+    if (signal?.aborted) {
       return;
     }
     // The alert carries the failure; the block keeps an empty, readable list
@@ -48,6 +55,29 @@ async function loadAutomatic(
 }
 
 /**
+ * Re-arms one failed attempt, then reloads the list. The answer of the write is
+ * deliberately not read: the reloaded list is the single source of what the
+ * attempt became, and it is that response the shared schema guards.
+ */
+async function retryAutomatic(
+  store: Store<AutomaticRunsState>,
+  id: string,
+  report: (failure: unknown) => void
+) {
+  store.set((current) => ({ ...current, retrying: id }));
+  try {
+    await api(`/dashboard/automatic/${encodeURIComponent(id)}/retry`, {
+      method: "POST",
+    });
+    await loadAutomatic(store, report);
+  } catch (failure) {
+    report(failure);
+  } finally {
+    store.set((current) => ({ ...current, retrying: undefined }));
+  }
+}
+
+/**
  * The automatic attempts the home screen reports.
  *
  * The request is a real lifecycle: the screen owns it and abandons it on
@@ -59,7 +89,7 @@ async function loadAutomatic(
  */
 export function createAutomaticRunsStore(
   report: (failure: unknown) => void
-): Readable<AutomaticRunsState> {
+): AutomaticRunsStore {
   let listeners = 0;
   let abort: (() => void) | undefined;
 
@@ -68,12 +98,15 @@ export function createAutomaticRunsStore(
     (store) => {
       const controller = new AbortController();
       abort = () => controller.abort();
-      void loadAutomatic(store, controller.signal, report);
+      void loadAutomatic(store, report, controller.signal);
     }
   );
 
   return {
     getSnapshot: state.getSnapshot,
+    retry: (id) => {
+      void retryAutomatic(state, id, report);
+    },
     subscribe(listener) {
       listeners += 1;
       const unsubscribe = state.subscribe(listener);

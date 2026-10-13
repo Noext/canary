@@ -41,6 +41,9 @@ const admin: Principal = {
   username: "ui-admin",
 };
 
+/** The principal `/me` answers with; a test that needs a reader replaces it. */
+let me: Principal = admin;
+
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 function attempt(overrides: Partial<AutomaticAttempt> = {}): AutomaticAttempt {
@@ -67,6 +70,15 @@ function waitingStatus(): AutomaticStatus {
   };
 }
 
+/** The failure the home block reports, and the attempt a retry re-arms. */
+function expiredStatus(): AutomaticStatus {
+  return {
+    attempts: [attempt({ state: "expired" })],
+    enabledRepos: ["fixture/app"],
+    summary: { expired: 1, rateLimited: 0, waiting: 0 },
+  };
+}
+
 function byId(container: HTMLElement, id: string): HTMLElement {
   const element = container.querySelector<HTMLElement>(`[id="${id}"]`);
   if (!element) {
@@ -81,6 +93,7 @@ let calls: ApiCall[] = [];
 
 beforeEach(() => {
   calls = [];
+  me = admin;
   automaticStatus = waitingStatus();
   window.scrollTo = vi.fn();
   setup = {
@@ -96,11 +109,17 @@ beforeEach(() => {
   apiMock.mockReset();
   apiMock.mockImplementation(async (path, options) => {
     calls.push({ method: options?.method ?? "GET", path });
+    // A retry re-arms the same attempt: the server answers with it and the next
+    // read of the list reports it as waiting, which is what this fixture models.
+    if (path === "/dashboard/automatic/delivery-1/retry") {
+      automaticStatus = waitingStatus();
+      return { attempt: attempt(), timeline: [] };
+    }
     switch (path) {
       case "/auth/status":
         return { initialized: true };
       case "/me":
-        return admin;
+        return me;
       case "/dashboard/automatic":
         return automaticStatus;
       case "/dashboard/status":
@@ -288,6 +307,58 @@ describe("AutomaticRuns", () => {
     expect(screen.getByTestId("route")).toHaveTextContent(
       "automatic:delivery-1"
     );
+  });
+
+  it("re-arms a failed attempt and shows it waiting again", async () => {
+    const user = userEvent.setup();
+    automaticStatus = expiredStatus();
+    const container = await rendered();
+    expect(byId(container, "automaticSummary")).toHaveTextContent(
+      "1 délai(s) dépassé(s)"
+    );
+
+    await user.click(byId(container, "automaticRetry-delivery-1"));
+
+    expect(calls).toContainEqual({
+      method: "POST",
+      path: "/dashboard/automatic/delivery-1/retry",
+    });
+    // What the operator sees next comes from the reloaded list, not from the
+    // response of the write: an expired attempt is waiting again.
+    await waitFor(() =>
+      expect(byId(container, "automaticAttempts")).toHaveTextContent(
+        "En attente de la préversion"
+      )
+    );
+    expect(byId(container, "automaticAttempts")).not.toHaveTextContent(
+      "Délai dépassé"
+    );
+    expect(byId(container, "automaticSummary")).toHaveTextContent(
+      "1 en attente"
+    );
+  });
+
+  it("offers no retry on an attempt the probe loop still owns", async () => {
+    const container = await rendered();
+
+    // A waiting attempt has nothing to re-arm: the next probe is scheduled.
+    expect(document.getElementById("automaticRetry-delivery-1")).toBeNull();
+    expect(byId(container, "automaticAttempts")).toHaveTextContent(
+      "En attente de la préversion"
+    );
+  });
+
+  it("offers no retry to a reader the write would be refused for", async () => {
+    me = { ...admin, role: "viewer", username: "ui-reader" };
+    automaticStatus = expiredStatus();
+    const container = await rendered();
+
+    expect(document.getElementById("automaticRetry-delivery-1")).toBeNull();
+    // The failure itself is still reported, with the screens that explain it.
+    expect(byId(container, "automaticAttempts")).toHaveTextContent(
+      "Délai dépassé"
+    );
+    expect(byId(container, "automaticAttempt-delivery-1")).toBeInTheDocument();
   });
 
   it("renders nothing while GitHub is not connected", async () => {

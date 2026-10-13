@@ -81,6 +81,9 @@ export interface AutomaticTimelineEntry {
  * attempt itself, the version proof its preview had to satisfy and the audit
  * trail of its probes. The title configuration is deployment topology, so it is
  * reported to administrators only.
+ *
+ * `POST /dashboard/automatic/:id/retry` answers with this same object, so the
+ * screen that re-armed an attempt replaces what it shows with the response.
  */
 export interface AutomaticDetail {
   attempt: AutomaticAttempt;

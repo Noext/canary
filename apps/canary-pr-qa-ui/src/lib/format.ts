@@ -67,6 +67,15 @@ export function toneForAutomatic(state: string | null | undefined): Tone {
   return state === "promoted" ? "success" : "neutral";
 }
 
+/**
+ * The two failures a retry can restart. `waiting` is already probing, `promoted`
+ * has its run, `discarded` would be discarded again on the same facts, and
+ * `disabled` is a server-side switch: none of them has anything to re-arm.
+ */
+export function retryableAutomatic(state: string | null | undefined): boolean {
+  return state === "expired" || state === "rate_limited";
+}
+
 export function automaticStateLabel(state: string | null | undefined): string {
   if (!state) {
     return "";

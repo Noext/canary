@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from "react";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
+import { useSession } from "@/app/session";
 import { useWorkspace } from "@/app/workspace";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/feedback";
@@ -16,6 +17,7 @@ import {
   automaticStateLabel,
   formatDate,
   githubPullUrl,
+  retryableAutomatic,
   shortSha,
   toneForAutomatic,
 } from "@/lib/format";
@@ -27,7 +29,8 @@ import { createAutomaticRunsStore } from "./automatic-runs-store";
  * preview is still missing, the deadline passed or GitHub throttled the
  * repository. A delivery that already produced a run is reported by the runs
  * history, never here. Dates are rendered, not counted down, so nothing here
- * depends on the current time.
+ * depends on the current time. A failure that stopped without a run offers the
+ * retry that puts it back in the probe loop.
  */
 export function AutomaticRuns(): ReactNode {
   const { githubReady } = useWorkspace();
@@ -41,11 +44,12 @@ export function AutomaticRuns(): ReactNode {
 
 function AutomaticRunsBlock(): ReactNode {
   const { report } = useError();
+  const { canWrite } = useSession();
   const { openAutomatic } = useNavigation();
   // The store instance belongs to this screen, never to module scope: React's
   // first subscription starts the request and abandoning the screen aborts it.
   const [store] = useState(() => createAutomaticRunsStore(report));
-  const { loading, status } = useStore(store);
+  const { loading, retrying, status } = useStore(store);
 
   const attempts = status.attempts;
   const summary = status.summary;
@@ -129,14 +133,33 @@ function AutomaticRunsBlock(): ReactNode {
                   formatDate(attempt.deadlineAt)
                 )}`}
               </p>
-              <Button
-                className="mt-2"
-                id={`automaticAttempt-${attempt.id}`}
-                onClick={() => openAutomatic(attempt.id)}
-                variant="quiet"
-              >
-                {automatic.detail}
-              </Button>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <Button
+                  id={`automaticAttempt-${attempt.id}`}
+                  onClick={() => openAutomatic(attempt.id)}
+                  variant="quiet"
+                >
+                  {automatic.detail}
+                </Button>
+                {/*
+                  An attempt that stopped without a run can be re-armed where
+                  the operator already is. A viewer gets no button: the server
+                  refuses the write, and its detail screen explains the state.
+                */}
+                {canWrite && retryableAutomatic(attempt.state) ? (
+                  <Button
+                    disabled={retrying === attempt.id}
+                    id={`automaticRetry-${attempt.id}`}
+                    onClick={() => store.retry(attempt.id)}
+                    title={automatic.retryTitle}
+                    variant="primary"
+                  >
+                    {retrying === attempt.id
+                      ? automatic.retrying
+                      : automatic.retry}
+                  </Button>
+                ) : null}
+              </div>
             </li>
           );
         })}
