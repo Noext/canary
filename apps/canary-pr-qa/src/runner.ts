@@ -8,7 +8,7 @@ import {
   PLAN_EVIDENCE_SNAPSHOT_CHARS,
 } from "./canary.js";
 import { type Config, validateConfiguration } from "./config.js";
-import { diagnose, QaError } from "./diagnostics.js";
+import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import { fixtureCatalog } from "./fixtures.js";
 import { GitHub, type PrContext } from "./github.js";
@@ -16,10 +16,16 @@ import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
   type PlanEvidenceRefusal,
+  type PlanEvidenceReport,
   planEvidenceDiagnostic,
   validatePlanEvidence,
 } from "./plan-evidence.js";
-import { trustedPolicy, validateCoverage, validateProvider } from "./policy.js";
+import {
+  trustedPolicy,
+  validateCoverage,
+  validateProvider,
+  writeEvidenceRefusals,
+} from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
@@ -30,6 +36,7 @@ import {
   PlanSchema,
   type Preview,
   type RunResult,
+  type Scenario,
   type ScenarioResult,
 } from "./schema.js";
 import { traced } from "./telemetry.js";
@@ -154,6 +161,77 @@ function aggregate(scenarios: ScenarioResult[]): Outcome {
   }
   return "passed";
 }
+/**
+ * A scenario refused before execution is reported blocked and skipped, with the
+ * existing diagnostic; the remaining scenarios still run.
+ */
+async function refuseScenario(
+  result: RunResult,
+  scenario: Scenario,
+  diagnostic: Diagnostic,
+  progress: Progress,
+  root: string,
+  config: Config
+) {
+  result.scenarios.push({
+    scenario,
+    outcome: "blocked",
+    steps: [],
+    assertions: [],
+    artifacts: [],
+    diagnostic,
+    error: diagnostic.message,
+  });
+  await progress.record({
+    phase: "planning",
+    scenarioId: scenario.id,
+    outcome: "blocked",
+    diagnostic,
+  });
+  await saveReport(root, result, config);
+}
+/**
+ * Diagnostic d'un refus prononcé avant toute exécution : cible absente de la page
+ * de découverte, ou interaction sans preuve du changement. `undefined` quand le
+ * scénario peut s'exécuter. Un scénario refusé n'est jamais exécuté — aperçu de
+ * tête comme préversion de base — et son refus est journalisé une seule fois, ici.
+ */
+function refusalDiagnostic(
+  result: RunResult,
+  scenario: Scenario,
+  refusals: Map<string, PlanEvidenceRefusal[]>,
+  inconclusive: PlanEvidenceReport["inconclusive"],
+  writeRefusals: Map<string, QaError>,
+  config: Config
+): Diagnostic | undefined {
+  const scenarioRefusals = refusals.get(scenario.id);
+  if (scenarioRefusals) {
+    const { message, hint } = planEvidenceDiagnostic(
+      scenario,
+      scenarioRefusals,
+      inconclusive.filter((item) => item.scenarioId === scenario.id).length
+    );
+    logger.warn(
+      {
+        runId: result.id,
+        scenario: scenario.id,
+        targets: scenarioRefusals.map((item) => item.target),
+      },
+      "Scénario refusé avant exécution : cible absente de la page de découverte"
+    );
+    return diagnose(new QaError("PLAN_TARGET_MISSING", message, hint), config);
+  }
+  const writeRefusal = writeRefusals.get(scenario.id);
+  if (!writeRefusal) {
+    return;
+  }
+  const diagnostic = diagnose(writeRefusal, config);
+  logger.warn(
+    { runId: result.id, scenario: scenario.id, diagnostic },
+    "Scénario refusé avant exécution : interaction sans preuve du changement"
+  );
+  return diagnostic;
+}
 async function executePlan(
   result: RunResult,
   context: PrContext,
@@ -194,7 +272,20 @@ async function executePlan(
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });
-  result.plan = await model.json(PLANNER_PROMPT, payload, PlanSchema);
+  result.plan = await model.json(
+    PLANNER_PROMPT,
+    payload,
+    PlanSchema,
+    config.QA_PLAN_MAX_TOKENS,
+    (candidate) => {
+      const refusals = writeEvidenceRefusals(candidate, policy);
+      return refusals.length
+        ? `Plan rejected: ${refusals
+            .map((item) => `${item.error.message}. ${item.error.hint}`)
+            .join(" ")} Return the complete corrected plan.`
+        : undefined;
+    }
+  );
   validatePlan(result.plan, context, config);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
@@ -224,45 +315,24 @@ async function executePlan(
     await progress.record({ phase: "planning", diagnostic });
   }
   result.coverage = validateCoverage(result.plan, context, policy, config);
+  const writeRefusals = new Map(
+    writeEvidenceRefusals(result.plan, policy).map((item) => [
+      item.scenario.id,
+      item.error,
+    ])
+  );
   await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
-    const scenarioRefusals = refusals.get(scenario.id);
-    if (scenarioRefusals) {
-      const { message, hint } = planEvidenceDiagnostic(
-        scenario,
-        scenarioRefusals,
-        planEvidence.inconclusive.filter(
-          (item) => item.scenarioId === scenario.id
-        ).length
-      );
-      const diagnostic = diagnose(
-        new QaError("PLAN_TARGET_MISSING", message, hint),
-        config
-      );
-      logger.warn(
-        {
-          runId: result.id,
-          scenario: scenario.id,
-          targets: scenarioRefusals.map((item) => item.target),
-        },
-        "Scénario refusé avant exécution : cible absente de la page de découverte"
-      );
-      await progress.record({
-        phase: "planning",
-        scenarioId: scenario.id,
-        outcome: "blocked",
-        diagnostic,
-      });
-      result.scenarios.push({
-        scenario,
-        outcome: "blocked",
-        steps: [],
-        assertions: [],
-        artifacts: [],
-        diagnostic,
-        error: diagnostic.message,
-      });
-      await saveReport(root, result, config);
+    const refusal = refusalDiagnostic(
+      result,
+      scenario,
+      refusals,
+      planEvidence.inconclusive,
+      writeRefusals,
+      config
+    );
+    if (refusal) {
+      await refuseScenario(result, scenario, refusal, progress, root, config);
       continue;
     }
     logger.info(
@@ -301,7 +371,7 @@ async function executePlan(
       scenarios: [],
     };
     for (const scenario of result.plan.scenarios) {
-      if (refusals.has(scenario.id)) {
+      if (refusals.has(scenario.id) || writeRefusals.has(scenario.id)) {
         // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
         continue;
       }

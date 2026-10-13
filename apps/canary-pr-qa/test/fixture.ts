@@ -132,6 +132,8 @@ export async function fixture(
     listenHost?: string;
     missingDiffAndContext?: boolean;
     decoy?: boolean;
+    plans?: Plan[];
+    requireWriteEvidence?: boolean;
     unchangedState?: boolean;
     persistent?: boolean;
     persistenceBroken?: boolean;
@@ -148,6 +150,7 @@ export async function fixture(
   const catalogRequests: string[] = [];
 
   let prReads = 0;
+  let planRequests = 0;
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) =>
       json(res, { error: String(error) }, 500)
@@ -221,6 +224,18 @@ export async function fixture(
       );
       return;
     }
+    if (path === "/baseline") {
+      // Préversion de base : même hôte, autre SHA annoncé, pour exercer le tour
+      // de comparaison `QA_BASELINE_URL_TEMPLATE` sans changer d'infrastructure.
+      res.writeHead(200, {
+        "Content-Type": "text/html",
+        "x-commit-sha": BASE_SHA,
+      });
+      res.end(
+        '<!doctype html><html lang="en"><title>QA baseline fixture</title><h1>Baseline</h1></html>'
+      );
+      return;
+    }
     if (path === "/download") {
       res.writeHead(200, {
         "Content-Type": "text/plain",
@@ -267,7 +282,19 @@ export async function fixture(
       return;
     }
     if (path.includes("/contents/.canary/qa.json")) {
-      json(res, { message: "Not Found" }, 404);
+      if (options.requireWriteEvidence === undefined) {
+        json(res, { message: "Not Found" }, 404);
+        return;
+      }
+      json(res, {
+        encoding: "base64",
+        content: Buffer.from(
+          JSON.stringify({
+            version: 1,
+            requireWriteEvidence: options.requireWriteEvidence,
+          })
+        ).toString("base64"),
+      });
       return;
     }
     if (path.includes("/contents/")) {
@@ -299,13 +326,15 @@ export async function fixture(
       if (messages[0]?.content.startsWith("You are a connection diagnostic")) {
         value = { ok: true };
       } else if (messages[0]?.content.startsWith("You plan")) {
+        const scripted = options.plans?.[planRequests] ?? options.plans?.at(-1);
+        planRequests++;
         value = options.noScenarios
           ? {
               summary: "No browser changes",
               scenarios: [],
               skipped: [{ sourceFile: "src/form.ts", reason: "fixture" }],
             }
-          : structuredClone(plan);
+          : structuredClone(scripted ?? plan);
         if (options.unnamedStatus && !options.noScenarios) {
           (value as Plan).scenarios[0]!.assertions[0]!.target = {
             by: "role",
