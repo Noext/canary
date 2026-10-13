@@ -60,6 +60,13 @@ export interface ApiOptions {
   method?: "DELETE" | "GET" | "POST" | "PUT";
   query?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
+  /**
+   * Declares that the caller does not read the answer, for a write whose effect
+   * is observed by reloading the resource it touched. A response nobody reads is
+   * the only case where validating it would prove nothing; without this flag, a
+   * path outside the typed map still has to carry a schema.
+   */
+  unvalidated?: true;
 }
 
 function requestUrl(path: string, query: ApiOptions["query"]): string {
@@ -98,10 +105,14 @@ export async function api<T>(
 ): Promise<T>;
 /**
  * A write whose answer the caller does not read, for an id-carrying path the
- * typed map cannot know: the change it makes is observed by reloading the
+ * typed map cannot know. The `unvalidated` flag is required, so no caller loses
+ * a schema by omission: the change the write makes is observed by reloading the
  * resource it touched, and that read is the one carrying a schema.
  */
-export async function api(path: string, options?: ApiOptions): Promise<unknown>;
+export async function api(
+  path: string,
+  options: ApiOptions & { unvalidated: true }
+): Promise<unknown>;
 export async function api(
   path: string,
   options: ApiOptions & { schema?: z.ZodType<unknown> } = {}
