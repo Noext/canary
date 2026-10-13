@@ -11,6 +11,7 @@ import {
   resultSummaries,
   runAdvice,
   runDiagnostic,
+  runScreen,
 } from "@/i18n";
 import {
   githubCommentUrl,
@@ -278,6 +279,24 @@ function FailedScenario({ item }: { item: ScenarioSummary }) {
 }
 
 /**
+ * The panel the history mounts when the run could not be read. Its own screen,
+ * `RunScreenView`, shows the same sentence in place of the whole detail; this is
+ * for the callers that have nothing else to put there.
+ */
+function RunMissing({ runId }: { runId?: string }) {
+  return (
+    <Card hidden={!runId} id="detail">
+      <Notice id="runMissing" tone="warning">
+        {runScreen.missing}
+      </Notice>
+      <p className="mt-3 text-muted-foreground text-sm" id="runIdentifier">
+        {runId ? copy.runIdentifierPrefix + runId : ""}
+      </p>
+    </Card>
+  );
+}
+
+/**
  * The selected run: its live progress, its result report and the technical
  * diagnostic every assertion of the end-to-end suite reads.
  *
@@ -289,18 +308,25 @@ function FailedScenario({ item }: { item: ScenarioSummary }) {
  */
 export function RunDetail({
   canWrite,
+  onUnavailable,
   onUpdate,
   runId,
 }: {
   canWrite: boolean;
+  /**
+   * Called when the run cannot be read at all. A caller that shows the missing
+   * state on its own screen takes over the explanation; the panel the history
+   * mounts keeps it in place, because it has nowhere else to put it.
+   */
+  onUnavailable?: () => void;
   onUpdate?: () => void;
   runId?: string;
 }) {
   const { report } = useError();
   const [store] = useState(() =>
-    createRunDetailStore({ onUpdate, report, runId })
+    createRunDetailStore({ onUnavailable, onUpdate, report, runId })
   );
-  const { cancelling, job, live, message, result, resultFailure } =
+  const { cancelling, job, live, message, result, resultFailure, unavailable } =
     useStore(store);
 
   const progress = job?.progress;
@@ -309,6 +335,12 @@ export function RunDetail({
   const summary = result ? summaryFor(result) : resultFailure;
   const summaryTone = summaryToneFor(result);
   const commentUrl = githubCommentUrl(result?.publication?.commentUrl);
+
+  // A purged run, or one belonging to another account, never produces a frame:
+  // saying so beats a panel that waits forever for a stream that cannot open.
+  if (unavailable) {
+    return <RunMissing runId={runId} />;
+  }
 
   return (
     <Card hidden={!runId} id="detail">

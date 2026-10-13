@@ -53,14 +53,18 @@ export function phaseLabel(phase: string | null | undefined): string {
 }
 
 /**
- * An automatic attempt that waits is not a failure; only an expired deadline
- * is. `rate_limited` stays neutral so the block never overstates the problem.
+ * An automatic attempt that waits is not a failure; only an expired deadline is.
+ * `rate_limited` stays neutral so the block never overstates the problem, and a
+ * promoted attempt is the one unambiguous success of this screen.
  */
 export function toneForAutomatic(state: string | null | undefined): Tone {
   if (state === "expired") {
     return "failed";
   }
-  return state === "waiting" ? "pending" : "neutral";
+  if (state === "waiting") {
+    return "pending";
+  }
+  return state === "promoted" ? "success" : "neutral";
 }
 
 export function automaticStateLabel(state: string | null | undefined): string {

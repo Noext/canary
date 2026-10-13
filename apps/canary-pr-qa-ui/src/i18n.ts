@@ -109,11 +109,17 @@ export const outcomes: Record<string, string> = {
   skipped: "Non testé",
 };
 
-/** Lifecycle of a pull-request delivery that has no run yet. */
+/**
+ * Lifecycle of a pull-request delivery. The first three are what the home block
+ * lists; `promoted` and `disabled` are what the detail screen meets when it opens
+ * an attempt by its id after the attempt left the list.
+ */
 export const automaticStates: Record<string, string> = {
   waiting: "En attente de la préversion",
   expired: "Délai dépassé",
   rate_limited: "Quota horaire atteint",
+  promoted: "Test lancé",
+  disabled: "Lancements désactivés",
 };
 
 /** Machine reason codes of an automatic attempt, explained in French. */
@@ -519,6 +525,8 @@ export const automaticDetail = {
     "Cette tentative a fini par trouver son application de test : le test a démarré.",
   promotedCta: "Voir le détail du test",
   runCta: "Lancer un test manuellement",
+  runViewer:
+    "Un opérateur ou un administrateur peut lancer ce test depuis « Nouveau test ».",
   timelineEmpty: "Aucune étape enregistrée pour cette tentative.",
   timelineTitle: "Déroulé des vérifications",
   waiting:

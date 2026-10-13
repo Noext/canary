@@ -555,8 +555,24 @@ export class Queue {
   }
 }
 
+/**
+ * The state the dashboard renders for one delivery status. The list endpoint only
+ * selects `pending`, `expired` and `rate_limited`, but the detail endpoint looks
+ * a delivery up by its id and can therefore meet the two terminal states that
+ * never create a run: reporting either of them as `waiting` would tell the
+ * operator that Canary is still probing a PR it has already promoted or
+ * refused.
+ */
+const automaticStates: Record<string, AutomaticState> = {
+  auto_disabled: "disabled",
+  expired: "expired",
+  processed: "promoted",
+  rate_limited: "rate_limited",
+};
+
+/** A row with no terminal status is pending: that is the column default. */
 function automaticState(status: string): AutomaticState {
-  return status === "expired" || status === "rate_limited" ? status : "waiting";
+  return automaticStates[status] ?? "waiting";
 }
 function isoInstant(value: Date | null, fallback: Date): string {
   return (value ?? fallback).toISOString();

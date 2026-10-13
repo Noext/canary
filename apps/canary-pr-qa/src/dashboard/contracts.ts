@@ -31,8 +31,18 @@ export interface SetupStatus {
   preview: { automatic: boolean } & Partial<PreviewSettings>;
 }
 
-/** Lifecycle of a pull-request delivery that has no run yet. */
-export type AutomaticState = "waiting" | "expired" | "rate_limited";
+/**
+ * Lifecycle of a pull-request delivery that has no run yet, plus the two states
+ * a delivery reaches once it is looked up by its own id: promoted into a run, or
+ * refused before any probe. The list only reports the three waiting states; the
+ * detail screen can be opened on any of them.
+ */
+export type AutomaticState =
+  | "waiting"
+  | "expired"
+  | "rate_limited"
+  | "promoted"
+  | "disabled";
 
 export interface AutomaticAttempt {
   /** Probe count already spent waiting for a verifiable preview. */

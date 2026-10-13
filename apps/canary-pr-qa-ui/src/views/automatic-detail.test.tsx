@@ -313,10 +313,14 @@ describe("AutomaticDetailView", () => {
     );
   });
 
-  it("points a promoted attempt at its run screen", async () => {
+  it("points a promoted attempt at its run screen without still waiting", async () => {
     const user = userEvent.setup();
+    // The delivery left the list when it was promoted: the state it is opened
+    // with must say so instead of reusing the list's `waiting` fallback.
     wire.handler = () =>
-      detail({ attempt: { ...detail().attempt, runId: "run-9" } });
+      detail({
+        attempt: { ...detail().attempt, runId: "run-9", state: "promoted" },
+      });
     render(
       <Harness initialAutomatic={DELIVERY_ID}>
         <AutomaticDetailView />
@@ -328,8 +332,52 @@ describe("AutomaticDetailView", () => {
         automaticDetail.promoted
       )
     );
+    expect(byId("automaticDetailPill")).toHaveTextContent("Test lancé");
+    expect(document.getElementById("automaticDetailWaiting")).toBeNull();
     await user.click(byId("automaticDetailRunCta"));
     expect(screen.getByTestId("route")).toHaveTextContent("run:");
+  });
+
+  it("tells a viewer what a refused attempt is instead of still waiting", async () => {
+    wire.handler = () =>
+      detail({
+        attempt: {
+          ...detail().attempt,
+          reason: "AUTO_RUNS_DISABLED",
+          state: "disabled",
+        },
+      });
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+
+    await waitFor(() =>
+      expect(byId("automaticDetailPill")).toHaveTextContent(
+        "Lancements désactivés"
+      )
+    );
+    expect(document.getElementById("automaticDetailWaiting")).toBeNull();
+  });
+
+  it("offers a viewer the guidance instead of an action it cannot open", async () => {
+    session.canWrite = false;
+    wire.handler = () => detail();
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+
+    await waitFor(() =>
+      expect(byId("automaticDetailRunViewer")).toHaveTextContent(
+        automaticDetail.runViewer
+      )
+    );
+    // `Nouveau test` is refused to a viewer by the navigation guard, so the
+    // button would bounce them home without ever saying why.
+    expect(document.getElementById("automaticDetailRunCta")).toBeNull();
   });
 
   it("keeps StrictMode's double subscription to a single call", async () => {

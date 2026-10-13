@@ -758,3 +758,87 @@ it("serves one automatic attempt with its audit trail, scoped to the caller", as
     template: "https://preview.example.com/{sha}",
   });
 }, 30_000);
+
+it("reports a promoted or refused attempt as what it is, not as still waiting", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  // Promoted: the delivery leaves the list the moment a real run is created, but
+  // its id keeps working, and the screen must not announce a probe that will
+  // never happen again.
+  expect(
+    await q.acceptDelivery(
+      "promoted-attempt",
+      "pull_request",
+      { ...attempt, number: 9 },
+      1800
+    )
+  ).toBe(true);
+  const promotedToken = "token-promoted";
+  expect(await q.claimDelivery(promotedToken, 90)).toMatchObject({
+    id: "promoted-attempt",
+  });
+  const promoted = await q.promoteAutomatic({
+    delivery: "promoted-attempt",
+    key: `webhook:fixture/app:9:${SHA}`,
+    limits: { global: 10, repository: 10 },
+    pr: 9,
+    repo: "fixture/app",
+    run: { prUrl: PR_URL, publish: false },
+    sha: SHA,
+    token: promotedToken,
+    waitSeconds: 1800,
+  });
+  expect(promoted.promoted).toBe(true);
+  // Refused before any probe: the master switch was off when the webhook landed.
+  expect(
+    await q.acceptDelivery(
+      "disabled-attempt",
+      "pull_request",
+      { ...attempt, number: 10 },
+      1800
+    )
+  ).toBe(true);
+  const disabledToken = "token-disabled";
+  expect(await q.claimDelivery(disabledToken, 90)).toMatchObject({
+    id: "disabled-attempt",
+  });
+  expect(
+    await q.failDelivery(
+      "disabled-attempt",
+      disabledToken,
+      "auto_disabled",
+      "AUTO_RUNS_DISABLED"
+    )
+  ).toBe(true);
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const read = async (id: string): Promise<AutomaticDetail> =>
+    (await (
+      await fetch(`${url}/dashboard/automatic/${id}`, {
+        headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+      })
+    ).json()) as AutomaticDetail;
+  const promotedDetail = await read("promoted-attempt");
+  expect(promotedDetail.attempt).toMatchObject({
+    id: "promoted-attempt",
+    runId: promoted.job?.id,
+    state: "promoted",
+  });
+  expect((await read("disabled-attempt")).attempt).toMatchObject({
+    reason: "AUTO_RUNS_DISABLED",
+    state: "disabled",
+  });
+  // The list still only reports attempts that wait, expire or hit the budget:
+  // neither of these has anything left to check.
+  expect(await q.automatic(["fixture/app"], 1800)).toEqual({
+    attempts: [],
+    summary: { expired: 0, rateLimited: 0, waiting: 0 },
+  });
+}, 30_000);

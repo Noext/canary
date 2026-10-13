@@ -80,8 +80,17 @@ export interface SetupStatus {
   preview: { automatic: boolean } & PreviewSettings;
 }
 
-/** Lifecycle of a pull-request delivery that has no run yet. */
-export type AutomaticState = "waiting" | "expired" | "rate_limited";
+/**
+ * Lifecycle of a pull-request delivery, including the two states a delivery only
+ * reaches once it is looked up by its own id: promoted into a run, or refused
+ * before any probe. The list reports the three waiting states only.
+ */
+export type AutomaticState =
+  | "waiting"
+  | "expired"
+  | "rate_limited"
+  | "promoted"
+  | "disabled";
 
 export interface AutomaticAttempt {
   attempts: number;

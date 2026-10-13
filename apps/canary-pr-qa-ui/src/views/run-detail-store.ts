@@ -16,6 +16,12 @@ interface RunDetailState {
   result?: RunResult;
   /** Set when `result.json` could not be read: the summary explains the gap. */
   resultFailure?: string;
+  /**
+   * Set when the run itself could not be read — purged, or another account's —
+   * so no frame will ever arrive. Without it the panel would keep announcing a
+   * connection for a run that does not exist.
+   */
+  unavailable?: boolean;
 }
 
 export interface RunDetailStore extends Store<RunDetailState> {
@@ -64,11 +70,12 @@ function messageFor(data: LiveRun): string {
  * selection (`RunsView` keys it on the selected id).
  */
 export function createRunDetailStore(options: {
+  onUnavailable?: () => void;
   onUpdate?: () => void;
   report: (failure: unknown) => void;
   runId?: string;
 }): RunDetailStore {
-  const { onUpdate, report, runId } = options;
+  const { onUnavailable, onUpdate, report, runId } = options;
   const store = createStore<RunDetailState>({
     cancelling: false,
     live: copy.liveConnecting,
@@ -170,7 +177,19 @@ export function createRunDetailStore(options: {
         follow(run, token);
       })
       .catch((failure) => {
-        if (token === generation) {
+        if (token !== generation) {
+          return;
+        }
+        store.set((current) => ({
+          ...current,
+          live: copy.liveDone,
+          unavailable: true,
+        }));
+        // A caller that explains the failure on its own screen owns the error
+        // surface; the rest get the shared alert, as before.
+        if (onUnavailable) {
+          onUnavailable();
+        } else {
           report(failure);
         }
       });

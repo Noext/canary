@@ -50,6 +50,10 @@ export function RunScreenView(): ReactNode {
     })
   );
   const { runId } = useStore(store);
+  // A syntactically valid link can still point at a purged run, or at another
+  // account's: the panel reports it, and this screen replaces it with the
+  // missing state instead of leaving a detail that can never load.
+  const [missing, setMissing] = useState(false);
 
   return (
     <>
@@ -57,7 +61,7 @@ export function RunScreenView(): ReactNode {
         <Button id="runScreenBack" onClick={() => navigate("runs")}>
           {copy.back}
         </Button>
-        {runId ? (
+        {runId && !missing ? (
           <Button
             id="runScreenSeenIn"
             onClick={() => {
@@ -69,9 +73,14 @@ export function RunScreenView(): ReactNode {
           </Button>
         ) : null}
       </div>
-      {runId ? (
+      {runId && !missing ? (
         <div className="mt-5">
-          <RunDetail canWrite={canWrite} key={runId} runId={runId} />
+          <RunDetail
+            canWrite={canWrite}
+            key={runId}
+            onUnavailable={() => setMissing(true)}
+            runId={runId}
+          />
         </div>
       ) : (
         <Notice className="mt-5" id="runScreenMissing" tone="warning">

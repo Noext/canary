@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react";
 import type { AutomaticDetail } from "@/api/contracts";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
+import { useSession } from "@/app/session";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import { Card, CardHeader } from "@/components/ui/form";
@@ -28,6 +29,7 @@ import { createAutomaticDetailStore } from "./automatic-detail-store";
  */
 export function AutomaticDetailView(): ReactNode {
   const { report } = useError();
+  const { canWrite } = useSession();
   const { consumeAutomatic, navigate, openRunScreen, requestedAutomatic } =
     useNavigation();
   const [store] = useState(() =>
@@ -81,6 +83,7 @@ export function AutomaticDetailView(): ReactNode {
 
   return (
     <AutomaticDetailBody
+      canWrite={canWrite}
       detail={detail}
       navigate={navigate}
       openRunScreen={openRunScreen}
@@ -89,10 +92,12 @@ export function AutomaticDetailView(): ReactNode {
 }
 
 function AutomaticDetailBody({
+  canWrite,
   detail,
   navigate,
   openRunScreen,
 }: {
+  canWrite: boolean;
   detail: AutomaticDetail;
   navigate: (view: "home" | "new") => void;
   openRunScreen: (runId: string) => void;
@@ -193,13 +198,7 @@ function AutomaticDetailBody({
           </Button>
         </div>
       ) : (
-        <Button
-          className="mt-4"
-          id="automaticDetailRunCta"
-          onClick={() => navigate("new")}
-        >
-          {automaticDetail.runCta}
-        </Button>
+        <ManualRunAction canWrite={canWrite} navigate={navigate} />
       )}
 
       {preview ? (
@@ -260,5 +259,40 @@ function AutomaticDetailBody({
         {automaticDetail.back}
       </Button>
     </Card>
+  );
+}
+
+/**
+ * The action of an attempt that never started a run.
+ *
+ * `Nouveau test` is open to writers only: the navigation guard would silently
+ * send a viewer back to the home screen, so a viewer is told what to ask for
+ * instead of being offered a button that does nothing.
+ */
+function ManualRunAction({
+  canWrite,
+  navigate,
+}: {
+  canWrite: boolean;
+  navigate: (view: "home" | "new") => void;
+}): ReactNode {
+  if (!canWrite) {
+    return (
+      <p
+        className="mt-4 text-muted-foreground text-sm"
+        id="automaticDetailRunViewer"
+      >
+        {automaticDetail.runViewer}
+      </p>
+    );
+  }
+  return (
+    <Button
+      className="mt-4"
+      id="automaticDetailRunCta"
+      onClick={() => navigate("new")}
+    >
+      {automaticDetail.runCta}
+    </Button>
   );
 }

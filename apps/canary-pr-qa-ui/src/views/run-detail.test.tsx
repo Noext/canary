@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
-import { errorMessages, runAdvice } from "@/i18n";
+import { errorMessages, runAdvice, runScreen } from "@/i18n";
 import { RunDetail } from "./run-detail";
 
 const apiMock = vi.fn();
@@ -243,6 +243,20 @@ describe("RunDetail", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Run not found")
     );
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("says the run is missing instead of announcing a connection forever", async () => {
+    // The panel the history mounts has nowhere else to put this: a purged or
+    // forbidden run never produces a frame, so the alert alone would leave it
+    // showing its initial connection state indefinitely.
+    apiMock.mockRejectedValue(new Error("Run not found"));
+    renderDetail();
+
+    await waitFor(() =>
+      expect(element("runMissing").textContent).toBe(runScreen.missing)
+    );
+    expect(element("runIdentifier").textContent).toContain(RUN_ID);
+    expect(document.getElementById("liveConnection")).toBeNull();
   });
 });
 

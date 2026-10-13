@@ -109,6 +109,8 @@ export const automaticStateSchema = z.enum([
   "waiting",
   "expired",
   "rate_limited",
+  "promoted",
+  "disabled",
 ]);
 
 export const automaticAttemptSchema = z.object({

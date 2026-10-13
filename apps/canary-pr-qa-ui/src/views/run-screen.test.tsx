@@ -22,8 +22,10 @@ vi.mock("@/api/client", async (importOriginal) => {
     api: (path: string) => {
       wire.calls.push(path);
       const handler = wire.handlers.get(path);
+      // Resolve in a task so a throwing handler rejects, exactly like the real
+      // client, instead of escaping `api()` synchronously.
       return handler
-        ? Promise.resolve(handler())
+        ? Promise.resolve().then(() => handler())
         : Promise.reject(new Error(`Unexpected api call: ${path}`));
     },
   };
@@ -147,6 +149,26 @@ describe("RunScreenView", () => {
     expect(document.getElementById("runScreenSeenIn")).toBeNull();
     expect(document.getElementById("detail")).toBeNull();
     expect(wire.calls).toHaveLength(0);
+  });
+
+  it("replaces the detail with the missing state when the run cannot be read", async () => {
+    // A syntactically valid link whose run was purged, or belongs to another
+    // account: no frame will ever arrive, so the screen must say so rather than
+    // leave a detail announcing a connection forever.
+    wire.handlers.set(`/runs/${runId}`, () => {
+      throw new Error("Not found");
+    });
+    render(<Harness run={runId} />);
+
+    await waitFor(() =>
+      expect(element("runScreenMissing").textContent).toBe(
+        "Ce test est introuvable : il a peut-être été purgé, ou il appartient à un dépôt auquel vous n’avez pas accès."
+      )
+    );
+    expect(document.getElementById("detail")).toBeNull();
+    expect(document.getElementById("runScreenSeenIn")).toBeNull();
+    // The way back stays available: the screen is not a dead end.
+    expect(element("runScreenBack")).toBeInTheDocument();
   });
 
   it("goes back to the history", async () => {
