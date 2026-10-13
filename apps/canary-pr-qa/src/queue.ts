@@ -54,13 +54,14 @@ export interface DeliveryRow {
   created_at: Date;
   deadline_at: Date | null;
   id: string;
+  last_error?: string | null;
   payload: DeliveryPayload;
   reason: string | null;
   run_id: string | null;
   status: string;
   updated_at: Date;
 }
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
@@ -91,6 +92,7 @@ ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS last_error text;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS run_id uuid;
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE qa_deliveries ADD COLUMN IF NOT EXISTS claim_token text;
+CREATE INDEX IF NOT EXISTS qa_audit_delivery ON qa_audit ((details->>'delivery'));
 ${PREVIEW_HOSTS_MIGRATION}
 INSERT INTO qa_schema(version) VALUES(${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
 `;
@@ -485,7 +487,7 @@ export class Queue {
     const scope = repos.map((repo) => repo.toLowerCase());
     const rows = (
       await this.pool.query<DeliveryRow>(
-        `SELECT id,payload,status,attempts,reason,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
+        `SELECT id,payload,status,attempts,reason,last_error,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
          WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND (status='pending' OR (status IN ('expired','rate_limited') AND updated_at>now()-interval '24 hours'))
          ORDER BY updated_at DESC,created_at DESC LIMIT 50`,
         [scope, deadlineSeconds]
@@ -511,18 +513,85 @@ export class Queue {
       },
     };
   }
+  /**
+   * One automatic attempt by delivery id, with the same resolved deadline the
+   * listing computes. Returns nothing for an unknown id, which is also what an
+   * attempt of another tenant looks like once the caller checked its repository.
+   */
+  async delivery(id: string, deadlineSeconds: number) {
+    return (
+      await this.pool.query<DeliveryRow>(
+        `SELECT id,payload,status,attempts,reason,last_error,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries WHERE id=$1`,
+        [id, deadlineSeconds]
+      )
+    ).rows[0];
+  }
+  /**
+   * Audit trail of one automatic attempt, oldest first. Only the shape the
+   * detail screen renders is selected: the stored `details` blob also carries
+   * free-form values that must not reach the browser wholesale.
+   */
+  async deliveryTimeline(id: string) {
+    const rows = (
+      await this.pool.query<{
+        action: string;
+        created_at: Date;
+        details: { backoffSeconds?: unknown };
+      }>(
+        `SELECT action,created_at,details FROM qa_audit WHERE details->>'delivery'=$1 ORDER BY created_at,id LIMIT 200`,
+        [id]
+      )
+    ).rows;
+    return rows.map((row) => ({
+      action: row.action,
+      at: row.created_at.toISOString(),
+      ...(typeof row.details.backoffSeconds === "number"
+        ? { seconds: row.details.backoffSeconds }
+        : {}),
+    }));
+  }
   async close() {
     await this.pool.end();
   }
 }
 
-function automaticState(status: string): AutomaticState {
-  return status === "expired" || status === "rate_limited" ? status : "waiting";
+/**
+ * The state the dashboard renders for one delivery status. The list endpoint only
+ * selects `pending`, `expired` and `rate_limited`, but the detail endpoint looks
+ * a delivery up by its id and can therefore meet the two terminal states that
+ * never create a run: reporting either of them as `waiting` would tell the
+ * operator that Canary is still probing a PR it has already promoted or
+ * refused.
+ */
+/**
+ * The state the dashboard renders for one delivery. The list endpoint only
+ * selects `pending`, `expired` and `rate_limited`, but the detail endpoint looks
+ * a delivery up by its id and can therefore meet the terminal states that never
+ * create a run: reporting any of them as `waiting` would tell the operator that
+ * Canary is still probing a PR it has already promoted or refused.
+ */
+const automaticStates: Record<string, AutomaticState> = {
+  auto_disabled: "disabled",
+  expired: "expired",
+  rate_limited: "rate_limited",
+};
+
+/**
+ * `processed` covers two different ends: a run was created, or the probe loop
+ * dropped the delivery because its repository left the allowlist, its pull
+ * request closed, or its SHA moved. Only a linked run proves the first, so the
+ * state is derived from `run_id` rather than from the status alone.
+ */
+function automaticState(row: DeliveryRow): AutomaticState {
+  if (row.status === "processed") {
+    return row.run_id ? "promoted" : "discarded";
+  }
+  return automaticStates[row.status] ?? "waiting";
 }
 function isoInstant(value: Date | null, fallback: Date): string {
   return (value ?? fallback).toISOString();
 }
-function automaticAttempt(row: DeliveryRow): AutomaticAttempt {
+export function automaticAttempt(row: DeliveryRow): AutomaticAttempt {
   return {
     attempts: row.attempts,
     deadlineAt: isoInstant(row.deadline_at, row.created_at),
@@ -531,8 +600,9 @@ function automaticAttempt(row: DeliveryRow): AutomaticAttempt {
     pr: row.payload.number ?? 0,
     repo: row.payload.repo ?? "",
     runId: row.run_id,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
     sha: row.payload.sha ?? "",
-    state: automaticState(row.status),
+    state: automaticState(row),
     updatedAt: isoInstant(row.updated_at, row.created_at),
   };
 }

@@ -4,11 +4,20 @@ import { useError } from "@/app/errors";
 import { Button } from "@/components/ui/button";
 import { Notice, Pill } from "@/components/ui/feedback";
 import { Card, CardHeader } from "@/components/ui/form";
-import { runs as copy, phaseSteps, resultSummaries } from "@/i18n";
+import {
+  runs as copy,
+  errorMessages,
+  phaseSteps,
+  resultSummaries,
+  runAdvice,
+  runDiagnostic,
+  runScreen,
+} from "@/i18n";
 import {
   githubCommentUrl,
   outcomeLabel,
   phaseIndex,
+  phaseLabel,
   safeArtifactPath,
   shortSha,
   stateLabel,
@@ -32,6 +41,15 @@ export function modelFromInput(input: unknown): string {
 
 const errorOutcomes = ["failed", "blocked", "stale"];
 
+/**
+ * A run that was not browser-tested is not a run that failed.
+ *
+ * `errorOutcomes` is what the diagnostic block is for; `skipped` is the outcome
+ * of a sound run whose plan retained nothing safe to drive, and `passed` needs no
+ * explanation at all. The distinction is documented, so the block must not
+ * flatten it into a red "why did this fail" panel.
+ */
+
 /** Phase tracker states: real utilities, the stylesheet has no `.done`. */
 const phaseBase = "rounded-full border px-2 py-1";
 const phaseDone = "border-pass/40 bg-pass/10 text-pass";
@@ -54,7 +72,10 @@ function phaseClass(
 
 function summaryFor(result: RunResult): string {
   const base = resultSummaries[result.outcome] ?? copy.resultFallback;
-  const error = result.error ? ` ${result.error}` : "";
+  // A structured diagnostic is rendered in French by the block below; the raw
+  // server error is only the summary when there is nothing else to show, so the
+  // two never repeat the same sentence in two languages.
+  const error = result.error && !result.diagnostic ? ` ${result.error}` : "";
   const publication =
     result.publication?.status === "failed" ? copy.publicationFailed : "";
   return `${base}${error}${publication}`;
@@ -179,6 +200,112 @@ function ScenarioCard({
 }
 
 /**
+ * Why the run did not go all the way: the server diagnostic, the phase it
+ * stopped in and the scenarios that stopped on an error.
+ *
+ * A report written before the diagnostic existed carries none of it — the field
+ * is absent or null — so the block gives the generic advice instead of an empty
+ * panel. The expected cause and the next step are shown in French whenever this
+ * build knows the code: the interface is French only, and `diagnose()` writes
+ * its hint in English. An unknown code keeps the server's own wording, so the
+ * advice Canary was given is never swallowed.
+ *
+ * `done` is the marker the runner records when it finishes, not a phase a run
+ * can fail in: announcing it as the phase reached would say nothing, so it is
+ * left out. An intermediate phase (a cancelled or interrupted run) is reported.
+ */
+function RunDiagnosticBlock({
+  phase,
+  result,
+}: {
+  phase: string | null | undefined;
+  result: RunResult;
+}) {
+  const diagnostic = result.diagnostic;
+  const failedScenarios = result.scenarios.filter((item) =>
+    errorOutcomes.includes(item.outcome)
+  );
+  return (
+    <Notice className="mt-3" id="runDiagnostic" tone="error">
+      <h3 className="font-semibold text-sm">{runDiagnostic.title}</h3>
+      {diagnostic ? (
+        <>
+          <p className="mt-1" id="runDiagnosticCode">
+            {runDiagnostic.code(diagnostic.code)}
+          </p>
+          <p className="mt-1">
+            {errorMessages[diagnostic.code] ?? diagnostic.message}
+          </p>
+          <p className="mt-1" id="runDiagnosticHint">
+            {runDiagnostic.hint(runAdvice[diagnostic.code] ?? diagnostic.hint)}
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="mt-1">{runDiagnostic.fallback}</p>
+          <p className="mt-1" id="runDiagnosticHint">
+            {runDiagnostic.hintMissing}
+          </p>
+        </>
+      )}
+      {phase && phase !== "done" ? (
+        <p className="mt-1" id="runDiagnosticPhase">
+          {runDiagnostic.stoppedAt(phaseLabel(phase))}
+        </p>
+      ) : null}
+      {failedScenarios.length > 0 ? (
+        <>
+          <p className="mt-2">
+            {runDiagnostic.scenarios(failedScenarios.length)}
+          </p>
+          <ul className="mt-1 space-y-1">
+            {failedScenarios.map((item) => (
+              <FailedScenario item={item} key={item.scenario.id} />
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </Notice>
+  );
+}
+
+/**
+ * One scenario that stopped on an error, in the same French-first wording as the
+ * run-level cause: its code drives the copy, and its own message and hint are
+ * the fallback for a code this build does not know yet.
+ */
+function FailedScenario({ item }: { item: ScenarioSummary }) {
+  const code = item.diagnostic?.code ?? "";
+  const cause = errorMessages[code] ?? item.error;
+  const advice = runAdvice[code] ?? item.diagnostic?.hint ?? undefined;
+  return (
+    <li>
+      <span className="font-medium">{item.scenario.title}</span>
+      {cause ? ` — ${cause}` : null}
+      {advice ? <p>{runDiagnostic.hint(advice)}</p> : null}
+    </li>
+  );
+}
+
+/**
+ * The panel the history mounts when the run could not be read. Its own screen,
+ * `RunScreenView`, shows the same sentence in place of the whole detail; this is
+ * for the callers that have nothing else to put there.
+ */
+function RunMissing({ runId }: { runId?: string }) {
+  return (
+    <Card hidden={!runId} id="detail">
+      <Notice id="runMissing" tone="warning">
+        {runScreen.missing}
+      </Notice>
+      <p className="mt-3 text-muted-foreground text-sm" id="runIdentifier">
+        {runId ? copy.runIdentifierPrefix + runId : ""}
+      </p>
+    </Card>
+  );
+}
+
+/**
  * The selected run: its live progress, its result report and the technical
  * diagnostic every assertion of the end-to-end suite reads.
  *
@@ -190,18 +317,25 @@ function ScenarioCard({
  */
 export function RunDetail({
   canWrite,
+  onUnavailable,
   onUpdate,
   runId,
 }: {
   canWrite: boolean;
+  /**
+   * Called when the run cannot be read at all. A caller that shows the missing
+   * state on its own screen takes over the explanation; the panel the history
+   * mounts keeps it in place, because it has nowhere else to put it.
+   */
+  onUnavailable?: () => void;
   onUpdate?: () => void;
   runId?: string;
 }) {
   const { report } = useError();
   const [store] = useState(() =>
-    createRunDetailStore({ onUpdate, report, runId })
+    createRunDetailStore({ onUnavailable, onUpdate, report, runId })
   );
-  const { cancelling, job, live, message, result, resultFailure } =
+  const { cancelling, job, live, message, result, resultFailure, unavailable } =
     useStore(store);
 
   const progress = job?.progress;
@@ -210,6 +344,12 @@ export function RunDetail({
   const summary = result ? summaryFor(result) : resultFailure;
   const summaryTone = summaryToneFor(result);
   const commentUrl = githubCommentUrl(result?.publication?.commentUrl);
+
+  // A purged run, or one belonging to another account, never produces a frame:
+  // saying so beats a panel that waits forever for a stream that cannot open.
+  if (unavailable) {
+    return <RunMissing runId={runId} />;
+  }
 
   return (
     <Card hidden={!runId} id="detail">
@@ -274,6 +414,9 @@ export function RunDetail({
       >
         {summary}
       </Notice>
+      {result && errorOutcomes.includes(result.outcome) ? (
+        <RunDiagnosticBlock phase={progress?.phase} result={result} />
+      ) : null}
       <div className="mt-4 space-y-3" id="scenarioCards">
         {result?.scenarios.map((item) => (
           <ScenarioCard item={item} key={item.scenario.id} runId={result.id} />

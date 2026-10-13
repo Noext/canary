@@ -53,14 +53,18 @@ export function phaseLabel(phase: string | null | undefined): string {
 }
 
 /**
- * An automatic attempt that waits is not a failure; only an expired deadline
- * is. `rate_limited` stays neutral so the block never overstates the problem.
+ * An automatic attempt that waits is not a failure; only an expired deadline is.
+ * `rate_limited`, `discarded` and `disabled` stay neutral so the screens never
+ * overstate the problem, and a promoted attempt is the one unambiguous success.
  */
 export function toneForAutomatic(state: string | null | undefined): Tone {
   if (state === "expired") {
     return "failed";
   }
-  return state === "waiting" ? "pending" : "neutral";
+  if (state === "waiting") {
+    return "pending";
+  }
+  return state === "promoted" ? "success" : "neutral";
 }
 
 export function automaticStateLabel(state: string | null | undefined): string {
@@ -119,8 +123,13 @@ export function shortSha(sha: string | null | undefined): string {
   return (sha ?? "").slice(0, 12);
 }
 
+/**
+ * Dates of a French-only interface. The runtime locale of a container is not a
+ * given (it renders `10/13/2026, 6:25:05 AM` under `en-US`), so the locale is
+ * pinned here rather than inherited from the host.
+ */
 export function formatDate(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleString() : "";
+  return value ? new Date(value).toLocaleString("fr-FR") : "";
 }
 
 /**

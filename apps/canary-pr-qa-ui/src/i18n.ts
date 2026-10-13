@@ -6,10 +6,44 @@
  * string is a type error at the call site.
  */
 
-export type ViewName = "home" | "new" | "runs" | "settings";
+export type ViewName =
+  | "home"
+  | "new"
+  | "runs"
+  | "settings"
+  | "automatic"
+  | "run";
 
 /** Server error codes the interface explains in French. */
 export const errorMessages: Record<string, string | undefined> = {
+  CANARY_START_FAILED:
+    "Canary n’a pas pu ouvrir sa session Chromium : le moteur ou son navigateur n’était pas disponible.",
+  CONTEXT_INCOMPLETE:
+    "Canary n’a pas reçu assez de contexte sur la pull request pour préparer des scénarios sûrs.",
+  CONTRACT_BUDGET:
+    "Le scénario a épuisé son budget d’actions sans terminer ce qui était prévu.",
+  CONTRACT_INCOMPLETE:
+    "Le scénario s’est arrêté avant d’avoir joué toutes les étapes prévues.",
+  CONTRACT_VIOLATION:
+    "Le scénario a été interrompu : une étape ne respectait plus le plan validé.",
+  CRITICAL_COVERAGE_MISSING:
+    "Une partie importante des changements de la pull request n’a pas été couverte par les scénarios.",
+  EVIDENCE_VIDEO_MISSING:
+    "La vidéo de preuve n’a pas pu être produite pour ce scénario.",
+  GITHUB_NOT_CONNECTED: "Aucune App GitHub n’est connectée à cette instance.",
+  MODEL_CATALOG_EMPTY:
+    "Le fournisseur n’a renvoyé aucun modèle utilisable. Vérifiez son endpoint et sa clé.",
+  MODEL_JSON_INVALID:
+    "Le modèle a renvoyé une réponse que Canary n’a pas pu interpréter.",
+  MODEL_NOT_ALLOWED:
+    "Ce modèle n’est pas autorisé sur ce serveur. Choisissez-en un dans la liste.",
+  MODEL_OUTPUT_INCOMPLETE:
+    "La réponse du modèle était incomplète : le plan de test n’a pas pu être finalisé.",
+  MODEL_PROVIDER_DENIED:
+    "Le fournisseur IA a refusé la requête. Vérifiez la clé, le quota et l’autorisation Cloudflare de l’IP du VPS.",
+  PR_CHANGED:
+    "La pull request a changé pendant le test : ce résultat ne correspond plus au dernier commit.",
+  PR_CLOSED: "Cette pull request est fermée.",
   PREVIEW_SHA_MISMATCH:
     "L’application de test ne présente pas le commit de cette PR. Déployez cette version puis vérifiez à nouveau.",
   PREVIEW_NOT_FOUND:
@@ -22,6 +56,16 @@ export const errorMessages: Record<string, string | undefined> = {
     "Ce modèle n’est plus disponible chez votre fournisseur. Actualisez la liste et choisissez explicitement un modèle.",
   MODEL_CATALOG_INVALID:
     "Le fournisseur n’a pas renvoyé un catalogue de modèles valide. Vérifiez son endpoint et l’accès Cloudflare.",
+  RUN_BUDGET_EXCEEDED:
+    "Le test a dépassé le budget de tokens autorisé pour un run.",
+  RUN_NOT_FOUND:
+    "Ce test n’existe pas ou a été purgé. Vérifiez son identifiant dans l’historique.",
+  RUN_DEADLINE: "Le test a dépassé le temps maximum autorisé pour un run.",
+  STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
+  WEBHOOK_RATE_LIMIT:
+    "Le budget horaire de lancements automatiques de Canary (global ou par dépôt) est atteint.",
+  WRITE_EVIDENCE_MISSING:
+    "Les preuves écrites attendues n’ont pas été trouvées pour ce scénario.",
   HTTP_403:
     "L’accès a été refusé. Vérifiez les permissions GitHub ou l’autorisation Cloudflare de l’IP du VPS.",
   HTTP_401:
@@ -67,15 +111,26 @@ export const outcomes: Record<string, string> = {
   skipped: "Non testé",
 };
 
-/** Lifecycle of a pull-request delivery that has no run yet. */
+/**
+ * Lifecycle of a pull-request delivery. The first three are what the home block
+ * lists; the terminal ones are what the detail screen meets when it opens an
+ * attempt by its id after the attempt left the list.
+ */
 export const automaticStates: Record<string, string> = {
   waiting: "En attente de la préversion",
   expired: "Délai dépassé",
   rate_limited: "Quota horaire atteint",
+  promoted: "Test lancé",
+  discarded: "Sans suite",
+  disabled: "Lancements désactivés",
 };
 
 /** Machine reason codes of an automatic attempt, explained in French. */
 export const automaticReasons: Record<string, string> = {
+  AUTO_REPO_DISABLED:
+    "Les lancements automatiques sont désactivés pour ce dépôt : Canary n’a vérifié aucune application de test.",
+  AUTO_RUNS_DISABLED:
+    "Les lancements automatiques sont désactivés sur le serveur : Canary n’a rien vérifié.",
   PREVIEW_NOT_FOUND:
     "Aucune application de test publiée pour ce commit. Canary attend son déploiement.",
   PREVIEW_SHA_MISMATCH:
@@ -141,6 +196,18 @@ export const views: Record<
     breadcrumb: "Réglages",
     intro: "Vos connexions et les dépôts que Canary peut tester.",
     title: "Réglages de votre espace",
+  },
+  automatic: {
+    breadcrumb: "Lancements automatiques",
+    intro:
+      "Ce qui a été tenté, pourquoi le test n’a pas démarré et ce qu’il reste à faire.",
+    title: "Pourquoi ce test n’a pas démarré",
+  },
+  run: {
+    breadcrumb: "Détail du test",
+    intro:
+      "La phase atteinte, la cause de l’arrêt et les preuves enregistrées.",
+    title: "Détail du test",
   },
 };
 
@@ -374,6 +441,7 @@ export const automatic = {
   attempts: (count: number) =>
     count === 1 ? "1 tentative" : `${count} tentatives`,
   deadline: (date: string) => `Délai : ${date}`,
+  detail: "Voir le détail",
   empty: "Aucune tentative automatique en attente.",
   emptyHint:
     "Canary lancera un test dès qu’une pull request changera sur un dépôt en lancement automatique.",
@@ -388,6 +456,178 @@ export const automatic = {
     waiting: (count: number) => `${count} en attente`,
   },
   title: "Lancements automatiques",
+} as const;
+
+/**
+ * One line per audit action an automatic attempt records. An action this build
+ * does not know still renders its raw name: the trail is never hidden.
+ */
+export const automaticSteps: Record<string, string> = {
+  "automatic.disabled":
+    "Lancements automatiques désactivés sur le serveur : aucune vérification n’a été faite.",
+  "automatic.preview_expired":
+    "Délai d’attente dépassé : la tentative s’arrête sans lancer de test.",
+  "automatic.preview_wait":
+    "Application de test absente ou sans la bonne version : nouvelle vérification programmée.",
+  "automatic.promoted": "Application de test vérifiée : le test a démarré.",
+  "automatic.rate_limited":
+    "Budget horaire de lancements automatiques atteint : le test n’a pas démarré.",
+  "automatic.repo_disabled":
+    "Lancements automatiques désactivés pour ce dépôt : aucune vérification n’a été faite.",
+  "webhook.rate_limited": "Refusé par le quota horaire du serveur.",
+};
+
+/** The next step an operator must take, keyed by the reason code recorded. */
+export const automaticAdvice: Record<string, string> = {
+  AUTO_REPO_DISABLED:
+    "Réactivez ce dépôt dans Réglages → GitHub, puis lancez le test depuis « Nouveau test » : une tentative expirée n’est jamais rejouée.",
+  AUTO_RUNS_DISABLED:
+    "Réactivez les lancements automatiques sur le serveur (QA_AUTO_RUNS), ou lancez ce test depuis « Nouveau test ».",
+  PREVIEW_HOST_NOT_ALLOWED:
+    "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
+  PREVIEW_NOT_FOUND:
+    "Déployez le commit attendu, puis lancez le test depuis « Nouveau test ». Sans déploiement automatique, renseignez son URL dans le formulaire.",
+  PREVIEW_SHA_MISMATCH:
+    "Le déploiement ne publie pas encore ce commit. Attendez sa fin, ou vérifiez l’en-tête ou le chemin de version configuré, puis relancez un test.",
+  PREVIEW_UNAVAILABLE:
+    "Vérifiez que l’adresse de test répond publiquement, puis lancez le test depuis « Nouveau test » pour voir le diagnostic complet.",
+  WEBHOOK_RATE_LIMIT:
+    "Attendez la prochaine fenêtre du quota horaire, ou lancez ce test depuis « Nouveau test ».",
+};
+
+/**
+ * The dedicated screen of one automatic attempt: what Canary tried, why it
+ * stopped, and what the operator has to do next.
+ */
+export const automaticDetail = {
+  adviceFallback:
+    "Lancez ce test depuis « Nouveau test » : une tentative en échec n’est jamais rejouée automatiquement.",
+  adviceTitle: "Ce qu’il reste à faire",
+  attempts: (count: number) =>
+    count === 1
+      ? "1 vérification effectuée"
+      : `${count} vérifications effectuées`,
+  back: "Retour à l’accueil",
+  causeTitle: "Pourquoi Canary n’a pas démarré le test",
+  deadline: (date: string) => `Délai d’attente atteint le ${date}`,
+  discarded:
+    "Canary a cessé de suivre cette pull request sans lancer de test : elle a été fermée, son commit a changé, ou le dépôt n’est plus sélectionné.",
+  factsTitle: "Ce que Canary a tenté",
+  githubPr: "Ouvrir la pull request",
+  lastErrorTitle: "Dernière erreur enregistrée",
+  lastProbe: (date: string) => `Dernière vérification : ${date}`,
+  loading: "Chargement du détail de la tentative…",
+  missing:
+    "Cette tentative est introuvable : elle a peut-être été purgée. Rouvrez l’accueil pour voir les tentatives en cours.",
+  pinned: (sha: string) => `Commit attendu : ${sha}`,
+  previewHeader: (header: string) => `En-tête HTTP de version : ${header}`,
+  previewNone:
+    "Aucun modèle d’URL n’est configuré : Canary lit les déploiements GitHub de la pull request.",
+  previewPath: (path: string) => `Chemin JSON de version : ${path}`,
+  previewTitle: "Preuve de version exigée",
+  previewTemplate: (template: string) => `Modèle d’URL : ${template}`,
+  promoted:
+    "Cette tentative a fini par trouver son application de test : le test a démarré.",
+  promotedCta: "Voir le détail du test",
+  runCta: "Lancer un test manuellement",
+  runViewer:
+    "Un opérateur ou un administrateur peut lancer ce test depuis « Nouveau test ».",
+  timelineEmpty: "Aucune étape enregistrée pour cette tentative.",
+  timelineTitle: "Déroulé des vérifications",
+  waiting:
+    "Cette tentative attend encore : Canary continue de vérifier l’application de test.",
+} as const;
+
+/**
+ * The "why did it fail" block shared by the inline run panel and the dedicated
+ * run screen: the server diagnostic, the phase it stopped in, and the failing
+ * scenarios.
+ */
+export const runDiagnostic = {
+  code: (code: string) => `Code : ${code}`,
+  fallback:
+    "Aucun code d’erreur n’a été enregistré pour ce test. Consultez le rapport et la vidéo ci-dessous.",
+  hint: (hint: string) => `À faire : ${hint}`,
+  hintMissing:
+    "Relancez un test sur le même commit après avoir corrigé la cause, ou ouvrez le rapport pour le déroulé complet.",
+  scenarios: (count: number) =>
+    count === 1
+      ? "1 scénario s’est arrêté sur une erreur"
+      : `${count} scénarios se sont arrêtés sur une erreur`,
+  stoppedAt: (phase: string) => `Phase atteinte : ${phase}`,
+  title: "Pourquoi ce test n’est pas allé au bout",
+} as const;
+
+/**
+ * The next step to take after a failed run, keyed by the server diagnostic code.
+ * A code this build does not know falls back to the server's own hint, which is
+ * English: the dashboard never hides the advice it was given.
+ */
+export const runAdvice: Record<string, string> = {
+  CANARY_START_FAILED:
+    "Vérifiez que le service browser tourne et dispose de Chromium (docker compose ps), puis relancez le test.",
+  CONTEXT_INCOMPLETE:
+    "Vérifiez que l’App GitHub voit bien les fichiers de cette PR (permissions, dépôt sélectionné), puis relancez.",
+  CONTRACT_BUDGET:
+    "Le plan était trop long pour le budget d’actions du scénario : réduisez le périmètre de la PR ou relancez pour obtenir un plan plus court.",
+  CONTRACT_INCOMPLETE:
+    "Relancez le test ; si l’arrêt se répète, ouvrez le rapport pour voir l’étape manquante et ajustez le scénario.",
+  CONTRACT_VIOLATION:
+    "Un scénario a voulu agir hors du plan validé : ouvrez le rapport, puis corrigez le plan ou les fichiers `.canary` du dépôt.",
+  CRITICAL_COVERAGE_MISSING:
+    "Élargissez le plan de test (fichiers `.canary`) pour couvrir ces changements, puis relancez.",
+  EVIDENCE_VIDEO_MISSING:
+    "Vérifiez l’espace disque et le volume `canary-sessions` du service browser, puis relancez le test.",
+  GITHUB_NOT_CONNECTED:
+    "Connectez votre App GitHub dans Réglages, puis relancez le test.",
+  GITHUB_REPOSITORY_DENIED:
+    "Sélectionnez ce dépôt dans Réglages → GitHub, puis relancez le test.",
+  HTTP_401:
+    "Vérifiez les credentials du service concerné sur le serveur (fournisseur IA ou GitHub), puis relancez.",
+  HTTP_403:
+    "Vérifiez les permissions GitHub et l’autorisation Cloudflare de l’IP de sortie du VPS, puis relancez.",
+  MODEL_CATALOG_EMPTY:
+    "Vérifiez `OPENAI_BASE_URL` et la clé du fournisseur, puis actualisez la liste des modèles dans Réglages.",
+  MODEL_CATALOG_INVALID:
+    "Vérifiez l’endpoint du fournisseur et son autorisation Cloudflare, puis actualisez la liste des modèles.",
+  MODEL_JSON_INVALID:
+    "Relancez le test ; si l’erreur revient, vérifiez que le modèle choisi gère le mode JSON.",
+  MODEL_NOT_ALLOWED:
+    "Choisissez un modèle autorisé par `QA_ALLOWED_MODELS` dans « Nouveau test ».",
+  MODEL_NOT_AVAILABLE:
+    "Actualisez la liste des modèles et choisissez-en un disponible dans « Nouveau test ».",
+  MODEL_OUTPUT_INCOMPLETE:
+    "Relancez le test ; si l’erreur revient, choisissez un modèle plus fiable ou augmentez `QA_RUN_MAX_TOKENS`.",
+  MODEL_PROVIDER_DENIED:
+    "Autorisez l’IP de sortie du VPS chez le fournisseur (Cloudflare), vérifiez la clé, puis relancez.",
+  PR_CHANGED: "Relancez un test sur le dernier commit de la pull request.",
+  PR_CLOSED: "Cette pull request est fermée : il n’y a rien à tester.",
+  PREVIEW_HOST_NOT_ALLOWED:
+    "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
+  PREVIEW_NOT_FOUND:
+    "Déployez le commit attendu, puis lancez un test depuis « Nouveau test ». Sans déploiement automatique, renseignez son URL dans le formulaire.",
+  PREVIEW_SHA_MISMATCH:
+    "Le déploiement ne publie pas ce commit. Attendez sa fin, ou vérifiez l’en-tête ou le chemin de version configuré, puis relancez un test.",
+  PREVIEW_UNAVAILABLE:
+    "Vérifiez que l’adresse de test répond publiquement (et que le service egress y accède), puis relancez un test.",
+  RUN_BUDGET_EXCEEDED:
+    "Augmentez `QA_RUN_MAX_TOKENS` après avoir vérifié les tarifs, ou réduisez le périmètre de la PR.",
+  RUN_DEADLINE:
+    "Vérifiez la phase atteinte dans le rapport, puis augmentez `QA_RUN_TIMEOUT_SECONDS` si le test mérite plus de temps.",
+  STALE_HEAD:
+    "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
+  WEBHOOK_RATE_LIMIT:
+    "Attendez la prochaine fenêtre du quota horaire, ou lancez ce test depuis « Nouveau test ».",
+  WRITE_EVIDENCE_MISSING:
+    "Vérifiez que le scénario écrit bien ses artefacts (fichiers `.canary`), puis relancez le test.",
+};
+
+/** The dedicated full-screen run report. */
+export const runScreen = {
+  back: "Retour à l’historique",
+  missing:
+    "Ce test est introuvable : il a peut-être été purgé, ou il appartient à un dépôt auquel vous n’avez pas accès.",
+  seenIn: "Ouvrir dans l’historique",
 } as const;
 
 export const settings = {

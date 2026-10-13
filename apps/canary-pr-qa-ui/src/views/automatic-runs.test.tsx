@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AutomaticAttempt,
@@ -7,6 +8,7 @@ import type {
   SetupStatus,
 } from "@/api/contracts";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
+import { NavigationProvider, useNavigation } from "@/app/navigation";
 import { SessionProvider } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
 import { automatic } from "@/i18n";
@@ -80,6 +82,7 @@ let calls: ApiCall[] = [];
 beforeEach(() => {
   calls = [];
   automaticStatus = waitingStatus();
+  window.scrollTo = vi.fn();
   setup = {
     ai: { defaultModel: "fixture-model", endpoint: "ai.example.com" },
     github: {
@@ -128,12 +131,20 @@ function renderBlock(): ReturnType<typeof render> {
     <ErrorProvider>
       <ErrorAlert />
       <SessionProvider>
-        <WorkspaceProvider>
-          <AutomaticRuns />
-        </WorkspaceProvider>
+        <NavigationProvider>
+          <WorkspaceProvider>
+            <AutomaticRuns />
+            <RouteProbe />
+          </WorkspaceProvider>
+        </NavigationProvider>
       </SessionProvider>
     </ErrorProvider>
   );
+}
+
+function RouteProbe() {
+  const { requestedAutomatic, view } = useNavigation();
+  return <p data-testid="route">{`${view}:${requestedAutomatic ?? ""}`}</p>;
 }
 
 async function rendered(): Promise<HTMLElement> {
@@ -265,6 +276,17 @@ describe("AutomaticRuns", () => {
     expect(byId(container, "automaticAttempts")).toHaveAttribute("hidden");
     expect(byId(container, "automaticSummary")).toHaveTextContent(
       "0 en attente"
+    );
+  });
+
+  it("opens the detail screen of an attempt from its link", async () => {
+    const user = userEvent.setup();
+    const container = await rendered();
+
+    await user.click(byId(container, "automaticAttempt-delivery-1"));
+
+    expect(screen.getByTestId("route")).toHaveTextContent(
+      "automatic:delivery-1"
     );
   });
 

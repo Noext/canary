@@ -6,8 +6,10 @@ import { useWorkspace } from "@/app/workspace";
 import { Pill } from "@/components/ui/feedback";
 import { home, roles, shell, type ViewName, views } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { AutomaticDetailView } from "@/views/automatic-detail";
 import { HomeView } from "@/views/home-view";
 import { NewTestView } from "@/views/new-test-view";
+import { RunScreenView } from "@/views/run-screen";
 import { RunsView } from "@/views/runs-view";
 import { SettingsView } from "@/views/settings-view";
 
@@ -17,6 +19,15 @@ const navItems: { id: string; label: string; view: ViewName }[] = [
   { id: "nav-runs", label: shell.nav.runs, view: "runs" },
   { id: "nav-settings", label: shell.nav.settings, view: "settings" },
 ];
+
+/**
+ * The nav entry a screen belongs to, so the sidebar still shows where the
+ * operator is while a deep-linked detail is open.
+ */
+const navParent: Partial<Record<ViewName, ViewName>> = {
+  automatic: "home",
+  run: "runs",
+};
 
 function Logo() {
   return (
@@ -36,6 +47,7 @@ export function Shell() {
   const { navigate, view } = useNavigation();
   const { githubReady, modelReady, status } = useWorkspace();
   const copy = views[view];
+  const current = navParent[view] ?? view;
 
   const visible = navItems.filter((item) => {
     if (item.view === "settings") {
@@ -63,10 +75,10 @@ export function Shell() {
         >
           {visible.map((item) => (
             <button
-              aria-current={view === item.view ? "page" : undefined}
+              aria-current={current === item.view ? "page" : undefined}
               className={cn(
                 "rounded-md px-3 py-2 text-left text-sm",
-                view === item.view
+                current === item.view
                   ? "bg-primary/20 font-semibold text-ink-strong"
                   : "text-foreground hover:bg-well-2"
               )}
@@ -124,6 +136,8 @@ export function Shell() {
         ) : null}
         {view === "new" ? <NewTestView /> : null}
         {view === "runs" ? <RunsView /> : null}
+        {view === "run" ? <RunScreenView /> : null}
+        {view === "automatic" ? <AutomaticDetailView /> : null}
         {view === "settings" ? <SettingsView /> : null}
         {view === "home" && !canWrite ? (
           <p className="sr-only">{home.titleViewer}</p>

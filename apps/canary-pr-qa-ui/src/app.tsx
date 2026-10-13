@@ -10,6 +10,9 @@ import { Shell } from "./app/shell";
 
 /** A deep link wins over the post-callback destination. */
 function initialViewFor(route: InitialRoute): ViewName {
+  if (route.screen) {
+    return route.screen.kind === "run" ? "run" : "automatic";
+  }
   if (route.runId) {
     return "runs";
   }
@@ -25,6 +28,12 @@ function Screens({ route }: { route: InitialRoute }) {
     <WorkspaceProvider>
       <NavigationProvider
         {...(route.runId ? { initialRun: route.runId } : {})}
+        {...(route.screen?.kind === "run"
+          ? { initialRunScreen: route.screen.id }
+          : {})}
+        {...(route.screen?.kind === "automatic"
+          ? { initialAutomatic: route.screen.id }
+          : {})}
         initialView={initialViewFor(route)}
       >
         <Shell />

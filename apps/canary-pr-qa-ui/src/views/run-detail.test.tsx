@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DashboardError } from "@/api/client";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
+import { errorMessages, runAdvice, runScreen } from "@/i18n";
 import { RunDetail } from "./run-detail";
 
 const apiMock = vi.fn();
@@ -72,6 +74,38 @@ const result = {
   sha: "1".repeat(40),
   startedAt: "2026-01-01T00:00:00.000Z",
 };
+
+function element(id: string): HTMLElement {
+  const node = document.getElementById(id);
+  if (!node) {
+    throw new Error(`#${id} is missing from the run detail`);
+  }
+  return node;
+}
+
+/** A run the server stopped, with the fields the diagnostic block reads. */
+function mockBlocked(
+  resultOverrides: Record<string, unknown>,
+  jobOverrides: Record<string, unknown> = {}
+) {
+  apiMock.mockImplementation((path: string) => {
+    if (path.endsWith("/result.json")) {
+      return Promise.resolve({
+        ...result,
+        outcome: "blocked",
+        ...resultOverrides,
+      });
+    }
+    return Promise.resolve(
+      job({
+        outcome: "blocked",
+        progress: { phase: "preview" },
+        status: "failed",
+        ...jobOverrides,
+      })
+    );
+  });
+}
 
 function renderDetail(onUpdate?: () => void) {
   return render(
@@ -203,6 +237,22 @@ describe("RunDetail", () => {
     expect(FakeEventSource.instances[0]?.url).toBe(`/runs/${RUN_ID}/events`);
   });
 
+  it("keeps an operational failure out of the missing state", async () => {
+    // Only a verdict on the run selects the missing state: a 5xx, a dropped
+    // connection or a broken contract must stay a reportable incident.
+    apiMock.mockRejectedValue(
+      new DashboardError("Le serveur n’a pas répondu (HTTP 502).", {
+        status: 502,
+      })
+    );
+    renderDetail();
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("HTTP 502")
+    );
+    expect(document.getElementById("runMissing")).toBeNull();
+  });
+
   it("never streams a run the account cannot read", async () => {
     apiMock.mockRejectedValue(new Error("Run not found"));
     renderDetail();
@@ -210,5 +260,229 @@ describe("RunDetail", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Run not found")
     );
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("says the run is missing instead of announcing a connection forever", async () => {
+    // The panel the history mounts has nowhere else to put this: a purged or
+    // forbidden run never produces a frame, so the alert alone would leave it
+    // showing its initial connection state indefinitely.
+    apiMock.mockRejectedValue(
+      new DashboardError("Ce test n’existe pas ou a été purgé.", {
+        code: "RUN_NOT_FOUND",
+        status: 404,
+      })
+    );
+    renderDetail();
+
+    await waitFor(() =>
+      expect(element("runMissing").textContent).toBe(runScreen.missing)
+    );
+    expect(element("runIdentifier").textContent).toContain(RUN_ID);
+    expect(document.getElementById("liveConnection")).toBeNull();
+  });
+});
+
+describe("RunDetail diagnostic", () => {
+  it("explains a known failure in French and gives the next step", async () => {
+    mockBlocked({
+      diagnostic: {
+        code: "PREVIEW_SHA_MISMATCH",
+        hint: "Deploy the PR head commit and expose its full SHA.",
+        message: "Preview SHA mismatch or missing provenance",
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    expect(element("runDiagnostic").textContent).toContain(
+      "Pourquoi ce test n’est pas allé au bout"
+    );
+    // A stopped run is an error, not a warning: the block never plays it down.
+    expect(element("runDiagnostic").className).toContain("border-destructive");
+    expect(element("runDiagnosticCode").textContent).toBe(
+      "Code : PREVIEW_SHA_MISMATCH"
+    );
+    // The interface is French only, and `diagnose()` writes its hint in English:
+    // a code this build knows is explained from the shared catalogue instead.
+    expect(element("runDiagnostic").textContent).toContain(
+      errorMessages.PREVIEW_SHA_MISMATCH!
+    );
+    expect(element("runDiagnosticHint").textContent).toBe(
+      `À faire : ${runAdvice.PREVIEW_SHA_MISMATCH!}`
+    );
+    expect(element("runDiagnosticHint").textContent).not.toContain(
+      "Deploy the PR head commit"
+    );
+    // The phase belongs to the job: it is what says how far the run got.
+    expect(element("runDiagnosticPhase").textContent).toBe(
+      "Phase atteinte : Vérification de la version de votre application"
+    );
+  });
+
+  it("keeps the server wording for a code this build does not know", async () => {
+    mockBlocked({
+      diagnostic: {
+        code: "SOMETHING_NEW",
+        hint: "Open the report and inspect the failing step.",
+        message: "A cause this dashboard has no translation for.",
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    // The advice Canary was given is never swallowed by a missing translation.
+    expect(element("runDiagnostic").textContent).toContain(
+      "A cause this dashboard has no translation for."
+    );
+    expect(element("runDiagnosticHint").textContent).toBe(
+      "À faire : Open the report and inspect the failing step."
+    );
+  });
+
+  it("does not repeat the raw server error next to its French explanation", async () => {
+    mockBlocked({
+      diagnostic: {
+        code: "PREVIEW_SHA_MISMATCH",
+        hint: "Deploy the PR head commit.",
+        message: "Preview SHA mismatch or missing provenance",
+      },
+      error: "Preview SHA mismatch or missing provenance",
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    // The summary keeps the shared sentence; the cause lives in the block below.
+    expect(element("resultSummary").textContent).toBe(
+      "Le test n’a pas pu terminer : l’application ou le scénario a bloqué."
+    );
+  });
+
+  it("still shows the raw server error when no diagnostic was recorded", async () => {
+    mockBlocked({
+      diagnostic: undefined,
+      error: "Une panne sans code enregistré",
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    // Nothing else carries the cause, so the summary is the only place for it.
+    expect(element("resultSummary").textContent).toContain(
+      "Une panne sans code enregistré"
+    );
+  });
+
+  it("leaves out the terminal marker the runner records when it finishes", async () => {
+    // `done` is not a phase a run can fail in: announcing it would say nothing.
+    mockBlocked(
+      {
+        diagnostic: {
+          code: "RUN_DEADLINE",
+          hint: "Inspect the last progress phase.",
+          message: "Run deadline exceeded",
+        },
+      },
+      { progress: { phase: "done" } }
+    );
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    expect(document.getElementById("runDiagnosticPhase")).toBeNull();
+  });
+
+  it("gives the generic next step when the report carries no diagnostic", async () => {
+    // An older report omits the field, a replayed one may carry null: both mean
+    // the server recorded no cause, so both get the same advice.
+    for (const diagnostic of [undefined, null]) {
+      mockBlocked({ diagnostic });
+      const view = renderDetail();
+
+      await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+      expect(element("runDiagnosticHint").textContent).toBe(
+        "Relancez un test sur le même commit après avoir corrigé la cause, ou ouvrez le rapport pour le déroulé complet."
+      );
+      expect(document.getElementById("runDiagnosticCode")).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it("omits the reached phase when the job has not reported one", async () => {
+    mockBlocked(
+      {
+        diagnostic: {
+          code: "PREVIEW_SHA_MISMATCH",
+          hint: "Redéployez la version de test sur le commit attendu, puis relancez.",
+          message:
+            "La version servie ne porte pas le SHA complet de la pull request.",
+        },
+      },
+      { progress: undefined }
+    );
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    expect(document.getElementById("runDiagnosticPhase")).toBeNull();
+  });
+
+  it("repeats the diagnostic of the scenarios that stopped on an error", async () => {
+    mockBlocked({
+      scenarios: [
+        {
+          artifacts: [],
+          diagnostic: {
+            code: "SCENARIO_STEP_FAILED",
+            hint: "Vérifiez le formulaire de connexion.",
+            message: "Le clic est resté sans effet.",
+          },
+          error: "Le bouton de connexion n’a pas répondu",
+          outcome: "failed",
+          scenario: { id: "login", title: "Connexion" },
+        },
+        {
+          artifacts: [],
+          outcome: "passed",
+          scenario: { id: "welcome", title: "Accueil" },
+        },
+      ],
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    const block = element("runDiagnostic").textContent ?? "";
+    // Only the scenario that really stopped is counted and listed.
+    expect(block).toContain("1 scénario s’est arrêté sur une erreur");
+    expect(block).toContain("Connexion");
+    // An unknown scenario code keeps the scenario's own wording and hint.
+    expect(block).toContain("Le bouton de connexion n’a pas répondu");
+    expect(block).toContain("À faire : Vérifiez le formulaire de connexion.");
+    expect(block).not.toContain("Accueil");
+  });
+
+  it("shows no failure diagnostic for an outcome that is not a failure", async () => {
+    // `skipped` is the outcome of a sound run whose plan retained nothing safe
+    // to drive: it is documented as distinct from a failure, so the block must
+    // not flatten it into a red "why did this fail" panel.
+    for (const outcome of ["passed", "skipped"]) {
+      apiMock.mockImplementation((path: string) => {
+        if (path.endsWith("/result.json")) {
+          return Promise.resolve({
+            ...result,
+            diagnostic: null,
+            outcome,
+            scenarios: [],
+          });
+        }
+        return Promise.resolve(job({ outcome, status: "completed" }));
+      });
+      const view = renderDetail();
+
+      await waitFor(() => expect(element("resultSummary")).toBeVisible());
+      expect(element("resultSummary").textContent).toBe(
+        outcome === "skipped"
+          ? "Aucun scénario n’a été exécuté : le planificateur n’a rien retenu de sûr."
+          : "Les assertions ont réussi sur la version testée."
+      );
+      expect(document.getElementById("runDiagnostic")).toBeNull();
+      view.unmount();
+    }
   });
 });

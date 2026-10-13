@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { api, errorText, post } from "@/api/client";
+import { api, DashboardError, errorText, post } from "@/api/client";
 import type { RunResult } from "@/api/contracts";
 import { cancelSchema, runJobSchema, runResultSchema } from "@/api/schemas";
 import { runs as copy } from "@/i18n";
@@ -16,10 +16,31 @@ interface RunDetailState {
   result?: RunResult;
   /** Set when `result.json` could not be read: the summary explains the gap. */
   resultFailure?: string;
+  /**
+   * Set when the run itself could not be read — purged, or another account's —
+   * so no frame will ever arrive. Without it the panel would keep announcing a
+   * connection for a run that does not exist.
+   */
+  unavailable?: boolean;
 }
 
 export interface RunDetailStore extends Store<RunDetailState> {
   cancel(): Promise<void>;
+}
+
+/**
+ * Whether a failed lookup is a verdict on the run rather than a bad moment.
+ *
+ * A purged run answers `RUN_NOT_FOUND`, a run of another account is refused with
+ * 403, and both mean no frame will ever arrive. A 5xx, an unreachable server or a
+ * response that breaks the contract say nothing about the run: replacing the
+ * detail then would claim it is missing, so those stay reportable.
+ */
+function isMissing(failure: unknown): boolean {
+  if (!(failure instanceof DashboardError)) {
+    return false;
+  }
+  return failure.code === "RUN_NOT_FOUND" || failure.status === 403;
 }
 
 function parseFrame(data: string): LiveRun | undefined {
@@ -64,11 +85,12 @@ function messageFor(data: LiveRun): string {
  * selection (`RunsView` keys it on the selected id).
  */
 export function createRunDetailStore(options: {
+  onUnavailable?: () => void;
   onUpdate?: () => void;
   report: (failure: unknown) => void;
   runId?: string;
 }): RunDetailStore {
-  const { onUpdate, report, runId } = options;
+  const { onUnavailable, onUpdate, report, runId } = options;
   const store = createStore<RunDetailState>({
     cancelling: false,
     live: copy.liveConnecting,
@@ -170,7 +192,25 @@ export function createRunDetailStore(options: {
         follow(run, token);
       })
       .catch((failure) => {
-        if (token === generation) {
+        if (token !== generation) {
+          return;
+        }
+        if (!isMissing(failure)) {
+          // Not a verdict on the run: the alert says what happened, and the
+          // panel keeps the state a reload can move out of.
+          report(failure);
+          return;
+        }
+        store.set((current) => ({
+          ...current,
+          live: copy.liveDone,
+          unavailable: true,
+        }));
+        // A caller that explains the missing run on its own screen owns the
+        // error surface; the rest get the shared alert, as before.
+        if (onUnavailable) {
+          onUnavailable();
+        } else {
           report(failure);
         }
       });

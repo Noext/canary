@@ -3,6 +3,7 @@ import { z } from "zod";
 import { type Principal, requireAccess } from "./access.js";
 import type { Config } from "./config.js";
 import type {
+  AutomaticDetail,
   Preflight,
   PreviewSettings,
   SetupStatus,
@@ -18,6 +19,7 @@ import {
   PreviewPolicyUnpublishedError,
 } from "./preview-hosts.js";
 import type { Queue } from "./queue.js";
+import { automaticAttempt } from "./queue.js";
 
 const preflightSchema = z
   .object({
@@ -33,6 +35,12 @@ const previewHostsSchema = z
     hosts: z.array(z.string().max(MAX_HOST_LENGTH)).max(400),
   })
   .strict();
+/**
+ * Delivery ids are opaque webhook identifiers. The bound is what the caller may
+ * put in a path segment; it is not a claim about their shape, so an id the
+ * server never issued simply matches nothing.
+ */
+const DELIVERY_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 export function dashboardRoutes(
   setup: GitHubSetup,
   config: Config,
@@ -92,6 +100,40 @@ export function dashboardRoutes(
     }
     return true;
   }
+  /**
+   * The automatic-run probes, split out of the main handler so its branch count
+   * stays readable. The list and one attempt answer the same shape of request;
+   * only their scope check differs.
+   */
+  async function automaticRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    user: Principal
+  ) {
+    if (req.method !== "GET") {
+      return false;
+    }
+    if (url.pathname === "/dashboard/automatic") {
+      json(res, 200, await automaticStatus(setup, queue, user));
+      return true;
+    }
+    const prefix = "/dashboard/automatic/";
+    if (!url.pathname.startsWith(prefix)) {
+      return false;
+    }
+    json(
+      res,
+      200,
+      await automaticDetail(
+        config,
+        queue,
+        user,
+        url.pathname.slice(prefix.length)
+      )
+    );
+    return true;
+  }
   return async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -102,8 +144,7 @@ export function dashboardRoutes(
       json(res, 200, await setupStatus(setup, config, previewHosts, user));
       return true;
     }
-    if (req.method === "GET" && url.pathname === "/dashboard/automatic") {
-      json(res, 200, await automaticStatus(setup, queue, user));
+    if (await automaticRoute(req, res, url, user)) {
       return true;
     }
     if (await previewHostRoute(req, res, url, user)) {
@@ -255,6 +296,51 @@ async function automaticStatus(
     effective.QA_AUTO_PREVIEW_WAIT_SECONDS
   );
   return { attempts, enabledRepos, summary };
+}
+
+/**
+ * One automatic attempt and the evidence of why it never produced a run: what
+ * it was pinned to, how many probes it spent, and the audit trail of those
+ * probes. An attempt belongs to a repository, so the id alone is not a
+ * capability — the caller must already be able to read that repository.
+ */
+async function automaticDetail(
+  config: Config,
+  queue: Queue,
+  user: Principal,
+  id: string
+): Promise<AutomaticDetail> {
+  const row = DELIVERY_ID.test(id)
+    ? await queue.delivery(id, config.QA_AUTO_PREVIEW_WAIT_SECONDS)
+    : undefined;
+  const repo = row?.payload.repo;
+  if (!(row && repo) || row.payload.ignored) {
+    throw new QaError(
+      "AUTOMATIC_UNKNOWN",
+      "Cette tentative automatique est introuvable.",
+      "Elle a peut-être été purgée. Rouvrez l’accueil pour voir les tentatives en cours."
+    );
+  }
+  requireAccess(user, repo);
+  return {
+    attempt: automaticAttempt(row),
+    // The preview template and the version proof describe this instance’s
+    // deployment topology, so they are reported to administrators only.
+    ...(user.role === "admin"
+      ? {
+          preview: {
+            shaHeader: config.PREVIEW_SHA_HEADER,
+            ...(config.PREVIEW_SHA_PATH
+              ? { shaPath: config.PREVIEW_SHA_PATH }
+              : {}),
+            ...(config.PREVIEW_URL_TEMPLATE
+              ? { template: config.PREVIEW_URL_TEMPLATE }
+              : {}),
+          },
+        }
+      : {}),
+    timeline: await queue.deliveryTimeline(id),
+  };
 }
 
 function githubMode(config: Config) {

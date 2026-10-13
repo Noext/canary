@@ -435,6 +435,15 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
 5. **Historique** : phases live, verdict, assertions et vidéos. Le rapport complet
    et le commentaire GitHub sont accessibles ; le JSON et le run ID sont dans
    « Diagnostic technique ». Un résultat bloqué/annulé ne devient pas un succès.
+   Un test qui n'est pas allé au bout affiche d'abord « Pourquoi ce test n'est
+   pas allé au bout » : le code du diagnostic serveur, son message et la suite à
+   donner, la phase atteinte et les scénarios en erreur. L'écran détaillé du run
+   est adressable (`#run=<run-id>`) et se partage tel quel.
+6. **Lancements automatiques** : chaque PR détectée mais sans test indique son
+   motif (« délai dépassé », « quota horaire ») et renvoie vers un écran dédié
+   (`#automatic=<delivery-id>`) qui montre ce que Canary a vérifié, la preuve de
+   version exigée et le déroulé des vérifications. Une tentative expirée n'est
+   jamais rejouée automatiquement : l'écran indique comment relancer le test.
 
 Le catalogue accessible ne prouve pas encore qu'une génération réussira. Une
 preview vérifiée ne prouve pas que les assertions fonctionnelles réussiront.
@@ -458,6 +467,8 @@ Captures réelles des E2E, avec données fictives :
 | `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
 | `POST /session`, `DELETE /session` | Accès technique / déconnexion et révocation locale |
 | `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
+| `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
+| `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |

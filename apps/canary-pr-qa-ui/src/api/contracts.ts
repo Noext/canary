@@ -80,13 +80,25 @@ export interface SetupStatus {
   preview: { automatic: boolean } & PreviewSettings;
 }
 
-/** Lifecycle of a pull-request delivery that has no run yet. */
-export type AutomaticState = "waiting" | "expired" | "rate_limited";
+/**
+ * Lifecycle of a pull-request delivery. The first three are what the home block
+ * lists; the terminal ones are what the detail screen meets when it opens an
+ * attempt by its id after the attempt left the list.
+ */
+export type AutomaticState =
+  | "waiting"
+  | "expired"
+  | "rate_limited"
+  | "promoted"
+  | "discarded"
+  | "disabled";
 
 export interface AutomaticAttempt {
   attempts: number;
   deadlineAt: string;
   id: string;
+  /** Redacted last failure text, set when the attempt was refused. */
+  lastError?: string | null;
   pr: number;
   reason: string;
   repo: string;
@@ -94,6 +106,30 @@ export interface AutomaticAttempt {
   sha: string;
   state: AutomaticState;
   updatedAt: string;
+}
+
+/** One recorded step of an automatic attempt, oldest first. */
+export interface AutomaticTimelineEntry {
+  /** Audit action (`automatic.preview_wait`, `automatic.preview_expired`, ...). */
+  action: string;
+  /** ISO instant the step was recorded. */
+  at: string;
+  /** Backoff the step scheduled before the next probe, when it recorded one. */
+  seconds?: number | null;
+}
+
+/**
+ * One automatic attempt and the evidence of why it never became a run. The
+ * preview constraints are deployment topology: an administrator only.
+ */
+export interface AutomaticDetail {
+  attempt: AutomaticAttempt;
+  preview?: {
+    shaHeader: string;
+    shaPath?: string | null;
+    template?: string | null;
+  } | null;
+  timeline: AutomaticTimelineEntry[];
 }
 
 export interface AutomaticStatus {
@@ -165,9 +201,35 @@ export interface ScenarioAssertion {
   persisted?: unknown;
 }
 
+/** The server's explanation of a failing phase: its code, message and next step. */
+export interface Diagnostic {
+  code: string;
+  hint: string;
+  message: string;
+}
+
+/** The server's explanation of a failing phase: its code, message and next step. */
+export interface Diagnostic {
+  code: string;
+  hint: string;
+  message: string;
+}
+
+/**
+ * The diagnostic stored for one scenario. `hint` is optional because the report
+ * is read back from a file an older build may have written.
+ */
+export interface ScenarioDiagnostic {
+  code: string;
+  hint?: string | null;
+  message: string;
+}
+
 export interface ScenarioSummary {
   artifacts: string[];
   assertions?: ScenarioAssertion[];
+  /** Set when the scenario stopped on an error; the code names the cause. */
+  diagnostic?: ScenarioDiagnostic | null;
   error?: string | null;
   outcome: Outcome;
   scenario: {
@@ -182,6 +244,8 @@ export interface ScenarioSummary {
  * server result is carried through untouched by the schema.
  */
 export interface RunResult {
+  /** Set when the run stopped before finishing; the code names the cause. */
+  diagnostic?: Diagnostic | null;
   endedAt?: string | null;
   error?: string | null;
   id: string;
