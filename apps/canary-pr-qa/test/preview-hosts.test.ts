@@ -122,22 +122,34 @@ it("holds the environment list to the rule the dashboard edit enforces", () => {
   };
   const good = loadConfig({
     ...base,
-    PREVIEW_ALLOWED_HOSTS: "*.arpilabe.pharmania.fr",
+    PREVIEW_ALLOWED_HOSTS: "*.arpilabe.pharmania.fr,preview.test",
   });
+  expect(good.allowedHosts).toEqual([
+    "*.arpilabe.pharmania.fr",
+    "preview.test",
+  ]);
+  expect(good.invalidAllowedHosts).toEqual([]);
+  expect(good.PREVIEW_ALLOWED_HOSTS).toBe(
+    "*.arpilabe.pharmania.fr,preview.test"
+  );
   expect(() => validateConfiguration(good)).not.toThrow();
   for (const entry of ["*.co.uk", "*.com", "https://preview.example.com"]) {
     const config = loadConfig({ ...base, PREVIEW_ALLOWED_HOSTS: entry });
-    // Loading stays permissive, so doctor can name the offending entry instead
-    // of failing at parse time...
-    expect(config.allowedHosts).toEqual([entry]);
+    // Loading drops the entry before any boundary sees it - `browser` and
+    // `egress` start without the boot check, and without `QA_POLICY_DIR` they
+    // never apply a published policy either...
+    expect(config.allowedHosts, entry).toEqual([]);
+    expect(config.PREVIEW_ALLOWED_HOSTS, entry).toBe("");
+    expect(config.invalidAllowedHosts, entry).toEqual([entry]);
+    // ...doctor and the boot check still name it instead of shrinking in
+    // silence, and the session policy that reaches the browser is sanitized too.
     expect(() => validateConfiguration(config), entry).toThrow(
       /PREVIEW_ALLOWED_HOSTS entries must be/
     );
-    // ...and enforcement drops it everywhere, including the containers that
-    // start without this check.
     expect(applyPreviewHosts(config, config.allowedHosts).allowedHosts).toEqual(
       []
     );
+    expect(browserEnvironment(config).CANARY_NETWORK_ALLOWED_HOSTS).toBe("");
   }
 });
 
@@ -219,7 +231,10 @@ it("lets a wildcard entry cover the trusted auth a preview subdomain presents", 
     return await prepareScenario(scenario, "fixture/app", config);
   }
   await expect(load(subdomain)).resolves.toHaveProperty("auth");
-  await expect(load("arpilabe.pharmania.fr")).rejects.toThrow(
+  // A parent-domain cookie is what the browser sends to the preview subdomain,
+  // so the entry's base domain has to be accepted here.
+  await expect(load("arpilabe.pharmania.fr")).resolves.toHaveProperty("auth");
+  await expect(load("pharmania.fr")).rejects.toThrow(
     "Auth cookie domain outside approved previews"
   );
   await expect(load("notarpilabe.pharmania.fr")).rejects.toThrow(

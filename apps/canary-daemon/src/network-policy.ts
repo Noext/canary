@@ -118,11 +118,23 @@ export function hostAllowed(url: URL, hosts: string[]): boolean {
   return hosts.some((entry) => hostEntryMatches(url, entry));
 }
 /**
- * Whether any entry covers a bare hostname. Cookies carry no port, so a trusted
- * cookie domain is matched against the entries' names, ignoring their ports.
+ * Whether a trusted cookie's domain belongs to the allowlist.
+ *
+ * A browser sends a cookie to its domain and to every subdomain of it, so an
+ * entry may be the cookie's own domain or one of its parents: `example.com`
+ * covers a `login.example.com` cookie. A `*.example.com` entry additionally
+ * covers a cookie scoped to the bare `example.com`, which is not an allowed
+ * destination but is exactly the cookie a preview subdomain receives.
  */
-export function hostnameAllowed(hostname: string, hosts: string[]): boolean {
-  return hosts.some((entry) => matchesName(hostname, splitPort(entry).name));
+export function cookieDomainAllowed(domain: string, hosts: string[]): boolean {
+  return hosts.some((entry) => {
+    const name = splitPort(entry).name;
+    return (
+      matchesName(domain, name) ||
+      domain.endsWith(`.${name}`) ||
+      (name.startsWith("*.") && domain === name.slice(2))
+    );
+  });
 }
 export async function networkAllowed(
   input: string,

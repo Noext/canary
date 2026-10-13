@@ -129,17 +129,30 @@ const envSchema = z.object({
 });
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.parse(env);
+  // The environment list is the one allowlist that does not pass
+  // `normalizePreviewHosts`, so it is split into what this process may enforce
+  // and what it must not. Every process gets its configuration here - including
+  // `browser` and `egress`, which never run the boot check and, without
+  // `QA_POLICY_DIR`, never apply a published policy either - so an entry the
+  // dashboard would refuse can never reach a network boundary. `invalid` is
+  // reported by `validateConfiguration` instead of being dropped in silence.
+  const environmentHosts = parsed.PREVIEW_ALLOWED_HOSTS.split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const allowedHosts = environmentHosts.filter(isValidPreviewHost);
   return {
     ...parsed,
+    PREVIEW_ALLOWED_HOSTS: allowedHosts.join(","),
     QA_DATA_DIR: resolve(parsed.QA_DATA_DIR),
     QA_POLICY_DIR: parsed.QA_POLICY_DIR ? resolve(parsed.QA_POLICY_DIR) : "",
     allowedRepos: parsed.GITHUB_ALLOWED_REPOS.split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
     autoRuns: parsed.QA_AUTO_RUNS === "true",
-    allowedHosts: parsed.PREVIEW_ALLOWED_HOSTS.split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
+    allowedHosts,
+    invalidAllowedHosts: environmentHosts.filter(
+      (host) => !isValidPreviewHost(host)
+    ),
   };
 }
 export type Config = ReturnType<typeof loadConfig> & {
@@ -241,16 +254,11 @@ export function validateConfiguration(config: Config, service = false) {
       "Set PREVIEW_ALLOWED_HOSTS to the exact reachable preview hosts (including ports)"
     );
   }
-  // The `.env` list is the only allowlist that does not pass
-  // `normalizePreviewHosts`, so the boot check holds it to the same rule: an
-  // entry it refuses is dropped before any network boundary sees it, and
-  // starting would otherwise hide a typo such as `*.co.uk`.
-  const invalidHosts = config.allowedHosts.filter(
-    (host) => !isValidPreviewHost(host)
-  );
-  if (invalidHosts.length) {
+  // The `.env` list is already sanitized by `loadConfig`; report what it had to
+  // drop, which is otherwise an allowlist that silently shrank.
+  if (config.invalidAllowedHosts.length) {
     problems.push(
-      `PREVIEW_ALLOWED_HOSTS entries must be host, host:port, *.domain or *.domain:port over a domain you control: ${invalidHosts.join(", ")}`
+      `PREVIEW_ALLOWED_HOSTS entries must be host, host:port, *.domain or *.domain:port over a domain you control: ${config.invalidAllowedHosts.join(", ")}`
     );
   }
   if (config.allowedRepos.some((repo) => !/^[\w.-]+\/[\w.-]+$/.test(repo))) {

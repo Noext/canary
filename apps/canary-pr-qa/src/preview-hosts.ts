@@ -126,22 +126,14 @@ export function normalizePreviewHosts(value: unknown): string[] {
  * the run pipeline.
  *
  * An entry the loader would refuse never reaches a network boundary: the
- * environment list is the one source that does not pass
- * {@link normalizePreviewHosts}, and `browser` and `egress` start without the
- * boot-time configuration check that reports it. `doctor` and the API fail on
- * the same entry; here it is dropped rather than enforced.
+ * environment list is sanitized by `loadConfig`, a dashboard list by
+ * {@link normalizePreviewHosts}, and a published policy by the read that feeds
+ * this call. The filter here is the boundary's own guarantee - `browser` and
+ * `egress` start without the boot-time configuration check that reports a bad
+ * `.env` entry.
  */
 export function applyPreviewHosts(config: Config, hosts: string[]): Config {
   const allowed = hosts.filter(isValidPreviewHost);
-  if (allowed.length !== hosts.length) {
-    logger.warn(
-      {
-        code: "PREVIEW_HOSTS_IGNORED",
-        hosts: hosts.filter((host) => !isValidPreviewHost(host)),
-      },
-      "Ignored preview allowlist entries this process cannot enforce safely"
-    );
-  }
   config.allowedHosts = allowed;
   config.PREVIEW_ALLOWED_HOSTS = allowed.join(",");
   return config;
@@ -380,16 +372,16 @@ export class PreviewHosts {
   readonly pool: pg.Pool;
   readonly config: Config;
   /**
-   * The `PREVIEW_ALLOWED_HOSTS` default, captured before any override is
-   * applied and without the entries {@link isValidPreviewHost} refuses, so a bad
-   * `.env` entry is never published back as the list to restore.
+   * The `PREVIEW_ALLOWED_HOSTS` default, captured before any override is applied
+   * and already sanitized by `loadConfig`, so a bad `.env` entry can never be
+   * published back as the list to restore.
    */
   private readonly environment: string[];
 
   constructor(pool: pg.Pool, config: Config) {
     this.pool = pool;
     this.config = config;
-    this.environment = config.allowedHosts.filter(isValidPreviewHost);
+    this.environment = [...config.allowedHosts];
   }
 
   /** The server default, offered in the dashboard as the list to restore. */

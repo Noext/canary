@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { type BrowserAuth, BrowserAuthSchema } from "@usecanary/protocol";
 import { z } from "zod";
 import {
+  cookieDomainAllowed,
   hostAllowed,
-  hostnameAllowed,
 } from "../../canary-daemon/src/network-policy.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
@@ -112,12 +112,13 @@ export async function prepareScenario(
   }
 }
 function validateAuth(auth: BrowserAuth, config: Config) {
-  // A cookie carries no port, so its domain is matched against the entries'
-  // hostnames - wildcards included, which is why a `*.preview.example.com`
-  // entry also covers the auth cookie a preview subdomain sets.
+  // A cookie carries no port, and one scoped to a parent domain is precisely
+  // what a preview subdomain receives: `cookieDomainAllowed` accepts the base
+  // domain of a `*.preview.example.com` entry for that reason.
   if (
     auth.cookies.some(
-      (c) => !hostnameAllowed(c.domain.replace(/^\./, ""), config.allowedHosts)
+      (c) =>
+        !cookieDomainAllowed(c.domain.replace(/^\./, ""), config.allowedHosts)
     )
   ) {
     throw new Error("Auth cookie domain outside approved previews");

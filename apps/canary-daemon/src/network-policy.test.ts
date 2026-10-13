@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cookieDomainAllowed,
   hostAllowed,
   hostEntryMatches,
-  hostnameAllowed,
   networkAllowed,
 } from "./network-policy.js";
 
@@ -109,13 +109,40 @@ describe("hostAllowed", () => {
   });
 });
 
-describe("hostnameAllowed", () => {
-  it("ignores the entries' ports, because a cookie carries none", () => {
-    expect(hostnameAllowed("preview.test", ["preview.test:8443"])).toBe(true);
-    expect(hostnameAllowed("pr-12.preview.test", ["*.preview.test:8443"])).toBe(
+describe("cookieDomainAllowed", () => {
+  it("accepts the entries' domain, their subdomains and a wildcard's base domain", () => {
+    expect(cookieDomainAllowed("preview.test", ["preview.test:8443"])).toBe(
       true
     );
-    expect(hostnameAllowed("preview.test", ["*.preview.test"])).toBe(false);
+    // A parent-domain cookie is what a preview subdomain receives.
+    expect(cookieDomainAllowed("preview.test", ["*.preview.test"])).toBe(true);
+    expect(cookieDomainAllowed("pr-12.preview.test", ["*.preview.test"])).toBe(
+      true
+    );
+    expect(cookieDomainAllowed("login.preview.test", ["preview.test"])).toBe(
+      true
+    );
+    expect(cookieDomainAllowed("pr-12.preview.test", ["preview.test"])).toBe(
+      true
+    );
+  });
+
+  it("refuses a domain the allowlist does not cover", () => {
+    for (const [domain, entry] of [
+      // A cookie scoped above the entry would be sent to hosts the allowlist
+      // never authorized.
+      ["test", "preview.test"],
+      ["evil.test", "preview.test"],
+      ["notpreview.test", "preview.test"],
+      ["preview.test", "login.preview.test"],
+      ["evil.test", "*.preview.test"],
+      ["preview.test", "*.login.preview.test"],
+    ] as [string, string][]) {
+      expect(cookieDomainAllowed(domain, [entry]), `${domain} ~ ${entry}`).toBe(
+        false
+      );
+    }
+    expect(cookieDomainAllowed("preview.test", [])).toBe(false);
   });
 });
 
