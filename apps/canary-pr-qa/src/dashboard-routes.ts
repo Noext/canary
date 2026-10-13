@@ -41,6 +41,8 @@ const previewHostsSchema = z
  * server never issued simply matches nothing.
  */
 const DELIVERY_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+/** Path suffix that re-arms an attempt instead of reading it. */
+const RETRY_SUFFIX = "/retry";
 export function dashboardRoutes(
   setup: GitHubSetup,
   config: Config,
@@ -111,10 +113,10 @@ export function dashboardRoutes(
     url: URL,
     user: Principal
   ) {
-    if (req.method !== "GET") {
-      return false;
-    }
     if (url.pathname === "/dashboard/automatic") {
+      if (req.method !== "GET") {
+        return false;
+      }
       json(res, 200, await automaticStatus(setup, queue, user));
       return true;
     }
@@ -122,16 +124,27 @@ export function dashboardRoutes(
     if (!url.pathname.startsWith(prefix)) {
       return false;
     }
-    json(
-      res,
-      200,
-      await automaticDetail(
-        config,
-        queue,
-        user,
-        url.pathname.slice(prefix.length)
-      )
-    );
+    const rest = url.pathname.slice(prefix.length);
+    // `:id/retry` re-arms a failed attempt. Ids are opaque and never contain a
+    // slash, so the two shapes cannot be confused by a path a caller invented.
+    if (req.method === "POST" && rest.endsWith(RETRY_SUFFIX)) {
+      json(
+        res,
+        200,
+        await retryAutomatic(
+          setup,
+          config,
+          queue,
+          user,
+          rest.slice(0, -RETRY_SUFFIX.length)
+        )
+      );
+      return true;
+    }
+    if (req.method !== "GET") {
+      return false;
+    }
+    json(res, 200, await automaticDetail(config, queue, user, rest));
     return true;
   }
   return async (
@@ -299,6 +312,25 @@ async function automaticStatus(
 }
 
 /**
+ * The delivery behind an attempt id. An attempt belongs to a repository, so the
+ * id alone is not a capability: an unknown, malformed or parked record gets the
+ * same verdict, and the caller still has to be able to read that repository.
+ */
+async function attemptRow(queue: Queue, id: string, deadlineSeconds: number) {
+  const row = DELIVERY_ID.test(id)
+    ? await queue.delivery(id, deadlineSeconds)
+    : undefined;
+  if (!row?.payload.repo || row.payload.ignored) {
+    throw new QaError(
+      "AUTOMATIC_UNKNOWN",
+      "Cette tentative automatique est introuvable.",
+      "Elle a peut-être été purgée. Rouvrez l’accueil pour voir les tentatives en cours."
+    );
+  }
+  return row;
+}
+
+/**
  * One automatic attempt and the evidence of why it never produced a run: what
  * it was pinned to, how many probes it spent, and the audit trail of those
  * probes. An attempt belongs to a repository, so the id alone is not a
@@ -310,17 +342,8 @@ async function automaticDetail(
   user: Principal,
   id: string
 ): Promise<AutomaticDetail> {
-  const row = DELIVERY_ID.test(id)
-    ? await queue.delivery(id, config.QA_AUTO_PREVIEW_WAIT_SECONDS)
-    : undefined;
-  const repo = row?.payload.repo;
-  if (!(row && repo) || row.payload.ignored) {
-    throw new QaError(
-      "AUTOMATIC_UNKNOWN",
-      "Cette tentative automatique est introuvable.",
-      "Elle a peut-être été purgée. Rouvrez l’accueil pour voir les tentatives en cours."
-    );
-  }
+  const row = await attemptRow(queue, id, config.QA_AUTO_PREVIEW_WAIT_SECONDS);
+  const repo = row.payload.repo ?? "";
   requireAccess(user, repo);
   return {
     attempt: automaticAttempt(row),
@@ -341,6 +364,62 @@ async function automaticDetail(
       : {}),
     timeline: await queue.deliveryTimeline(id),
   };
+}
+
+/**
+ * Re-arms a failed attempt on the same pinned SHA, from the dashboard.
+ *
+ * The delivery goes back to the probe loop with a fresh waiting window, so
+ * Canary verifies the same preview again and can promote it into a run. Only the
+ * two failures that stopped without a run can be re-armed: a promoted attempt
+ * has its run, a discarded one would be discarded again on the same facts, and a
+ * refused one is a server-side switch rather than a missed probe. The retry is a
+ * write, so a viewer is refused here and not only in the UI.
+ *
+ * An attempt that is no longer re-armable is not an error: it is a state of its
+ * own, and the screen renders every one of them. That is what a second operator
+ * sees when the first retry already had its probe — the answer is the attempt as
+ * it stands, promoted run included, never a "nothing to relaunch" that would
+ * hide the run the retry produced.
+ */
+async function retryAutomatic(
+  setup: GitHubSetup,
+  config: Config,
+  queue: Queue,
+  user: Principal,
+  id: string
+): Promise<AutomaticDetail> {
+  const effective = await setup.effective();
+  const row = await attemptRow(
+    queue,
+    id,
+    effective.QA_AUTO_PREVIEW_WAIT_SECONDS
+  );
+  const repo = row.payload.repo ?? "";
+  requireAccess(user, repo, true);
+  if (!automaticRepos(effective).includes(repo.toLowerCase())) {
+    throw new QaError(
+      "AUTOMATIC_DISABLED",
+      "Les lancements automatiques sont désactivés pour ce dépôt : rien ne serait vérifié.",
+      "Réactivez ce dépôt dans Réglages → GitHub, ou lancez le test depuis « Nouveau test »."
+    );
+  }
+  const updated = await queue.retryDelivery(
+    id,
+    effective.QA_AUTO_PREVIEW_WAIT_SECONDS
+  );
+  if (updated) {
+    // The audit trail is what the detail screen renders: the operator who
+    // re-armed the attempt, and the window it was given, belong in it.
+    await queue.audit(user.id, "automatic.retried", undefined, {
+      attempts: row.attempts,
+      delivery: id,
+      pr: updated.payload.number ?? 0,
+      repo,
+      sha: updated.payload.sha ?? "",
+    });
+  }
+  return automaticDetail(config, queue, user, id);
 }
 
 function githubMode(config: Config) {

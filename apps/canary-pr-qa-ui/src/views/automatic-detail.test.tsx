@@ -12,7 +12,12 @@ import { DashboardError } from "@/api/client";
 import type { AutomaticDetail } from "@/api/contracts";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { NavigationProvider, useNavigation } from "@/app/navigation";
-import { automaticAdvice, automaticDetail, automaticReasons } from "@/i18n";
+import {
+  automatic,
+  automaticAdvice,
+  automaticDetail,
+  automaticReasons,
+} from "@/i18n";
 import { AutomaticDetailView } from "./automatic-detail";
 import { createAutomaticDetailStore } from "./automatic-detail-store";
 
@@ -272,6 +277,15 @@ describe("AutomaticDetailView", () => {
         automaticDetail.waiting
       )
     );
+    // A waiting attempt is probing the cause a previous probe recorded: that is
+    // what the operator has to act on, so it stays on screen. Only a waiting
+    // attempt with no reason at all is not explained (see the retry test).
+    expect(byId("automaticDetailCause")).toHaveTextContent(
+      automaticReasons.PREVIEW_NOT_FOUND!
+    );
+    expect(byId("automaticDetailAdvice")).toHaveTextContent(
+      automaticAdvice.PREVIEW_NOT_FOUND!
+    );
   });
 
   it("hides the preview block from a viewer who receives no topology", async () => {
@@ -464,8 +478,61 @@ describe("AutomaticDetailView", () => {
       )
     );
     // `Nouveau test` is refused to a viewer by the navigation guard, so the
-    // button would bounce them home without ever saying why.
+    // button would bounce them home without ever saying why. The retry is a
+    // write the server refuses, so it is not offered either.
     expect(document.getElementById("automaticDetailRunCta")).toBeNull();
+    expect(document.getElementById("automaticDetailRetry")).toBeNull();
+  });
+
+  it("re-arms the attempt and shows it waiting again with the step that did it", async () => {
+    const user = userEvent.setup();
+    wire.handler = (path) =>
+      path.endsWith("/retry")
+        ? detail({
+            attempt: {
+              ...detail().attempt,
+              attempts: 0,
+              reason: "",
+              state: "waiting",
+            },
+            timeline: [
+              {
+                action: "automatic.retried",
+                at: "2026-01-02T06:00:00.000Z",
+              },
+            ],
+          })
+        : detail();
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+    await waitFor(() =>
+      expect(byId("automaticDetailRetry")).toHaveTextContent(automatic.retry)
+    );
+
+    await user.click(byId("automaticDetailRetry"));
+
+    expect(wire.calls).toContain(`/dashboard/automatic/${DELIVERY_ID}/retry`);
+    await waitFor(() =>
+      expect(byId("automaticDetailWaiting")).toHaveTextContent(
+        automaticDetail.waiting
+      )
+    );
+    // The server answered with the attempt it re-armed: the screen shows that
+    // attempt, so the button it can no longer act on is gone.
+    expect(document.getElementById("automaticDetailRetry")).toBeNull();
+    expect(byId("automaticDetailFacts")).toHaveTextContent(
+      "0 vérifications effectuées"
+    );
+    // Nothing stopped this attempt any more: an empty cause with the fallback
+    // advice would send the operator to a manual run Canary is already doing.
+    expect(document.getElementById("automaticDetailCause")).toBeNull();
+    expect(document.getElementById("automaticDetailAdvice")).toBeNull();
+    expect(byId("automaticDetailTimeline")).toHaveTextContent(
+      "Relancé depuis le tableau de bord"
+    );
   });
 
   it("keeps StrictMode's double subscription to a single call", async () => {

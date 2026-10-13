@@ -13,6 +13,13 @@ export interface AutomaticDetailState {
   error?: string;
   loading: boolean;
   missing: boolean;
+  /** A retry is in flight: the button reports it instead of re-arming twice. */
+  retrying?: boolean;
+}
+
+export interface AutomaticDetailStore extends Readable<AutomaticDetailState> {
+  /** Re-arms the attempt and shows the fresh state the server answers with. */
+  retry(): void;
 }
 
 /** The error code the server returns for an attempt that no longer exists. */
@@ -58,6 +65,29 @@ async function loadAutomaticDetail(
 }
 
 /**
+ * Re-arms the attempt this screen was opened on. The answer is the attempt
+ * itself, in the same shape as the read: it is waiting again, with the audit
+ * step that records the retry, so the screen replaces its detail with it.
+ */
+async function rearm(
+  store: Store<AutomaticDetailState>,
+  id: string,
+  report: (failure: unknown) => void
+) {
+  store.set((current) => ({ ...current, retrying: true }));
+  try {
+    const detail = await api<AutomaticDetail>(
+      `/dashboard/automatic/${encodeURIComponent(id)}/retry`,
+      { method: "POST", schema: automaticDetailSchema }
+    );
+    store.set((current) => ({ ...current, detail, retrying: false }));
+  } catch (failure) {
+    report(failure);
+    store.set((current) => ({ ...current, retrying: false }));
+  }
+}
+
+/**
  * One automatic attempt and the evidence of why it never became a run.
  *
  * The id is read once, at construction: `requested` is the deep link the screen
@@ -75,7 +105,7 @@ export function createAutomaticDetailStore(options: {
   consumeRequest: () => string | undefined;
   report: (failure: unknown) => void;
   requested?: string;
-}): Readable<AutomaticDetailState> {
+}): AutomaticDetailStore {
   const { consumeRequest, report, requested = "" } = options;
   // Exactly one read of the pending link, whether it came as a prop or through
   // the consumer: `requested` wins, and the consumer still clears the state.
@@ -101,6 +131,12 @@ export function createAutomaticDetailStore(options: {
 
   return {
     getSnapshot: state.getSnapshot,
+    retry: () => {
+      if (!id) {
+        return;
+      }
+      void rearm(state, id, report);
+    },
     subscribe(listener) {
       listeners += 1;
       const unsubscribe = state.subscribe(listener);

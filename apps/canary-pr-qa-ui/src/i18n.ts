@@ -457,6 +457,10 @@ export const automatic = {
     "Canary a détecté ces pull requests et attend une application de test au bon commit.",
   manualHint: "Un lancement manuel reste possible depuis « Nouveau test ».",
   reasonUnknown: (code: string) => `Cause à vérifier : ${code}.`,
+  retry: "Relancer la vérification",
+  retryTitle:
+    "Revérifier la même pull request au même commit, avec un nouveau délai d’attente.",
+  retrying: "Relance…",
   summary: {
     expired: (count: number) => `${count} délai(s) dépassé(s)`,
     rateLimited: (count: number) => `${count} refusé(s) par le quota horaire`,
@@ -479,6 +483,8 @@ export const automaticSteps: Record<string, string> = {
   "automatic.promoted": "Application de test vérifiée : le test a démarré.",
   "automatic.rate_limited":
     "Budget horaire de lancements automatiques atteint : le test n’a pas démarré.",
+  "automatic.retried":
+    "Relancé depuis le tableau de bord : la même pull request est revérifiée au même commit.",
   "automatic.repo_disabled":
     "Lancements automatiques désactivés pour ce dépôt : aucune vérification n’a été faite.",
   "webhook.rate_limited": "Refusé par le quota horaire du serveur.",

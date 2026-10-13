@@ -121,6 +121,9 @@ export interface AutomaticTimelineEntry {
 /**
  * One automatic attempt and the evidence of why it never became a run. The
  * preview constraints are deployment topology: an administrator only.
+ *
+ * `POST /dashboard/automatic/:id/retry` answers with this same object, the
+ * attempt it re-armed, so a screen can replace what it shows with the response.
  */
 export interface AutomaticDetail {
   attempt: AutomaticAttempt;

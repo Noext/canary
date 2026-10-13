@@ -1328,8 +1328,11 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     ],
     origins: [],
   });
-  const act = (label: string, action: Parameters<typeof compileAction>[0]) =>
-    canary.act(session, label, compileAction(action, url));
+  const act = (
+    label: string,
+    action: Parameters<typeof compileAction>[0],
+    assertion?: Parameters<typeof compileAction>[2]
+  ) => canary.act(session, label, compileAction(action, url, assertion));
   // One observation per screen: the accessible text of the document, which is
   // what the operator reads and what the assertions below pin.
   const observed = async (label: string) => {
@@ -1373,6 +1376,15 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     // it on a fresh document instead of a same-document hash change the
     // dashboard deliberately does not act on.
     await act("fresh-document", { type: "goto", path: "/?reload=1" });
+    // The failure is actionable where the operator first meets it: the home
+    // block offers the same retry as the detail screen, on the same attempt.
+    const home = await canary.act(
+      session,
+      "home-lists-a-retryable-failure",
+      `const page=await browser.getPage("qa"); await page.waitForSelector(${JSON.stringify("#automaticRetry-e2e-attempt")},{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(String(home.actual)).toContain("Relancer la vérification");
+    expect(String(home.actual)).toContain("Délai dépassé");
     await act("expired-attempt-link", {
       type: "goto",
       path: "/#automatic=e2e-attempt",
@@ -1395,6 +1407,44 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     expect(attempt.text).toContain("Délai d’attente dépassé");
     // Deployment topology is administrator-only, but this session is admin.
     expect(attempt.text).toContain("Preuve de version exigée");
+    // An expired attempt is not a dead end any more: the screen the operator is
+    // already reading re-arms it, on the same commit, with a fresh window. The
+    // assertion polls the state pill, so the click's write is what is measured.
+    await act("retry-expired-attempt", {
+      type: "click",
+      locator: { by: "css", value: "#automaticDetailRetry" },
+    });
+    await act(
+      "retried-attempt-waiting",
+      {
+        type: "assert",
+        assertionId: "retry-waiting",
+        locator: { by: "css", value: "#automaticDetailPill" },
+      },
+      {
+        id: "retry-waiting",
+        description: "En attente de la préversion",
+        kind: "text",
+        expected: "En attente de la préversion",
+        verification: "state",
+      }
+    );
+    const rearmed = await observed("retried-attempt-detail");
+    expect(rearmed.text).toContain("Relancé depuis le tableau de bord");
+    // Nothing stopped it any more: the screen must not keep explaining a cause
+    // and an advice for an attempt that is waiting again with no reason yet.
+    expect(rearmed.text).not.toContain(
+      "Pourquoi Canary n’a pas démarré le test"
+    );
+    expect(rearmed.text).not.toContain("Ce qu’il reste à faire");
+    // The row itself is what was re-armed: due again, with its history kept as
+    // the attempt's audit trail rather than as a probe count.
+    const row = (
+      await queue.pool.query(
+        "SELECT status,attempts,reason FROM qa_deliveries WHERE id='e2e-attempt'"
+      )
+    ).rows[0];
+    expect(row).toEqual({ attempts: 0, reason: null, status: "pending" });
     await canary.end(session, join(f.dataDir, "failed-run-evidence"));
   } catch (error) {
     await canary.abort(session);

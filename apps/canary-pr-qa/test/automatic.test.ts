@@ -396,6 +396,207 @@ it("expires an attempt past its deadline, warns once and never replays it", asyn
   expect(await q.list(["fixture/app"])).toEqual([]);
 }, 30_000);
 
+it("re-arms an expired attempt from the dashboard, and the probe loop starts the run it never had", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    GITHUB_ALLOWED_REPOS: "fixture/app",
+    QA_PORT: 0,
+    allowedRepos: ["fixture/app"],
+  };
+  expect(await q.acceptDelivery("retried", "pull_request", attempt, 1800)).toBe(
+    true
+  );
+  // One probe that cannot prove the SHA, then the deadline closes: the delivery
+  // Canary used to leave as a dead end.
+  await processDelivery(q, config);
+  await q.pool.query(
+    "UPDATE qa_deliveries SET deadline_at=now()-interval '1 second' WHERE id='retried'"
+  );
+  await due(q);
+  await processDelivery(q, config);
+  expect(await delivery(q, "retried")).toMatchObject({
+    attempts: 1,
+    reason: "PREVIEW_NOT_FOUND",
+    status: "expired",
+  });
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
+    summary: { expired: 1, rateLimited: 0, waiting: 0 },
+  });
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const headers = { Authorization: `Bearer ${config.QA_API_TOKEN}` };
+  const rearm = () =>
+    fetch(`${url}/dashboard/automatic/retried/retry`, {
+      method: "POST",
+      headers,
+    });
+  const response = await rearm();
+  expect(response.status).toBe(200);
+  const detail = (await response.json()) as AutomaticDetail;
+  expect(detail.attempt).toMatchObject({
+    attempts: 0,
+    reason: "",
+    runId: null,
+    state: "waiting",
+  });
+  // A retry is only worth anything with a full window: what changed is the
+  // deployment the operator was waiting for, not the attempt's history.
+  expect(Date.parse(detail.attempt.deadlineAt)).toBeGreaterThan(
+    Date.now() + 60_000
+  );
+  // The write is audited into the attempt's own timeline, where the screen the
+  // operator is looking at reads it back.
+  expect(detail.timeline.map((step) => step.action)).toEqual([
+    "automatic.preview_wait",
+    "automatic.preview_expired",
+    "automatic.retried",
+  ]);
+  expect(await audits(q, "automatic.retried")).toMatchObject([
+    {
+      details: {
+        attempts: 1,
+        delivery: "retried",
+        pr: 1,
+        repo: "fixture/app",
+        sha: SHA,
+      },
+    },
+  ]);
+  // The home block reports it as waiting again instead of as a failure.
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
+    attempts: [{ id: "retried", state: "waiting" }],
+    summary: { expired: 0, rateLimited: 0, waiting: 1 },
+  });
+  // Two operators clicking together re-arm one attempt: the second call answers
+  // with the state the first one produced instead of failing.
+  const again = await rearm();
+  expect(again.status).toBe(200);
+  expect(((await again.json()) as AutomaticDetail).attempt.state).toBe(
+    "waiting"
+  );
+  // And the probe loop now finds the preview that was missing.
+  await due(q);
+  await processDelivery(q, { ...config, PREVIEW_URL_TEMPLATE: f.baseUrl });
+  const jobs = await q.list(["fixture/app"]);
+  expect(jobs).toHaveLength(1);
+  expect(await delivery(q, "retried")).toMatchObject({
+    run_id: jobs[0]!.id,
+    status: "processed",
+  });
+  expect(await audits(q, "automatic.promoted")).toMatchObject([
+    { run_id: jobs[0]!.id },
+  ]);
+}, 30_000);
+
+it("refuses a retry a viewer cannot make, an unknown attempt, or a disabled switch, and answers an unretryable one with its state", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  const viewer = "automatic-retry-viewer-token-0123456789";
+  const usersFile = join(f.dataDir, "automatic-retry-users.json");
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "retry-viewer",
+        repos: ["fixture/app"],
+        role: "viewer",
+        tokenSha256: createHash("sha256").update(viewer).digest("hex"),
+      },
+    ])
+  );
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    GITHUB_ALLOWED_REPOS: "fixture/app",
+    QA_PORT: 0,
+    QA_USERS_FILE: usersFile,
+    allowedRepos: ["fixture/app"],
+  };
+  // An expired attempt, and one the probe loop promoted into a real run.
+  expect(
+    await q.acceptDelivery("expired-attempt", "pull_request", attempt, -1)
+  ).toBe(true);
+  await processDelivery(q, config);
+  expect(
+    await q.acceptDelivery(
+      "promoted-attempt",
+      "pull_request",
+      { ...attempt, number: 2 },
+      1800
+    )
+  ).toBe(true);
+  await processDelivery(q, { ...config, PREVIEW_URL_TEMPLATE: f.baseUrl });
+  expect(await delivery(q, "promoted-attempt")).toMatchObject({
+    status: "processed",
+  });
+  expect((await q.list(["fixture/app"])).length).toBe(1);
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const rearm = async (id: string, token: string) => {
+    const response = await fetch(`${url}/dashboard/automatic/${id}/retry`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return {
+      body: (await response.json()) as {
+        code?: string;
+      } & Partial<AutomaticDetail>,
+      status: response.status,
+    };
+  };
+  // The retry is a write: a reader of the same repository is refused, and the
+  // attempt keeps the state it was reported with.
+  expect(await rearm("expired-attempt", viewer)).toMatchObject({
+    status: 403,
+  });
+  expect(await delivery(q, "expired-attempt")).toMatchObject({
+    status: "expired",
+  });
+  // A promoted attempt has its run; there is nothing left to re-arm, and the
+  // answer is that attempt, not an error: another operator's retry may be what
+  // produced the run, and hiding it behind a failure would lose it.
+  const promoted = await rearm("promoted-attempt", config.QA_API_TOKEN);
+  expect(promoted.status).toBe(200);
+  expect(promoted.body.attempt).toMatchObject({
+    runId: expect.any(String),
+    state: "promoted",
+  });
+  // It created no second run.
+  expect((await q.list(["fixture/app"]))[0]).toMatchObject({
+    status: "queued",
+  });
+  expect(await q.list(["fixture/app"])).toHaveLength(1);
+  expect(await rearm("no-such-attempt", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_UNKNOWN" },
+    status: 400,
+  });
+  // The switch is off on the server: the retry would replace an attempt that
+  // already explains why nothing runs with one the worker refuses at once.
+  const off = { ...config, autoRuns: false };
+  const offServer = await startProductionServer(off);
+  cleanup.push(() => offServer.shutdown());
+  const offUrl = `http://127.0.0.1:${(offServer.address() as { port: number }).port}`;
+  const refused = await fetch(
+    `${offUrl}/dashboard/automatic/expired-attempt/retry`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+    }
+  );
+  expect(refused.status).toBe(400);
+  expect(await refused.json()).toMatchObject({ code: "AUTOMATIC_DISABLED" });
+  expect(await delivery(q, "expired-attempt")).toMatchObject({
+    status: "expired",
+  });
+}, 30_000);
+
 it("records auto_disabled attempts when automatic runs are switched off", async () => {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();

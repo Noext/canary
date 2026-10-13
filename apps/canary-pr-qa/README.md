@@ -304,8 +304,21 @@ preview. Les livraisons terminales (`processed`, `expired`, `rate_limited`,
 
 Après la deadline, la tentative passe en `expired`, avec l'audit
 `automatic.preview_expired` et un log d'avertissement du worker. **Une tentative
-expirée n'est jamais rejouée automatiquement** : relancer explicitement depuis le
-dashboard ou pousser un nouveau commit.
+expirée n'est jamais rejouée automatiquement** : le dashboard peut la réarmer
+explicitement, ou pousser un nouveau commit.
+
+`POST /dashboard/automatic/:id/retry` réarme une tentative en échec sur le même
+commit : la livraison redevient due avec une nouvelle fenêtre complète et le
+worker revérifie la même preview, jusqu'à la promotion en run réel. Seuls
+`expired` et `rate_limited` peuvent l'être — un run existe déjà pour `processed`,
+`discarded` se reproduirait sur les mêmes faits, et `auto_disabled` est un
+interrupteur serveur. L'écriture est refusée à un viewer (403) et sur un dépôt
+dont l'automatisation est désactivée (`AUTOMATIC_DISABLED`, la livraison reste
+intacte). Une tentative qui n'est plus réarmable — déjà relancée, promue en run ou
+écartée entre-temps — n'est pas une erreur : la réponse est son état courant, run
+compris, ce que le second clic d'un opérateur doit voir. Chaque relance est
+auditée `automatic.retried` avec le nombre de vérifications déjà dépensé, et les
+compteurs de probes repartent de zéro.
 
 | État | Audit | Cause |
 | --- | --- | --- |
@@ -315,6 +328,7 @@ dashboard ou pousser un nouveau commit.
 | `rate_limited` | `automatic.rate_limited` | budgets horaires globaux/par dépôt |
 | `auto_disabled` | `automatic.disabled` | `QA_AUTO_RUNS=false` |
 | `auto_disabled` | `automatic.repo_disabled` | dépôt non opt-in |
+| en attente | `automatic.retried` | relance manuelle depuis le dashboard |
 
 Une tentative n'est pas un job `qa_jobs` : aucun statut de run n'est inventé, le
 run réel n'est créé qu'une fois la preview vérifiée.
@@ -323,7 +337,8 @@ run réel n'est créé qu'une fois la preview vérifiée.
 ayant accès au dépôt les tentatives les plus récentes d'abord (50 au maximum),
 avec un résumé des tentatives en attente, expirées et rate-limitées. Les lignes
 `expired` et `rate_limited` restent visibles 24 heures ; les tentatives en attente
-sont comptées dans le résumé.
+sont comptées dans le résumé. Un opérateur ou administrateur peut réarmer une
+ligne en échec depuis la liste ou son écran de détail.
 
 Interrupteurs : `QA_AUTO_RUNS=false` désactive les runs automatiques de tout le
 déploiement (les tentatives sont enregistrées `auto_disabled`, audit
@@ -450,7 +465,9 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
    motif (« délai dépassé », « quota horaire ») et renvoie vers un écran dédié
    (`#automatic=<delivery-id>`) qui montre ce que Canary a vérifié, la preuve de
    version exigée et le déroulé des vérifications. Une tentative expirée n'est
-   jamais rejouée automatiquement : l'écran indique comment relancer le test.
+   jamais rejouée automatiquement : « Relancer la vérification » la réarme sur le
+   même commit avec un nouveau délai, depuis la liste comme depuis l'écran de
+   détail.
 
 Le catalogue accessible ne prouve pas encore qu'une génération réussira. Une
 preview vérifiée ne prouve pas que les assertions fonctionnelles réussiront.
@@ -476,6 +493,7 @@ Captures réelles des E2E, avec données fictives :
 | `GET /dashboard/status` | Connexions et informations non secrètes nécessaires au guide |
 | `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
 | `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
+| `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /models` | Catalogue IA authentifié et modèle par défaut ; accès operator/admin |

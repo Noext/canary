@@ -404,10 +404,6 @@ export class Queue {
     }
   }
   /**
-   * Keeps an automatic attempt waiting: the row stays `pending`, one probe is
-   * counted and the next one is scheduled after the given backoff.
-   */
-  /**
    * Claims one due delivery for `token`, which owns it until the next claim.
    *
    * The row lock is released on commit, so `retry_at` is also the claim lease:
@@ -427,6 +423,9 @@ export class Queue {
     ).rows[0];
   }
   /**
+   * Keeps an automatic attempt waiting: the row stays `pending`, one probe is
+   * counted and the next one is scheduled after the given backoff.
+   *
    * A failed probe schedules the next one, but never past the deadline: an
    * attempt whose deadline is closer than the backoff becomes due exactly at the
    * deadline, so expiration is enforced instead of being deferred by up to 300 s.
@@ -446,6 +445,7 @@ export class Queue {
     );
     return result.rowCount === 1;
   }
+  /** Ends an automatic attempt without a run: `expired`, `rate_limited` or `auto_disabled`. */
   async failDelivery(
     id: string,
     token: string,
@@ -466,13 +466,26 @@ export class Queue {
     );
     return result.rowCount === 1;
   }
-  /** Ends an automatic attempt without a run: `expired`, `rate_limited` or `auto_disabled`. */
-  /** Marks the attempt as promoted: the verified preview created this real job. */
   /**
-   * Automatic attempts of the given repositories, newest first. Waiting rows are
-   * listed with the attempts still running; expired/rate-limited rows stay visible
-   * for 24 hours. Attempts are not jobs: no `qa_jobs` row exists before promotion.
+   * Re-arms a failed attempt on the same pinned SHA: the delivery becomes due
+   * again with a fresh waiting window, exactly as if its webhook had just
+   * arrived. The probe loop then verifies the same preview and can promote it.
+   *
+   * Only the two failures that stopped without a run can be re-armed; the claim
+   * token is cleared so the worker that owned the previous window can no longer
+   * expire the attempt it lost.
    */
+  async retryDelivery(id: string, waitSeconds: number) {
+    return (
+      await this.pool.query<DeliveryRow>(
+        `UPDATE qa_deliveries SET status='pending',attempts=0,reason=NULL,last_error=NULL,claim_token=NULL,
+         retry_at=now(),deadline_at=now()+make_interval(secs => $2::double precision),updated_at=now()
+         WHERE id=$1 AND status IN ('expired','rate_limited')
+         RETURNING id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at`,
+        [id, waitSeconds]
+      )
+    ).rows[0];
+  }
   /**
    * Attempts the dashboard may show, scoped to `repos`. A pending delivery
    * accepted before `deadline_at` existed (schema v5 and earlier) has no stored
