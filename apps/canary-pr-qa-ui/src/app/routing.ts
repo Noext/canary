@@ -49,18 +49,26 @@ function screenFromHash(hash: string): ScreenRoute | undefined {
 }
 
 /**
- * The dashboard is a single document: deep links are read once, then stripped
- * from the URL so a refresh never replays them.
+ * Reads the URL once, at load. A link this dashboard wrote stays in the URL, so
+ * reloading a shared `#automatic=<id>` or `#run=<uuid>` reopens the same screen
+ * instead of dropping it on the first of two refreshes. Only the payloads that
+ * must not be replayed — a temporary setup code, the GitHub callback — are
+ * erased from the address bar.
  */
 export function readInitialRoute(): InitialRoute {
   const hash = window.location.hash.replace(/^#/, "");
   const params = new URLSearchParams(window.location.search);
   const route: InitialRoute = {};
   const screen = screenFromHash(hash);
+  // A bare `#<uuid>` is the legacy run link, written by `openRun`; it is kept
+  // like the screen links so a refresh keeps the run the history selected.
+  let keepHash = false;
   if (screen) {
     route.screen = screen;
+    keepHash = true;
   } else if (RUN_ID.test(hash)) {
     route.runId = hash;
+    keepHash = true;
   } else if (hash.startsWith("setup=")) {
     route.setupCode = hash.slice("setup=".length);
   }
@@ -69,7 +77,12 @@ export function readInitialRoute(): InitialRoute {
     route.github = github;
   }
   if (hash || github) {
-    window.history.replaceState(null, "", window.location.pathname);
+    const path = window.location.pathname;
+    window.history.replaceState(
+      null,
+      "",
+      keepHash ? `${path}${window.location.hash}` : path
+    );
   }
   return route;
 }
