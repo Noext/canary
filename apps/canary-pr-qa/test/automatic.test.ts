@@ -493,7 +493,7 @@ it("re-arms an expired attempt from the dashboard, and the probe loop starts the
   ]);
 }, 30_000);
 
-it("refuses a retry a viewer cannot make, on an attempt that cannot be re-armed, or with automation off", async () => {
+it("refuses a retry a viewer cannot make, an unknown attempt, or a disabled switch, and answers an unretryable one with its state", async () => {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -545,7 +545,9 @@ it("refuses a retry a viewer cannot make, on an attempt that cannot be re-armed,
       headers: { Authorization: `Bearer ${token}` },
     });
     return {
-      body: (await response.json()) as { code?: string },
+      body: (await response.json()) as {
+        code?: string;
+      } & Partial<AutomaticDetail>,
       status: response.status,
     };
   };
@@ -557,14 +559,20 @@ it("refuses a retry a viewer cannot make, on an attempt that cannot be re-armed,
   expect(await delivery(q, "expired-attempt")).toMatchObject({
     status: "expired",
   });
-  // A promoted attempt has its run; there is nothing left to re-arm.
-  expect(await rearm("promoted-attempt", config.QA_API_TOKEN)).toMatchObject({
-    body: { code: "AUTOMATIC_NOT_RETRYABLE" },
-    status: 400,
+  // A promoted attempt has its run; there is nothing left to re-arm, and the
+  // answer is that attempt, not an error: another operator's retry may be what
+  // produced the run, and hiding it behind a failure would lose it.
+  const promoted = await rearm("promoted-attempt", config.QA_API_TOKEN);
+  expect(promoted.status).toBe(200);
+  expect(promoted.body.attempt).toMatchObject({
+    runId: expect.any(String),
+    state: "promoted",
   });
+  // It created no second run.
   expect((await q.list(["fixture/app"]))[0]).toMatchObject({
     status: "queued",
   });
+  expect(await q.list(["fixture/app"])).toHaveLength(1);
   expect(await rearm("no-such-attempt", config.QA_API_TOKEN)).toMatchObject({
     body: { code: "AUTOMATIC_UNKNOWN" },
     status: 400,

@@ -375,6 +375,12 @@ async function automaticDetail(
  * has its run, a discarded one would be discarded again on the same facts, and a
  * refused one is a server-side switch rather than a missed probe. The retry is a
  * write, so a viewer is refused here and not only in the UI.
+ *
+ * An attempt that is no longer re-armable is not an error: it is a state of its
+ * own, and the screen renders every one of them. That is what a second operator
+ * sees when the first retry already had its probe — the answer is the attempt as
+ * it stands, promoted run included, never a "nothing to relaunch" that would
+ * hide the run the retry produced.
  */
 async function retryAutomatic(
   setup: GitHubSetup,
@@ -412,18 +418,6 @@ async function retryAutomatic(
       repo,
       sha: updated.payload.sha ?? "",
     });
-  } else if (
-    automaticAttempt(
-      await attemptRow(queue, id, effective.QA_AUTO_PREVIEW_WAIT_SECONDS)
-    ).state !== "waiting"
-  ) {
-    // Already re-armed by a first click is the one honest non-failure here: the
-    // intent is satisfied, and the reload below returns the waiting attempt.
-    throw new QaError(
-      "AUTOMATIC_NOT_RETRYABLE",
-      "Cette tentative n’est plus en échec : il n’y a rien à relancer.",
-      "Elle a été relancée, testée ou écartée entre-temps. Rechargez l’accueil pour voir son état."
-    );
   }
   return automaticDetail(config, queue, user, id);
 }

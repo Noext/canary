@@ -314,9 +314,11 @@ worker revérifie la même preview, jusqu'à la promotion en run réel. Seuls
 `discarded` se reproduirait sur les mêmes faits, et `auto_disabled` est un
 interrupteur serveur. L'écriture est refusée à un viewer (403) et sur un dépôt
 dont l'automatisation est désactivée (`AUTOMATIC_DISABLED`, la livraison reste
-intacte) ; une relance déjà en attente répond avec l'état courant au lieu
-d'échouer. Chaque relance est auditée `automatic.retried` avec le nombre de
-vérifications déjà dépensé, et les compteurs de probes repartent de zéro.
+intacte). Une tentative qui n'est plus réarmable — déjà relancée, promue en run ou
+écartée entre-temps — n'est pas une erreur : la réponse est son état courant, run
+compris, ce que le second clic d'un opérateur doit voir. Chaque relance est
+auditée `automatic.retried` avec le nombre de vérifications déjà dépensé, et les
+compteurs de probes repartent de zéro.
 
 | État | Audit | Cause |
 | --- | --- | --- |
