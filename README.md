@@ -433,7 +433,7 @@ What the container provides, and what CI therefore depends on:
 | ------------------------------------------------- | ------------------------------------------------------------------ |
 | Docker and Compose ≥ 2.20 (image build, Compose E2E) | the `docker` role                                               |
 | Chromium system libraries                         | the `ghrunner` role                                                |
-| Postgres 16.10 for `check`                        | the job's own `services:` container — supported on a self-hosted Linux runner with Docker installed |
+| Postgres 16.10 for `check`                        | a container the job starts itself on a Docker-assigned free port bound to `127.0.0.1`; a `services:` entry needs a fixed host port, so a second concurrent `check` job would collide with it |
 | Node and pnpm                                     | `actions/setup-node` and `pnpm/action-setup`, not the container     |
 
 Two constraints to know before editing these workflows:
