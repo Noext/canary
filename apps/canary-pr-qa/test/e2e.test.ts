@@ -1384,6 +1384,30 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     const history = await observed("history-after-back");
     expect(history.url).not.toContain("#run=");
     expect(history.text).toContain("Vos tests");
+    // The list has its own address now: it is the link the operator reloads or
+    // shares, so the server has to serve the document on that path.
+    expect(new URL(history.url).pathname).toBe("/history");
+    const reloadedHistory = await canary.act(
+      session,
+      "history-list-survives-a-reload",
+      `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#historyTable",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(reloadedHistory.url).toContain("/history");
+    // Same for the page that starts a test: its address is a path too, and a
+    // reload is served by the dashboard instead of answering 404.
+    await act("open-new-test", {
+      type: "click",
+      locator: { by: "css", value: "#nav-new" },
+    });
+    const newTest = await observed("new-test-address");
+    expect(new URL(newTest.url).pathname).toBe("/new-test");
+    const reloadedNewTest = await canary.act(
+      session,
+      "new-test-page-survives-a-reload",
+      `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#runForm",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(reloadedNewTest.url).toContain("/new-test");
+    expect(String(reloadedNewTest.actual)).toContain("Vérifier les accès");
     // Leaving the screen cleared its hash, which is what keeps a quoted link
     // from outliving the panel it opened. The dashboard reads a hash once at
     // load and does not act on a same-document change: reach the home panel on
