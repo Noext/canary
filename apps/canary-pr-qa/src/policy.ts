@@ -142,7 +142,7 @@ export function writeEvidenceRefusals(
  * les contenus contextuels récupérés pour ce chemin.
  */
 export function requirementEvidence(
-  requirement: Requirement,
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext
 ): string {
   return [
@@ -170,6 +170,86 @@ export function ungroundedRequirement(
 }
 
 /**
+ * Fichiers dont le texte témoin contient la citation mot pour mot, dans l'ordre
+ * où ils apparaîent : sert à dire au planificateur où la citation existe
+ * réellement quand il l'a attribuée au mauvais fichier.
+ */
+export function witnessFiles(quote: string, context: PrContext): string[] {
+  const paths = [
+    ...context.files.map((file) => file.filename),
+    ...context.context.map((item) => item.path),
+  ];
+  return [...new Set(paths)].filter((path) =>
+    requirementEvidence({ quote, sourceFile: path }, context).includes(quote)
+  );
+}
+
+/**
+ * Répare une attribution fautive quand la citation existe mot pour mot dans un
+ * autre fichier déclaré par le même scénario : la preuve reste réelle, seule la
+ * mention du fichier était fausse. Un plan qui cite un fichier hors scénario
+ * n'est pas réparé ici — le planificateur reçoit le refus et corrige lui-même
+ * sa liste de sources.
+ */
+export function repairRequirementAttribution(
+  plan: Plan,
+  context: PrContext
+): { from: string; quote: string; scenarioId: string; to: string }[] {
+  const repairs: {
+    from: string;
+    quote: string;
+    scenarioId: string;
+    to: string;
+  }[] = [];
+  for (const scenario of plan.scenarios) {
+    for (const requirement of scenario.requirements) {
+      if (
+        requirementEvidence(requirement, context).includes(requirement.quote)
+      ) {
+        continue;
+      }
+      const candidates = scenario.sourceFiles.filter((sourceFile) =>
+        requirementEvidence(
+          { quote: requirement.quote, sourceFile },
+          context
+        ).includes(requirement.quote)
+      );
+      const [target] = candidates;
+      if (candidates.length !== 1 || !target) {
+        continue;
+      }
+      repairs.push({
+        from: requirement.sourceFile,
+        quote: requirement.quote,
+        scenarioId: scenario.id,
+        to: target,
+      });
+      requirement.sourceFile = target;
+    }
+  }
+  return repairs;
+}
+
+/**
+ * Où la citation se trouve réellement, en ne proposant que des fichiers que la
+ * PR change : déclarer une source hors diff consommerait la tentative de
+ * correction pour rien, puisque la validation la refuserait.
+ */
+function witnessHint(quote: string, context: PrContext): string {
+  const changed = context.files.map((file) => file.filename);
+  const found = witnessFiles(quote, context);
+  const pr = found.filter((path) => changed.includes(path));
+  if (pr.length > 0) {
+    return ` The quote appears verbatim in ${pr.join(", ")}; declare that file and attribute the requirement to it.`;
+  }
+  const outside = found.filter((path) => !changed.includes(path));
+  if (outside.length === 0) {
+    return "";
+  }
+  return ` The quote only appears in ${outside.join(", ")}, which this PR does not change; quote the changed file instead.`;
+}
+
+/**
  * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
  * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
  * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
@@ -187,7 +267,7 @@ export function ungroundedPlanRefusals(
       )
       .map((requirement) => {
         const error = ungroundedRequirement(scenario.id, requirement);
-        return `${error.message}. ${error.hint}`;
+        return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
       })
   );
 }

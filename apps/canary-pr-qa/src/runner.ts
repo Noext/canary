@@ -21,6 +21,8 @@ import {
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
+  type Policy,
+  repairRequirementAttribution,
   trustedPolicy,
   ungroundedPlanRefusals,
   validateCoverage,
@@ -233,6 +235,52 @@ function refusalDiagnostic(
   );
   return diagnostic;
 }
+/**
+ * Une assertion d'absence ne lit pas un élément : elle en constate l'absence,
+ * donc une cible qui ne résout rien y est normale. Les autres sont comptées sur
+ * la page de découverte avant toute exécution.
+ */
+/**
+ * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
+ * exigence sans témoin textuel, cible absente de la page de découverte.
+ */
+function planRefusals(
+  candidate: Plan,
+  policy: Policy,
+  context: PrContext
+): string[] {
+  return [
+    ...writeEvidenceRefusals(candidate, policy).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
+    ...ungroundedPlanRefusals(candidate, context),
+  ];
+}
+/**
+ * Après la planification : une citation réelle attribuée au mauvais fichier est
+ * réparée — la preuve ne change pas, seule la mention du fichier était fausse —
+ * le contrat est validé, et un plan qui lit une cible absente de la page de
+ * découverte est refusé avant d'exécuter quoi que ce soit.
+ */
+function settlePlan(
+  plan: Plan,
+  context: PrContext,
+  config: Config,
+  runId: string
+) {
+  for (const repair of repairRequirementAttribution(plan, context)) {
+    logger.info(
+      {
+        from: repair.from,
+        runId,
+        scenario: repair.scenarioId,
+        to: repair.to,
+      },
+      "Requirement attribution repaired"
+    );
+  }
+  validatePlan(plan, context, config);
+}
 async function executePlan(
   result: RunResult,
   context: PrContext,
@@ -279,20 +327,18 @@ async function executePlan(
     PlanSchema,
     config.QA_PLAN_MAX_TOKENS,
     (candidate) => {
-      const refusals = writeEvidenceRefusals(candidate, policy);
-      // Même traitement pour une exigence sans témoin textuel : le planificateur
-      // reçoit le refus et dispose d'une tentative de correction, au lieu de
-      // faire échouer le run sur une citation recopiée de mémoire.
-      const messages = [
-        ...refusals.map((item) => `${item.error.message}. ${item.error.hint}`),
-        ...ungroundedPlanRefusals(candidate, context),
-      ];
+      // Le planificateur reçoit les refus et dispose d'une tentative de
+      // correction, au lieu de faire échouer le run sur une citation recopiée
+      // de mémoire ou attribuée au mauvais fichier.
+      const messages = planRefusals(candidate, policy, context);
       return messages.length
         ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
         : undefined;
     }
   );
-  validatePlan(result.plan, context, config);
+  // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
+  // change pas, seule la mention du fichier était fausse.
+  settlePlan(result.plan, context, config, result.id);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

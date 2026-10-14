@@ -12,9 +12,13 @@ import {
   locatorExpression,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
-import { QaError } from "../src/diagnostics.js";
+import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
+import {
+  repairRequirementAttribution,
+  ungroundedPlanRefusals,
+} from "../src/policy.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
 import type { Progress } from "../src/progress.js";
 import { saveReport } from "../src/report.js";
@@ -603,6 +607,90 @@ describe("runner false-green regressions", () => {
     // Deux tentatives de plan, donc deux réservations déposées avant chacune.
     expect(budget.reserves.length - before).toBe(2);
   }, 40_000);
+  it("repairs a requirement attributed to the wrong declared file", async () => {
+    const f = await setup();
+    const context = await new GitHub(f.config).context(PR_URL);
+    const contract = structuredClone(plan);
+    contract.scenarios[0]!.sourceFiles = ["src/form.ts", "src/legacy.tsx"];
+    contract.scenarios[0]!.requirements[0]!.sourceFile = "src/legacy.tsx";
+    const repairs = repairRequirementAttribution(contract, {
+      ...context,
+      files: [
+        ...context.files,
+        {
+          filename: "src/legacy.tsx",
+          patch: "- <p>Work in progress</p>",
+          status: "modified",
+        },
+      ],
+    });
+    expect(repairs).toEqual([
+      {
+        from: "src/legacy.tsx",
+        quote: "show('Welcome '+name)",
+        scenarioId: "welcome",
+        to: "src/form.ts",
+      },
+    ]);
+    expect(contract.scenarios[0]!.requirements[0]!.sourceFile).toBe(
+      "src/form.ts"
+    );
+  });
+  it("names where the quote lives, only among the files the PR changes", async () => {
+    const f = await setup();
+    const context = await new GitHub(f.config).context(PR_URL);
+    const contract = structuredClone(plan);
+    contract.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const inPr = ungroundedPlanRefusals(contract, {
+      ...context,
+      files: [
+        ...context.files,
+        {
+          filename: "src/app.tsx",
+          patch: "+ show('Welcome '+nom)",
+          status: "modified",
+        },
+      ],
+    });
+    expect(inPr[0]).toContain("No source witness for welcome: src/form.ts");
+    expect(inPr[0]).toContain("declare that file");
+    // Un témoin hors diff ne doit pas être proposé : le planificateur le
+    // déclarerait et la validation le refuserait, pour rien.
+    const outside = ungroundedPlanRefusals(contract, {
+      ...context,
+      context: [
+        {
+          content: "show('Welcome '+nom)",
+          path: "README.md",
+          ref: context.sha,
+        },
+      ],
+    });
+    expect(outside[0]).toContain("this PR does not change");
+    expect(outside[0]).not.toContain("declare that file");
+  });
+  it("names a target that never resolves, not one that is merely not actionable", () => {
+    const waiting = diagnose(
+      new Error(
+        "Canary action failed: Timeout 5000ms exceeded.\nCall log:\n  - waiting for locator('div[class*=\"place-items-center\"] p')"
+      )
+    );
+    expect(waiting.code).toBe("TARGET_NOT_FOUND");
+    expect(waiting.hint).toContain("kind hidden");
+    // Un élément trouvé mais inactionnable n'est pas une cible à corriger.
+    const actionable = diagnose(
+      new Error(
+        "Timeout 10000ms exceeded.\nCall log:\n  - locator resolved to <button>…\n  - element is not visible"
+      )
+    );
+    expect(actionable.code).toBe("QA_ERROR");
+    // Un événement attendu qui n'arrive pas parle de l'événement, pas d'un
+    // élément : la cible du clic a bien été trouvée.
+    const event = diagnose(
+      new Error('Timeout 10000ms exceeded while waiting for event "download"')
+    );
+    expect(event.code).toBe("QA_ERROR");
+  });
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();
     fakeBrowser();
