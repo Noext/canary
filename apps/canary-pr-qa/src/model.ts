@@ -3,7 +3,7 @@ import type { Config } from "./config.js";
 import { QaError, redact } from "./diagnostics.js";
 import { fetchSse, fetchText } from "./http.js";
 import { assertProvider, runModelConfig } from "./model-catalog.js";
-import { checkBudget, type RunScope, runScope } from "./run-scope.js";
+import { checkBudget, runScope } from "./run-scope.js";
 import { emptyChatStream, reduceChatStream } from "./sse.js";
 import { modelCalls, modelLatency, modelTokens, traced } from "./telemetry.js";
 
@@ -45,10 +45,14 @@ export const MODEL_RETRY_DELAYS_MS = [1000, 4000, 10_000];
  */
 export const MAX_MODEL_CALLS_PER_RUN = 10;
 
-/** Une reprise n'est permise que dans la limite configurée et du plafond d'appels. */
-function mayRetry(attempt: number, max: number, scope?: RunScope): boolean {
-  const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
-  return attempt < max && used + 1 <= MAX_MODEL_CALLS_PER_RUN;
+/**
+ * Une reprise n'est permise que dans la limite configurée et du plafond
+ * d'appels. `used` ne compte que les réponses déjà comptées et les reprises
+ * déjà déclenchées : l'échec courant et la reprise envisagée occupent deux
+ * créneaux de plus, sans quoi le plafond serait dépassé d'un appel.
+ */
+export function mayRetry(attempt: number, max: number, used: number): boolean {
+  return attempt < max && used + 2 <= MAX_MODEL_CALLS_PER_RUN;
 }
 
 /**
@@ -115,7 +119,7 @@ export class Model {
     let validation = "";
     let refused: T | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      this.reserve(messages, maxTokens);
+      this.claim(messages, maxTokens);
       const started = Date.now();
       const response = await traced(
         "model.json",
@@ -205,22 +209,38 @@ export class Model {
   }
 
   /**
-   * Réservation budgétaire d'une tentative : chaque essai — reprise comprise —
-   * est vérifié contre l'enveloppe du run avant d'être lancé.
+   * Ce qu'une tentative engage au pire cas : l'entrée comptée au caractère et
+   * la sortie maximale. Une connexion coupée a pu consommer ces tokens sans que
+   * l'endpoint ne les rapporte jamais.
    */
-  private reserve(
+  private reservation(
     messages: { content: string; role: string }[],
     maxTokens: number
-  ) {
+  ): { costUsd: number; tokens: number } {
     const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
     const inputCostBound =
       Buffer.byteLength(JSON.stringify(messages), "utf8") +
       64 * (messages.length + 1);
-    const reservedCost =
-      (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
-        maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
-      1_000_000;
-    checkBudget(maxTokens + reservedInput, reservedCost);
+    return {
+      costUsd:
+        (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
+          maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
+        1_000_000,
+      tokens: maxTokens + reservedInput,
+    };
+  }
+
+  /**
+   * Aucune tentative n'est lancée si l'enveloppe du run ne couvre pas son pire
+   * cas — y compris après le débit des tentatives perdues.
+   */
+  private claim(
+    messages: { content: string; role: string }[],
+    maxTokens: number
+  ): { costUsd: number; tokens: number } {
+    const reservation = this.reservation(messages, maxTokens);
+    checkBudget(reservation.tokens, reservation.costUsd);
+    return reservation;
   }
 
   /**
@@ -239,12 +259,22 @@ export class Model {
       } catch (error) {
         const code = transportCode(error);
         const scope = runScope.getStore();
-        if (!(code && mayRetry(attempt, max, scope))) {
+        const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
+        if (!(code && mayRetry(attempt, max, used))) {
           throw failedAttempt(error, code, attempt);
         }
-        // Chaque tentative réserve son enveloppe : une connexion coupée a pu
-        // consommer des tokens que l'endpoint ne nous rendra jamais.
-        this.reserve(messages, maxTokens);
+        // Une connexion coupée a pu consommer des tokens que l'endpoint ne nous
+        // rendra jamais : l'échec est débité au pire cas avant que la reprise
+        // ne réserve son propre engagement, sinon plusieurs tentatives
+        // payantes passeraient contre un solde inchangé. Le run est marqué
+        // estimé : ce débit n'est pas un usage rapporté par l'endpoint.
+        const lost = this.reservation(messages, maxTokens);
+        if (scope) {
+          scope.tokens += lost.tokens;
+          scope.costUsd += lost.costUsd;
+          scope.estimated = true;
+        }
+        this.claim(messages, maxTokens);
         const wait =
           (MODEL_RETRY_DELAYS_MS[
             Math.min(attempt, MODEL_RETRY_DELAYS_MS.length - 1)

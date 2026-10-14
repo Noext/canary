@@ -14,7 +14,7 @@ import {
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
-import { transportCode } from "../src/model.js";
+import { mayRetry, transportCode } from "../src/model.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
 import { saveReport } from "../src/report.js";
 import { runScope } from "../src/run-scope.js";
@@ -525,6 +525,34 @@ describe("runner false-green regressions", () => {
     expect(result.usage?.retries).toBe(1);
     expect(result.outcome).toBe("passed");
     expect(f.modelRequests).toHaveLength(2);
+  }, 40_000);
+  it("refuses a retry the current failure and the retry would push over the cap", () => {
+    // `used` compte les réponses et les reprises déjà faites : l'échec courant
+    // et la reprise envisagée occupent deux créneaux de plus.
+    expect(mayRetry(0, 5, 8)).toBe(true);
+    expect(mayRetry(0, 5, 9)).toBe(false);
+    expect(mayRetry(5, 5, 0)).toBe(false);
+  });
+  it("debits the lost attempt before allowing its retry", async () => {
+    const env = { QA_MODEL_RETRIES: "1", QA_PLAN_MAX_TOKENS: "5000" };
+    const reference = await setup({ env: { QA_PLAN_MAX_TOKENS: "5000" } });
+    fakeBrowser();
+    const baseline = await runQa(
+      { prUrl: PR_URL, previewUrl: reference.baseUrl },
+      reference.config
+    );
+    const lost = await setup({ env, modelResets: 1 });
+    fakeBrowser();
+    const retried = await runQa(
+      { prUrl: PR_URL, previewUrl: lost.baseUrl },
+      lost.config
+    );
+    expect(retried.usage?.retries).toBe(1);
+    expect(retried.outcome).toBe("passed");
+    // La tentative perdue est débitée au pire cas — au moins la sortie maximale
+    // réservée — avant que la reprise ne réserve son propre engagement.
+    const delta = (retried.usage?.tokens ?? 0) - (baseline.usage?.tokens ?? 0);
+    expect(delta).toBeGreaterThanOrEqual(5000);
   }, 40_000);
   it("reserves the budget of every attempt, retries included", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
