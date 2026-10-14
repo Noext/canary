@@ -103,6 +103,12 @@ async function performStep(
  * qui disparaît entre la première lecture et cette relecture n'efface pas la
  * valeur déjà lue : c'est une régression réelle, enregistrée avec cette valeur
  * plutôt qu'annoncée comme une cible « jamais apparue ».
+ *
+ * Cette valeur ne remonte jamais dans `result.error` : le message est repris par
+ * `reportMarkdown` et publié en commentaire de PR dès que la publication est
+ * active, alors qu'une valeur lue dans la page peut venir d'une session
+ * authentifiée. Elle reste dans l'assertion, c'est-à-dire dans l'artefact
+ * d'assertion servi derrière l'autorisation du tableau de bord.
  */
 async function readPersisted(
   sessionId: string,
@@ -139,7 +145,7 @@ async function readPersisted(
     });
     result.outcome = "failed";
     result.diagnostic = diagnostic;
-    result.error = `Assertion ${assertion.id} failed: the value read before the reload (${JSON.stringify(observation.actual)}) is no longer present in the target after it — persistence is not demonstrated — ${diagnostic.message}`;
+    result.error = `Assertion ${assertion.id} failed: the value observed before the reload is no longer present in the target after it — persistence is not demonstrated — ${diagnostic.message}`;
     return { handled: true };
   }
 }

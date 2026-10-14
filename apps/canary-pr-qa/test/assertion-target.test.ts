@@ -1,7 +1,13 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
+import { reportMarkdown } from "../src/report.js";
 import { runQa } from "../src/runner.js";
 import { fixture, PR_URL, plan } from "./fixture.js";
+
+/** Valeur reconnaissable lue dans la page : elle doit rester dans l'évidence. */
+const SENTINEL = "SENTINEL-SECRET-42";
 
 /**
  * Le délai réel d'une assertion dont la cible ne résout jamais : Playwright
@@ -45,8 +51,10 @@ async function runFailingStep(step: string) {
  * Le cas `persisted` : la lecture d'avant rechargement aboutit, mais la cible
  * disparaît après le rechargement. La sonde `persistence-*` lève alors le même
  * délai de cible introuvable ; le relevé déjà obtenu ne doit pas être perdu.
+ * Le run publie (le commentaire part dans `f.outgoing`), comme une exécution
+ * automatique de webhook.
  */
-async function runMissingPersistedTarget() {
+async function runMissingPersistedTarget(observed = "Welcome Ada") {
   const persisted = structuredClone(plan);
   persisted.scenarios[0]!.assertions[0]!.verification = "persisted";
   const f = await fixture({ plans: [persisted] });
@@ -60,12 +68,16 @@ async function runMissingPersistedTarget() {
       return {
         url: "http://fixture/",
         snapshot: "textbox Name, button Save",
-        actual: label.startsWith("baseline-") ? "Welcome" : "Welcome Ada",
+        actual: label.startsWith("baseline-") ? "Welcome" : observed,
       };
     }
   );
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
-  return runQa({ prUrl: PR_URL, previewUrl: f.baseUrl }, f.config);
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  return { result, f };
 }
 
 it("fails the run when an assertion target never resolves", async () => {
@@ -88,7 +100,7 @@ it("fails the run when an assertion target never resolves", async () => {
 });
 
 it("keeps the pre-reload value when a persisted target disappears", async () => {
-  const result = await runMissingPersistedTarget();
+  const { result } = await runMissingPersistedTarget();
   expect(result.outcome).toBe("failed");
   const scenario = result.scenarios[0];
   expect(scenario?.outcome).toBe("failed");
@@ -103,6 +115,38 @@ it("keeps the pre-reload value when a persisted target disappears", async () => 
     baseline: "Welcome",
   });
   expect(scenario?.error).toContain("persistence");
+});
+
+/**
+ * Le commentaire de PR est public sur un dépôt, l'artefact ne l'est pas : une
+ * valeur lue dans la page ne doit exister que dans l'assertion enregistrée,
+ * jamais dans le message repris par `reportMarkdown` puis publié.
+ */
+it("keeps an observed value out of the error and the published comment", async () => {
+  const { result, f } = await runMissingPersistedTarget(SENTINEL);
+  const scenario = result.scenarios[0];
+  // L'évidence d'assertion garde la valeur : c'est la preuve de la régression.
+  expect(scenario?.assertions).toHaveLength(1);
+  expect(scenario?.assertions[0]?.actual).toBe(SENTINEL);
+  const stored = JSON.parse(
+    await readFile(join(f.dataDir, result.id, "result.json"), "utf8")
+  );
+  expect(stored.scenarios[0].assertions[0].actual).toBe(SENTINEL);
+  // Le corps publié existe bien, et aucune surface publiée ne recopie la valeur.
+  const published = f.outgoing.find((request) =>
+    request.path.endsWith("/comments")
+  )?.payload.body;
+  expect(typeof published).toBe("string");
+  expect(published).toContain("persistence");
+  for (const surface of [
+    scenario?.error,
+    scenario?.diagnostic?.message,
+    scenario?.diagnostic?.hint,
+    reportMarkdown(result),
+    published,
+  ]) {
+    expect(surface).not.toContain(SENTINEL);
+  }
 });
 
 it("keeps a click whose target never resolves blocked", async () => {
