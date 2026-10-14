@@ -21,6 +21,8 @@ export interface ProgressEvent {
   durationMs?: number;
   outcome?: string;
   phase: Phase;
+  /** Reprise d'un appel modèle après une coupure de transport. */
+  retry?: { attempt: number; max: number; code: string };
   scenarioId?: string;
   step?: number;
 }

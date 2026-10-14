@@ -12,11 +12,14 @@ import {
   locatorExpression,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
+import { QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
+import { mayRetry, transportCode } from "../src/model.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
+import type { Progress } from "../src/progress.js";
 import { saveReport } from "../src/report.js";
-import { runScope } from "../src/run-scope.js";
-import { runQa } from "../src/runner.js";
+import { type RunScope, runScope } from "../src/run-scope.js";
+import { relayModelRetries, runQa } from "../src/runner.js";
 import {
   ActionSchema,
   PlanSchema,
@@ -25,6 +28,24 @@ import {
 import { BASE_SHA, fixture, PR_URL, plan, SHA } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
+
+/**
+ * Les réservations budgétaires déposées avant chaque tentative modèle : le
+ * wrapper réel est conservé, seul l'appel est observé.
+ */
+const budget = vi.hoisted(() => ({ reserves: [] as number[] }));
+vi.mock("../src/run-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/run-scope.js")>();
+  return {
+    ...actual,
+    checkBudget: (tokens = 0, costUsd = 0) => {
+      if (tokens > 0) {
+        budget.reserves.push(tokens);
+      }
+      return actual.checkBudget(tokens, costUsd);
+    },
+  };
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(close.splice(0).map((fn) => fn()));
@@ -419,6 +440,169 @@ describe("runner false-green regressions", () => {
         .state
     ).toBe("error");
   });
+  it("retries a model call cut by the transport, and counts it", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // La première proposition de plan est coupée avant toute réponse, donc seule
+    // la seconde — la reprise — est enregistrée par le fixture.
+    expect(f.modelRequests).toHaveLength(1);
+    expect(result.usage?.retries).toBe(1);
+    expect(result.outcome).toBe("passed");
+    // La reprise est publiée pendant l'attente : le tableau de bord ne doit pas
+    // paraître figé, et l'instabilité reste lisible dans l'historique.
+    const events = await readFile(
+      join(f.dataDir, result.id, "events.jsonl"),
+      "utf8"
+    );
+    expect(events).toContain('"retry":{"attempt":1,"max":1,"code":');
+  }, 40_000);
+  it("stops after the configured retries and names the transport failure", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "2" }, modelResets: 9 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toMatch(/ECONNRESET|UND_ERR_SOCKET/);
+    expect(result.error).toContain("(after 2 retries)");
+    expect(result.usage?.retries).toBe(2);
+    expect(result.usage?.calls).toBe(0);
+    expect(f.modelRequests).toHaveLength(0);
+  }, 60_000);
+  it("never spends the transport budget on a semantic refusal", async () => {
+    const ungrounded = structuredClone(plan);
+    ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: { QA_MODEL_RETRIES: "3" },
+      plans: [ungrounded, plan],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Plan refusé puis corrigé : deux appels, et aucune reprise de transport.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.usage?.retries).toBe(0);
+    expect(result.outcome).toBe("passed");
+  });
+  it("classes what may be retried and what may not", () => {
+    expect(
+      transportCode(
+        Object.assign(new Error("terminated"), {
+          cause: { code: "ECONNRESET" },
+        })
+      )
+    ).toBe("ECONNRESET");
+    expect(transportCode(new Error("socket hang up"))).toBe("UND_ERR_SOCKET");
+    // Nos normalisations de transport : délai du client et flux tronqué.
+    expect(transportCode(new QaError("TIMEOUT", "x", "y"))).toBe("TIMEOUT");
+    expect(transportCode(new QaError("MODEL_STREAM_TRUNCATED", "x", "y"))).toBe(
+      "MODEL_STREAM_TRUNCATED"
+    );
+    // Déterministes, donc jamais rejoués.
+    expect(
+      transportCode(new QaError("MODEL_STREAM_ERROR", "x", "y"))
+    ).toBeUndefined();
+    expect(
+      transportCode(new QaError("REQUIREMENT_UNGROUNDED", "x", "y"))
+    ).toBeUndefined();
+  });
+  it("retries a stream closed without its terminal marker", async () => {
+    const f = await setup({
+      env: { QA_MODEL_RETRIES: "1" },
+      modelTruncations: 1,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.usage?.retries).toBe(1);
+    expect(result.outcome).toBe("passed");
+    expect(f.modelRequests).toHaveLength(2);
+  }, 40_000);
+  it("refuses a retry the current failure and the retry would push over the cap", () => {
+    // `used` compte les réponses et les reprises déjà faites : l'échec courant
+    // et la reprise envisagée occupent deux créneaux de plus.
+    expect(mayRetry(0, 5, 8)).toBe(true);
+    expect(mayRetry(0, 5, 9)).toBe(false);
+    expect(mayRetry(5, 5, 0)).toBe(false);
+  });
+  it("debits the lost attempt before allowing its retry", async () => {
+    const env = { QA_MODEL_RETRIES: "1", QA_PLAN_MAX_TOKENS: "5000" };
+    const reference = await setup({ env: { QA_PLAN_MAX_TOKENS: "5000" } });
+    fakeBrowser();
+    const baseline = await runQa(
+      { prUrl: PR_URL, previewUrl: reference.baseUrl },
+      reference.config
+    );
+    const lost = await setup({ env, modelResets: 1 });
+    fakeBrowser();
+    const retried = await runQa(
+      { prUrl: PR_URL, previewUrl: lost.baseUrl },
+      lost.config
+    );
+    expect(retried.usage?.retries).toBe(1);
+    expect(retried.outcome).toBe("passed");
+    // La tentative perdue est débitée au pire cas — au moins la sortie maximale
+    // réservée — avant que la reprise ne réserve son propre engagement.
+    const delta = (retried.usage?.tokens ?? 0) - (baseline.usage?.tokens ?? 0);
+    expect(delta).toBeGreaterThanOrEqual(5000);
+  }, 40_000);
+  it("debits the last attempt too when no retry follows", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "0" }, modelResets: 1 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toMatch(/ECONNRESET|UND_ERR_SOCKET/);
+    expect(result.usage?.retries).toBe(0);
+    // Aucune reprise ne suit, mais la tentative perdue est quand même débitée :
+    // elle a pu consommer une génération entière.
+    expect(result.usage?.tokens ?? 0).toBeGreaterThan(0);
+    expect(result.usage?.estimated).toBe(true);
+  }, 40_000);
+  it("never lets a retry progress write take the worker down", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    const scope: RunScope = {
+      calls: 0,
+      costUsd: 0,
+      id: "retry-progress",
+      maxCostUsd: 1,
+      maxTokens: 1000,
+      signal: AbortSignal.timeout(1000),
+      tokens: 0,
+    };
+    relayModelRetries(scope, {
+      record: () => Promise.reject(new Error("ENOSPC")),
+    } as unknown as Progress);
+    scope.onRetry?.({ attempt: 1, code: "ECONNRESET", max: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.off("unhandledRejection", onRejection);
+    expect(rejections).toEqual([]);
+  });
+  it("reserves the budget of every attempt, retries included", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
+    fakeBrowser();
+    const before = budget.reserves.length;
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    // Deux tentatives de plan, donc deux réservations déposées avant chacune.
+    expect(budget.reserves.length - before).toBe(2);
+  }, 40_000);
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();
     fakeBrowser();

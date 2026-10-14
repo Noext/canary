@@ -176,7 +176,13 @@ describe("RunsView history", () => {
   it("lists each run with its link, commit, model, state and outcome", async () => {
     wire.handlers.set("/runs", () => [
       job(),
-      job({ id: otherRunId, outcome: "passed", pr: 2, status: "completed" }),
+      job({
+        id: otherRunId,
+        outcome: "passed",
+        pr: 2,
+        status: "completed",
+        usage: { retries: 2 },
+      }),
     ]);
     render(<Harness />);
 
@@ -190,6 +196,10 @@ describe("RunsView history", () => {
     );
     expect(within(element("runs")).getByText("En attente")).toBeVisible();
     expect(within(element("runs")).getByText("Réussi")).toBeVisible();
+    // La colonne des reprises affiche le compteur, et un tiret sans reprise.
+    expect(element("historyTable").textContent).toContain("Reprises");
+    const row = within(element("runs")).getAllByRole("row")[1];
+    expect(within(row as HTMLElement).getByText("2")).toBeVisible();
     expect(element("historyTable")).not.toHaveAttribute("hidden");
     expect(element("historyEmpty")).toHaveAttribute("hidden");
   });

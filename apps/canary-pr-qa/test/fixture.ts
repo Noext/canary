@@ -174,6 +174,12 @@ export async function fixture(
     unnamedStatus?: boolean;
     models?: string[];
     modelsStatus?: number;
+    /** Nombre de propositions de plan coupées net, avant toute réponse. */
+    modelResets?: number;
+    /** Nombre de flux de plan fermés sans marqueur terminal. */
+    modelTruncations?: number;
+    /** Variables d'environnement ajoutées à la configuration du fixture. */
+    env?: Record<string, string>;
   } = {}
 ) {
   const outgoing: { path: string; payload: Record<string, unknown> }[] = [];
@@ -183,6 +189,8 @@ export async function fixture(
 
   let prReads = 0;
   let planRequests = 0;
+  let modelResets = options.modelResets ?? 0;
+  let modelTruncations = options.modelTruncations ?? 0;
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) =>
       json(res, { error: String(error) }, 500)
@@ -351,6 +359,13 @@ export async function fixture(
       return;
     }
     if (path === "/v1/chat/completions") {
+      if (modelResets > 0) {
+        modelResets -= 1;
+        // Une socket détruite avant toute réponse : c'est le ECONNRESET réel,
+        // celui qui laisse "terminated" côté client.
+        req.socket.destroy();
+        return;
+      }
       const payload = await body(req);
       modelRequests.push(payload);
       const messages = payload.messages as { role: string; content: string }[];
@@ -386,6 +401,17 @@ export async function fixture(
       }
       const text = JSON.stringify(value);
       if (payload.stream === true) {
+        if (modelTruncations > 0) {
+          modelTruncations -= 1;
+          // Flux fermé proprement, sans marqueur terminal : c'est la coupure que
+          // le client refuse au lieu d'accepter un plan tronqué.
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: { content: "{" }, index: 0 }] })}\n\n`
+          );
+          res.end();
+          return;
+        }
         sse(res, text);
         return;
       }
@@ -461,6 +487,7 @@ export async function fixture(
     QA_DATA_DIR: dataDir,
     PREVIEW_ALLOWED_HOSTS: `127.0.0.1:${address.port}`,
     QA_API_TOKEN: "fixture-api-token-123456789012345",
+    ...options.env,
   });
   return {
     config,

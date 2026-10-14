@@ -137,6 +137,7 @@ export function RunsView() {
                 <Th>{copy.table.model}</Th>
                 <Th>{copy.table.status}</Th>
                 <Th>{copy.table.result}</Th>
+                <Th>{copy.table.retries}</Th>
                 <Th>{copy.table.created}</Th>
               </tr>
             </thead>
@@ -170,6 +171,9 @@ export function RunsView() {
                     <Pill tone={toneFor(run.outcome ?? "")}>
                       {run.outcome ? outcomeLabel(run.outcome) : "—"}
                     </Pill>
+                  </td>
+                  <td className={cellClass}>
+                    {run.usage?.retries ? String(run.usage.retries) : "—"}
                   </td>
                   <td className={cellClass}>{formatDate(run.created_at)}</td>
                 </tr>

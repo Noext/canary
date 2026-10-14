@@ -17,6 +17,84 @@ interface ModelResponse {
   };
 }
 
+/**
+ * Codes rejouables : la connexion meurt avant tout contenu utile, donc la
+ * reprise est sans effet de bord et sans double facturation. Les deux derniers
+ * sont nos normalisations de transport — `TIMEOUT` (délai du client modèle,
+ * issu d'un `AbortSignal.timeout`) et `MODEL_STREAM_TRUNCATED` (flux fermé
+ * proprement avant `[DONE]`). Tout autre code échoue sans reprise : un refus
+ * sémantique (JSON, schéma, preuve) et une erreur rapportée par l'endpoint
+ * (`MODEL_STREAM_ERROR`) sont déterministes, pas transitoires.
+ */
+const TRANSPORT_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "TIMEOUT",
+  "MODEL_STREAM_TRUNCATED",
+]);
+
+/** Délais entre deux reprises ; le nombre de reprises vient de QA_MODEL_RETRIES. */
+export const MODEL_RETRY_DELAYS_MS = [1000, 4000, 10_000];
+
+/**
+ * Plafond absolu d'appels modèle par run, reprises de transport et reprise
+ * sémantique confondues : une valeur généreuse de QA_MODEL_RETRIES ne peut pas
+ * faire exploser la dépense d'un run.
+ */
+export const MAX_MODEL_CALLS_PER_RUN = 10;
+
+/**
+ * Une reprise n'est permise que dans la limite configurée et du plafond
+ * d'appels. `used` ne compte que les réponses déjà comptées et les reprises
+ * déjà déclenchées : l'échec courant et la reprise envisagée occupent deux
+ * créneaux de plus, sans quoi le plafond serait dépassé d'un appel.
+ */
+export function mayRetry(attempt: number, max: number, used: number): boolean {
+  return attempt < max && used + 2 <= MAX_MODEL_CALLS_PER_RUN;
+}
+
+/**
+ * L'erreur rendue à l'opérateur : telle quelle quand aucune reprise n'a eu lieu,
+ * enrichie du nombre de reprises épuisées sinon — le code reste celui du
+ * transport, pour que la cause reste lisible.
+ */
+function failedAttempt(
+  error: unknown,
+  code: string | undefined,
+  attempt: number
+): unknown {
+  if (attempt === 0 || !code) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new QaError(
+    code,
+    `${message} (after ${attempt} retries)`,
+    "The model endpoint reset the connection; the run retried with backoff before giving up. Check the endpoint and its proxy, then relaunch."
+  );
+}
+
+/** Classe une erreur : code rejouable, ou `undefined` (échec définitif). */
+export function transportCode(error: unknown): string | undefined {
+  for (const candidate of [
+    error,
+    (error as { cause?: { code?: string } } | undefined)?.cause,
+  ]) {
+    const code = (candidate as { code?: unknown } | undefined)?.code;
+    if (typeof code === "string" && TRANSPORT_CODES.has(code)) {
+      return code;
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  // Node signale une socket détruite en plein échange par « terminated » ou
+  // « socket hang up », parfois sans code : c'est la même classe rejouable.
+  return /terminated|socket hang up/i.test(message)
+    ? "UND_ERR_SOCKET"
+    : undefined;
+}
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -41,15 +119,7 @@ export class Model {
     let validation = "";
     let refused: T | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
-      const inputCostBound =
-        Buffer.byteLength(JSON.stringify(messages), "utf8") +
-        64 * (messages.length + 1);
-      const reservedCost =
-        (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
-          maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
-        1_000_000;
-      checkBudget(maxTokens + reservedInput, reservedCost);
+      this.claim(messages, maxTokens);
       const started = Date.now();
       const response = await traced(
         "model.json",
@@ -57,7 +127,7 @@ export class Model {
           model: this.config.OPENAI_MODEL,
           runId: runScope.getStore()?.id ?? "doctor",
         },
-        () => this.completion(messages, maxTokens)
+        () => this.completionWithRetries(messages, maxTokens)
       );
       modelLatency.observe(
         { model: this.config.OPENAI_MODEL },
@@ -136,6 +206,105 @@ export class Model {
       "AI returned invalid structured output twice",
       `Validation: ${validation}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
     );
+  }
+
+  /**
+   * Ce qu'une tentative engage au pire cas : l'entrée comptée au caractère et
+   * la sortie maximale. Une connexion coupée a pu consommer ces tokens sans que
+   * l'endpoint ne les rapporte jamais.
+   */
+  private reservation(
+    messages: { content: string; role: string }[],
+    maxTokens: number
+  ): { costUsd: number; tokens: number } {
+    const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
+    const inputCostBound =
+      Buffer.byteLength(JSON.stringify(messages), "utf8") +
+      64 * (messages.length + 1);
+    return {
+      costUsd:
+        (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
+          maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
+        1_000_000,
+      tokens: maxTokens + reservedInput,
+    };
+  }
+
+  /**
+   * Aucune tentative n'est lancée si l'enveloppe du run ne couvre pas son pire
+   * cas — y compris après le débit des tentatives perdues.
+   */
+  private claim(
+    messages: { content: string; role: string }[],
+    maxTokens: number
+  ): { costUsd: number; tokens: number } {
+    const reservation = this.reservation(messages, maxTokens);
+    checkBudget(reservation.tokens, reservation.costUsd);
+    return reservation;
+  }
+
+  /**
+   * Un appel modèle rejoué sur place quand le transport casse : même prompt,
+   * même contexte, aucun effet de bord. Le contenu partiel d'un flux interrompu
+   * est jeté — un flux troué n'est jamais accepté comme plan.
+   */
+  private async completionWithRetries(
+    messages: { content: string; role: string }[],
+    maxTokens: number
+  ): Promise<ModelResponse> {
+    const max = this.config.QA_MODEL_RETRIES;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.completion(messages, maxTokens);
+      } catch (error) {
+        const code = transportCode(error);
+        if (!code) {
+          throw error;
+        }
+        const scope = runScope.getStore();
+        const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
+        // Une connexion coupée a pu consommer des tokens que l'endpoint ne nous
+        // rendra jamais : la tentative est débitée au pire cas, y compris
+        // quand elle est la dernière — reprises épuisées ou plafond d'appels
+        // atteint. Le run passe en estimé : ce débit n'est pas un usage
+        // rapporté par l'endpoint.
+        const lost = this.reservation(messages, maxTokens);
+        if (scope) {
+          scope.tokens += lost.tokens;
+          scope.costUsd += lost.costUsd;
+          scope.estimated = true;
+        }
+        if (!mayRetry(attempt, max, used)) {
+          throw failedAttempt(error, code, attempt);
+        }
+        this.claim(messages, maxTokens);
+        const wait =
+          (MODEL_RETRY_DELAYS_MS[
+            Math.min(attempt, MODEL_RETRY_DELAYS_MS.length - 1)
+          ] ?? 10_000) + Math.floor(Math.random() * 250);
+        if (scope) {
+          scope.retries = (scope.retries ?? 0) + 1;
+          scope.onRetry?.({ attempt: attempt + 1, max, code });
+        }
+        await this.pause(wait);
+      }
+    }
+  }
+
+  /** Attente bornée qui respecte l'annulation du run. */
+  private async pause(ms: number) {
+    const signal = runScope.getStore()?.signal;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        },
+        { once: true }
+      );
+    });
   }
 
   /**

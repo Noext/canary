@@ -297,5 +297,7 @@ export interface RunResult {
     model?: string;
     estimated?: boolean;
     pricingConfigured?: boolean;
+    /** Reprises de transport effectuées pendant les appels modèle du run. */
+    retries?: number;
   };
 }

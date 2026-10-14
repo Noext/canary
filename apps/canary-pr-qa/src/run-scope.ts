@@ -7,7 +7,15 @@ export interface RunScope {
   id: string;
   maxCostUsd: number;
   maxTokens: number;
+  /** Signalé avant chaque attente de reprise, pour que le run reste lisible. */
+  onRetry?: (info: { attempt: number; max: number; code: string }) => void;
   previewSha?: string;
+  /**
+   * Reprises de transport déjà effectuées sur les appels modèle du run. Compté
+   * à part de `calls`, qui ne compte que les réponses reçues : un appel coupé
+   * avant tout contenu n'incrémente pas `calls`.
+   */
+  retries?: number;
   signal: AbortSignal;
   tokens: number;
   verifyOwnership?: () => Promise<void>;
