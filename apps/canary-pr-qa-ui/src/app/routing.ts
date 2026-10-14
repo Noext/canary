@@ -1,46 +1,52 @@
-import { isSettingsSection, type SettingsSection } from "@/i18n";
+import { isSettingsSection, type SettingsSection, type ViewName } from "@/i18n";
 
 /**
- * The dedicated screen a URL points at: the detail of one automatic attempt, or
- * the detail of one run. Both are addressable so a support conversation can
- * quote one link instead of describing a path through the interface.
+ * L'écran détaillé qu'une adresse nomme : le détail d'une tentative automatique,
+ * ou celui d'un test. Les deux sont adressables, pour qu'une conversation de
+ * support cite un lien au lieu de décrire un chemin à travers l'interface.
  */
 export type ScreenRoute =
   | { id: string; kind: "automatic" }
   | { id: string; kind: "run" };
 
 /**
- * Hash bodies this dashboard writes. `legacy` is the bare `#<uuid>` link the
- * history has always used to select a run in place: it keeps working, and it is
- * deliberately not the same link as the dedicated `run=` screen.
+ * Une adresse par écran. L'historique et la page de nouveau test vivent dans le
+ * chemin (`/history`, `/new-test`), donc un rechargement ou un partage n'a pas
+ * besoin du fragment ; les écrans qui citent un identifiant gardent un hash, que
+ * le serveur n'a jamais eu à servir. Le `kind` d'une route est le nom de la vue
+ * qu'elle affiche : la liste des écrans et celle des adresses ne peuvent pas
+ * diverger sans erreur de compilation.
  */
-export type DeepLink =
-  | ScreenRoute
-  | { id: string; kind: "legacy" }
-  | { id: SettingsSection; kind: "settings" };
+export type Route =
+  | { kind: "home" }
+  | { kind: "new" }
+  /** L'historique ; `runId` est le test que nomme l'ancien lien `#<uuid>`. */
+  | { kind: "runs"; runId?: string }
+  | { kind: "settings"; section: SettingsSection }
+  | ScreenRoute;
 
+/**
+ * Ce pour quoi un chargement a été servi : l'écran que son adresse nomme, et les
+ * charges utiles qui l'accompagnaient.
+ */
 export interface InitialRoute {
   github?: string;
-  /** Legacy `#<uuid>` link, still honoured: the runs view selects this run. */
-  runId?: string;
-  /** Dedicated screen the URL asked for, when it named one. */
-  screen?: ScreenRoute;
-  /** Settings page the URL asked for, when it named one. */
-  section?: SettingsSection;
+  /** L'écran que l'adresse demande ; `home` quand elle n'en nomme aucun. */
+  route: Route;
   setupCode?: string;
 }
 
 const RUN_ID = /^[0-9a-f-]{36}$/;
-/** Delivery ids are opaque; this only bounds what may travel in a path segment. */
+/** Les identifiants de tentative sont opaques ; ceci borne le hash. */
 const DELIVERY_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
-/** `run=<uuid>` and `automatic=<id>`; anything else is not a screen link. */
+/** `run=<uuid>` et `automatic=<id>` ; rien d'autre n'est un lien d'écran. */
 function screenFromHash(hash: string): ScreenRoute | undefined {
   const value = (prefix: string) => {
     try {
       return decodeURIComponent(hash.slice(prefix.length));
     } catch {
-      // A malformed escape is not a link this dashboard ever wrote.
+      // Un échappement malformé n'est pas un lien que ce dashboard écrit.
       return;
     }
   };
@@ -55,7 +61,7 @@ function screenFromHash(hash: string): ScreenRoute | undefined {
   return;
 }
 
-/** `settings=<id>`; a section this build does not know is not a link. */
+/** `settings=<id>` ; une page que ce build ne connaît pas n'est pas un lien. */
 function sectionFromHash(hash: string): SettingsSection | undefined {
   if (!hash.startsWith("settings=")) {
     return;
@@ -64,64 +70,204 @@ function sectionFromHash(hash: string): SettingsSection | undefined {
     const id = decodeURIComponent(hash.slice("settings=".length));
     return isSettingsSection(id) ? id : undefined;
   } catch {
-    // A malformed escape is not a link this dashboard ever wrote.
+    // Un échappement malformé n'est pas un lien que ce dashboard écrit.
     return;
   }
 }
 
 /**
- * Reads the URL once, at load. A link this dashboard wrote stays in the URL, so
- * reloading a shared `#automatic=<id>`, `#run=<uuid>` or `#settings=<section>`
- * reopens the same screen instead of dropping it on the first of two refreshes.
- * Only the payloads that must not be replayed — a temporary setup code, the
- * GitHub callback — are erased from the address bar.
+ * L'écran qu'un chemin nomme. Le serveur sert ce dashboard pour `/`, `/history`
+ * et `/new-test`, et pour rien d'autre : tout autre chemin (une adresse à moitié
+ * tapée, un ancien marque-page) est l'accueil, et la barre d'adresse est corrigée
+ * en conséquence.
  */
-export function readInitialRoute(): InitialRoute {
+function routeFromPath(pathname: string): Route {
+  if (pathname === "/history") {
+    return { kind: "runs" };
+  }
+  if (pathname === "/new-test") {
+    return { kind: "new" };
+  }
+  return { kind: "home" };
+}
+
+/**
+ * Lit l'adresse telle qu'elle est, sans y toucher. L'écran est le hash quand il
+ * en nomme un — la seule partie qui puisse citer un identifiant — et le chemin
+ * sinon : le serveur ne sert ce document que pour les chemins qu'il connaît.
+ */
+function parseAddress(): {
+  github?: string;
+  hashNamesScreen: boolean;
+  route: Route;
+  setupCode?: string;
+} {
   const hash = window.location.hash.replace(/^#/, "");
   const params = new URLSearchParams(window.location.search);
-  const route: InitialRoute = {};
   const screen = screenFromHash(hash);
   const section = sectionFromHash(hash);
-  // A bare `#<uuid>` is the legacy run link, written by `openRun`; it is kept
-  // like the screen links so a refresh keeps the run the history selected.
-  let keepHash = false;
+  const legacyRun = !(screen || section) && RUN_ID.test(hash);
+  let route: Route = routeFromPath(window.location.pathname);
   if (screen) {
-    route.screen = screen;
-    keepHash = true;
+    route = screen;
   } else if (section) {
-    route.section = section;
-    keepHash = true;
-  } else if (RUN_ID.test(hash)) {
-    route.runId = hash;
-    keepHash = true;
-  } else if (hash.startsWith("setup=")) {
-    route.setupCode = hash.slice("setup=".length);
+    route = { kind: "settings", section };
+  } else if (legacyRun) {
+    route = { kind: "runs", runId: hash };
   }
-  const github = params.get("github");
-  if (github) {
-    route.github = github;
+  return {
+    github: params.get("github") ?? undefined,
+    hashNamesScreen: Boolean(screen || section || legacyRun),
+    route,
+    setupCode: hash.startsWith("setup=")
+      ? hash.slice("setup=".length)
+      : undefined,
+  };
+}
+
+/**
+ * La vue qu'une adresse affiche : le `kind` d'une route est le nom de son écran,
+ * donc une route ajoutée sans vue correspondante ne compile pas.
+ */
+export function viewOf(route: Route): ViewName {
+  return route.kind;
+}
+
+/**
+ * Preuve de compilation qu'une union est entièrement traitée : un écran ajouté
+ * sans adresse ne compile pas, au lieu de retomber silencieusement sur l'accueil.
+ */
+function unreachable(value: never): never {
+  throw new Error(`Écran sans adresse : ${JSON.stringify(value)}`);
+}
+
+/**
+ * Le chemin et le hash qu'un écran occupe. Les listes n'utilisent que le chemin,
+ * pour qu'un rechargement ou un partage n'ait pas besoin du fragment ; les écrans
+ * détaillés gardent `/` en chemin et citent leur identifiant dans le hash, comme
+ * ils l'ont toujours fait.
+ */
+function addressParts(route: Route): { hash: string; path: string } {
+  switch (route.kind) {
+    case "home":
+      return { hash: "", path: "/" };
+    case "new":
+      return { hash: "", path: "/new-test" };
+    case "runs":
+      return route.runId
+        ? { hash: `#${route.runId}`, path: "/" }
+        : { hash: "", path: "/history" };
+    case "settings":
+      return { hash: `#settings=${route.section}`, path: "/" };
+    case "run":
+      return { hash: `#run=${route.id}`, path: "/" };
+    case "automatic":
+      return { hash: `#automatic=${route.id}`, path: "/" };
+    default:
+      return unreachable(route);
   }
-  if (hash || github) {
+}
+
+/** L'adresse d'un écran, absolue dans le document. */
+export function routeUrl(route: Route): string {
+  const { hash, path } = addressParts(route);
+  return `${path}${hash}`;
+}
+
+/**
+ * L'adresse d'une vue visible. `current` porte l'identifiant des écrans
+ * détaillés : la vue le consomme à l'ouverture, donc l'état ne le garde plus,
+ * mais l'adresse par laquelle il est arrivé ne doit pas être perdue.
+ */
+export function addressFor(
+  view: ViewName,
+  section: SettingsSection,
+  current: Route
+): Route {
+  switch (view) {
+    case "home":
+      return { kind: "home" };
+    case "new":
+      return { kind: "new" };
+    case "runs":
+      return current.kind === "runs" && current.runId
+        ? current
+        : { kind: "runs" };
+    case "settings":
+      return { kind: "settings", section };
+    // Un écran détaillé garde le lien par lequel il a été ouvert.
+    case "run":
+    case "automatic":
+      return current;
+    default:
+      return unreachable(view);
+  }
+}
+
+/** L'adresse telle que la barre la porte, requête et hash compris. */
+function currentUrl(): string {
+  const { hash, pathname, search } = window.location;
+  return `${pathname}${search}${hash}`;
+}
+
+/** Écrit l'adresse d'un écran, ou laisse la barre tranquille si elle y est déjà. */
+function write(route: Route, mode: "push" | "replace"): void {
+  const url = routeUrl(route);
+  // L'adresse demandée est déjà celle de la barre : la pousser laisserait une
+  // entrée dont Retour ne sort pas, et la réécrire à l'identique n'écrit rien.
+  if (url === currentUrl()) {
+    return;
+  }
+  if (mode === "push") {
+    window.history.pushState(null, "", url);
+  } else {
+    window.history.replaceState(null, "", url);
+  }
+}
+
+/** Ajoute une entrée : Retour ramène l'écran qui était affiché avant. */
+export function pushRoute(route: Route): void {
+  write(route, "push");
+}
+
+/** Corrige l'entrée que la barre affiche, sans en ajouter une seconde. */
+export function replaceRoute(route: Route): void {
+  write(route, "replace");
+}
+
+/**
+ * Relit l'adresse courante sans la modifier : `popstate` rejoue l'entrée que le
+ * navigateur vient de restaurer, et la réécrire effacerait ce Retour.
+ */
+export function readRoute(): Route {
+  return parseAddress().route;
+}
+
+/**
+ * Lit l'URL une fois, au chargement. Un lien que ce dashboard a écrit reste dans
+ * l'URL, donc recharger un `#automatic=<id>`, `#run=<uuid>` ou
+ * `#settings=<section>` partagé rouvre le même écran au lieu de le perdre à la
+ * première actualisation. Les chemins `/history` et `/new-test` restent pour la
+ * même raison. Seules les charges qui ne doivent pas être rejouées — un code de
+ * setup temporaire, le retour du callback GitHub, un hash que ce dashboard n'a
+ * jamais écrit — quittent la barre d'adresse.
+ */
+export function readInitialRoute(): InitialRoute {
+  const address = parseAddress();
+  if (window.location.hash || address.github) {
     const path = window.location.pathname;
     window.history.replaceState(
       null,
       "",
-      keepHash ? `${path}${window.location.hash}` : path
+      address.hashNamesScreen ? `${path}${window.location.hash}` : path
     );
   }
-  return route;
-}
-
-/** Writes the deep link of the visible screen, or clears it. */
-export function replaceHash(link: DeepLink | undefined) {
-  const path = window.location.pathname;
-  if (!link) {
-    window.history.replaceState(null, "", path);
-    return;
+  const initial: InitialRoute = { route: address.route };
+  if (address.github) {
+    initial.github = address.github;
   }
-  const body =
-    link.kind === "legacy"
-      ? link.id
-      : `${link.kind}=${encodeURIComponent(link.id)}`;
-  window.history.replaceState(null, "", `${path}#${body}`);
+  if (address.setupCode) {
+    initial.setupCode = address.setupCode;
+  }
+  return initial;
 }

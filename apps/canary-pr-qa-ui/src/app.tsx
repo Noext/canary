@@ -1,41 +1,32 @@
 import { useState } from "react";
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { NavigationProvider } from "@/app/navigation";
-import { type InitialRoute, readInitialRoute } from "@/app/routing";
+import { type InitialRoute, readInitialRoute, viewOf } from "@/app/routing";
 import { SessionProvider, useSession } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
-import type { ViewName } from "@/i18n";
 import { LoginView } from "@/views/login-view";
 import { Shell } from "./app/shell";
 
-/** A deep link wins over the post-callback destination. */
-function initialViewFor(route: InitialRoute): ViewName {
-  if (route.screen) {
-    return route.screen.kind === "run" ? "run" : "automatic";
-  }
-  if (route.runId) {
-    return "runs";
-  }
-  return route.github || route.section ? "settings" : "home";
-}
-
-function Screens({ route }: { route: InitialRoute }) {
+function Screens({ initial }: { initial: InitialRoute }) {
   const { phase, user } = useSession();
   if (phase !== "authenticated" || !user) {
     return <LoginView />;
   }
+  const { route } = initial;
   return (
     <WorkspaceProvider>
       <NavigationProvider
-        {...(route.runId ? { initialRun: route.runId } : {})}
-        {...(route.screen?.kind === "run"
-          ? { initialRunScreen: route.screen.id }
+        {...(route.kind === "runs" && route.runId
+          ? { initialRun: route.runId }
           : {})}
-        {...(route.screen?.kind === "automatic"
-          ? { initialAutomatic: route.screen.id }
+        {...(route.kind === "run" ? { initialRunScreen: route.id } : {})}
+        {...(route.kind === "automatic" ? { initialAutomatic: route.id } : {})}
+        {...(route.kind === "settings"
+          ? { initialSection: route.section }
           : {})}
-        {...(route.section ? { initialSection: route.section } : {})}
-        initialView={initialViewFor(route)}
+        // Le retour du callback GitHub ouvre la connexion à GitHub des réglages :
+        // c'est le seul écran que l'adresse ne nomme pas elle-même.
+        initialView={initial.github ? "settings" : viewOf(route)}
       >
         <Shell />
       </NavigationProvider>
@@ -44,14 +35,14 @@ function Screens({ route }: { route: InitialRoute }) {
 }
 
 export function App() {
-  const [route] = useState(readInitialRoute);
+  const [initial] = useState(readInitialRoute);
   return (
     <ErrorProvider>
       <SessionProvider
-        {...(route.setupCode ? { setupCode: route.setupCode } : {})}
+        {...(initial.setupCode ? { setupCode: initial.setupCode } : {})}
       >
         <ErrorAlert />
-        <Screens route={route} />
+        <Screens initial={initial} />
       </SessionProvider>
     </ErrorProvider>
   );
