@@ -86,6 +86,39 @@ export function json(res: ServerResponse, value: unknown, status = 200) {
   res.end(JSON.stringify(value));
 }
 /**
+ * Réponse `text/event-stream` : deltas partiels (dont un delta de raisonnement), usage final
+ * puis `[DONE]`. Le contenu est coupé sur une frontière sûre pour forcer un vrai recollage.
+ */
+export function sse(res: ServerResponse, text: string) {
+  res.writeHead(200, {
+    "Cache-Control": "no-store",
+    "Content-Type": "text/event-stream",
+  });
+  const halfway = Math.ceil(text.length / 2);
+  const boundary = text.lastIndexOf(" ", halfway);
+  const cut = boundary > 0 ? boundary : halfway;
+  const chunk = (
+    delta: Record<string, unknown>,
+    extra: Record<string, unknown> = {}
+  ) => {
+    res.write(
+      `data: ${JSON.stringify({ choices: [{ delta, index: 0, ...extra }] })}\n\n`
+    );
+  };
+  res.write(": stream open\n\n");
+  chunk({ role: "assistant" });
+  chunk({ reasoning_content: "fixture reasoning" });
+  chunk({ content: text.slice(0, cut) });
+  chunk({ content: text.slice(cut) });
+  res.write(
+    `data: ${JSON.stringify({
+      choices: [{ delta: {}, finish_reason: "stop", index: 0 }],
+      usage: { completion_tokens: 7, prompt_tokens: 11, total_tokens: 18 },
+    })}\n\n`
+  );
+  res.end("data: [DONE]\n\n");
+}
+/**
  * Runs the production SQL of `Queue` on PostgreSQL WASM: migration, delivery
  * state machine and queue helpers execute the real statements without a server.
  * Multi-process row locking is covered separately on native PostgreSQL in CI.
@@ -351,10 +384,15 @@ export async function fixture(
         );
         return;
       }
+      const text = JSON.stringify(value);
+      if (payload.stream === true) {
+        sse(res, text);
+        return;
+      }
       json(res, {
         choices: [
           {
-            message: { content: JSON.stringify(value) },
+            message: { content: text },
             finish_reason: "stop",
           },
         ],

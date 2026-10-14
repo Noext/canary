@@ -1,12 +1,13 @@
 import { diagnose, QaError } from "./diagnostics.js";
 import { requestSignal } from "./run-scope.js";
+import { sseEventData, takeSseEvents } from "./sse.js";
 
-export async function fetchText(
+/** Ouvre la requête et traduit tout échec en diagnostic nommé, comme le reste du harnais. */
+async function open(
   url: string | URL,
-  init: RequestInit = {},
-  timeoutMs = 30_000,
-  maxBytes = 5_000_000
-): Promise<{ response: Response; text: string }> {
+  init: RequestInit,
+  timeoutMs: number
+): Promise<{ body: ReadableStream<Uint8Array>; response: Response }> {
   const response = await fetch(url, {
     ...init,
     signal: requestSignal(timeoutMs),
@@ -43,7 +44,17 @@ export async function fetchText(
   if (!response.body) {
     throw new Error("Empty HTTP response");
   }
-  const reader = response.body.getReader();
+  return { body: response.body, response };
+}
+
+export async function fetchText(
+  url: string | URL,
+  init: RequestInit = {},
+  timeoutMs = 30_000,
+  maxBytes = 5_000_000
+): Promise<{ response: Response; text: string }> {
+  const { body, response } = await open(url, init, timeoutMs);
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -62,4 +73,54 @@ export async function fetchText(
     await reader.cancel();
   }
   return { response, text: Buffer.concat(chunks).toString("utf8") };
+}
+
+/**
+ * Lit un flux SSE événement par événement, sans jamais garder le corps entier : une réponse
+ * `chat/completions` streamée pèse plusieurs mégaoctets de deltas pour un seul plan.
+ *
+ * `onEvent` renvoie `false` pour interrompre la lecture (`[DONE]`, ou tout ce que
+ * l'appelant sait terminal). La limite d'octets reste un garde-fou, pas une mesure.
+ */
+export async function fetchSse(
+  url: string | URL,
+  init: RequestInit,
+  onEvent: (event: string) => boolean | undefined,
+  timeoutMs = 30_000,
+  maxBytes = 64 * 1024 * 1024
+): Promise<void> {
+  const { body } = await open(url, init, timeoutMs);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let size = 0;
+  const emit = (event: string): boolean => onEvent(event) !== false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > maxBytes) {
+        throw new Error(`HTTP response exceeds ${maxBytes} bytes`);
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = takeSseEvents(buffer);
+      buffer = rest;
+      for (const event of events) {
+        if (!emit(event)) {
+          return;
+        }
+      }
+    }
+    // Certains endpoints omettent la ligne vide finale : le dernier bloc reste exploitable.
+    buffer += decoder.decode();
+    const last = sseEventData(buffer);
+    if (last !== undefined) {
+      emit(last);
+    }
+  } finally {
+    await reader.cancel();
+  }
 }
