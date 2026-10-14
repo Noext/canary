@@ -9,7 +9,7 @@ import {
   type Observation,
 } from "./canary.js";
 import type { Config } from "./config.js";
-import { diagnose, QaError } from "./diagnostics.js";
+import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
 import type { ProgressEvent } from "./progress.js";
 import type { Assertion, Scenario, ScenarioResult } from "./schema.js";
@@ -98,6 +98,57 @@ async function performStep(
     observation: JSON.stringify(observation),
   });
 }
+/**
+ * Relit la cible après le rechargement pour prouver une `persisted`. Une cible
+ * qui disparaît entre la première lecture et cette relecture n'efface pas la
+ * valeur déjà lue : c'est une régression réelle, enregistrée avec cette valeur
+ * plutôt qu'annoncée comme une cible « jamais apparue ».
+ *
+ * Cette valeur ne remonte jamais dans `result.error` : le message est repris par
+ * `reportMarkdown` et publié en commentaire de PR dès que la publication est
+ * active, alors qu'une valeur lue dans la page peut venir d'une session
+ * authentifiée. Elle reste dans l'assertion, c'est-à-dire dans l'artefact
+ * d'assertion servi derrière l'autorisation du tableau de bord.
+ */
+async function readPersisted(
+  sessionId: string,
+  assertion: Assertion,
+  observation: Observation,
+  result: ScenarioResult,
+  preview: string,
+  canary: Canary,
+  config: Config,
+  baseline: unknown
+): Promise<{ handled: true } | { handled: false; persisted: unknown }> {
+  try {
+    const persisted = (
+      await canary.act(
+        sessionId,
+        `persistence-${assertion.id}`,
+        compileProbe(assertion, preview, true)
+      )
+    ).actual;
+    return { handled: false, persisted };
+  } catch (error) {
+    const diagnostic = diagnose(error, config);
+    if (
+      diagnostic.code !== "TARGET_NOT_FOUND" ||
+      observation.actual === undefined
+    ) {
+      throw error;
+    }
+    result.assertions.push({
+      id: assertion.id,
+      passed: false,
+      actual: observation.actual,
+      baseline,
+    });
+    result.outcome = "failed";
+    result.diagnostic = diagnostic;
+    result.error = `Assertion ${assertion.id} failed: the value observed before the reload is no longer present in the target after it — persistence is not demonstrated — ${diagnostic.message}`;
+    return { handled: true };
+  }
+}
 async function evaluateAssertion(
   sessionId: string,
   assertion: Assertion,
@@ -112,13 +163,20 @@ async function evaluateAssertion(
   const baseline = baselines.get(assertion.id);
   let persisted: unknown;
   if (assertion.verification === "persisted") {
-    persisted = (
-      await canary.act(
-        sessionId,
-        `persistence-${assertion.id}`,
-        compileProbe(assertion, preview, true)
-      )
-    ).actual;
+    const probe = await readPersisted(
+      sessionId,
+      assertion,
+      observation,
+      result,
+      preview,
+      canary,
+      config,
+      baseline
+    );
+    if (probe.handled) {
+      return;
+    }
+    persisted = probe.persisted;
   }
   const actual =
     assertion.kind === "visual"
@@ -197,6 +255,35 @@ async function captureBaselines(
     }
   }
 }
+/**
+ * Une cible qui n'apparaît jamais est une promesse non tenue, pas une panne :
+ * un `assert` affirme qu'un élément existe, donc son échec est une assertion
+ * fausse et le scénario échoue. Un clic dont la même cible ne résout jamais
+ * reste une panne d'exécution (`false`) : l'action n'a pas atteint son but.
+ */
+function failAssertionOnMissingTarget(
+  result: ScenarioResult,
+  step: Scenario["steps"][number],
+  diagnostic: Diagnostic,
+  baselines: Map<string, unknown>
+): boolean {
+  if (step.action.type !== "assert" || diagnostic.code !== "TARGET_NOT_FOUND") {
+    return false;
+  }
+  const { assertionId } = step.action;
+  if (!result.assertions.some((item) => item.id === assertionId)) {
+    result.assertions.push({
+      id: assertionId,
+      passed: false,
+      actual: undefined,
+      baseline: baselines.get(assertionId),
+    });
+  }
+  result.outcome = "failed";
+  result.diagnostic = diagnostic;
+  result.error = `Assertion ${assertionId} failed: the target never appeared — ${diagnostic.message}`;
+  return true;
+}
 async function driveScenario(
   sessionId: string,
   result: ScenarioResult,
@@ -273,6 +360,11 @@ async function driveScenario(
         outcome: "error",
         diagnostic,
       });
+      // Le verdict et l'erreur nommée sont déjà posés : renvoyer ici évite que
+      // le catch de `executeScenario` les remplace par le message brut.
+      if (failAssertionOnMissingTarget(result, step, diagnostic, baselines)) {
+        return;
+      }
       throw error;
     }
     if (result.outcome === "failed") {

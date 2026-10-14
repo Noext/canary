@@ -1,4 +1,6 @@
 import { PLAN_EVIDENCE_SNAPSHOT_CHARS } from "./canary.js";
+import { QaError } from "./diagnostics.js";
+import { unstableSelectorReason } from "./plan-selector.js";
 import type { Locator, Plan, Scenario } from "./schema.js";
 
 /**
@@ -269,6 +271,60 @@ function isAssertionStep(
       "assertionId" in action &&
       action.assertionId === assertionId
   );
+}
+
+/**
+ * Refus rendus au planificateur pour une cible CSS construite sur une classe ou
+ * une couleur (`plan-selector.ts` porte la règle) : un refus par scénario, qui
+ * nomme l'étape, la cible et ce qu'il faut viser à la place. `runner.ts` les
+ * rejoue après l'appel modèle, pour qu'un plan non corrigé soit bloqué avant
+ * exécution.
+ */
+export function unstableSelectorRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const targets = [
+      ...scenario.steps.flatMap((step) =>
+        "locator" in step.action && step.action.locator
+          ? [{ locator: step.action.locator, label: step.id }]
+          : []
+      ),
+      ...scenario.assertions.flatMap((assertion) =>
+        assertion.target
+          ? [
+              {
+                locator: assertion.target,
+                // L'assertion est nommée avec son étape : deux assertions
+                // partageant la même étape seraient sinon indistinguables.
+                label: `${assertion.afterStep ?? assertion.id} (assertion ${assertion.id})`,
+              },
+            ]
+          : []
+      ),
+    ].flatMap((target) => {
+      const reason = unstableSelectorReason(target.locator);
+      return reason === undefined ? [] : [{ ...target, reason }];
+    });
+    if (targets.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_SELECTOR_UNSTABLE",
+        `Scenario ${scenario.id} targets an element with a CSS selector built from ${targets
+          .map(
+            (target) =>
+              `${target.reason}: ${target.label} → ${describeTarget(target.locator)}`
+          )
+          .join(" ; ")}`,
+        'Target what the discovery snapshot shows instead: a role with its accessible name, an id, or a stable attribute the source defines. To prove an absence, use kind "hidden" or a count of 0 on a selector the page still carries. A class name or a color read in the source is not a stable target.'
+      ),
+    });
+  }
+  return refusals;
 }
 
 export function validatePlanEvidence(
