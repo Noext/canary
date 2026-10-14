@@ -258,21 +258,24 @@ export class Model {
         return await this.completion(messages, maxTokens);
       } catch (error) {
         const code = transportCode(error);
+        if (!code) {
+          throw error;
+        }
         const scope = runScope.getStore();
         const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
-        if (!(code && mayRetry(attempt, max, used))) {
-          throw failedAttempt(error, code, attempt);
-        }
         // Une connexion coupée a pu consommer des tokens que l'endpoint ne nous
-        // rendra jamais : l'échec est débité au pire cas avant que la reprise
-        // ne réserve son propre engagement, sinon plusieurs tentatives
-        // payantes passeraient contre un solde inchangé. Le run est marqué
-        // estimé : ce débit n'est pas un usage rapporté par l'endpoint.
+        // rendra jamais : la tentative est débitée au pire cas, y compris
+        // quand elle est la dernière — reprises épuisées ou plafond d'appels
+        // atteint. Le run passe en estimé : ce débit n'est pas un usage
+        // rapporté par l'endpoint.
         const lost = this.reservation(messages, maxTokens);
         if (scope) {
           scope.tokens += lost.tokens;
           scope.costUsd += lost.costUsd;
           scope.estimated = true;
+        }
+        if (!mayRetry(attempt, max, used)) {
+          throw failedAttempt(error, code, attempt);
         }
         this.claim(messages, maxTokens);
         const wait =

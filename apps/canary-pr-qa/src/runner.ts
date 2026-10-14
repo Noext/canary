@@ -504,10 +504,19 @@ async function publish(
  * bord ne doit pas paraître figé pendant le backoff, et l'instabilité de l'amont
  * reste mesurable dans l'historique du run.
  */
-function relayModelRetries(scope: RunScope | undefined, progress: Progress) {
+export function relayModelRetries(
+  scope: RunScope | undefined,
+  progress: Progress
+) {
   if (scope) {
-    scope.onRetry = (retry) =>
-      void progress.record({ phase: "planning", retry });
+    scope.onRetry = (retry) => {
+      // L'écriture de la progression ne doit jamais faire tomber le worker : un
+      // rejet détaché suffirait à terminer le processus et à laisser la ligne
+      // SQL courir jusqu'à l'expiration de son lease au lieu de finir bloquée.
+      progress.record({ phase: "planning", retry }).catch((error: unknown) => {
+        logger.warn({ error, retry }, "Retry progress event not persisted");
+      });
+    };
   }
 }
 async function runUnscoped(

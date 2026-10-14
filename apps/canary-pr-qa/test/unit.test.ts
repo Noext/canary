@@ -16,9 +16,10 @@ import { QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
+import type { Progress } from "../src/progress.js";
 import { saveReport } from "../src/report.js";
-import { runScope } from "../src/run-scope.js";
-import { runQa } from "../src/runner.js";
+import { type RunScope, runScope } from "../src/run-scope.js";
+import { relayModelRetries, runQa } from "../src/runner.js";
 import {
   ActionSchema,
   PlanSchema,
@@ -554,6 +555,42 @@ describe("runner false-green regressions", () => {
     const delta = (retried.usage?.tokens ?? 0) - (baseline.usage?.tokens ?? 0);
     expect(delta).toBeGreaterThanOrEqual(5000);
   }, 40_000);
+  it("debits the last attempt too when no retry follows", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "0" }, modelResets: 1 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toMatch(/ECONNRESET|UND_ERR_SOCKET/);
+    expect(result.usage?.retries).toBe(0);
+    // Aucune reprise ne suit, mais la tentative perdue est quand même débitée :
+    // elle a pu consommer une génération entière.
+    expect(result.usage?.tokens ?? 0).toBeGreaterThan(0);
+    expect(result.usage?.estimated).toBe(true);
+  }, 40_000);
+  it("never lets a retry progress write take the worker down", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    const scope: RunScope = {
+      calls: 0,
+      costUsd: 0,
+      id: "retry-progress",
+      maxCostUsd: 1,
+      maxTokens: 1000,
+      signal: AbortSignal.timeout(1000),
+      tokens: 0,
+    };
+    relayModelRetries(scope, {
+      record: () => Promise.reject(new Error("ENOSPC")),
+    } as unknown as Progress);
+    scope.onRetry?.({ attempt: 1, code: "ECONNRESET", max: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.off("unhandledRejection", onRejection);
+    expect(rejections).toEqual([]);
+  });
   it("reserves the budget of every attempt, retries included", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
     fakeBrowser();
