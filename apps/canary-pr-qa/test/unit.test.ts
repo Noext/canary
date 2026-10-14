@@ -15,6 +15,10 @@ import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
+import {
+  repairRequirementAttribution,
+  ungroundedPlanRefusals,
+} from "../src/policy.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
 import type { Progress } from "../src/progress.js";
 import { saveReport } from "../src/report.js";
@@ -55,13 +59,31 @@ async function setup(options?: Parameters<typeof fixture>[0]) {
   close.push(f.close);
   return f;
 }
-function fakeBrowser() {
+function fakeBrowser(ghostTargets: string[] = []) {
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("fixture-session");
-  vi.spyOn(Canary.prototype, "act").mockImplementation(async (_id, label) => ({
-    url: "http://fixture/",
-    snapshot: "textbox Name, button Save",
-    ...(label.endsWith("assert") ? { actual: "Welcome Ada" } : {}),
-  }));
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_id, label, script) => {
+      if (label === "probe-plan-targets") {
+        // Le relevé de cibles répond pour chaque assertion sondée par le script,
+        // et déclare fantômes celles que le test a désignées.
+        const ids = [
+          ...(script ?? "").matchAll(/"([^"]+\/[^"]+)": await /g),
+        ].map((match) => match[1] as string);
+        return {
+          url: "http://fixture/",
+          snapshot: "",
+          actual: Object.fromEntries(
+            ids.map((id) => [id, ghostTargets.includes(id) ? 0 : 1])
+          ),
+        };
+      }
+      return {
+        url: "http://fixture/",
+        snapshot: "textbox Name, button Save",
+        ...(label.endsWith("assert") ? { actual: "Welcome Ada" } : {}),
+      };
+    }
+  );
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([
     "video.webm",
     "trace.zip",
@@ -602,6 +624,95 @@ describe("runner false-green regressions", () => {
     expect(result.outcome).toBe("passed");
     // Deux tentatives de plan, donc deux réservations déposées avant chacune.
     expect(budget.reserves.length - before).toBe(2);
+  }, 40_000);
+  it("repairs a requirement attributed to the wrong declared file", async () => {
+    const f = await setup();
+    const context = await new GitHub(f.config).context(PR_URL);
+    const contract = structuredClone(plan);
+    contract.scenarios[0]!.sourceFiles = ["src/form.ts", "src/legacy.tsx"];
+    contract.scenarios[0]!.requirements[0]!.sourceFile = "src/legacy.tsx";
+    const repairs = repairRequirementAttribution(contract, {
+      ...context,
+      files: [
+        ...context.files,
+        {
+          filename: "src/legacy.tsx",
+          patch: "- <p>Work in progress</p>",
+          status: "modified",
+        },
+      ],
+    });
+    expect(repairs).toEqual([
+      {
+        from: "src/legacy.tsx",
+        quote: "show('Welcome '+name)",
+        scenarioId: "welcome",
+        to: "src/form.ts",
+      },
+    ]);
+    expect(contract.scenarios[0]!.requirements[0]!.sourceFile).toBe(
+      "src/form.ts"
+    );
+  });
+  it("names where the quote lives instead of only refusing", async () => {
+    const f = await setup();
+    const context = await new GitHub(f.config).context(PR_URL);
+    const contract = structuredClone(plan);
+    contract.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const refusals = ungroundedPlanRefusals(contract, {
+      ...context,
+      context: [
+        {
+          content: "show('Welcome '+nom)",
+          path: "src/app.tsx",
+          ref: context.sha,
+        },
+      ],
+    });
+    expect(refusals[0]).toContain("No source witness for welcome: src/form.ts");
+    expect(refusals[0]).toContain("appears verbatim in src/app.tsx");
+  });
+  it("refuses a plan that reads an element the preview does not carry", async () => {
+    const ghost = structuredClone(plan);
+    ghost.scenarios[0]!.assertions[0]!.id = "ghost";
+    ghost.scenarios[0]!.assertions[0]!.target = {
+      by: "css",
+      value: 'div[class*="place-items-center"] p',
+    };
+    ghost.scenarios[0]!.steps.at(-1)!.action = {
+      type: "assert",
+      assertionId: "ghost",
+    };
+    const f = await setup({ plans: [ghost, ghost] });
+    fakeBrowser(["welcome/ghost"]);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("PLAN_TARGET_ABSENT");
+    expect(result.scenarios).toEqual([]);
+  }, 40_000);
+  it("gives the planner one chance to retarget a ghost selector", async () => {
+    const ghost = structuredClone(plan);
+    ghost.scenarios[0]!.assertions[0]!.id = "ghost";
+    ghost.scenarios[0]!.assertions[0]!.target = {
+      by: "css",
+      value: 'div[class*="place-items-center"] p',
+    };
+    ghost.scenarios[0]!.steps.at(-1)!.action = {
+      type: "assert",
+      assertionId: "ghost",
+    };
+    const f = await setup({ plans: [ghost, plan] });
+    fakeBrowser(["welcome/ghost"]);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus part au planificateur, qui repropose une cible existante.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
   }, 40_000);
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();

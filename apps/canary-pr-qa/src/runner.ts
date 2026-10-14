@@ -4,6 +4,7 @@ import { createLogger } from "@usecanary/logger";
 import {
   Canary,
   compileAction,
+  compileTargetProbe,
   type Observation,
   PLAN_EVIDENCE_SNAPSHOT_CHARS,
 } from "./canary.js";
@@ -21,6 +22,8 @@ import {
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
+  type Policy,
+  repairRequirementAttribution,
   trustedPolicy,
   ungroundedPlanRefusals,
   validateCoverage,
@@ -32,6 +35,8 @@ import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
+  type Assertion,
+  type Locator,
   type Outcome,
   type Plan,
   PlanSchema,
@@ -233,6 +238,126 @@ function refusalDiagnostic(
   );
   return diagnostic;
 }
+/**
+ * Une assertion d'absence ne lit pas un élément : elle en constate l'absence,
+ * donc une cible qui ne résout rien y est normale. Les autres sont comptées sur
+ * la page de découverte avant toute exécution.
+ */
+function readsState(assertion: Assertion): boolean {
+  if (!assertion.target) {
+    return false;
+  }
+  if (assertion.kind === "hidden") {
+    return false;
+  }
+  return !(assertion.kind === "count" && assertion.expected === 0);
+}
+
+/**
+ * Compte les cibles d'assertion du plan sur la page de découverte : un plan qui
+ * lit un élément inexistant — un panneau que la PR a remplacé, par exemple —
+ * échouerait sur un simple délai et bloquerait le scénario, donc le run entier.
+ * Le planificateur reçoit le refus et corrige sa cible avant d'exécuter.
+ */
+async function absentTargetRefusals(
+  plan: Plan,
+  context: PrContext,
+  preview: Preview,
+  canary: Canary
+): Promise<string[]> {
+  const targets = plan.scenarios.flatMap((scenario) =>
+    scenario.assertions.filter(readsState).map((assertion) => ({
+      assertionId: `${scenario.id}/${assertion.id}`,
+      locator: assertion.target as Locator,
+    }))
+  );
+  if (targets.length === 0) {
+    return [];
+  }
+  const sessionId = await canary.start(`PR ${context.ref.number} plan targets`);
+  let counts: Record<string, number> = {};
+  try {
+    const observation = await canary.act(
+      sessionId,
+      "probe-plan-targets",
+      compileTargetProbe(targets, preview.url)
+    );
+    // Un relevé illisible ne refuse aucun plan : cette sonde est un pré-contrôle
+    // d'aide au planificateur, jamais une preuve — l'exécution reste le juge.
+    counts =
+      observation.actual && typeof observation.actual === "object"
+        ? (observation.actual as Record<string, number>)
+        : {};
+  } finally {
+    // La sonde n'a pas d'évidence à finaliser : on ferme la session sans
+    // écrire un rapport de plus dans le run.
+    await canary.abort(sessionId);
+  }
+  return targets
+    .filter(
+      (target) =>
+        counts[target.assertionId] !== undefined &&
+        counts[target.assertionId] === 0
+    )
+    .map(
+      (target) =>
+        `Assertion ${target.assertionId} targets ${JSON.stringify(target.locator.value)} which resolves to nothing on the discovery page.`
+    );
+}
+/**
+ * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
+ * exigence sans témoin textuel, cible absente de la page de découverte.
+ */
+function planRefusals(
+  candidate: Plan,
+  policy: Policy,
+  context: PrContext,
+  absentTargets: string[]
+): string[] {
+  return [
+    ...writeEvidenceRefusals(candidate, policy).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
+    ...ungroundedPlanRefusals(candidate, context),
+    ...absentTargets.map(
+      (message) =>
+        `${message} Target an element that exists, or prove an absence with kind "hidden" or a count of 0 on a stable selector.`
+    ),
+  ];
+}
+/**
+ * Après la planification : une citation réelle attribuée au mauvais fichier est
+ * réparée — la preuve ne change pas, seule la mention du fichier était fausse —
+ * le contrat est validé, et un plan qui lit une cible absente de la page de
+ * découverte est refusé avant d'exécuter quoi que ce soit.
+ */
+function settlePlan(
+  plan: Plan,
+  context: PrContext,
+  config: Config,
+  runId: string,
+  absentTargets: string[]
+) {
+  for (const repair of repairRequirementAttribution(plan, context)) {
+    logger.info(
+      {
+        from: repair.from,
+        runId,
+        scenario: repair.scenarioId,
+        to: repair.to,
+      },
+      "Requirement attribution repaired"
+    );
+  }
+  validatePlan(plan, context, config);
+  if (absentTargets.length > 0) {
+    throw new QaError(
+      "PLAN_TARGET_ABSENT",
+      absentTargets.join(" "),
+      "The plan reads an element that the discovery page does not carry: retarget the assertion, or prove the absence with kind hidden or a count of 0 on a stable selector, then relaunch."
+    );
+  }
+}
 async function executePlan(
   result: RunResult,
   context: PrContext,
@@ -273,26 +398,33 @@ async function executePlan(
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });
+  let absentTargets: string[] = [];
   result.plan = await model.json(
     PLANNER_PROMPT,
     payload,
     PlanSchema,
     config.QA_PLAN_MAX_TOKENS,
-    (candidate) => {
-      const refusals = writeEvidenceRefusals(candidate, policy);
+    async (candidate) => {
       // Même traitement pour une exigence sans témoin textuel : le planificateur
       // reçoit le refus et dispose d'une tentative de correction, au lieu de
-      // faire échouer le run sur une citation recopiée de mémoire.
-      const messages = [
-        ...refusals.map((item) => `${item.error.message}. ${item.error.hint}`),
-        ...ungroundedPlanRefusals(candidate, context),
-      ];
+      // faire échouer le run sur une citation recopiée de mémoire. Les cibles
+      // absentes de la page de découverte comptent aussi : une étape qui lit un
+      // élément inexistant bloque le scénario, et le run avec lui.
+      absentTargets = await absentTargetRefusals(
+        candidate,
+        context,
+        preview,
+        canary
+      );
+      const messages = planRefusals(candidate, policy, context, absentTargets);
       return messages.length
         ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
         : undefined;
     }
   );
-  validatePlan(result.plan, context, config);
+  // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
+  // change pas, seule la mention du fichier était fausse.
+  settlePlan(result.plan, context, config, result.id, absentTargets);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

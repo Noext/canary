@@ -149,6 +149,35 @@ export function assertionMatches(
   return actual === assertion.expected;
 }
 
+/**
+ * Un relevé de résolution des cibles d'assertion du plan, sur la page de
+ * découverte : un sélecteur qui ne résout rien — un panneau que la PR a
+ * remplacé, par exemple — ferait échouer l'étape sur un simple délai et
+ * bloquerait le scénario, donc le run entier. Chaque sélecteur est compté, et
+ * le repli de libellé de `locatorCall` s'applique comme à l'exécution.
+ */
+export function compileTargetProbe(
+  targets: { assertionId: string; locator: Locator }[],
+  previewUrl: string
+): string {
+  const preview = new URL(previewUrl);
+  const counts = targets
+    .map(
+      (target) =>
+        `  ${JSON.stringify(target.assertionId)}: await ${locatorCall(target.locator, "count()")},`
+    )
+    .join("\n");
+  return `const page = await browser.getPage("qa");
+await page.goto(${JSON.stringify(preview.href)}, { waitUntil: "domcontentloaded", timeout: 15000 });
+const actual = {
+${counts}
+};
+const url = page.url();
+if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
+const ariaSnapshot = (await page.snapshotForAI({ depth: 12 })).full;
+console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS}), actual, provenanceUrls: [] }));`;
+}
+
 function readAssertion(assertion: Assertion, locator?: Locator): string {
   if (assertion.kind === "visual") {
     if (!locator) {
