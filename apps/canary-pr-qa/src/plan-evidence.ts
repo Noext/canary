@@ -282,10 +282,32 @@ function isAssertionStep(
 const CLASS_NAME = /\.(?!\d)[a-z_\u00a0-\uffff-][\w\u00a0-\uffff-]*/i;
 /** Attribut class : `[class]` seul ne nomme aucune classe, il n'est pas visé. */
 const CLASS_ATTRIBUTE = /^\[\s*class\s*[*^$~|]?\s*=/i;
+/**
+ * Attribut dont la valeur est une couleur : `#hex` et `rgb()` n'en sont une que
+ * là. Dans `[value="#ffffff"]` ou `[id="#abc"]`, c'est une donnée de la page —
+ * un id, un identifiant de test — aussi stable qu'un `data-*`.
+ */
+const COLOR_ATTRIBUTE = /^\[\s*(?:style|fill|stroke|color|bg)\s*[*^$~|]?\s*=/i;
 const COLOR_HEX = /#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})(?![\w-])/i;
-const COLOR_FUNCTION = /(?:^|[^\w-])(?:rgba?|oklch)\s*\(/i;
+/**
+ * Fonction de couleur CSS, nom seul : `(?<![\w-])` empêche de confondre
+ * `oklab(` avec `lab(` et de citer le caractère qui précède la couleur.
+ */
+const COLOR_FUNCTION =
+  /(?<![\w-])(?:color-mix|color|rgba?|hsla?|hwb|lab|lch|oklab|oklch)\s*\(/i;
 /** Moteur de locator Playwright, `<moteur>=valeur` : le seul CSS est `css=`. */
 const ENGINE = /^([a-z][\w-]*)=/i;
+
+/**
+ * Le sélecteur privé du contenu de ses crochets, à longueur constante : un point
+ * dans une valeur d'attribut n'est jamais une classe, et une longueur conservée
+ * laisse citer le fragment fautif. Le sélecteur reçu n'a plus ses chaînes
+ * littérales, donc un crochet entre guillemets n'en ouvre aucun. Les classes
+ * d'un crochet sont vues par `CLASS_ATTRIBUTE`.
+ */
+function outsideBrackets(code: string): string {
+  return code.replace(/\[[^\]]*\]?/g, (block) => " ".repeat(block.length));
+}
 
 /**
  * Le sélecteur privé de ses chaînes littérales, à longueur constante : un point
@@ -361,8 +383,9 @@ function bracketBlocks(selector: string): string[] {
  * Ce qu'un sélecteur CSS doit à une classe ou à une couleur, `undefined` quand
  * il n'en dépend pas. `role=`, `text=` et les autres moteurs Playwright ne sont
  * pas des sélecteurs CSS — un point y est du texte —, seul `css=` en annonce. Un
- * `#hex` n'est une couleur que dans un crochet : hors crochet c'est un id, et
- * l'ambiguïté se tranche en faveur de l'id (`#abc`).
+ * `#hex` n'est une couleur que dans un attribut de style : hors crochet c'est un
+ * id, et dans un autre attribut une donnée — l'ambiguïté se tranche en faveur de
+ * l'id (`#abc`) et de la donnée (`[value="#ffffff"]`).
  */
 function classOrColorSelector(selector: string): string | undefined {
   const value = selector.trim();
@@ -371,8 +394,9 @@ function classOrColorSelector(selector: string): string | undefined {
     return;
   }
   const css = engine === "css" ? value.slice(engine.length + 1) : value;
-  const code = selectorCode(css);
-  const className = CLASS_NAME.exec(code);
+  // Un point n'est une classe que hors chaînes littérales et hors crochets —
+  // sinon `[data-file=report.png]` serait une classe.
+  const className = CLASS_NAME.exec(outsideBrackets(selectorCode(css)));
   if (className) {
     return `a class name (${className[0]})`;
   }
@@ -381,19 +405,17 @@ function classOrColorSelector(selector: string): string | undefined {
   if (classAttribute) {
     return `a class attribute selector (${classAttribute})`;
   }
-  const literal = blocks
+  const colorBlocks = blocks.filter((block) => COLOR_ATTRIBUTE.test(block));
+  const literal = colorBlocks
     .map((block) => COLOR_HEX.exec(block)?.[0])
     .find((fragment) => fragment !== undefined);
   if (literal) {
     return `a color literal (${literal})`;
   }
-  // Une couleur fonctionnelle se lit dans un crochet comme hors crochet.
-  const colorFunction = [...blocks, code]
-    .map((fragment) => COLOR_FUNCTION.exec(fragment)?.[0])
+  const colorFunction = colorBlocks
+    .map((block) => COLOR_FUNCTION.exec(block)?.[0])
     .find((fragment) => fragment !== undefined);
-  return colorFunction
-    ? `a color literal (${colorFunction.trim()})`
-    : undefined;
+  return colorFunction ? `a color literal (${colorFunction})` : undefined;
 }
 
 /**
@@ -410,7 +432,7 @@ export function unstableSelectorRefusals(
     const targets = [
       ...scenario.steps.flatMap((step) =>
         "locator" in step.action && step.action.locator
-          ? [{ locator: step.action.locator, stepId: step.id }]
+          ? [{ locator: step.action.locator, label: step.id }]
           : []
       ),
       ...scenario.assertions.flatMap((assertion) =>
@@ -418,7 +440,9 @@ export function unstableSelectorRefusals(
           ? [
               {
                 locator: assertion.target,
-                stepId: assertion.afterStep ?? assertion.id,
+                // L'assertion est nommée avec son étape : deux assertions
+                // partageant la même étape seraient sinon indistinguables.
+                label: `${assertion.afterStep ?? assertion.id} (assertion ${assertion.id})`,
               },
             ]
           : []
@@ -439,7 +463,7 @@ export function unstableSelectorRefusals(
         `Scenario ${scenario.id} targets an element with a CSS selector built from ${targets
           .map(
             (target) =>
-              `${target.reason}: ${target.stepId} → ${describeTarget(target.locator)}`
+              `${target.reason}: ${target.label} → ${describeTarget(target.locator)}`
           )
           .join(" ; ")}`,
         'Target what the discovery snapshot shows instead: a role with its accessible name, an id, or a stable attribute the source defines. To prove an absence, use kind "hidden" or a count of 0 on a selector the page still carries. A class name or a color read in the source is not a stable target.'

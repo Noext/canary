@@ -434,7 +434,9 @@ describe("sélecteur construit sur une classe ou une couleur", () => {
       'a class attribute selector ([class*="text-[#b42318]"])'
     );
     expect(observed[0]?.error.message).toContain("heading-visible");
-    expect(observed[0]?.error.message).toContain("load → css=");
+    expect(observed[0]?.error.message).toContain(
+      "load (assertion heading) → css="
+    );
     expect(observed[0]?.error.hint).toContain(
       "a role with its accessible name"
     );
@@ -449,11 +451,80 @@ describe("sélecteur construit sur une classe ou une couleur", () => {
       '[class^="text-"]',
       "[class$=500]",
       '[class~="text-red-500"]',
+      "[class|=foo]",
+      "[class=foo].bar",
+      "div[data-x].b",
       '[style*="color: rgb(180, 35, 24)"]',
       'p[class*="text-[rgb(180,35,24)]"]',
     ]) {
       expect(refusals(value), value).toHaveLength(1);
     }
+  });
+  it("accepte un point, un #hex ou une fonction de couleur hors attribut de style", () => {
+    for (const value of [
+      "[data-file=report.png]",
+      "[data-testid=user.name]",
+      "[data-x=foo.bar]",
+      '[aria-label="#abc"]',
+      '[id="#abc"]',
+      '[value="#ffffff"]',
+      '[data-label="rgb(0,0,0)"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("lit la couleur dans un attribut de style et cite la fonction seule", () => {
+    for (const value of [
+      '[style*="background:rgb(0,0,0)"]',
+      '[style="color:#b42318"]',
+      '[style*="border-color: hsl(0 0% 0%)"]',
+      '[style*="color: hsla(1,2%,3%,.5)"]',
+      '[style*="color: color-mix(in srgb, red, blue)"]',
+      '[style*="color: lab(50% 40 59.5)"]',
+      '[style*="color: lch(50% 40 30)"]',
+      '[style*="color: oklab(50% 0.1 0.1)"]',
+      '[style*="color: oklch(50% 0.1 30)"]',
+      '[fill="#b42318"]',
+      "[stroke=#fff]",
+    ]) {
+      expect(refusals(value), value).toHaveLength(1);
+    }
+    // Le fragment cité est la fonction seule : ni le guillemet ni le deux-points
+    // qui la précèdent.
+    const fragment = refusals('[style*="background:rgb(0,0,0)"]')[0];
+    expect(fragment?.error.message).toContain("a color literal (rgb()");
+    expect(fragment?.error.message).not.toContain('("rgb(');
+  });
+  it("nomme l'assertion refusée, pas seulement son étape", () => {
+    const plan = PlanSchema.parse(
+      readOnlyPlan({ by: "css", value: ".text-red-500" })
+    );
+    const scenario = plan.scenarios[0]!;
+    const assertion = scenario.assertions[0]!;
+    const named = unstableSelectorRefusals({
+      ...plan,
+      scenarios: [
+        {
+          ...scenario,
+          assertions: [
+            {
+              ...assertion,
+              id: "heading-a",
+              target: { by: "css", value: ".text-red-500" },
+            },
+            {
+              ...assertion,
+              id: "heading-b",
+              target: { by: "css", value: ".text-blue-500" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(named).toHaveLength(1);
+    const message = named[0]?.error.message ?? "";
+    expect(message).toContain("load (assertion heading-a) → ");
+    expect(message).toContain("load (assertion heading-b) → ");
   });
   it("n'oppose aucun refus à un id, une chaîne, un data-* ou un autre moteur", () => {
     for (const value of [
