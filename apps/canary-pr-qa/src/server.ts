@@ -115,6 +115,20 @@ export function canonicalArtifactPath(raw: string) {
   }
   return path;
 }
+/**
+ * Les dumps que la politique de données garde hors de portée : la trace
+ * Playwright, le HAR, le journal natif, l'index `results.json` et les fichiers
+ * qu'un rapport lie. La décision lit le **nom**, jamais les répertoires — un
+ * scénario peut s'appeler `network-errors` ou `console-errors` et son
+ * `report.html` reste un rapport. Partagée par la route HTTP des artefacts et
+ * les outils MCP, pour qu'aucune surface n'ouvre ce que l'autre refuse.
+ */
+export function isRawEvidenceName(name: string) {
+  return (
+    /\.(?:har|zip|log)$/i.test(name) ||
+    /^(?:results\.json$|console[.-]|network[.-])/i.test(name)
+  );
+}
 export async function serveArtifact(
   res: ServerResponse,
   config: Config,
@@ -177,9 +191,25 @@ export async function serveArtifact(
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
   });
-  createReadStream(path)
-    .on("error", () => res.destroy())
-    .pipe(res);
+  // La réponse n'est terminée qu'une fois le fichier remis : un appelant qui
+  // journalise une lecture juste après doit savoir que le contenu est parti,
+  // pas seulement que l'en-tête a été écrit. Un transfert interrompu par le
+  // disque ou par le client remonte donc en erreur, et ne se lit pas comme une
+  // lecture réussie.
+  await new Promise<void>((done, reject) => {
+    const stream = createReadStream(path);
+    stream.on("error", (error) => {
+      res.destroy();
+      reject(error);
+    });
+    res.on("finish", () => done());
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        reject(new Error("Artifact transfer interrupted"));
+      }
+    });
+    stream.pipe(res);
+  });
 }
 
 export async function startServer(config: Config) {

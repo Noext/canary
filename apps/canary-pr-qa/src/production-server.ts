@@ -35,7 +35,11 @@ import { PreviewHosts } from "./preview-hosts.js";
 import { type Job, Queue } from "./queue.js";
 import { purgeRun } from "./retention.js";
 import { accepted, RunLauncher, runInputSchema } from "./run-launch.js";
-import { canonicalArtifactPath, serveArtifact } from "./server.js";
+import {
+  canonicalArtifactPath,
+  isRawEvidenceName,
+  serveArtifact,
+} from "./server.js";
 import {
   durableCost,
   durableRuns,
@@ -225,22 +229,22 @@ export async function startProductionServer(config: Config) {
     // The aggregate report and each scenario's Canary session report are the
     // dashboard's own output: an authorized user reads them without the raw
     // evidence policy. That policy only keeps the heavy dumps the reports link
-    // to (trace, HAR, console log, results manifest) out of reach. It reads the
-    // file name, never the directories: a scenario may be named `network-errors`
-    // or `console-errors`, and its `report.html` is still a report.
+    // to (trace, HAR, console log, results manifest) out of reach, and the MCP
+    // tools read it from the same predicate.
     const name = path.slice(path.lastIndexOf("/") + 1);
-    if (
-      config.QA_RAW_EVIDENCE !== "true" &&
-      (/\.(?:har|zip|log)$/i.test(name) ||
-        /^(?:results\.json$|console[.-]|network[.-])/i.test(name))
-    ) {
+    if (config.QA_RAW_EVIDENCE !== "true" && isRawEvidenceName(name)) {
       json(res, 403, { error: "Raw evidence disabled by data policy" });
       return;
     }
     await serveArtifact(res, config, id, path);
-    if (user) {
-      await queue.audit(user.id, "artifact.read", id, { path });
-    }
+    // Un lien signé se suit sans clé, et c'est le fichier qui compte : la ligne
+    // est écrite dès qu'un contenu a été servi, quel que soit le porteur. Le
+    // porteur signé n'a pas d'identité à nommer, l'acteur dit alors par où il
+    // est entré, comme `webhook` le fait pour les livraisons GitHub.
+    await queue.audit(user?.id ?? "artifact-signature", "artifact.read", id, {
+      path,
+      ...(user ? {} : { via: "signature" }),
+    });
   }
   async function streamRun(
     req: IncomingMessage,

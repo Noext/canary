@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type { Config } from "../src/config.js";
 import type { ApiKeyCreated } from "../src/dashboard/contracts.js";
 import { startProductionServer } from "../src/production-server.js";
 import { fixture, PR_URL, pgliteQueue, SHA } from "./fixture.js";
@@ -30,7 +31,10 @@ interface McpAnswer {
 }
 
 /** A production server on the in-memory PostgreSQL, plus a key to read it. */
-async function mcpServer(role: "operator" | "viewer" = "viewer") {
+async function mcpServer(
+  role: "operator" | "viewer" = "viewer",
+  extra: Partial<Config> = {}
+) {
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
@@ -38,6 +42,7 @@ async function mcpServer(role: "operator" | "viewer" = "viewer") {
     ...f.config,
     DATABASE_URL: "postgres://fixture",
     QA_PORT: 0,
+    ...extra,
   });
   cleanup.push(() => server.shutdown());
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -117,6 +122,58 @@ async function completedRun(
   return queued.id;
 }
 
+/** Une session telle que `list_run_sessions` la publie. */
+interface SessionRow {
+  artifacts: { bytes: number; kind: string; path: string; url?: string }[];
+  dir: string;
+  id?: string;
+  name?: string;
+  outcome?: string;
+}
+function byArtifactKind(artifacts: SessionRow["artifacts"]) {
+  return Object.fromEntries(
+    artifacts.map((entry) => [entry.kind, entry])
+  ) as Record<string, SessionRow["artifacts"][number] | undefined>;
+}
+/**
+ * Les preuves qu'un scénario laisse sur disque, dans le layout que `canary end`
+ * copie : index, rapport, dumps, trace, vidéo et capture. Le HAR dépasse la
+ * taille rendue par le MCP pour exercer le lien signé.
+ */
+async function sessionOnDisk(dataDir: string, id: string) {
+  const dir = join(dataDir, id, "welcome");
+  await mkdir(join(dir, "video"), { recursive: true });
+  await mkdir(join(dir, "screenshots"), { recursive: true });
+  await writeFile(
+    join(dataDir, id, "result.json"),
+    JSON.stringify({
+      id,
+      outcome: "passed",
+      scenarios: [
+        {
+          outcome: "passed",
+          scenario: {
+            id: "welcome",
+            title: "Submitting the name saves a welcome message",
+          },
+          sessionId: "session-abc",
+        },
+      ],
+      startedAt: "2026-03-12T09:00:00.000Z",
+    })
+  );
+  await writeFile(
+    join(dir, "results.json"),
+    JSON.stringify({ id: "session-abc", kind: "canary-session-result" })
+  );
+  await writeFile(join(dir, "report.html"), "<!doctype html><h1>report</h1>");
+  await writeFile(join(dir, "console.log"), "[info] ready\n[error] boom\n");
+  await writeFile(join(dir, "network.har"), Buffer.alloc(300_000, 0x20));
+  await writeFile(join(dir, "trace.zip"), Buffer.alloc(64));
+  await writeFile(join(dir, "video", "page.webm"), Buffer.alloc(32));
+  await writeFile(join(dir, "screenshots", "welcome.png"), Buffer.alloc(16));
+}
+
 it("answers the MCP handshake and publishes the read tools and the one action", async () => {
   const { url, key } = await mcpServer();
   const handshake = await call(url, key, "initialize", {
@@ -133,8 +190,12 @@ it("answers the MCP handshake and publishes the read tools and the one action", 
   expect(listed.result?.tools?.map((entry) => entry.name).sort()).toEqual([
     "get_automatic_attempt",
     "get_run",
+    "get_session_console",
+    "get_session_har",
+    "get_session_results",
     "launch_run",
     "list_automatic_attempts",
+    "list_run_sessions",
     "list_runs",
   ]);
 }, 30_000);
@@ -252,7 +313,7 @@ it("caps a batched request and answers its calls one at a time", async () => {
   const answered = await post(batch(2));
   expect(answered.status).toBe(200);
   const payload = (await answered.json()) as McpAnswer[];
-  expect(payload.map((entry) => entry.result?.tools?.length)).toEqual([5, 5]);
+  expect(payload.map((entry) => entry.result?.tools?.length)).toEqual([9, 9]);
   // A batch of notifications alone is accepted and answers nothing.
   const silent = await post(
     JSON.stringify([
@@ -540,6 +601,299 @@ it("answers a refused launch with a diagnostic, not a server fault", async () =>
   });
   expect(outOfScope.isError).toBe(true);
   expect(String(outOfScope.body.message)).toContain("access denied");
+}, 30_000);
+
+it("lists a run's Canary sessions and keeps raw evidence behind the data policy", async () => {
+  const { dataDir, key, q, url } = await mcpServer();
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  const listed = await tool(url, key, "list_run_sessions", { runId: id });
+  expect(listed.isError).toBe(false);
+  expect(listed.body).toMatchObject({ count: 1, rawEvidence: false, run: id });
+  expect(String(listed.body.note)).toContain("QA_RAW_EVIDENCE");
+  const [session] = listed.body.sessions as SessionRow[];
+  expect(session).toMatchObject({
+    dir: "welcome",
+    id: "session-abc",
+    name: "Submitting the name saves a welcome message",
+    outcome: "passed",
+  });
+  const byKind = byArtifactKind(session!.artifacts);
+  expect(Object.keys(byKind).sort()).toEqual([
+    "console",
+    "har",
+    "report",
+    "results",
+    "screenshot",
+    "trace",
+    "video",
+  ]);
+  // Le rapport, la vidéo et la capture sont la sortie du service, pas des
+  // dumps : ils portent un chemin même politique fermée, à demander avec la clé.
+  for (const kind of ["report", "video", "screenshot"] as const) {
+    expect(byKind[kind]?.url).toContain(`/artifacts/${id}/welcome/`);
+    expect(String(byKind[kind]?.url)).not.toContain("signature=");
+  }
+  // La trace et les dumps restent hors de portée : ni chemin (l'URL serait
+  // refusée par la route HTTP), ni contenu.
+  for (const kind of ["trace", "results", "console", "har"] as const) {
+    expect(byKind[kind]?.url).toBeUndefined();
+  }
+  // Le chemin rendu n'est pas un porteur : sans clé, la route refuse.
+  const reportUrl = String(byKind.report?.url);
+  expect((await fetch(`${url}${reportUrl}`)).status).toBe(401);
+  for (const name of [
+    "get_session_results",
+    "get_session_console",
+    "get_session_har",
+  ]) {
+    const refused = await tool(url, key, name, {
+      runId: id,
+      session: "welcome",
+    });
+    expect(refused.isError).toBe(true);
+    expect(String(refused.body.message)).toContain("QA_RAW_EVIDENCE");
+  }
+  // Le refus n'est pas un chemin détourné : rien n'a été audité en lecture.
+  const audited = await q.pool.query(
+    "SELECT count(*)::int AS count FROM qa_audit WHERE action='artifact.read'"
+  );
+  expect(audited.rows[0]).toMatchObject({ count: 0 });
+  // Une session inconnue est une réponse lisible, pas un protocole en échec.
+  const absent = await tool(url, key, "get_session_console", {
+    runId: id,
+    session: "nope",
+  });
+  expect(absent.isError).toBe(true);
+  expect(String(absent.body.message)).toContain("welcome");
+  const missing = await tool(url, key, "list_run_sessions", {
+    runId: "87654321-1234-1234-1234-123456789012",
+  });
+  expect(missing.isError).toBe(true);
+}, 30_000);
+
+it("renders session evidence page by page once the data policy opens it", async () => {
+  const { dataDir, key, q, url } = await mcpServer("viewer", {
+    QA_RAW_EVIDENCE: "true",
+  });
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  const listed = await tool(url, key, "list_run_sessions", { runId: id });
+  expect(listed.body).toMatchObject({ rawEvidence: true });
+  const [session] = listed.body.sessions as SessionRow[];
+  // Ouverte, la politique expose aussi le chemin de la trace : aucun autre
+  // outil ne la rend, et le chemin se lit avec la clé de l'appelant.
+  expect(byArtifactKind(session!.artifacts).trace?.url).toContain(
+    `/artifacts/${id}/welcome/trace.zip`
+  );
+  const console_ = await tool(url, key, "get_session_console", {
+    runId: id,
+    session: "welcome",
+  });
+  expect(console_.isError).toBe(false);
+  expect(console_.body).toMatchObject({
+    artifact: { kind: "console", path: "welcome/console.log" },
+    nextOffset: null,
+    offset: 0,
+    session: { dir: "welcome", id: "session-abc" },
+    text: "[info] ready\n[error] boom\n",
+    url: null,
+  });
+  // L'index et le HAR sont lisibles par le même chemin, et le HAR gros rend un
+  // lien signé plutôt que plusieurs mégaoctets dans la réponse.
+  const results = await tool(url, key, "get_session_results", {
+    runId: id,
+    session: "session-abc",
+  });
+  expect(JSON.parse(String(results.body.text))).toMatchObject({
+    id: "session-abc",
+  });
+  const har = await tool(url, key, "get_session_har", {
+    runId: id,
+    session: "welcome",
+  });
+  expect(har.body).toMatchObject({ text: null });
+  const harUrl = String(har.body.url);
+  expect(harUrl).toContain(`/artifacts/${id}/welcome/network.har`);
+  // Le MCP ne fabrique pas de porteur anonyme : le chemin rendu se demande avec
+  // la clé de l'appelant, comme le dashboard exige une autorité de partage pour
+  // émettre un lien signé.
+  expect(harUrl).not.toContain("signature=");
+  expect((await fetch(`${url}${harUrl}`)).status).toBe(401);
+  const downloaded = await fetch(`${url}${harUrl}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  expect(downloaded.status).toBe(200);
+  expect((await downloaded.arrayBuffer()).byteLength).toBe(300_000);
+  // La pagination ne coupe pas un caractère : la suite recolle l'original.
+  const head = await tool(url, key, "get_session_console", {
+    limit: 8,
+    runId: id,
+    session: "welcome",
+  });
+  const tail = await tool(url, key, "get_session_console", {
+    offset: head.body.nextOffset as number,
+    runId: id,
+    session: "welcome",
+  });
+  expect(head.body.nextOffset).toBe(8);
+  expect(`${head.body.text}${tail.body.text}`).toBe(
+    "[info] ready\n[error] boom\n"
+  );
+  expect(tail.body.nextOffset).toBeNull();
+  // Le journal suit la fin de chaque transfert : la ligne du gros artefact
+  // arrive après que le client a lu les 300 000 octets.
+  const reads = async () => {
+    const rows = await q.pool.query(
+      "SELECT actor, details FROM qa_audit WHERE action='artifact.read' ORDER BY id"
+    );
+    return rows.rows as {
+      actor: string;
+      details: { bytes?: number; delivery?: string; path: string };
+    }[];
+  };
+  await vi.waitFor(async () => {
+    expect((await reads()).map((row) => row.details.path)).toEqual([
+      "welcome/console.log",
+      "welcome/results.json",
+      "welcome/network.har",
+      "welcome/console.log",
+      "welcome/console.log",
+    ]);
+  });
+  const audited = await reads();
+  // Les lectures rendues par le MCP portent leur mode de livraison ; celle du
+  // lien signé nomme son porteur, qui n'a pas de compte.
+  expect(audited.map((row) => row.details.delivery ?? null)).toEqual([
+    "inline",
+    "inline",
+    null,
+    "inline",
+    "inline",
+  ]);
+  // La ligne d'audit porte la taille rendue, mesurée après la lecture : un
+  // contenu qui n'a pas été lu ne peut pas y figurer, et le chemin d'un gros
+  // artefact n'y ajoute rien avant que la clé ne le demande.
+  expect(audited.map((row) => row.details.bytes ?? null)).toEqual([
+    26,
+    (results.body.artifact as { bytes: number }).bytes,
+    null,
+    8,
+    18,
+  ]);
+  // La lecture du gros artefact est attribuée à la clé qui l'a demandée, pas à
+  // un porteur anonyme.
+  expect(audited[2]?.actor).toMatch(/^key:/);
+}, 30_000);
+
+it("renders a whole character when the page is shorter than it", async () => {
+  const { dataDir, key, q, url } = await mcpServer("viewer", {
+    QA_RAW_EVIDENCE: "true",
+  });
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  // Trois caractères de deux octets : une page d'un octet ne peut pas les
+  // découper. Sans progression garantie, l'appelant qui suit `nextOffset`
+  // relirait la même page vide à l'infini.
+  await writeFile(join(dataDir, id, "welcome", "console.log"), "ééé");
+  const first = await tool(url, key, "get_session_console", {
+    limit: 1,
+    runId: id,
+    session: "welcome",
+  });
+  expect(first.body.text).toBe("é");
+  expect(first.body.nextOffset).toBe(2);
+  const rest = await tool(url, key, "get_session_console", {
+    offset: 2,
+    runId: id,
+    session: "welcome",
+  });
+  expect(`${first.body.text}${rest.body.text}`).toBe("ééé");
+  expect(rest.body.nextOffset).toBeNull();
+  // Un offset au milieu d'un caractère est refusé, avec la frontière à
+  // reprendre : servir un caractère cassé perdrait l'octet restant.
+  const midCharacter = await tool(url, key, "get_session_console", {
+    offset: 1,
+    runId: id,
+    session: "welcome",
+  });
+  expect(midCharacter.isError).toBe(true);
+  expect(String(midCharacter.body.message)).toContain("milieu d'un caractère");
+  expect(String(midCharacter.body.message)).toContain("reprendre à 0");
+}, 30_000);
+
+it("reports an unreadable session layout as a fault, not as an empty run", async () => {
+  const { dataDir, key, q, url } = await mcpServer();
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  // Un fichier là où la copie des preuves attend un dossier : la panne doit
+  // remonter, sinon `count: 0` ferait passer la perte d'accès pour un test sans
+  // session et l'agent chercherait des preuves qui existent.
+  await rm(join(dataDir, id, "welcome", "video"), { recursive: true });
+  await writeFile(join(dataDir, id, "welcome", "video"), "not a directory");
+  const broken = await call(url, key, "tools/call", {
+    arguments: { runId: id },
+    name: "list_run_sessions",
+  });
+  expect(broken.status).toBe(500);
+  expect(((await broken.json()) as McpAnswer).error?.code).toBe(-32_603);
+}, 30_000);
+
+it("mints an anonymous link only from an operator authority, never from an agent key", async () => {
+  const { admin, dataDir, key, q, url } = await mcpServer();
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  const share = (token: string) =>
+    fetch(`${url}/runs/${id}/links`, {
+      body: JSON.stringify({ path: "welcome/report.html" }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+  // La clé lit le run, mais le partage anonyme demande l'autorité d'écrire sur
+  // le run : c'est cette règle qui rend le porteur impossible à fabriquer d'ici.
+  expect((await share(key)).status).toBe(403);
+  const shared = await share(admin.Authorization.replace("Bearer ", ""));
+  expect(shared.status).toBe(200);
+  const link = ((await shared.json()) as { url: string }).url;
+  expect(link).toContain("signature=");
+  // Ce lien-là est bien un porteur anonyme, et sa lecture est auditée pour ce
+  // qu'elle est, faute de compte à nommer. Le corps est lu jusqu'au bout :
+  // l'audit suit la fin du transfert, pas l'en-tête.
+  const download = await fetch(`${url}${link}`);
+  expect(download.status).toBe(200);
+  await download.arrayBuffer();
+  const audits = () =>
+    q.pool
+      .query(
+        "SELECT actor, action FROM qa_audit WHERE action IN ('artifact.share','artifact.read') ORDER BY id"
+      )
+      .then((result) => result.rows as { action: string; actor: string }[]);
+  await vi.waitFor(async () => {
+    expect((await audits()).map((row) => row.action)).toEqual([
+      "artifact.share",
+      "artifact.read",
+    ]);
+  });
+  expect((await audits())[1]?.actor).toBe("artifact-signature");
+}, 30_000);
+
+it("refuses a session of a run the key does not cover", async () => {
+  const { dataDir, key, q, url } = await mcpServer("viewer", {
+    QA_RAW_EVIDENCE: "true",
+  });
+  const secret = await completedRun(q, "other/secret");
+  await sessionOnDisk(dataDir, secret);
+  for (const name of ["list_run_sessions", "get_session_console"]) {
+    const refused = await tool(url, key, name, {
+      runId: secret,
+      ...(name === "list_run_sessions" ? {} : { session: "welcome" }),
+    });
+    expect(refused.isError).toBe(true);
+    expect(String(refused.body.message)).toContain("access denied");
+  }
 }, 30_000);
 
 it("re-answers a retried launch instead of paying for a second run", async () => {
