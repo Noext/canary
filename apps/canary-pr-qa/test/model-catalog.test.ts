@@ -121,7 +121,9 @@ it("returns useful schema errors to the bounded repair request without silently 
         { status: 200 }
       );
     });
-  const config = loadConfig({});
+  // Le corps non streamé est remplacé ici : ce test porte sur le schéma et la réparation,
+  // pas sur le transport (couvert par le serveur de fixture et les tests SSE).
+  const config = loadConfig({ OPENAI_STREAM: "false" });
   expect(
     await new Model(config).json(
       "Diagnostic JSON",

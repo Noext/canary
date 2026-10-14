@@ -76,6 +76,14 @@ const envSchema = z.object({
   OPENAI_TEMPERATURE: z
     .union([z.literal(""), z.coerce.number().min(0).max(2)])
     .default(""),
+  // Streamé par défaut : un proxy devant l'endpoint coupe une réponse non streamée (~100 s)
+  // avant la fin d'une longue génération. `false` revient au corps complet, pour un endpoint
+  // qui ne sait pas streamer.
+  OPENAI_STREAM: z.enum(["true", "false"]).default("true"),
+  // Vide : le paramètre n'est pas envoyé (compatible avec les modèles qui le rejettent).
+  OPENAI_REASONING_EFFORT: z
+    .enum(["", "minimal", "low", "medium", "high"])
+    .default(""),
   QA_DATA_DIR: z.string().default("./qa-data"),
   QA_POLICY_DIR: z.string().default(""),
   QA_API_TOKEN: z.string().default(""),
