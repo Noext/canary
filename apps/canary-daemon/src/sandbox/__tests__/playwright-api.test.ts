@@ -81,6 +81,16 @@ const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
     <select id="profil" aria-label="Profil de démonstration">
       <option value="admin">Administrateur démo 1</option>
     </select>
+    <label class="field">
+      <span class="sr-only">Fournisseurs</span>
+      <select id="fournisseurs" multiple>
+        <option value="alpha">Alpha SA</option>
+        <option value="beta">Beta SARL</option>
+      </select>
+    </label>
+    <label for="recherche-active">Recherche</label>
+    <input id="recherche-active" type="checkbox" />
+    <input id="recherche-libre" type="text" title="Recherche" />
     <button id="submit">Submit</button>
     <button id="disabled" disabled>Disabled</button>
     <button id="focus-target">Focus target</button>
@@ -780,6 +790,72 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       // c'est ce qui rend le repli sûr en strict mode.
       expect(result.alreadyNamedByAriaLabel).toBe(1);
       expect(result.selected).toBe("DEMO18");
+    });
+
+    it("prefers the exact label and covers listbox and homonym controls", async () => {
+      const result = await harness.runJson<{
+        labelOnly: number;
+        ordered: number;
+        multiLabelOnly: number;
+        multiOrdered: number;
+        collisionLabelOnly: number;
+        collisionWidened: number;
+        collisionOrdered: number;
+        selected: string;
+        multiSelected: string;
+        checked: boolean;
+      }>(
+        withTestPage(
+          "locator-label-preference",
+          `
+          const resolveLabel = async (strict, fallback) => ((await strict.count()) ? strict : fallback);
+          const strictPharmacy = page.getByLabel("Pharmacie active", { exact: true });
+          const pharmacy = await resolveLabel(strictPharmacy, strictPharmacy
+            .or(page.getByRole("combobox", { name: "Pharmacie active", exact: true }))
+            .or(page.getByRole("listbox", { name: "Pharmacie active", exact: true }))
+            .or(page.getByRole("textbox", { name: "Pharmacie active", exact: true })));
+          const strictFournisseurs = page.getByLabel("Fournisseurs", { exact: true });
+          const fournisseurs = await resolveLabel(strictFournisseurs, strictFournisseurs
+            .or(page.getByRole("combobox", { name: "Fournisseurs", exact: true }))
+            .or(page.getByRole("listbox", { name: "Fournisseurs", exact: true }))
+            .or(page.getByRole("textbox", { name: "Fournisseurs", exact: true })));
+          const strictRecherche = page.getByLabel("Recherche", { exact: true });
+          const widenedRecherche = strictRecherche
+            .or(page.getByRole("textbox", { name: "Recherche", exact: true }));
+          const recherche = await resolveLabel(strictRecherche, widenedRecherche);
+          await pharmacy.selectOption("DEMO18");
+          await fournisseurs.selectOption("beta");
+          await recherche.click();
+          console.log(JSON.stringify({
+            labelOnly: await strictPharmacy.count(),
+            ordered: await pharmacy.count(),
+            multiLabelOnly: await strictFournisseurs.count(),
+            multiOrdered: await fournisseurs.count(),
+            collisionLabelOnly: await strictRecherche.count(),
+            collisionWidened: await widenedRecherche.count(),
+            collisionOrdered: await recherche.count(),
+            selected: await page.locator("#pharmacie").inputValue(),
+            multiSelected: await page.locator("#fournisseurs").inputValue(),
+            checked: await page.locator("#recherche-active").isChecked(),
+          }));
+        `
+        )
+      );
+
+      expect(result.labelOnly).toBe(0);
+      expect(result.ordered).toBe(1);
+      // `<select multiple>` a le rôle implicite `listbox`, pas `combobox`.
+      expect(result.multiLabelOnly).toBe(0);
+      expect(result.multiOrdered).toBe(1);
+      // Deux contrôles distincts partageant le même nom accessible : l'union
+      // seule en résout deux, la préférence au libellé exact garde la cible
+      // unique et n'élargit donc pas un locator qui fonctionnait.
+      expect(result.collisionLabelOnly).toBe(1);
+      expect(result.collisionWidened).toBe(2);
+      expect(result.collisionOrdered).toBe(1);
+      expect(result.selected).toBe("DEMO18");
+      expect(result.multiSelected).toBe("beta");
+      expect(result.checked).toBe(true);
     });
   });
 

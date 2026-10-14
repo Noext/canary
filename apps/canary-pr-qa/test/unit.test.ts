@@ -168,26 +168,37 @@ describe("validation and deterministic assertions", () => {
       )
     ).toThrow();
   });
-  it("keeps an exact label match and adds the accessible-name path of the same label", () => {
+  it("prefers the exact label match and falls back to the accessible name", () => {
     const target = { by: "label" as const, value: "Pharmacie active" };
     const expression = locatorExpression(target);
-    // Le libellé englobant d'un `<select>` inclut le texte de ses options : la
-    // correspondance exacte seule ne résout rien, le nom accessible la rattrape.
+    const strict = 'page.getByLabel("Pharmacie active", { exact: true })';
+    // Le contrôle du libellé exact reste prioritaire : l'union n'est consultée
+    // que si ce libellé ne résout rien, donc un locator `by:"label"` qui
+    // fonctionnait ne s'élargit jamais à un contrôle homonyme.
     expect(expression).toContain(
-      'page.getByLabel("Pharmacie active", { exact: true })'
+      `(await resolveLabel(${strict}, ${strict}.or(`
     );
+    // Le libellé englobant d'un `<select>` inclut le texte de ses options :
+    // l'union par nom accessible rattrape les cas pollués, `<select multiple>`
+    // (rôle implicite `listbox`) compris.
     expect(expression).toContain(
       'page.getByRole("combobox", { name: "Pharmacie active", exact: true })'
     );
     expect(expression).toContain(
+      'page.getByRole("listbox", { name: "Pharmacie active", exact: true })'
+    );
+    expect(expression).toContain(
       'page.getByRole("textbox", { name: "Pharmacie active", exact: true })'
     );
-    // Jamais de correspondance par sous-chaîne : un libellé qui contient la
-    // valeur ne doit pas être sélectionné à la place du bon contrôle.
-    expect(expression).not.toMatch(/getByLabel\([^,]+(?:\)|, \))/);
+    // Jamais de correspondance par sous-chaîne, et jamais un libellé sans
+    // exactitude : un libellé qui contient la valeur ne doit pas être choisi.
+    expect(expression).not.toMatch(/getByLabel\("[^"]+"\)/);
     const command = compileAction(
       { type: "select", locator: target, value: "DEMO18" },
       "https://preview.test"
+    );
+    expect(command).toContain(
+      "const resolveLabel = async (strict, fallback) => ((await strict.count()) ? strict : fallback);"
     );
     expect(command).toContain(
       `await ${expression}.selectOption("DEMO18", { timeout: 10000 });`

@@ -33,22 +33,35 @@ export type Observation = z.infer<typeof observationSchema>;
 /**
  * `getByLabel` compare le texte du libellé associé, pas le nom accessible du
  * contrôle : ce texte est la concaténation de tous les nœuds texte du `<label>`
- * englobant, donc aussi celle des `option` d'un `<select>` ou du contenu initial
+ * englobant, donc aussi celle des `option` d'un `<select>` — dont le rôle
+ * implicite est `listbox` pour un `<select multiple>` — ou du contenu initial
  * d'un `<textarea>`. Un libellé réduit à un `sr-only` — « Pharmacie active »,
  * run e6df6014 — ne correspond plus exactement et le locator ne résout rien.
- * Le nom accessible, lui, reste juste : on garde l'exactitude et on ajoute les
- * rôles qui le portent. `Locator.or()` fait une union dédupliquée par élément,
- * donc un contrôle trouvé par les deux chemins reste unique.
+ *
+ * Le nom accessible, lui, reste juste. Le contrôle visé reste d'abord celui du
+ * libellé exact : l'union n'est consultée que si ce libellé ne résout rien, pour
+ * ne pas élargir la cible d'un locator `by:"label"` qui fonctionnait déjà —
+ * deux contrôles distincts partageant le même nom accessible échoueraient en
+ * strict mode. `Locator.or()` déduplique par élément.
  */
 function labelExpression(value: string): string {
   const name = JSON.stringify(value);
   const exact = `{ name: ${name}, exact: true }`;
-  return (
-    `page.getByLabel(${name}, { exact: true })` +
-    `.or(page.getByRole("combobox", ${exact}))` +
-    `.or(page.getByRole("textbox", ${exact}))`
+  const strict = `page.getByLabel(${name}, { exact: true })`;
+  const accessibleName = ["combobox", "listbox", "textbox"].reduce(
+    (expression, role) =>
+      `${expression}.or(page.getByRole(${JSON.stringify(role)}, ${exact}))`,
+    strict
   );
+  return `(await resolveLabel(${strict}, ${accessibleName}))`;
 }
+
+/**
+ * Émis dans le script compilé par `labelExpression` : le contrôle du libellé
+ * exact tant qu'il existe, l'union des deux chemins sinon.
+ */
+const RESOLVE_LABEL_HELPER =
+  "const resolveLabel = async (strict, fallback) => ((await strict.count()) ? strict : fallback);";
 
 export function locatorExpression(locator: Locator): string {
   const value = JSON.stringify(locator.value);
@@ -209,6 +222,7 @@ export function compileAction(
   return `const page = await browser.getPage("qa");
 let actual;
 const provenanceUrls = [];
+${RESOLVE_LABEL_HELPER}
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
