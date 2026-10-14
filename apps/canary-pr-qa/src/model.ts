@@ -190,12 +190,9 @@ export class Model {
       url,
       init,
       (event) => {
-        if (event === "[DONE]") {
-          return false;
-        }
         state = reduceChatStream(state, event);
-        // Inutile de payer la fin du flux une fois que l'endpoint a annoncé un échec.
-        return state.error === undefined;
+        // Inutile de payer la fin du flux une fois qu'un échec ou la fin sont connus.
+        return state.error === undefined && !state.done;
       },
       timeout
     );
@@ -213,6 +210,15 @@ export class Model {
         "MODEL_STREAM_INVALID",
         `Model stream contained ${state.malformed} unreadable event(s)`,
         "The response was cut, or the endpoint sent a payload that is not JSON. The plan was refused rather than accepted incomplete: retry the run, and use OPENAI_STREAM=false if the endpoint cannot stream."
+      );
+    }
+    // Un flux fermé proprement sans marqueur terminal est une génération interrompue : elle ne
+    // doit pas être confondue avec un plan complet.
+    if (!(state.done || state.finishReason !== undefined)) {
+      throw new QaError(
+        "MODEL_STREAM_TRUNCATED",
+        "Model stream ended without [DONE] or a finish reason",
+        "The connection closed before the end of the generation: retry the run. An interrupted stream is never accepted as a plan."
       );
     }
     return {

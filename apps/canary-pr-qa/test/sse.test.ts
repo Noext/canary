@@ -101,8 +101,8 @@ describe("reduceChatStream", () => {
     expect(state.events).toBe(2);
   });
 
-  it("laisse [DONE] sans effet et retient une erreur annoncée par l'endpoint", () => {
-    expect(reduce(["[DONE]"])).toEqual(emptyChatStream);
+  it("marque la fin du flux avec [DONE] sans toucher au contenu", () => {
+    expect(reduce(["[DONE]"])).toEqual({ ...emptyChatStream, done: true });
     const state = reduce([`{"error":{"message":"quota exceeded"}}`]);
     expect(state.error).toBe("quota exceeded");
     expect(state.content).toBe("");
@@ -237,6 +237,43 @@ describe("modalités de transport du modèle", () => {
           z.object({ ok: z.boolean() }).strict()
         )
       ).rejects.toThrow("quota exceeded");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("refuse un flux fermé sans marqueur terminal, même si le contenu est valide", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      streamResponse([chunk(content('{"ok":true}'))])
+    );
+    try {
+      await expect(
+        new Model(stubConfig()).json(
+          "JSON",
+          {},
+          z.object({ ok: z.boolean() }).strict()
+        )
+      ).rejects.toThrow("without [DONE]");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("accepte un flux terminé par un finish_reason, sans [DONE]", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      streamResponse([
+        chunk(content('{"ok":true}')),
+        chunk({}, false),
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop", index: 0 }] })}\n\n`,
+      ])
+    );
+    try {
+      const value = await new Model(stubConfig()).json(
+        "JSON",
+        {},
+        z.object({ ok: z.boolean() }).strict()
+      );
+      expect(value).toEqual({ ok: true });
     } finally {
       vi.restoreAllMocks();
     }

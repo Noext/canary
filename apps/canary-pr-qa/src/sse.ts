@@ -21,6 +21,8 @@ export interface ChatUsage {
 export interface ChatStreamState {
   /** Contenu assemblé, delta par delta : c'est lui que le schéma valide. */
   readonly content: string;
+  /** Marqueur terminal `[DONE]` reçu. */
+  readonly done: boolean;
   /** Erreur annoncée par l'endpoint au milieu du flux. */
   readonly error?: string;
   /** Événements `data:` reçus, y compris ceux sans contenu utile. */
@@ -34,6 +36,7 @@ export interface ChatStreamState {
 
 export const emptyChatStream: ChatStreamState = {
   content: "",
+  done: false,
   events: 0,
   malformed: 0,
   reasoningChars: 0,
@@ -86,7 +89,7 @@ export function reduceChatStream(
   event: string
 ): ChatStreamState {
   if (event === "[DONE]") {
-    return state;
+    return { ...state, done: true };
   }
   let chunk: ChatChunk;
   try {
@@ -106,6 +109,7 @@ export function reduceChatStream(
     state.error;
   return {
     content: state.content + (delta?.content ?? ""),
+    done: state.done,
     ...(error === undefined ? {} : { error }),
     events: state.events + 1,
     finishReason: chunk.choices?.[0]?.finish_reason ?? state.finishReason,
