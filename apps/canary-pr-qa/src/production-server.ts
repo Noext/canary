@@ -55,6 +55,28 @@ function json(res: ServerResponse, status: number, value: unknown) {
   });
   res.end(JSON.stringify(value));
 }
+
+/**
+ * Chemins qui reçoivent le même shell mono-document : le routeur client de
+ * `apps/canary-pr-qa-ui/src/app/routing.ts` choisit l'écran une fois la page
+ * chargée. Cette liste et celle du routeur client se lisent donc ensemble.
+ * Aucun autre chemin ne tombe dans ce shell, et notamment pas `GET /runs` ni
+ * `GET /runs/<id>`, qui restent les réponses JSON de l'API.
+ */
+const SHELL_PATHS = new Set(["/", "/history", "/new-test"]);
+
+/** Le shell du dashboard et ses en-têtes, identiques quel que soit le chemin. */
+function dashboardShell(res: ServerResponse) {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'"
+  );
+  res.end(dashboard);
+}
+
 async function rawBody(req: IncomingMessage, max = 16_384) {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -367,15 +389,8 @@ export async function startProductionServer(config: Config) {
       res.end(asset.body);
       return true;
     }
-    if (req.method === "GET" && url.pathname === "/") {
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("Referrer-Policy", "no-referrer");
-      res.setHeader(
-        "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'"
-      );
-      res.end(dashboard);
+    if (req.method === "GET" && SHELL_PATHS.has(url.pathname)) {
+      dashboardShell(res);
       return true;
     }
     if (req.method === "POST" && url.pathname === "/github/webhook") {

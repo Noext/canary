@@ -3,9 +3,10 @@ import type { Server } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { startProductionServer } from "../src/production-server.js";
 import { runQa } from "../src/runner.js";
 import { startServer } from "../src/server.js";
-import { fixture, PR_URL } from "./fixture.js";
+import { fixture, PR_URL, pgliteQueue } from "./fixture.js";
 
 vi.mock("../src/runner.js", () => ({ runQa: vi.fn() }));
 const closers: (() => Promise<void>)[] = [];
@@ -302,5 +303,75 @@ describe("persistent authenticated job service", () => {
       JSON.parse(await readFile(join(f.dataDir, id, "job.json"), "utf8")).status
     ).toBe("interrupted");
     expect(runQa).not.toHaveBeenCalled();
+  });
+});
+
+describe("dashboard shell routes", () => {
+  /** Le shell est public, comme `/` : le routeur client choisit l'écran. */
+  const shellHeaders = {
+    "Content-Security-Policy":
+      "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'",
+    "Content-Type": "text/html; charset=utf-8",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+  };
+  /**
+   * Le serveur historique que démarre `service()` ne sert pas le dashboard : ces
+   * routes vivent dans le serveur de production, avec la même mise en place
+   * (fixture + file PGlite) que les autres tests de ce serveur.
+   */
+  async function dashboardService() {
+    await pgliteQueue(closers);
+    const f = await fixture();
+    closers.push(f.close);
+    const server = await startProductionServer({
+      ...f.config,
+      DATABASE_URL: "postgres://fixture",
+      QA_PORT: 0,
+    });
+    closers.push(() => server.shutdown());
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("No service address");
+    }
+    return {
+      ...f,
+      server,
+      url: `http://127.0.0.1:${address.port}`,
+      headers: {
+        Authorization: `Bearer ${f.config.QA_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    };
+  }
+  it("serves the same shell on /history and /new-test, with the root headers", async () => {
+    const s = await dashboardService();
+    const root = await fetch(`${s.url}/`);
+    expect(root.status).toBe(200);
+    const shell = await root.text();
+    expect(shell).not.toBe("");
+    for (const path of ["/history", "/new-test"]) {
+      const response = await fetch(`${s.url}${path}`);
+      expect(response.status).toBe(200);
+      for (const [header, value] of Object.entries(shellHeaders)) {
+        expect(response.headers.get(header)).toBe(value);
+      }
+      expect(await response.text()).toBe(shell);
+    }
+  });
+  it("keeps unknown paths a 404 instead of falling back to the shell", async () => {
+    const s = await dashboardService();
+    const response = await fetch(`${s.url}/does-not-exist`, {
+      headers: s.headers,
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not found" });
+  });
+  it("still answers /runs with JSON, not the shell", async () => {
+    const s = await dashboardService();
+    const response = await fetch(`${s.url}/runs`, { headers: s.headers });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/json");
+    expect(Array.isArray(await response.json())).toBe(true);
   });
 });

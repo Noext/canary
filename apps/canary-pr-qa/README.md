@@ -498,7 +498,9 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
    est appliquée au navigateur et au proxy de sortie en quelques secondes, sans
    redémarrage, et chaque changement est audité.
 2. **Nouveau test** : coller l'URL de PR, l'URL de son application de test si elle
-   n'est pas fournie par GitHub, puis choisir votre modèle.
+   n'est pas fournie par GitHub, puis choisir votre modèle. La page a son adresse
+   (`/new-test`), comme l'historique (`/history`) : un rechargement ou un lien
+   partagé rouvre la même liste.
 3. **Vérifier les accès** : lecture de la PR et contrôle de la preview au même SHA.
    Aucune génération IA, scénario, vidéo ou écriture GitHub à cette étape.
 4. **Lancer le test** : le moteur prépare et exécute les scénarios. Les paramètres
@@ -510,7 +512,8 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
    Un test qui n'est pas allé au bout affiche d'abord « Pourquoi ce test n'est
    pas allé au bout » : le code du diagnostic serveur, son message et la suite à
    donner, la phase atteinte et les scénarios en erreur. L'écran détaillé du run
-   est adressable (`#run=<run-id>`) et se partage tel quel.
+   est adressable (`#run=<run-id>`) et se partage tel quel, et les boutons Retour
+   et Avant du navigateur suivent les écrans visités.
 6. **Lancements automatiques** : chaque PR détectée mais sans test indique son
    motif (« délai dépassé », « quota horaire ») et renvoie vers un écran dédié
    (`#automatic=<delivery-id>`) qui montre ce que Canary a vérifié, la preuve de
