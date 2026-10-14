@@ -4,7 +4,6 @@ import { createLogger } from "@usecanary/logger";
 import {
   Canary,
   compileAction,
-  compileTargetProbe,
   type Observation,
   PLAN_EVIDENCE_SNAPSHOT_CHARS,
 } from "./canary.js";
@@ -19,7 +18,6 @@ import {
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
-  probeableTargets,
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
@@ -243,71 +241,19 @@ function refusalDiagnostic(
  * la page de découverte avant toute exécution.
  */
 /**
- * Compte les cibles d'assertion du plan sur la page de découverte : un plan qui
- * lit un élément inexistant — un panneau que la PR a remplacé, par exemple —
- * échouerait sur un simple délai et bloquerait le scénario, donc le run entier.
- * Seules les cibles que cette page peut juger sont sondées : une cible qui
- * n'apparaît qu'après une interaction n'est pas du ressort de cette sonde.
- */
-async function absentTargetRefusals(
-  plan: Plan,
-  context: PrContext,
-  preview: Preview,
-  canary: Canary
-): Promise<string[]> {
-  const targets = probeableTargets(plan, preview.url);
-  if (targets.length === 0) {
-    return [];
-  }
-  const sessionId = await canary.start(`PR ${context.ref.number} plan targets`);
-  let counts: Record<string, number> = {};
-  try {
-    const observation = await canary.act(
-      sessionId,
-      "probe-plan-targets",
-      compileTargetProbe(targets, preview.url)
-    );
-    // Un relevé illisible ne refuse aucun plan : cette sonde est un pré-contrôle
-    // d'aide au planificateur, jamais une preuve — l'exécution reste le juge.
-    counts =
-      observation.actual && typeof observation.actual === "object"
-        ? (observation.actual as Record<string, number>)
-        : {};
-  } finally {
-    // La sonde n'a pas d'évidence à finaliser : on ferme la session sans
-    // écrire un rapport de plus dans le run.
-    await canary.abort(sessionId);
-  }
-  return targets
-    .filter(
-      (target) =>
-        counts[target.assertionId] !== undefined &&
-        counts[target.assertionId] === 0
-    )
-    .map(
-      (target) =>
-        `Assertion ${target.assertionId} targets ${JSON.stringify(target.locator.value)} which resolves to nothing on the discovery page.`
-    );
-}
-/**
  * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
  * exigence sans témoin textuel, cible absente de la page de découverte.
  */
 function planRefusals(
   candidate: Plan,
   policy: Policy,
-  context: PrContext,
-  absentTargets: string[]
+  context: PrContext
 ): string[] {
   return [
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
     ...ungroundedPlanRefusals(candidate, context),
-    ...absentTargets.map(
-      (message) =>
-        `${message} Target an element that exists, or prove an absence with kind "hidden" or a count of 0 on a stable selector.`
-    ),
   ];
 }
 /**
@@ -320,8 +266,7 @@ function settlePlan(
   plan: Plan,
   context: PrContext,
   config: Config,
-  runId: string,
-  absentTargets: string[]
+  runId: string
 ) {
   for (const repair of repairRequirementAttribution(plan, context)) {
     logger.info(
@@ -335,13 +280,6 @@ function settlePlan(
     );
   }
   validatePlan(plan, context, config);
-  if (absentTargets.length > 0) {
-    throw new QaError(
-      "PLAN_TARGET_ABSENT",
-      absentTargets.join(" "),
-      "The plan reads an element that the discovery page does not carry: retarget the assertion, or prove the absence with kind hidden or a count of 0 on a stable selector, then relaunch."
-    );
-  }
 }
 async function executePlan(
   result: RunResult,
@@ -383,30 +321,16 @@ async function executePlan(
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });
-  let absentTargets: string[] = [];
   result.plan = await model.json(
     PLANNER_PROMPT,
     payload,
     PlanSchema,
     config.QA_PLAN_MAX_TOKENS,
-    async (candidate) => {
-      // Même traitement pour une exigence sans témoin textuel : le planificateur
-      // reçoit le refus et dispose d'une tentative de correction, au lieu de
-      // faire échouer le run sur une citation recopiée de mémoire. Les cibles
-      // absentes de la page de découverte comptent aussi : une étape qui lit un
-      // élément inexistant bloque le scénario, et le run avec lui.
-      absentTargets = await absentTargetRefusals(
-        candidate,
-        context,
-        preview,
-        canary
-      ).catch((error: unknown) => {
-        // La sonde aide le planificateur, elle ne le juge pas : une session
-        // navigateur indisponible ne refuse aucun plan.
-        logger.warn({ error }, "Plan target probe skipped");
-        return [];
-      });
-      const messages = planRefusals(candidate, policy, context, absentTargets);
+    (candidate) => {
+      // Le planificateur reçoit les refus et dispose d'une tentative de
+      // correction, au lieu de faire échouer le run sur une citation recopiée
+      // de mémoire ou attribuée au mauvais fichier.
+      const messages = planRefusals(candidate, policy, context);
       return messages.length
         ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
         : undefined;
@@ -414,7 +338,7 @@ async function executePlan(
   );
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
-  settlePlan(result.plan, context, config, result.id, absentTargets);
+  settlePlan(result.plan, context, config, result.id);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

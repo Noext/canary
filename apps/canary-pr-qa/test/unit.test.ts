@@ -8,12 +8,11 @@ import {
   Canary,
   compileAction,
   compileProbe,
-  compileTargetProbe,
   locatorCall,
   locatorExpression,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
-import { QaError } from "../src/diagnostics.js";
+import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
 import {
@@ -60,31 +59,13 @@ async function setup(options?: Parameters<typeof fixture>[0]) {
   close.push(f.close);
   return f;
 }
-function fakeBrowser(ghostTargets: string[] = []) {
+function fakeBrowser() {
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("fixture-session");
-  vi.spyOn(Canary.prototype, "act").mockImplementation(
-    async (_id, label, script) => {
-      if (label === "probe-plan-targets") {
-        // Le relevé de cibles répond pour chaque assertion sondée par le script,
-        // et déclare fantômes celles que le test a désignées.
-        const ids = [
-          ...(script ?? "").matchAll(/"([^"]+\/[^"]+)": await /g),
-        ].map((match) => match[1] as string);
-        return {
-          url: "http://fixture/",
-          snapshot: "",
-          actual: Object.fromEntries(
-            ids.map((id) => [id, ghostTargets.includes(id) ? 0 : 1])
-          ),
-        };
-      }
-      return {
-        url: "http://fixture/",
-        snapshot: "textbox Name, button Save",
-        ...(label.endsWith("assert") ? { actual: "Welcome Ada" } : {}),
-      };
-    }
-  );
+  vi.spyOn(Canary.prototype, "act").mockImplementation(async (_id, label) => ({
+    url: "http://fixture/",
+    snapshot: "textbox Name, button Save",
+    ...(label.endsWith("assert") ? { actual: "Welcome Ada" } : {}),
+  }));
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([
     "video.webm",
     "trace.zip",
@@ -404,33 +385,6 @@ describe("preview and PR provenance", () => {
   });
 });
 
-/**
- * Un plan dont la cible fantôme est lue sur la page de découverte, sans
- * interaction avant : c'est le seul cas que la sonde peut juger.
- */
-function ghostPlan() {
-  const contract = structuredClone(plan);
-  contract.scenarios[0]!.steps = [
-    { id: "open", description: "ouvrir", action: { type: "goto", path: "/" } },
-    {
-      id: "verify",
-      description: "vérifier",
-      action: { type: "assert", assertionId: "ghost" },
-    },
-  ];
-  contract.scenarios[0]!.assertions = [
-    {
-      afterStep: "open",
-      description: "cible fantôme",
-      expected: "Work in progress",
-      id: "ghost",
-      kind: "text",
-      target: { by: "css", value: 'div[class*="place-items-center"] p' },
-      verification: "state",
-    },
-  ];
-  return contract;
-}
 describe("runner false-green regressions", () => {
   it("blocks a scenario with no readable diff or source versions", async () => {
     const f = await setup({ missingDiffAndContext: true });
@@ -700,68 +654,22 @@ describe("runner false-green regressions", () => {
     expect(refusals[0]).toContain("No source witness for welcome: src/form.ts");
     expect(refusals[0]).toContain("appears verbatim in src/app.tsx");
   });
-  it("defines the label fallback inside the target probe", () => {
-    const script = compileTargetProbe(
-      [{ assertionId: "s/a", locator: { by: "label", value: "Nom" } }],
-      "https://preview.test"
+  it("names a target that never resolves, not one that is merely not actionable", () => {
+    const waiting = diagnose(
+      new Error(
+        "Canary action failed: Timeout 5000ms exceeded.\nCall log:\n  - waiting for locator('div[class*=\"place-items-center\"] p')"
+      )
     );
-    expect(script).toContain("async function resolveLabel");
-    expect(script).toContain('"s/a": await ');
+    expect(waiting.code).toBe("TARGET_NOT_FOUND");
+    expect(waiting.hint).toContain("kind hidden");
+    // Un élément trouvé mais inactionnable n'est pas une cible à corriger.
+    const actionable = diagnose(
+      new Error(
+        "Timeout 10000ms exceeded.\nCall log:\n  - locator resolved to <button>…\n  - element is not visible"
+      )
+    );
+    expect(actionable.code).toBe("QA_ERROR");
   });
-  it("refuses a plan that reads an element the preview does not carry", async () => {
-    const f = await setup({ plans: [ghostPlan(), ghostPlan()] });
-    fakeBrowser(["welcome/ghost"]);
-    const result = await runQa(
-      { prUrl: PR_URL, previewUrl: f.baseUrl },
-      f.config
-    );
-    expect(result.outcome).toBe("blocked");
-    expect(result.diagnostic?.code).toBe("PLAN_TARGET_ABSENT");
-    expect(result.scenarios).toEqual([]);
-  }, 40_000);
-  it("gives the planner one chance to retarget a ghost selector", async () => {
-    const f = await setup({ plans: [ghostPlan(), plan] });
-    fakeBrowser(["welcome/ghost"]);
-    const result = await runQa(
-      { prUrl: PR_URL, previewUrl: f.baseUrl },
-      f.config
-    );
-    // Le refus part au planificateur, qui repropose une cible existante.
-    expect(f.modelRequests).toHaveLength(2);
-    expect(result.outcome).toBe("passed");
-  }, 40_000);
-  it("does not refuse a target that only appears after an interaction", async () => {
-    const late = structuredClone(plan);
-    late.scenarios[0]!.assertions[0]!.target = {
-      by: "css",
-      value: 'div[class*="place-items-center"] p',
-    };
-    const f = await setup({ plans: [late] });
-    fakeBrowser(["welcome/saved"]);
-    const result = await runQa(
-      { prUrl: PR_URL, previewUrl: f.baseUrl },
-      f.config
-    );
-    // La lecture a lieu après un clic : la page de découverte ne peut pas en
-    // juger, donc la sonde se taît au lieu de refuser un plan valide.
-    expect(result.diagnostic?.code).not.toBe("PLAN_TARGET_ABSENT");
-    expect(f.modelRequests).toHaveLength(1);
-  }, 40_000);
-  it("skips the probe instead of refusing when the browser fails", async () => {
-    const f = await setup({ plans: [ghostPlan()] });
-    fakeBrowser();
-    vi.spyOn(Canary.prototype, "start")
-      .mockResolvedValueOnce("discovery-session")
-      .mockRejectedValueOnce(new Error("No browser"));
-    const result = await runQa(
-      { prUrl: PR_URL, previewUrl: f.baseUrl },
-      f.config
-    );
-    // La sonde aide le planificateur, elle ne le juge pas : son échec ne refuse
-    // aucun plan et ne paie pas un appel de modèle de plus.
-    expect(f.modelRequests).toHaveLength(1);
-    expect(result.diagnostic?.code).not.toBe("PLAN_TARGET_ABSENT");
-  }, 40_000);
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();
     fakeBrowser();
