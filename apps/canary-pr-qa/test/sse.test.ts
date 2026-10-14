@@ -107,6 +107,19 @@ describe("reduceChatStream", () => {
     expect(state.error).toBe("quota exceeded");
     expect(state.content).toBe("");
   });
+
+  it("garde l'erreur du flux malgré les événements suivants", () => {
+    // Un dernier événement (usage, finish) suit souvent l'échec : sans conservation de l'erreur,
+    // le contenu assemblé pourrait satisfaire le schéma et passer pour un succès.
+    const state = reduce([
+      `{"error":{"message":"quota exceeded"}}`,
+      `{"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}`,
+      `{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"total_tokens":18}}`,
+    ]);
+    expect(state.error).toBe("quota exceeded");
+    expect(state.content).toBe('{"ok":true}');
+    expect(JSON.parse(state.content)).toEqual({ ok: true });
+  });
 });
 
 describe("modalités de transport du modèle", () => {
@@ -203,6 +216,27 @@ describe("modalités de transport du modèle", () => {
           z.object({ ok: z.boolean() }).strict()
         )
       ).rejects.toThrow("unreadable event");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("refuse un flux dont l'échec est suivi d'un contenu valide", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      streamResponse([
+        chunk({ error: { message: "quota exceeded" } }),
+        chunk(content('{"ok":true}')),
+        chunk({}, true),
+      ])
+    );
+    try {
+      await expect(
+        new Model(stubConfig()).json(
+          "JSON",
+          {},
+          z.object({ ok: z.boolean() }).strict()
+        )
+      ).rejects.toThrow("quota exceeded");
     } finally {
       vi.restoreAllMocks();
     }

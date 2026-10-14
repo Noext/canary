@@ -99,8 +99,11 @@ export function reduceChatStream(
     };
   }
   const delta = chunk.choices?.[0]?.delta;
+  // Une erreur annoncée en cours de flux doit survivre aux événements suivants : l'endpoint en
+  // envoie souvent un dernier (usage, finish) après l'échec, sinon le plan serait accepté.
   const error =
-    typeof chunk.error === "string" ? chunk.error : chunk.error?.message;
+    (typeof chunk.error === "string" ? chunk.error : chunk.error?.message) ??
+    state.error;
   return {
     content: state.content + (delta?.content ?? ""),
     ...(error === undefined ? {} : { error }),

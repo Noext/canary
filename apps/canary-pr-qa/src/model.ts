@@ -194,7 +194,8 @@ export class Model {
           return false;
         }
         state = reduceChatStream(state, event);
-        return true;
+        // Inutile de payer la fin du flux une fois que l'endpoint a annoncé un échec.
+        return state.error === undefined;
       },
       timeout
     );
