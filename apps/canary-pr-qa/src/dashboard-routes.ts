@@ -546,15 +546,17 @@ async function retryAutomatic(
 }
 
 /**
- * Removes a failed attempt from the dashboard.
+ * Clears a failed attempt from the dashboard.
  *
  * A failure stays listed for 24 hours so the operator can act on it, which is
- * why clearing one is its own explicit write. Only the two states that stopped
- * without a run can be removed, and the row is what limits it: a waiting attempt
- * still owns a probe window, and a promoted one is the trace of a test that
- * started. The write is refused to a viewer here, not only in the UI, and an
- * attempt that changed state under the caller is answered as such instead of
- * deleting a row that was just re-armed.
+ * why clearing one is its own explicit write. The row is not removed: it becomes
+ * a tombstone that keeps the delivery deduplicated, so clearing a failure can
+ * never let GitHub replay it — see `Queue.deleteDelivery`. Only the two states
+ * that stopped without a run can be cleared, and the row is what limits it: a
+ * waiting attempt still owns a probe window, and a promoted one is the trace of a
+ * test that started. The write is refused to a viewer here, not only in the UI,
+ * and an attempt that changed state under the caller is answered as such instead
+ * of clearing a row that was just re-armed.
  */
 async function deleteAutomatic(
   setup: GitHubSetup,
@@ -570,25 +572,17 @@ async function deleteAutomatic(
   );
   const repo = row.payload.repo ?? "";
   requireAccess(user, repo, true);
-  const deleted = await queue.deleteDelivery(id);
-  if (!deleted) {
+  const cleared = await queue.deleteDelivery(id, user.id);
+  if (!cleared) {
     throw new QaError(
       "AUTOMATIC_NOT_DELETABLE",
       "Cette tentative ne peut pas être supprimée : elle a été relancée, elle a produit un test, ou elle n’est plus en échec.",
       "Rouvrez l’accueil pour voir l’état actuel de vos tentatives."
     );
   }
-  // The audit row outlives the attempt it describes: the detail screen is gone
-  // with the row, so the instance's history is what still names what was
-  // cleared, by whom, and on which commit.
-  await queue.audit(user.id, "automatic.deleted", undefined, {
-    attempts: row.attempts,
-    delivery: id,
-    pr: deleted.payload.number ?? 0,
-    repo,
-    sha: deleted.payload.sha ?? "",
-  });
-  return automaticAttempt(deleted);
+  // The attempt as the operator saw it, not as the tombstone records it: the
+  // audit entry that names what was cleared is written by the same transaction.
+  return automaticAttempt(row);
 }
 
 function githubMode(config: Config) {

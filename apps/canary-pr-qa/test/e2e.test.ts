@@ -1647,12 +1647,28 @@ it("clears a failed automatic attempt from the list once the confirmation is ans
         verification: "state",
       }
     );
-    // The row is what the list, the detail screen and the probes read: it is
-    // gone from the database too, and the audit trail says who removed it.
+    // No read reports the row any more, and the audit trail says who cleared it.
     expect(await queue.delivery("delete-me", 1800)).toBeUndefined();
     expect(await queue.delivery("keep-me", 1800)).toMatchObject({
       status: "expired",
     });
+    // The row itself stayed, as a tombstone: it is what keeps GitHub from having
+    // the same delivery accepted again — and probed, and turned into a run — once
+    // an operator has cleared it.
+    const tombstone = (
+      await queue.pool.query<{ status: string }>(
+        "SELECT status FROM qa_deliveries WHERE id='delete-me'"
+      )
+    ).rows[0];
+    expect(tombstone).toEqual({ status: "deleted" });
+    expect(
+      await queue.acceptDelivery("delete-me", "pull_request", {
+        number: 1,
+        prUrl: PR_URL,
+        repo: "fixture/app",
+        sha: SHA,
+      })
+    ).toBe(false);
     const audit = await queue.pool.query<{ details: Record<string, unknown> }>(
       "SELECT details FROM qa_audit WHERE action='automatic.deleted'"
     );

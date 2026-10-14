@@ -260,7 +260,12 @@ it("purges terminal deliveries, including auto-disabled ones, during retention",
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
-  const ids = ["old-auto-disabled", "old-expired", "old-processed"];
+  const ids = [
+    "old-auto-disabled",
+    "old-expired",
+    "old-processed",
+    "old-deleted",
+  ];
   // Distinct PRs: `acceptDelivery` deduplicates one row per (repo, pr, sha).
   for (const [index, id] of [...ids, "recent-auto-disabled"].entries()) {
     await q.acceptDelivery(
@@ -275,7 +280,7 @@ it("purges terminal deliveries, including auto-disabled ones, during retention",
     );
   }
   await q.pool.query(
-    `UPDATE qa_deliveries SET status=CASE id WHEN 'old-auto-disabled' THEN 'auto_disabled' WHEN 'old-expired' THEN 'expired' ELSE 'processed' END,created_at=now()-interval '31 days' WHERE id = ANY($1::text[])`,
+    `UPDATE qa_deliveries SET status=CASE id WHEN 'old-auto-disabled' THEN 'auto_disabled' WHEN 'old-expired' THEN 'expired' WHEN 'old-deleted' THEN 'deleted' ELSE 'processed' END,created_at=now()-interval '31 days' WHERE id = ANY($1::text[])`,
     [ids]
   );
   await q.pool.query(
@@ -710,6 +715,9 @@ it("deletes a failure the dashboard no longer needs, and refuses what a delete w
     body: { code: "AUTOMATIC_UNKNOWN" },
     status: 400,
   });
+  // Nothing was cleared yet, so nothing was attributed to anyone: the audit is
+  // written inside the same transaction as the clear, never beside it.
+  expect(await audits(q, "automatic.deleted")).toEqual([]);
   // The write answers with the attempt as it was, so a caller that renders a
   // confirmation has what it removed without a second read.
   const removed = await remove("removable", config.QA_API_TOKEN);
@@ -722,8 +730,8 @@ it("deletes a failure the dashboard no longer needs, and refuses what a delete w
     sha: SHA,
     state: "expired",
   });
-  // The row is what the list and the detail screen read: it is gone, and the
-  // list the operator reloads no longer reports it.
+  // No read reports the row any more: neither the list, nor the detail screen
+  // an operator may still have open on it.
   expect(await q.delivery("removable", 1800)).toBeUndefined();
   expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
     attempts: [
@@ -732,6 +740,30 @@ it("deletes a failure the dashboard no longer needs, and refuses what a delete w
     ],
     summary: { expired: 0, rateLimited: 1, waiting: 1 },
   });
+  // The history query has no state filter of its own, so it must not report the
+  // tombstone either: it is what the MCP tool and the attempts view read.
+  expect(
+    (
+      await q.attempts(["fixture/app"], {
+        deadlineSeconds: 1800,
+        limit: 50,
+      })
+    ).map((row) => row.id)
+  ).not.toContain("removable");
+  // The row itself is still there, as a tombstone: a delivery is deduplicated on
+  // the rows it can see, so removing it would let GitHub hand back the same SHA
+  // — a redelivery, or a later event on the same commit — and have it probed
+  // again, which is exactly the automatic replay an expired attempt never gets.
+  const tombstone = (
+    await q.pool.query<{ attempts: number; status: string }>(
+      "SELECT status,attempts FROM qa_deliveries WHERE id='removable'"
+    )
+  ).rows[0];
+  expect(tombstone).toEqual({ attempts: 1, status: "deleted" });
+  expect(
+    await q.acceptDelivery("redelivered", "pull_request", attempt, 1800)
+  ).toBe(false);
+  expect(await q.delivery("redelivered", 1800)).toBeUndefined();
   // The audit row outlives the attempt it describes.
   expect(await audits(q, "automatic.deleted")).toMatchObject([
     {

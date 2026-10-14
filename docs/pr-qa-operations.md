@@ -146,7 +146,7 @@ WHERE action LIKE 'automatic.%' ORDER BY created_at DESC LIMIT 50;"
 | `automatic.rate_limited` | budgets `QA_WEBHOOK_MAX_RUNS_PER_HOUR` / `QA_WEBHOOK_REPO_MAX_RUNS_PER_HOUR` atteints |
 | `automatic.disabled` | `QA_AUTO_RUNS=false` |
 | `automatic.repo_disabled` | dépôt non opt-in (`qa_github_repositories.auto_run=false`) |
-| `automatic.deleted` | tentative en échec supprimée depuis le dashboard : la ligne `qa_deliveries` a disparu, le test reste lançable depuis « Nouveau test » |
+| `automatic.deleted` | tentative en échec retirée depuis le dashboard : la ligne reste en base comme tombeau (`deleted`) pour que GitHub ne puisse pas réintroduire la livraison ; le test reste lançable depuis « Nouveau test » |
 
 Logs : `docker compose logs --tail=200 worker` — l'expiration et chaque
 désactivation produisent un avertissement du worker (dépôt, PR, SHA) ; les
@@ -170,9 +170,11 @@ Correctifs :
   GitHub du dashboard puis `QA_AUTO_RUNS`.
 - `rate_limited` : attendre la fenêtre glissante ou lancer un run explicite
   autorisé ; ne pas modifier les limites sans inspecter l'usage.
-- Échec que personne ne relancera : le supprimer depuis « Lancements
+- Échec que personne ne relancera : le retirer depuis « Lancements
   automatiques » (audit `automatic.deleted`) pour vider une liste qui le
-  conserverait 24 heures ; le test reste lançable depuis « Nouveau test ».
+  conserverait 24 heures ; la ligne devient un tombeau invisible qui empêche
+  GitHub de réintroduire la même livraison, et le test reste lançable depuis
+  « Nouveau test ».
 
 Ne jamais déclarer réussie une tentative expirée ni rejouer ses écritures : le run
 réel n'est créé qu'après vérification de la provenance, et un parcours manuel
