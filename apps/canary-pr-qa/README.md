@@ -317,7 +317,7 @@ propriété de sa livraison (`claim_token`, bail de 90 s) : promotion, expiratio
 replanification ne s'appliquent que si ce jeton est encore le sien, et une
 promotion est refusée si la deadline s'est fermée pendant la vérification de la
 preview. Les livraisons terminales (`processed`, `expired`, `rate_limited`,
-`auto_disabled`) sont purgées après 30 jours.
+`auto_disabled`, `deleted`) sont purgées après 30 jours.
 
 Après la deadline, la tentative passe en `expired`, avec l'audit
 `automatic.preview_expired` et un log d'avertissement du worker. **Une tentative
@@ -336,6 +336,25 @@ intacte). Une tentative qui n'est plus réarmable — déjà relancée, promue e
 compris, ce que le second clic d'un opérateur doit voir. Chaque relance est
 auditée `automatic.retried` avec le nombre de vérifications déjà dépensé, et les
 compteurs de probes repartent de zéro.
+
+`DELETE /dashboard/automatic/:id` supprime une tentative en échec, pour vider une
+liste qui la conserve sinon 24 heures. Les deux mêmes états sont concernés : une
+tentative en attente appartient encore au worker de probe, et une tentative promue
+est la trace du run qu'elle a lancé. L'écriture est refusée à un viewer (403). Une
+tentative qui a changé d'état entre-temps est refusée (`AUTOMATIC_NOT_DELETABLE`)
+au lieu d'être supprimée, et une tentative déjà purgée ou déjà supprimée répond
+`AUTOMATIC_UNKNOWN`.
+
+La ligne ne disparaît pas : elle devient un tombeau (`status='deleted'`), invisible
+pour la liste, pour l'écran de détail et pour `list_automatic_attempts`. C'est ce
+tombeau qui garde la livraison déduplicée (`acceptDelivery` refuse un `(dépôt, PR,
+SHA)` déjà vu, et la même livraison GitHub ne peut pas être réintroduite) : sans
+lui, une redelivery GitHub ou un événement ultérieur sur le même commit serait
+accepté comme neuf et reprobé — exactement le rejeu automatique qu'une tentative
+expirée ne doit jamais avoir. Les tombeaux sont purgés avec les autres lignes
+terminales (30 jours). La suppression et son audit `automatic.deleted` (dépôt, PR,
+SHA, nombre de vérifications dépensé) sont écrits dans la même transaction : une
+ligne effacée sans trace ne serait attribuable à personne.
 
 | État | Audit | Cause |
 | --- | --- | --- |
@@ -498,7 +517,8 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
    version exigée et le déroulé des vérifications. Une tentative expirée n'est
    jamais rejouée automatiquement : « Relancer la vérification » la réarme sur le
    même commit avec un nouveau délai, depuis la liste comme depuis l'écran de
-   détail.
+   détail. Une tentative en échec que personne ne relancera se supprime depuis ces
+   deux écrans, avec une confirmation en place.
 
 Le catalogue accessible ne prouve pas encore qu'une génération réussira. Une
 preview vérifiée ne prouve pas que les assertions fonctionnelles réussiront.
@@ -530,6 +550,7 @@ Captures réelles des E2E, avec données fictives :
 | `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
 | `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
 | `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
+| `DELETE /dashboard/automatic/:id` | Retire une tentative expirée ou refusée par le quota de la liste en la laissant en base comme tombeau (`deleted`, déduplication conservée) ; rend l'état qu'elle avait ; 403 pour un viewer, 400 `AUTOMATIC_NOT_DELETABLE` si elle attend encore ou a produit un run, `AUTOMATIC_UNKNOWN` si elle a déjà été purgée ou retirée |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /accounts` | Comptes humains : `{accounts:[{id,username,role,repos,createdAt}]}`, administrateur d'instance uniquement (403 `ACCOUNT_SCOPE_REQUIRED` si son accès ne couvre pas tous les dépôts) |

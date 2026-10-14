@@ -76,6 +76,15 @@ export function retryableAutomatic(state: string | null | undefined): boolean {
   return state === "expired" || state === "rate_limited";
 }
 
+/**
+ * The two failures a delete can clear: the same set a retry can re-arm, because
+ * both stopped without a run. The row itself is what the server checks, so this
+ * only decides whether the button is offered.
+ */
+export function deletableAutomatic(state: string | null | undefined): boolean {
+  return retryableAutomatic(state);
+}
+
 export function automaticStateLabel(state: string | null | undefined): string {
   if (!state) {
     return "";

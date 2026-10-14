@@ -491,6 +491,60 @@ export class Queue {
     ).rows[0];
   }
   /**
+   * Clears one terminal failure that stopped without a run, so an operator can
+   * take it off a list that keeps it for 24 hours.
+   *
+   * The row becomes a tombstone instead of being removed. `acceptDelivery`
+   * deduplicates a delivery on its `(repo, number, sha)` — and on its own id —
+   * against the rows it can still see, so removing the row would let a GitHub
+   * redelivery, or a later event on the same SHA, be accepted as fresh and probed
+   * again: exactly the automatic replay an expired attempt must never get. A
+   * tombstone is reported by no read and is purged with the other terminal rows.
+   *
+   * The condition is the authority on what may be cleared, read again at the
+   * moment of the write: a `pending` row belongs to the probe loop, a row with a
+   * run is the trace of a real test, and an attempt another operator just
+   * re-armed must not lose the window it was given. The audit entry is written in
+   * the same transaction: a row no one can be held accountable for is worse than
+   * a row that was not cleared.
+   */
+  async deleteDelivery(id: string, actor: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const row = (
+        await client.query<DeliveryRow>(
+          `UPDATE qa_deliveries SET status='deleted',claim_token=NULL,updated_at=now()
+           WHERE id=$1 AND status IN ('expired','rate_limited') AND run_id IS NULL
+           RETURNING id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at`,
+          [id]
+        )
+      ).rows[0];
+      if (row) {
+        await client.query(
+          "INSERT INTO qa_audit(actor,action,run_id,details) VALUES($1,'automatic.deleted',NULL,$2)",
+          [
+            actor,
+            JSON.stringify({
+              attempts: row.attempts,
+              delivery: id,
+              pr: row.payload.number ?? 0,
+              repo: row.payload.repo ?? "",
+              sha: row.payload.sha ?? "",
+            }),
+          ]
+        );
+      }
+      await client.query("COMMIT");
+      return row;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  /**
    * Attempts the dashboard may show, scoped to `repos`. A pending delivery
    * accepted before `deadline_at` existed (schema v5 and earlier) has no stored
    * deadline: it is resolved here with the same rule the worker applies, so the
@@ -499,6 +553,8 @@ export class Queue {
    * Deliveries recorded with `ignored: true` never carried a pull request to
    * test (a `labeled` or `closed` action, for example): they stay in the inbox
    * until the probe loop clears them, and they are never reported as an attempt.
+   * Neither is a `deleted` tombstone: an operator cleared that failure from this
+   * very list.
    */
   async automatic(repos: string[], deadlineSeconds: number) {
     const scope = repos.map((repo) => repo.toLowerCase());
@@ -548,7 +604,7 @@ export class Queue {
     const rows = (
       await this.pool.query<DeliveryRow>(
         `SELECT id,payload,status,attempts,reason,last_error,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries
-         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true'
+         WHERE lower(payload->>'repo')=ANY($1::text[]) AND payload->>'ignored' IS DISTINCT FROM 'true' AND status<>'deleted'
            AND ($3::timestamptz IS NULL OR updated_at>=$3)
            ${options.state ? `AND (${ATTEMPT_STATE_SQL[options.state]})` : ""}
          ORDER BY updated_at DESC,created_at DESC LIMIT $4`,
@@ -565,12 +621,13 @@ export class Queue {
   /**
    * One automatic attempt by delivery id, with the same resolved deadline the
    * listing computes. Returns nothing for an unknown id, which is also what an
-   * attempt of another tenant looks like once the caller checked its repository.
+   * attempt of another tenant looks like once the caller checked its repository —
+   * and what a tombstone is: the operator cleared it, so nothing reads it back.
    */
   async delivery(id: string, deadlineSeconds: number) {
     return (
       await this.pool.query<DeliveryRow>(
-        `SELECT id,payload,status,attempts,reason,last_error,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries WHERE id=$1`,
+        `SELECT id,payload,status,attempts,reason,last_error,COALESCE(deadline_at,created_at+($2::int*interval '1 second')) AS deadline_at,run_id,updated_at,created_at FROM qa_deliveries WHERE id=$1 AND status<>'deleted'`,
         [id, deadlineSeconds]
       )
     ).rows[0];

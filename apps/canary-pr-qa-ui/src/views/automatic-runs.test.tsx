@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DashboardError } from "@/api/client";
 import type {
   AutomaticAttempt,
   AutomaticStatus,
@@ -88,11 +89,22 @@ function byId(container: HTMLElement, id: string): HTMLElement {
 }
 
 let automaticStatus: AutomaticStatus;
+let deleteRefused = false;
 let setup: SetupStatus;
 let calls: ApiCall[] = [];
 
+/** The list the home block reads after the attempt it showed is gone. */
+function emptyStatus(): AutomaticStatus {
+  return {
+    attempts: [],
+    enabledRepos: ["fixture/app"],
+    summary: { expired: 0, rateLimited: 0, waiting: 0 },
+  };
+}
+
 beforeEach(() => {
   calls = [];
+  deleteRefused = false;
   me = admin;
   automaticStatus = waitingStatus();
   window.scrollTo = vi.fn();
@@ -114,6 +126,17 @@ beforeEach(() => {
     if (path === "/dashboard/automatic/delivery-1/retry") {
       automaticStatus = waitingStatus();
       return { attempt: attempt(), timeline: [] };
+    }
+    // A delete removes the attempt from what the next read reports, and a
+    // refused one leaves it in place: the reload is what the operator sees.
+    if (options?.method === "DELETE") {
+      if (deleteRefused) {
+        throw new DashboardError("Tentative relancée entre-temps", {
+          code: "AUTOMATIC_NOT_DELETABLE",
+        });
+      }
+      automaticStatus = emptyStatus();
+      return attempt();
     }
     switch (path) {
       case "/auth/status":
@@ -343,6 +366,8 @@ describe("AutomaticRuns", () => {
 
     // A waiting attempt has nothing to re-arm: the next probe is scheduled.
     expect(document.getElementById("automaticRetry-delivery-1")).toBeNull();
+    // And nothing an operator can give up on either: it is still being probed.
+    expect(document.getElementById("automaticDelete-delivery-1")).toBeNull();
     expect(byId(container, "automaticAttempts")).toHaveTextContent(
       "En attente de la préversion"
     );
@@ -354,11 +379,83 @@ describe("AutomaticRuns", () => {
     const container = await rendered();
 
     expect(document.getElementById("automaticRetry-delivery-1")).toBeNull();
+    // The delete is the same write, refused for the same reason.
+    expect(document.getElementById("automaticDelete-delivery-1")).toBeNull();
     // The failure itself is still reported, with the screens that explain it.
     expect(byId(container, "automaticAttempts")).toHaveTextContent(
       "Délai dépassé"
     );
     expect(byId(container, "automaticAttempt-delivery-1")).toBeInTheDocument();
+  });
+
+  it("deletes a failure once the confirmation is answered, and reloads without it", async () => {
+    const user = userEvent.setup();
+    automaticStatus = expiredStatus();
+    const container = await rendered();
+
+    await user.click(byId(container, "automaticDelete-delivery-1"));
+
+    // Revealing the question deletes nothing: the second click is the decision.
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(
+      byId(container, "automaticDelete-delivery-1-question")
+    ).not.toHaveAttribute("hidden");
+
+    await user.click(byId(container, "automaticDelete-delivery-1-confirm"));
+
+    expect(calls).toContainEqual({
+      method: "DELETE",
+      path: "/dashboard/automatic/delivery-1",
+    });
+    // What the operator sees next comes from the reloaded list: the failure is
+    // gone, and so is its count in the summary.
+    await waitFor(() =>
+      expect(byId(container, "automaticEmpty")).not.toHaveAttribute("hidden")
+    );
+    expect(byId(container, "automaticAttempts")).toHaveAttribute("hidden");
+    expect(byId(container, "automaticSummary")).toHaveTextContent(
+      "0 délai(s) dépassé(s)"
+    );
+  });
+
+  it("lets the operator walk out of the question without deleting", async () => {
+    const user = userEvent.setup();
+    automaticStatus = expiredStatus();
+    const container = await rendered();
+
+    await user.click(byId(container, "automaticDelete-delivery-1"));
+    await user.click(byId(container, "automaticDelete-delivery-1-cancel"));
+
+    expect(
+      byId(container, "automaticDelete-delivery-1-question")
+    ).toHaveAttribute("hidden");
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(byId(container, "automaticAttempts")).toHaveTextContent(
+      "Délai dépassé"
+    );
+    expect(byId(container, "automaticDelete-delivery-1")).not.toBeDisabled();
+  });
+
+  it("reports a refused delete and shows the state the list really has", async () => {
+    const user = userEvent.setup();
+    deleteRefused = true;
+    automaticStatus = expiredStatus();
+    const container = await rendered();
+
+    await user.click(byId(container, "automaticDelete-delivery-1"));
+    await user.click(byId(container, "automaticDelete-delivery-1-confirm"));
+
+    // Another operator re-armed the attempt between the read and the write: the
+    // server refuses, and the reload is what tells this operator.
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Tentative relancée entre-temps"
+      )
+    );
+    expect(byId(container, "automaticAttempts")).toHaveTextContent(
+      "Délai dépassé"
+    );
+    expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(1);
   });
 
   it("renders nothing while GitHub is not connected", async () => {

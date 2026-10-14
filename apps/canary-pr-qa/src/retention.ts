@@ -66,7 +66,7 @@ export async function retain(queue: Queue, config: Config) {
   // expired and rate-limited rows for 24 hours, so the inbox cannot grow without
   // bound behind the dashboard.
   await queue.pool.query(
-    "DELETE FROM qa_deliveries WHERE status IN ('processed','expired','rate_limited','auto_disabled') AND created_at < now()-interval '30 days'"
+    "DELETE FROM qa_deliveries WHERE status IN ('processed','expired','rate_limited','auto_disabled','deleted') AND created_at < now()-interval '30 days'"
   );
   return { removed, bytes: used };
 }

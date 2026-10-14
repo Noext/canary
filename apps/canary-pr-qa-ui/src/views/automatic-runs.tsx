@@ -15,6 +15,7 @@ import { automatic, common } from "@/i18n";
 import {
   automaticReasonLabel,
   automaticStateLabel,
+  deletableAutomatic,
   formatDate,
   githubPullUrl,
   retryableAutomatic,
@@ -22,6 +23,7 @@ import {
   toneForAutomatic,
 } from "@/lib/format";
 import { useStore } from "@/lib/store";
+import { AutomaticDelete } from "./automatic-delete";
 import { createAutomaticRunsStore } from "./automatic-runs-store";
 
 /**
@@ -30,7 +32,8 @@ import { createAutomaticRunsStore } from "./automatic-runs-store";
  * repository. A delivery that already produced a run is reported by the runs
  * history, never here. Dates are rendered, not counted down, so nothing here
  * depends on the current time. A failure that stopped without a run offers the
- * retry that puts it back in the probe loop.
+ * retry that puts it back in the probe loop, and the delete that clears a
+ * failure nobody will re-arm.
  */
 export function AutomaticRuns(): ReactNode {
   const { githubReady } = useWorkspace();
@@ -49,7 +52,7 @@ function AutomaticRunsBlock(): ReactNode {
   // The store instance belongs to this screen, never to module scope: React's
   // first subscription starts the request and abandoning the screen aborts it.
   const [store] = useState(() => createAutomaticRunsStore(report));
-  const { loading, retrying, status } = useStore(store);
+  const { loading, removing, retrying, status } = useStore(store);
 
   const attempts = status.attempts;
   const summary = status.summary;
@@ -158,6 +161,18 @@ function AutomaticRunsBlock(): ReactNode {
                       ? automatic.retrying
                       : automatic.retry}
                   </Button>
+                ) : null}
+                {/*
+                  A failure nobody will re-arm is cleared from the list that
+                  keeps it: the server remains the judge of what may go, so the
+                  button is only offered where the write can succeed.
+                */}
+                {canWrite && deletableAutomatic(attempt.state) ? (
+                  <AutomaticDelete
+                    id={`automaticDelete-${attempt.id}`}
+                    onConfirm={() => store.remove(attempt.id)}
+                    pending={removing === attempt.id}
+                  />
                 ) : null}
               </div>
             </li>

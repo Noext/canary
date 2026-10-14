@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
+  AutomaticAttempt,
   AutomaticDetail,
   AutomaticStatus,
 } from "../src/dashboard/contracts.js";
@@ -259,7 +260,12 @@ it("purges terminal deliveries, including auto-disabled ones, during retention",
   const q = await pgliteQueue(cleanup);
   const f = await fixture();
   cleanup.push(f.close);
-  const ids = ["old-auto-disabled", "old-expired", "old-processed"];
+  const ids = [
+    "old-auto-disabled",
+    "old-expired",
+    "old-processed",
+    "old-deleted",
+  ];
   // Distinct PRs: `acceptDelivery` deduplicates one row per (repo, pr, sha).
   for (const [index, id] of [...ids, "recent-auto-disabled"].entries()) {
     await q.acceptDelivery(
@@ -274,7 +280,7 @@ it("purges terminal deliveries, including auto-disabled ones, during retention",
     );
   }
   await q.pool.query(
-    `UPDATE qa_deliveries SET status=CASE id WHEN 'old-auto-disabled' THEN 'auto_disabled' WHEN 'old-expired' THEN 'expired' ELSE 'processed' END,created_at=now()-interval '31 days' WHERE id = ANY($1::text[])`,
+    `UPDATE qa_deliveries SET status=CASE id WHEN 'old-auto-disabled' THEN 'auto_disabled' WHEN 'old-expired' THEN 'expired' WHEN 'old-deleted' THEN 'deleted' ELSE 'processed' END,created_at=now()-interval '31 days' WHERE id = ANY($1::text[])`,
     [ids]
   );
   await q.pool.query(
@@ -595,6 +601,193 @@ it("refuses a retry a viewer cannot make, an unknown attempt, or a disabled swit
   expect(await delivery(q, "expired-attempt")).toMatchObject({
     status: "expired",
   });
+}, 30_000);
+
+it("deletes a failure the dashboard no longer needs, and refuses what a delete would lose", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  const viewer = "automatic-delete-viewer-token-0123456789";
+  const usersFile = join(f.dataDir, "automatic-delete-users.json");
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "delete-viewer",
+        repos: ["fixture/app"],
+        role: "viewer",
+        tokenSha256: createHash("sha256").update(viewer).digest("hex"),
+      },
+    ])
+  );
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    GITHUB_ALLOWED_REPOS: "fixture/app",
+    QA_PORT: 0,
+    QA_USERS_FILE: usersFile,
+    allowedRepos: ["fixture/app"],
+  };
+  // The two failures a delete may clear, then the two states it must not: an
+  // attempt the probe loop still owns, and one that produced a real run. One
+  // probe that cannot prove the SHA, then the deadline closes: the failure the
+  // list keeps for 24 hours.
+  expect(
+    await q.acceptDelivery("removable", "pull_request", attempt, 1800)
+  ).toBe(true);
+  await processDelivery(q, config);
+  await q.pool.query(
+    "UPDATE qa_deliveries SET deadline_at=now()-interval '1 second',retry_at=now()-interval '1 second' WHERE id='removable'"
+  );
+  await processDelivery(q, config);
+  expect(await delivery(q, "removable")).toMatchObject({
+    attempts: 1,
+    reason: "PREVIEW_NOT_FOUND",
+    status: "expired",
+  });
+  for (const [index, id] of ["waiting", "promoted"].entries()) {
+    expect(
+      await q.acceptDelivery(
+        id,
+        "pull_request",
+        { ...attempt, number: index + 2 },
+        1800
+      )
+    ).toBe(true);
+  }
+  // The one the probe loop keeps: its next probe is scheduled, so it is not due
+  // and the promotion below can only be the attempt that asked for the preview.
+  await processDelivery(q, config);
+  expect(await delivery(q, "waiting")).toMatchObject({ status: "pending" });
+  await processDelivery(q, { ...config, PREVIEW_URL_TEMPLATE: f.baseUrl });
+  const promoted = await delivery(q, "promoted");
+  expect(promoted).toMatchObject({ status: "processed" });
+  expect(promoted.run_id).toEqual(expect.any(String));
+  // A refusal by the hourly budget is a failure without a run too: the state is
+  // the precondition of this test, not what it measures.
+  expect(
+    await q.acceptDelivery(
+      "throttled",
+      "pull_request",
+      { ...attempt, number: 4 },
+      -1
+    )
+  ).toBe(true);
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='rate_limited',reason='WEBHOOK_RATE_LIMIT' WHERE id='throttled'"
+  );
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const remove = async (id: string, token: string) => {
+    const response = await fetch(`${url}/dashboard/automatic/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return {
+      body: (await response.json()) as {
+        code?: string;
+      } & Partial<AutomaticAttempt>,
+      status: response.status,
+    };
+  };
+  // Deleting is a write on the repository's data: a reader of the same
+  // repository is refused, and the attempt keeps its place in the list.
+  expect(await remove("removable", viewer)).toMatchObject({ status: 403 });
+  expect(await delivery(q, "removable")).toMatchObject({ status: "expired" });
+  // An attempt the probe loop owns is not an error the operator can clear: the
+  // answer says why, and the row keeps its window.
+  const waiting = await remove("waiting", config.QA_API_TOKEN);
+  expect(waiting.status).toBe(400);
+  expect(waiting.body).toMatchObject({ code: "AUTOMATIC_NOT_DELETABLE" });
+  expect(await delivery(q, "waiting")).toMatchObject({ status: "pending" });
+  // A promoted attempt is the trace of a real test: removing it would lose the
+  // link between the failure and the run it eventually started.
+  expect(await remove("promoted", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_NOT_DELETABLE" },
+    status: 400,
+  });
+  expect(await delivery(q, "promoted")).toMatchObject({
+    run_id: promoted.run_id,
+    status: "processed",
+  });
+  expect(await remove("no-such-attempt", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_UNKNOWN" },
+    status: 400,
+  });
+  // Nothing was cleared yet, so nothing was attributed to anyone: the audit is
+  // written inside the same transaction as the clear, never beside it.
+  expect(await audits(q, "automatic.deleted")).toEqual([]);
+  // The write answers with the attempt as it was, so a caller that renders a
+  // confirmation has what it removed without a second read.
+  const removed = await remove("removable", config.QA_API_TOKEN);
+  expect(removed.status).toBe(200);
+  expect(removed.body).toMatchObject({
+    attempts: 1,
+    id: "removable",
+    pr: 1,
+    repo: "fixture/app",
+    sha: SHA,
+    state: "expired",
+  });
+  // No read reports the row any more: neither the list, nor the detail screen
+  // an operator may still have open on it.
+  expect(await q.delivery("removable", 1800)).toBeUndefined();
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
+    attempts: [
+      { id: "throttled", state: "rate_limited" },
+      { id: "waiting", state: "waiting" },
+    ],
+    summary: { expired: 0, rateLimited: 1, waiting: 1 },
+  });
+  // The history query has no state filter of its own, so it must not report the
+  // tombstone either: it is what the MCP tool and the attempts view read.
+  expect(
+    (
+      await q.attempts(["fixture/app"], {
+        deadlineSeconds: 1800,
+        limit: 50,
+      })
+    ).map((row) => row.id)
+  ).not.toContain("removable");
+  // The row itself is still there, as a tombstone: a delivery is deduplicated on
+  // the rows it can see, so removing it would let GitHub hand back the same SHA
+  // — a redelivery, or a later event on the same commit — and have it probed
+  // again, which is exactly the automatic replay an expired attempt never gets.
+  const tombstone = (
+    await q.pool.query<{ attempts: number; status: string }>(
+      "SELECT status,attempts FROM qa_deliveries WHERE id='removable'"
+    )
+  ).rows[0];
+  expect(tombstone).toEqual({ attempts: 1, status: "deleted" });
+  expect(
+    await q.acceptDelivery("redelivered", "pull_request", attempt, 1800)
+  ).toBe(false);
+  expect(await q.delivery("redelivered", 1800)).toBeUndefined();
+  // The audit row outlives the attempt it describes.
+  expect(await audits(q, "automatic.deleted")).toMatchObject([
+    {
+      details: {
+        attempts: 1,
+        delivery: "removable",
+        pr: 1,
+        repo: "fixture/app",
+        sha: SHA,
+      },
+    },
+  ]);
+  // Deleting twice converges: the second call finds nothing to delete and says
+  // so, which is what the second click of two operators gets.
+  expect(await remove("removable", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_UNKNOWN" },
+    status: 400,
+  });
+  // A refusal by the hourly budget is cleared the same way.
+  expect(await remove("throttled", config.QA_API_TOKEN)).toMatchObject({
+    body: { id: "throttled", state: "rate_limited" },
+    status: 200,
+  });
+  expect(await q.delivery("throttled", 1800)).toBeUndefined();
 }, 30_000);
 
 it("records auto_disabled attempts when automatic runs are switched off", async () => {

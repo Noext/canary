@@ -15,6 +15,7 @@ import {
 import {
   automaticReasonLabel,
   automaticStateLabel,
+  deletableAutomatic,
   formatDate,
   githubPullUrl,
   retryableAutomatic,
@@ -22,6 +23,7 @@ import {
   toneForAutomatic,
 } from "@/lib/format";
 import { useStore } from "@/lib/store";
+import { AutomaticDelete } from "./automatic-delete";
 import { createAutomaticDetailStore } from "./automatic-detail-store";
 
 /**
@@ -45,7 +47,8 @@ export function AutomaticDetailView(): ReactNode {
       requested: requestedAutomatic,
     })
   );
-  const { detail, error, loading, missing, retrying } = useStore(store);
+  const { deleting, detail, error, loading, missing, retrying } =
+    useStore(store);
 
   if (missing) {
     return (
@@ -90,8 +93,19 @@ export function AutomaticDetailView(): ReactNode {
   return (
     <AutomaticDetailBody
       canWrite={canWrite}
+      deleting={Boolean(deleting)}
       detail={detail}
       navigate={navigate}
+      onDelete={() => {
+        // The attempt is gone once the write is done, so the screen hands the
+        // operator back to the list that still has the others. A refused write
+        // keeps this screen: its own message and the attempt are both there.
+        void store.remove().then((removed) => {
+          if (removed) {
+            navigate("home");
+          }
+        });
+      }}
       onRetry={store.retry}
       openRunScreen={openRunScreen}
       retrying={Boolean(retrying)}
@@ -101,15 +115,19 @@ export function AutomaticDetailView(): ReactNode {
 
 function AutomaticDetailBody({
   canWrite,
+  deleting,
   detail,
   navigate,
+  onDelete,
   onRetry,
   openRunScreen,
   retrying,
 }: {
   canWrite: boolean;
+  deleting: boolean;
   detail: AutomaticDetail;
   navigate: (view: "home" | "new") => void;
+  onDelete: () => void;
   onRetry: () => void;
   openRunScreen: (runId: string) => void;
   retrying: boolean;
@@ -177,7 +195,10 @@ function AutomaticDetailBody({
 
       <PromotedAction
         canWrite={canWrite}
+        deletable={deletableAutomatic(attempt.state)}
+        deleting={deleting}
         navigate={navigate}
+        onDelete={onDelete}
         onRetry={onRetry}
         openRunScreen={openRunScreen}
         retryable={retryableAutomatic(attempt.state)}
@@ -269,7 +290,10 @@ const diagnosedStates: AutomaticState[] = [
 /** The run a promoted attempt created, or the actions that take its place. */
 function PromotedAction({
   canWrite,
+  deletable,
+  deleting,
   navigate,
+  onDelete,
   onRetry,
   openRunScreen,
   retryable,
@@ -277,7 +301,10 @@ function PromotedAction({
   runId,
 }: {
   canWrite: boolean;
+  deletable: boolean;
+  deleting: boolean;
   navigate: (view: "home" | "new") => void;
+  onDelete: () => void;
   onRetry: () => void;
   openRunScreen: (runId: string) => void;
   retryable: boolean;
@@ -288,7 +315,10 @@ function PromotedAction({
     return (
       <FailedAttemptActions
         canWrite={canWrite}
+        deletable={deletable}
+        deleting={deleting}
         navigate={navigate}
+        onDelete={onDelete}
         onRetry={onRetry}
         retryable={retryable}
         retrying={retrying}
@@ -385,8 +415,9 @@ function Timeline({
 
 /**
  * The actions of an attempt that never started a run: re-arm it on the same
- * commit, or start a run by hand with an explicit URL. Both answer "what now?",
- * and only a failure that a probe can still fix offers the retry.
+ * commit, give up on it and clear the list, or start a run by hand with an
+ * explicit URL. All three answer "what now?", and only a failure that a probe can
+ * still fix offers the retry or the delete.
  *
  * They are open to writers only: the navigation guard would silently send a
  * viewer back to the home screen, so a viewer is told what to ask for instead of
@@ -394,13 +425,19 @@ function Timeline({
  */
 function FailedAttemptActions({
   canWrite,
+  deletable,
+  deleting,
   navigate,
+  onDelete,
   onRetry,
   retryable,
   retrying,
 }: {
   canWrite: boolean;
+  deletable: boolean;
+  deleting: boolean;
   navigate: (view: "home" | "new") => void;
+  onDelete: () => void;
   onRetry: () => void;
   retryable: boolean;
   retrying: boolean;
@@ -430,6 +467,17 @@ function FailedAttemptActions({
         >
           {retrying ? automatic.retrying : automatic.retry}
         </Button>
+      ) : null}
+      {/*
+        A failure this screen was opened to act on is also the one an operator
+        decides to give up on: the delete is the same write the list offers.
+      */}
+      {deletable ? (
+        <AutomaticDelete
+          id="automaticDetailDelete"
+          onConfirm={onDelete}
+          pending={deleting}
+        />
       ) : null}
     </div>
   );
