@@ -231,6 +231,25 @@ export function repairRequirementAttribution(
 }
 
 /**
+ * Où la citation se trouve réellement, en ne proposant que des fichiers que la
+ * PR change : déclarer une source hors diff consommerait la tentative de
+ * correction pour rien, puisque la validation la refuserait.
+ */
+function witnessHint(quote: string, context: PrContext): string {
+  const changed = context.files.map((file) => file.filename);
+  const found = witnessFiles(quote, context);
+  const pr = found.filter((path) => changed.includes(path));
+  if (pr.length > 0) {
+    return ` The quote appears verbatim in ${pr.join(", ")}; declare that file and attribute the requirement to it.`;
+  }
+  const outside = found.filter((path) => !changed.includes(path));
+  if (outside.length === 0) {
+    return "";
+  }
+  return ` The quote only appears in ${outside.join(", ")}, which this PR does not change; quote the changed file instead.`;
+}
+
+/**
  * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
  * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
  * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
@@ -248,13 +267,7 @@ export function ungroundedPlanRefusals(
       )
       .map((requirement) => {
         const error = ungroundedRequirement(scenario.id, requirement);
-        const found = witnessFiles(requirement.quote, context);
-        // Un plan qui a seulement attribué la citation au mauvais fichier se
-        // corrige du premier coup quand on lui dit où elle est réellement.
-        const where = found.length
-          ? ` The quote appears verbatim in ${found.join(", ")}; declare that file and attribute the requirement to it.`
-          : "";
-        return `${error.message}. ${error.hint}${where}`;
+        return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
       })
   );
 }

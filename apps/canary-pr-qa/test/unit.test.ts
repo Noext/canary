@@ -636,23 +636,38 @@ describe("runner false-green regressions", () => {
       "src/form.ts"
     );
   });
-  it("names where the quote lives instead of only refusing", async () => {
+  it("names where the quote lives, only among the files the PR changes", async () => {
     const f = await setup();
     const context = await new GitHub(f.config).context(PR_URL);
     const contract = structuredClone(plan);
     contract.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
-    const refusals = ungroundedPlanRefusals(contract, {
+    const inPr = ungroundedPlanRefusals(contract, {
+      ...context,
+      files: [
+        ...context.files,
+        {
+          filename: "src/app.tsx",
+          patch: "+ show('Welcome '+nom)",
+          status: "modified",
+        },
+      ],
+    });
+    expect(inPr[0]).toContain("No source witness for welcome: src/form.ts");
+    expect(inPr[0]).toContain("declare that file");
+    // Un témoin hors diff ne doit pas être proposé : le planificateur le
+    // déclarerait et la validation le refuserait, pour rien.
+    const outside = ungroundedPlanRefusals(contract, {
       ...context,
       context: [
         {
           content: "show('Welcome '+nom)",
-          path: "src/app.tsx",
+          path: "README.md",
           ref: context.sha,
         },
       ],
     });
-    expect(refusals[0]).toContain("No source witness for welcome: src/form.ts");
-    expect(refusals[0]).toContain("appears verbatim in src/app.tsx");
+    expect(outside[0]).toContain("this PR does not change");
+    expect(outside[0]).not.toContain("declare that file");
   });
   it("names a target that never resolves, not one that is merely not actionable", () => {
     const waiting = diagnose(
@@ -669,6 +684,12 @@ describe("runner false-green regressions", () => {
       )
     );
     expect(actionable.code).toBe("QA_ERROR");
+    // Un événement attendu qui n'arrive pas parle de l'événement, pas d'un
+    // élément : la cible du clic a bien été trouvée.
+    const event = diagnose(
+      new Error('Timeout 10000ms exceeded while waiting for event "download"')
+    );
+    expect(event.code).toBe("QA_ERROR");
   });
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();

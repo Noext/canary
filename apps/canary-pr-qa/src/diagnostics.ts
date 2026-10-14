@@ -113,7 +113,10 @@ function hintFor(code: string, target: boolean): string {
 function unresolvedTarget(message: string): boolean {
   return (
     /Timeout \d+ms exceeded/.test(message) &&
-    message.includes("waiting for") &&
-    !message.includes("locator resolved to")
+    /waiting for (locator|getBy|internal:)/.test(message) &&
+    !message.includes("locator resolved to") &&
+    // Un `waitForEvent` qui n'arrive pas parle de l'événement, pas d'un
+    // élément : la cible du clic a bien été trouvée.
+    !message.includes("while waiting for event")
   );
 }
