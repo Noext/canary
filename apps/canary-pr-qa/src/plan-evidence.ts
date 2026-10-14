@@ -1,4 +1,5 @@
 import { PLAN_EVIDENCE_SNAPSHOT_CHARS } from "./canary.js";
+import { QaError } from "./diagnostics.js";
 import type { Locator, Plan, Scenario } from "./schema.js";
 
 /**
@@ -269,6 +270,183 @@ function isAssertionStep(
       "assertionId" in action &&
       action.assertionId === assertionId
   );
+}
+
+/**
+ * Ce qu'un sélecteur CSS doit à une classe ou à une couleur : la classe et la
+ * couleur changent sans que le comportement change, et la source n'en fait pas
+ * une preuve. Le contrôle est déterministe — il ne dépend ni du modèle ni de
+ * l'instantané de découverte — pour qu'un plan fautif soit refusé avant
+ * exécution, et réparé par le planificateur.
+ */
+const CLASS_NAME = /\.(?!\d)[a-z_\u00a0-\uffff-][\w\u00a0-\uffff-]*/i;
+/** Attribut class : `[class]` seul ne nomme aucune classe, il n'est pas visé. */
+const CLASS_ATTRIBUTE = /^\[\s*class\s*[*^$~|]?\s*=/i;
+const COLOR_HEX = /#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})(?![\w-])/i;
+const COLOR_FUNCTION = /(?:^|[^\w-])(?:rgba?|oklch)\s*\(/i;
+/** Moteur de locator Playwright, `<moteur>=valeur` : le seul CSS est `css=`. */
+const ENGINE = /^([a-z][\w-]*)=/i;
+
+/**
+ * Le sélecteur privé de ses chaînes littérales, à longueur constante : un point
+ * ou une classe dans une chaîne est une valeur d'attribut, jamais un sélecteur,
+ * et une longueur conservée laisse citer le fragment fautif.
+ */
+function selectorCode(selector: string): string {
+  let code = "";
+  let quote: string | undefined;
+  let index = 0;
+  while (index < selector.length) {
+    const char = selector[index] as string;
+    // Un caractère échappé appartient à un identifiant, jamais à un sélecteur.
+    if (char === "\\") {
+      const escaped = selector[index + 1];
+      code += escaped === undefined ? " " : "  ";
+      index += escaped === undefined ? 1 : 2;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      code += " ";
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      code += " ";
+    } else {
+      code += char;
+    }
+    index += 1;
+  }
+  return code;
+}
+
+/**
+ * Blocs entre crochets, chaînes littérales comprises : c'est là qu'un attribut
+ * et une couleur se lisent, y compris dans la forme observée
+ * `p[class*="text-[#b42318]"]`.
+ */
+function bracketBlocks(selector: string): string[] {
+  const blocks: string[] = [];
+  let quote: string | undefined;
+  let start = -1;
+  let index = 0;
+  while (index < selector.length) {
+    const char = selector[index] as string;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "[") {
+      start = index;
+    } else if (char === "]" && start >= 0) {
+      blocks.push(selector.slice(start, index + 1));
+      start = -1;
+    }
+    index += 1;
+  }
+  if (start >= 0) {
+    blocks.push(selector.slice(start));
+  }
+  return blocks;
+}
+
+/**
+ * Ce qu'un sélecteur CSS doit à une classe ou à une couleur, `undefined` quand
+ * il n'en dépend pas. `role=`, `text=` et les autres moteurs Playwright ne sont
+ * pas des sélecteurs CSS — un point y est du texte —, seul `css=` en annonce. Un
+ * `#hex` n'est une couleur que dans un crochet : hors crochet c'est un id, et
+ * l'ambiguïté se tranche en faveur de l'id (`#abc`).
+ */
+function classOrColorSelector(selector: string): string | undefined {
+  const value = selector.trim();
+  const engine = ENGINE.exec(value)?.[1]?.toLowerCase();
+  if (engine !== undefined && engine !== "css") {
+    return;
+  }
+  const css = engine === "css" ? value.slice(engine.length + 1) : value;
+  const code = selectorCode(css);
+  const className = CLASS_NAME.exec(code);
+  if (className) {
+    return `a class name (${className[0]})`;
+  }
+  const blocks = bracketBlocks(css);
+  const classAttribute = blocks.find((block) => CLASS_ATTRIBUTE.test(block));
+  if (classAttribute) {
+    return `a class attribute selector (${classAttribute})`;
+  }
+  const literal = blocks
+    .map((block) => COLOR_HEX.exec(block)?.[0])
+    .find((fragment) => fragment !== undefined);
+  if (literal) {
+    return `a color literal (${literal})`;
+  }
+  // Une couleur fonctionnelle se lit dans un crochet comme hors crochet.
+  const colorFunction = [...blocks, code]
+    .map((fragment) => COLOR_FUNCTION.exec(fragment)?.[0])
+    .find((fragment) => fragment !== undefined);
+  return colorFunction
+    ? `a color literal (${colorFunction.trim()})`
+    : undefined;
+}
+
+/**
+ * Refus rendus au planificateur pour une cible CSS construite sur une classe ou
+ * une couleur : un refus par scénario, qui nomme l'étape, la cible et ce qu'il
+ * faut viser à la place. `runner.ts` les rejoue après l'appel modèle, pour
+ * qu'un plan non corrigé soit bloqué avant exécution.
+ */
+export function unstableSelectorRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const targets = [
+      ...scenario.steps.flatMap((step) =>
+        "locator" in step.action && step.action.locator
+          ? [{ locator: step.action.locator, stepId: step.id }]
+          : []
+      ),
+      ...scenario.assertions.flatMap((assertion) =>
+        assertion.target
+          ? [
+              {
+                locator: assertion.target,
+                stepId: assertion.afterStep ?? assertion.id,
+              },
+            ]
+          : []
+      ),
+    ]
+      .filter((target) => target.locator.by === "css")
+      .flatMap((target) => {
+        const reason = classOrColorSelector(target.locator.value);
+        return reason === undefined ? [] : [{ ...target, reason }];
+      });
+    if (targets.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_SELECTOR_UNSTABLE",
+        `Scenario ${scenario.id} targets an element with a CSS selector built from ${targets
+          .map(
+            (target) =>
+              `${target.reason}: ${target.stepId} → ${describeTarget(target.locator)}`
+          )
+          .join(" ; ")}`,
+        'Target what the discovery snapshot shows instead: a role with its accessible name, an id, or a stable attribute the source defines. To prove an absence, use kind "hidden" or a count of 0 on a selector the page still carries. A class name or a color read in the source is not a stable target.'
+      ),
+    });
+  }
+  return refusals;
 }
 
 export function validatePlanEvidence(

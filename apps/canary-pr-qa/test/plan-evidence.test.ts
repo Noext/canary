@@ -11,6 +11,7 @@ import { Model } from "../src/model.js";
 import {
   ariaRoleNames,
   planEvidenceDiagnostic,
+  unstableSelectorRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
 import { runQa } from "../src/runner.js";
@@ -417,5 +418,114 @@ describe("scénario refusé avant exécution", () => {
     );
     expect(events).toContain('"PLAN_EVIDENCE_INCOMPLETE"');
     expect(events).toContain("coupé au plafond");
+  });
+});
+
+describe("sélecteur construit sur une classe ou une couleur", () => {
+  const refusals = (value: string) =>
+    unstableSelectorRefusals(
+      PlanSchema.parse(readOnlyPlan({ by: "css", value }))
+    );
+  it("refuse la forme observée p[class*=...] et une classe simple", () => {
+    const observed = refusals('p[class*="text-[#b42318]"]');
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.error.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    expect(observed[0]?.error.message).toContain(
+      'a class attribute selector ([class*="text-[#b42318]"])'
+    );
+    expect(observed[0]?.error.message).toContain("heading-visible");
+    expect(observed[0]?.error.message).toContain("load → css=");
+    expect(observed[0]?.error.hint).toContain(
+      "a role with its accessible name"
+    );
+    expect(observed[0]?.error.hint).toContain('kind "hidden"');
+    const simple = refusals(".text-red-500");
+    expect(simple).toHaveLength(1);
+    expect(simple[0]?.error.message).toContain("a class name (.text-red-500)");
+    for (const value of [
+      "button.text-red-500",
+      "css=.text-red-500",
+      ":not(.hidden)",
+      '[class^="text-"]',
+      "[class$=500]",
+      '[class~="text-red-500"]',
+      '[style*="color: rgb(180, 35, 24)"]',
+      'p[class*="text-[rgb(180,35,24)]"]',
+    ]) {
+      expect(refusals(value), value).toHaveLength(1);
+    }
+  });
+  it("n'oppose aucun refus à un id, une chaîne, un data-* ou un autre moteur", () => {
+    for (const value of [
+      "#saved",
+      "#abc",
+      '[aria-label="Save.now"]',
+      '[data-cash-state="cloture"]',
+      'a[href$=".pdf"]',
+      'role=status[name=""]',
+      "text=Save.now",
+      "label=Save.now",
+      "input",
+      "#saved > span",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+});
+
+describe("sélecteur instable refusé avant exécution", () => {
+  const unstable = () =>
+    PlanSchema.parse(readOnlyPlan({ by: "css", value: ".text-red-500" }));
+  const repaired = () =>
+    PlanSchema.parse(
+      readOnlyPlan({ by: "role", value: "heading", name: "Pilotage" })
+    );
+  /** Corrections envoyées au planificateur, une par refus de plan. */
+  function plannerFeedback(f: Awaited<ReturnType<typeof fixture>>): string[] {
+    return f.modelRequests
+      .filter((request) =>
+        (request.messages as { content: string }[])[0]?.content.startsWith(
+          "You plan"
+        )
+      )
+      .filter((request) => (request.messages as unknown[]).length > 2)
+      .map(
+        (request) =>
+          (request.messages as { content: string }[]).at(-1)?.content ?? ""
+      );
+  }
+  it("envoie le refus au planificateur puis exécute le plan corrigé", async () => {
+    const f = await setup({ plans: [unstable(), repaired()] });
+    stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(plannerFeedback(f)).toHaveLength(1);
+    expect(plannerFeedback(f)[0]).toContain("a class name (.text-red-500)");
+    expect(plannerFeedback(f)[0]).toContain("a role with its accessible name");
+    expect(result.outcome).toBe("passed");
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(result.plan?.scenarios[0]?.assertions[0]?.target?.value).toBe(
+      "heading"
+    );
+  });
+  it("bloque le scénario non corrigé sans dépenser d'étape navigateur", async () => {
+    const f = await setup({ plans: [unstable()] });
+    const labels = stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome).toBe("blocked");
+    expect(scenario.diagnostic?.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    expect(scenario.error).toContain(".text-red-500");
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.artifacts).toEqual([]);
+    // La découverte seule ouvre le navigateur : le scénario refusé n'exécute rien.
+    expect(labels).toEqual(["discover-preview"]);
+    expect(plannerFeedback(f)).toHaveLength(1);
+    expect(result.outcome).toBe("blocked");
   });
 });

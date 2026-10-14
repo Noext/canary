@@ -18,6 +18,7 @@ import {
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
+  unstableSelectorRefusals,
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
@@ -195,16 +196,17 @@ async function refuseScenario(
 }
 /**
  * Diagnostic d'un refus prononcé avant toute exécution : cible absente de la page
- * de découverte, ou interaction sans preuve du changement. `undefined` quand le
- * scénario peut s'exécuter. Un scénario refusé n'est jamais exécuté — aperçu de
- * tête comme préversion de base — et son refus est journalisé une seule fois, ici.
+ * de découverte, sélecteur construit sur une classe ou une couleur, ou
+ * interaction sans preuve du changement. `undefined` quand le scénario peut
+ * s'exécuter. Un scénario refusé n'est jamais exécuté — aperçu de tête comme
+ * préversion de base — et son refus est journalisé une seule fois, ici.
  */
 function refusalDiagnostic(
   result: RunResult,
   scenario: Scenario,
   refusals: Map<string, PlanEvidenceRefusal[]>,
   inconclusive: PlanEvidenceReport["inconclusive"],
-  writeRefusals: Map<string, QaError>,
+  preExecutionRefusals: Map<string, QaError>,
   config: Config
 ): Diagnostic | undefined {
   const scenarioRefusals = refusals.get(scenario.id);
@@ -224,14 +226,14 @@ function refusalDiagnostic(
     );
     return diagnose(new QaError("PLAN_TARGET_MISSING", message, hint), config);
   }
-  const writeRefusal = writeRefusals.get(scenario.id);
-  if (!writeRefusal) {
+  const refusal = preExecutionRefusals.get(scenario.id);
+  if (!refusal) {
     return;
   }
-  const diagnostic = diagnose(writeRefusal, config);
+  const diagnostic = diagnose(refusal, config);
   logger.warn(
     { runId: result.id, scenario: scenario.id, diagnostic },
-    "Scénario refusé avant exécution : interaction sans preuve du changement"
+    "Scénario refusé avant exécution"
   );
   return diagnostic;
 }
@@ -242,7 +244,8 @@ function refusalDiagnostic(
  */
 /**
  * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
- * exigence sans témoin textuel, cible absente de la page de découverte.
+ * sélecteur construit sur une classe ou une couleur, exigence sans témoin
+ * textuel, cible absente de la page de découverte.
  */
 function planRefusals(
   candidate: Plan,
@@ -251,6 +254,9 @@ function planRefusals(
 ): string[] {
   return [
     ...writeEvidenceRefusals(candidate, policy).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
+    ...unstableSelectorRefusals(candidate).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
     ...ungroundedPlanRefusals(candidate, context),
@@ -367,11 +373,13 @@ async function executePlan(
     await progress.record({ phase: "planning", diagnostic });
   }
   result.coverage = validateCoverage(result.plan, context, policy, config);
-  const writeRefusals = new Map(
-    writeEvidenceRefusals(result.plan, policy).map((item) => [
-      item.scenario.id,
-      item.error,
-    ])
+  // Refus rendus au planificateur pendant la planification, rejoués ici : un
+  // plan que le modèle n'a pas corrigé est bloqué, jamais exécuté.
+  const preExecutionRefusals = new Map(
+    [
+      ...writeEvidenceRefusals(result.plan, policy),
+      ...unstableSelectorRefusals(result.plan),
+    ].map((item) => [item.scenario.id, item.error])
   );
   await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
@@ -380,7 +388,7 @@ async function executePlan(
       scenario,
       refusals,
       planEvidence.inconclusive,
-      writeRefusals,
+      preExecutionRefusals,
       config
     );
     if (refusal) {
@@ -422,7 +430,7 @@ async function executePlan(
       scenarios: [],
     };
     for (const scenario of result.plan.scenarios) {
-      if (refusals.has(scenario.id) || writeRefusals.has(scenario.id)) {
+      if (refusals.has(scenario.id) || preExecutionRefusals.has(scenario.id)) {
         // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
         continue;
       }
