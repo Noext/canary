@@ -643,13 +643,21 @@ claude mcp add --transport http canary-qa https://votre-domaine-qa/mcp \
 ```
 
 `POST /mcp` est sans état et n'accepte qu'une clé API : un cookie de session ne
-l'ouvre pas, ce qui le met hors de portée d'une requête intersite. Quatre outils
-en lecture : `list_runs` (statut, résultat, modèle, coût), `get_run`,
+l'ouvre pas, ce qui le met hors de portée d'une requête intersite. Huit outils en
+lecture : `list_runs` (statut, résultat, modèle, coût), `get_run`,
 `list_automatic_attempts` et `get_automatic_attempt` (état, cause, chronologie des
-sondes). `get_run` rend le `result.json` du run — scénarios, assertions, vidéos,
-coût, publication — et reste soumis à la politique de preuves brutes : traces,
-HAR et journaux natifs restent refusés. Un run purgé par la rétention est annoncé
-comme tel, jamais inventé.
+sondes), puis l'exploration des preuves. `list_run_sessions` énumère les sessions
+Canary d'un test — une par scénario, plus la découverte — avec leur issue et
+l'inventaire de leurs artefacts ; `get_session_results`, `get_session_console` et
+`get_session_har` en rendent le contenu page par page (16 Kio par défaut, reprise
+par `nextOffset`). `get_run` rend le `result.json` du run — scénarios, assertions,
+vidéos, coût, publication. Tout cela reste soumis à la politique de preuves
+brutes : traces, HAR, journaux natifs et `results.json` sont refusés tant que
+`QA_RAW_EVIDENCE` n'est pas à `true`, et chaque lecture de preuve est auditée
+(`artifact.read`). Au-delà de 256 Kio, le contenu n'est plus rendu du tout :
+l'outil rend le lien signé, valable cinq minutes, qui sert le fichier entier — le
+seul chemin vers la trace Playwright, que les rapports relient déjà. Un run purgé
+par la rétention est annoncé comme tel, jamais inventé.
 
 `launch_run` (`{prUrl,previewUrl?,publish?,model?,idempotencyKey?}`) est le seul
 outil qui écrit, et il exige une clé `operator` : il passe par le même lanceur que
@@ -744,9 +752,10 @@ ferme le check du SHA épinglé avec `error`, jamais `success`. Une panne de pub
 rend le run `blocked` et conserve les preuves locales.
 
 Les logs, HAR, ZIP et le manifeste `results.json` sont des preuves brutes,
-interdites par défaut via HTTP. Les rapports (principal et par scénario) et leurs
-vidéos/images restent accessibles aux utilisateurs autorisés. N'activez
-`QA_RAW_EVIDENCE` qu'après avoir
+interdites par défaut via HTTP comme par les outils MCP qui lisent une session.
+Les rapports (principal et par scénario), leurs vidéos, images et captures
+restent accessibles aux utilisateurs autorisés. N'activez `QA_RAW_EVIDENCE`
+qu'après avoir
 vérifié les données de test. Les clés PEM, états d'authentification et configurations
 montées sont exclus du contexte Docker.
 

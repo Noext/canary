@@ -470,7 +470,8 @@ docker compose logs --tail=100 db worker browser egress pr-qa
 Remplacer `RUN_ID` par le UUID reçu au lancement. Le résumé de support masque les
 secrets et évite le DOM, les valeurs saisies et les cookies. Partager ce résumé
 avant les captures brutes. Les traces/HAR/logs natifs sont refusés par défaut via
-HTTP ; `QA_RAW_EVIDENCE=true` n'est à activer qu'après contrôle des données de test.
+HTTP comme par les outils MCP qui lisent une session ; `QA_RAW_EVIDENCE=true`
+n'est à activer qu'après contrôle des données de test.
 
 Vérifier dans l'ordre la configuration, SQL et sa migration, le worker/sa lease,
 IA/GitHub, la provenance de la preview, Chromium puis le proxy egress. Une lease

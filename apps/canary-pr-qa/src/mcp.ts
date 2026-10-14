@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
@@ -8,11 +8,13 @@ import {
   mayLaunch,
   type Principal,
   requireAccess,
+  signedArtifact,
 } from "./access.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import { automaticAttempt, type Job, type Queue } from "./queue.js";
 import { accepted, type RunLauncher, runInputSchema } from "./run-launch.js";
+import { isRawEvidenceName } from "./server.js";
 
 const logger = createLogger({ name: "qa-mcp" });
 const SERVER_NAME = "canary-pr-qa";
@@ -124,6 +126,197 @@ async function readResult(config: Config, id: string) {
   return text === undefined ? undefined : (JSON.parse(text) as unknown);
 }
 
+/**
+ * Octets rendus par page inline. Une réponse MCP voyage dans la fenêtre de
+ * contexte de l'agent : un `console.log` de plusieurs mégaoctets la saturerait
+ * en un appel. La page se reprend avec `nextOffset`.
+ */
+const INLINE_PAGE = 16_384;
+/**
+ * Au-delà, l'artefact n'est plus rendu du tout : le tool rend un lien signé, le
+ * même que le navigateur suit depuis le rapport. Un HAR de 8 Mo n'a rien à faire
+ * dans une réponse d'outil.
+ */
+const MAX_INLINE = 262_144;
+/**
+ * Les fichiers qu'une session Canary laisse dans le dossier de son scénario,
+ * dans l'ordre lisible d'un inventaire : l'index d'abord, puis le rapport, les
+ * dumps et la trace.
+ */
+const SESSION_FILES = [
+  { file: "results.json", kind: "results" },
+  { file: "report.html", kind: "report" },
+  { file: "console.log", kind: "console" },
+  { file: "network.har", kind: "har" },
+  { file: "trace.zip", kind: "trace" },
+] as const;
+/** Les captures vivent dans des sous-dossiers, une entrée par fichier. */
+const SESSION_NESTED = [
+  { dir: "video", ext: ".webm", kind: "video" },
+  { dir: "screenshots", ext: ".png", kind: "screenshot" },
+] as const;
+
+type ArtifactKind =
+  | (typeof SESSION_FILES)[number]["kind"]
+  | (typeof SESSION_NESTED)[number]["kind"];
+
+interface SessionArtifact {
+  bytes: number;
+  kind: ArtifactKind;
+  path: string;
+  url?: string;
+}
+interface RunSession {
+  artifacts: SessionArtifact[];
+  dir: string;
+  id?: string;
+  name?: string;
+  outcome?: string;
+}
+/**
+ * Les artefacts d'une session, tels que `canary end` les a copiés dans le
+dossier du scénario. Le disque est la source de vérité : un run encore en cours
+ * n'a pas de résultat, mais la copie des preuves est déjà là.
+ */
+async function sessionArtifacts(dir: string): Promise<SessionArtifact[]> {
+  const artifacts: SessionArtifact[] = [];
+  for (const { file, kind } of SESSION_FILES) {
+    const info = await stat(join(dir, file)).catch(() => undefined);
+    if (info?.isFile()) {
+      artifacts.push({ bytes: info.size, kind, path: file });
+    }
+  }
+  for (const { dir: sub, ext, kind } of SESSION_NESTED) {
+    const names = await readdir(join(dir, sub)).catch(() => []);
+    for (const name of names.filter((entry) => entry.endsWith(ext))) {
+      const info = await stat(join(dir, sub, name)).catch(() => undefined);
+      if (info?.isFile()) {
+        artifacts.push({ bytes: info.size, kind, path: `${sub}/${name}` });
+      }
+    }
+  }
+  return artifacts;
+}
+/**
+ * Le scénario qui a produit chaque session, lu dans le `result.json` du run.
+ * Un run encore en cours n'en a pas : les sessions restent énumérées depuis le
+ * disque, sans titre ni issue, plutôt que d'être annoncées inexistantes.
+ */
+async function scenarioIndex(config: Config, runId: string) {
+  const result = await readResult(config, runId);
+  const index = new Map<
+    string,
+    { id?: string; name?: string; outcome?: string }
+  >();
+  const scenarios = (result as { scenarios?: unknown } | undefined)?.scenarios;
+  if (!Array.isArray(scenarios)) {
+    return index;
+  }
+  for (const entry of scenarios) {
+    const scenario = (entry as { scenario?: { id?: unknown; title?: unknown } })
+      .scenario;
+    const dir = typeof scenario?.id === "string" ? scenario.id : undefined;
+    if (!dir) {
+      continue;
+    }
+    const sessionId = (entry as { sessionId?: unknown }).sessionId;
+    const outcome = (entry as { outcome?: unknown }).outcome;
+    index.set(dir, {
+      ...(typeof sessionId === "string" ? { id: sessionId } : {}),
+      ...(typeof scenario?.title === "string" ? { name: scenario.title } : {}),
+      ...(typeof outcome === "string" ? { outcome } : {}),
+    });
+  }
+  return index;
+}
+/**
+ * La politique de preuves brutes, la même que la route HTTP des artefacts : le
+ * MCP ne peut pas ouvrir ce que le navigateur refuse, et un test de la route
+ * couvre donc aussi ces tools.
+ */
+function allowed(config: Config, path: string) {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return config.QA_RAW_EVIDENCE === "true" || !isRawEvidenceName(name);
+}
+/** Les kinds qu'un tool dédié rend : l'inventaire ne distribue pas leur lien. */
+const READ_BY_TOOL = new Set<ArtifactKind>(["results", "console", "har"]);
+/**
+ * Une entrée d'inventaire, avec un lien signé quand aucun tool ne rend le
+ * fichier. La trace est un dump brut : sans lien tant que `QA_RAW_EVIDENCE`
+ * n'est pas à `true`, sinon l'URL serait refusée par la route HTTP et l'agent
+ * croirait à une preuve perdue.
+ */
+function linked(
+  config: Config,
+  runId: string,
+  session: string,
+  artifact: SessionArtifact
+): SessionArtifact {
+  if (READ_BY_TOOL.has(artifact.kind) || !allowed(config, artifact.path)) {
+    return artifact;
+  }
+  return {
+    ...artifact,
+    url: signedArtifact(runId, `${session}/${artifact.path}`, config),
+  };
+}
+/**
+ * Les sessions d'un run : un dossier par scénario, plus la découverte. Un
+ * dossier sans index ni trace n'est pas une session — un rapport seul, ou un
+ * fichier de travail — et l'annoncer enverrait l'agent chercher des preuves qui
+ * n'existent pas.
+ */
+async function runSessions(
+  config: Config,
+  runId: string
+): Promise<RunSession[]> {
+  const dirs = await readdir(join(config.QA_DATA_DIR, runId), {
+    withFileTypes: true,
+  }).catch(() => []);
+  const index = await scenarioIndex(config, runId);
+  const sessions: RunSession[] = [];
+  for (const entry of dirs) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+    const artifacts = await sessionArtifacts(
+      join(config.QA_DATA_DIR, runId, entry.name)
+    );
+    if (
+      !artifacts.some(
+        (item) => item.kind === "results" || item.kind === "trace"
+      )
+    ) {
+      continue;
+    }
+    sessions.push({
+      artifacts: artifacts.map((artifact) =>
+        linked(config, runId, entry.name, artifact)
+      ),
+      dir: entry.name,
+      ...(entry.name === "_discovery" ? { name: "Discovery" } : {}),
+      ...index.get(entry.name),
+    });
+  }
+  return sessions.sort((left, right) => left.dir.localeCompare(right.dir));
+}
+/**
+ * Recule sur une frontière UTF-8 : une page ne doit pas finir sur la moitié
+ * d'un caractère, que l'agent recollerait en mojibake.
+ */
+function safeCut(buffer: Buffer, start: number, end: number) {
+  let cut = end;
+  while (cut > start && cut < buffer.length) {
+    // Un octet de continuation s'écrit 10xxxxxx : la page finirait sur la
+    // moitié d'un caractère, que l'agent recollerait en mojibake.
+    const byte = buffer[cut];
+    if (byte === undefined || byte < 0x80 || byte >= 0xc0) {
+      break;
+    }
+    cut -= 1;
+  }
+  return cut;
+}
 function text(value: unknown, isError = false): ToolAnswer {
   return {
     ...(isError ? { isError: true } : {}),
@@ -205,12 +398,179 @@ const launchRunArgs = runInputSchema
   .extend({ idempotencyKey: z.string().min(1).max(150).optional() })
   .strict();
 
+const listSessionsArgs = z.object({ runId: z.string().uuid() }).strict();
+const sessionReadArgs = z
+  .object({
+    limit: z.number().int().min(1).max(INLINE_PAGE).optional(),
+    offset: z.number().int().min(0).optional(),
+    runId: z.string().uuid(),
+    session: z.string().min(1).max(200),
+  })
+  .strict();
+
 const LIMIT_SCHEMA = {
   description: "Nombre d'entrées à rendre, 200 au plus.",
   maximum: MAX_LIMIT,
   minimum: 1,
   type: "integer",
 };
+
+/**
+ * Le refus d'un dump brut, en clair : l'agent doit savoir que la donnée existe
+ * et qui peut l'ouvrir, plutôt que de conclure que la session n'a rien produit.
+ */
+const RAW_DISABLED = [
+  "Les preuves brutes sont fermées par la politique de données du service :",
+  "le journal natif, le HAR, la trace et l'index results.json ne sont pas lisibles",
+  "tant que QA_RAW_EVIDENCE n'est pas à true. Le rapport de session et les vidéos",
+  "restent accessibles, et chaque lecture de preuve brute est auditée.",
+].join(" ");
+const SESSION_READERS = [
+  {
+    description:
+      "L'index de session d'un scénario (`results.json`) : résumé, étapes, assertions et la liste des artefacts de la session.",
+    kind: "results",
+    label: "index de session",
+    name: "get_session_results",
+  },
+  {
+    description:
+      "Le journal natif d'une session (`console.log`) : messages de console et erreurs de page du scénario.",
+    kind: "console",
+    label: "journal natif",
+    name: "get_session_console",
+  },
+  {
+    description:
+      "Le HAR réseau d'une session (`network.har`) : requêtes, réponses et échecs observés pendant le scénario.",
+    kind: "har",
+    label: "HAR réseau",
+    name: "get_session_har",
+  },
+] as const;
+
+/**
+ * Une lecture de preuve de session : la session est nommée par son dossier de
+ * scénario ou par l'identifiant Canary que l'inventaire publie, jamais par un
+ * chemin — le dossier vient d'un `readdir`, pas de l'appelant.
+ */
+async function readSession(
+  raw: unknown,
+  ctx: ToolContext,
+  spec: (typeof SESSION_READERS)[number]
+): Promise<ToolAnswer> {
+  const args = sessionReadArgs.parse(raw);
+  try {
+    const job = await ctx.queue.get(args.runId);
+    if (!job) {
+      return text(
+        `Ce test est introuvable ou a été purgé : ${args.runId}.`,
+        true
+      );
+    }
+    requireAccess(ctx.user, job.repo);
+    const sessions = await runSessions(ctx.config, args.runId);
+    const session = sessions.find(
+      (entry) => entry.dir === args.session || entry.id === args.session
+    );
+    if (!session) {
+      return text(
+        sessions.length
+          ? `Ce test n'a pas de session « ${args.session} ». Sessions connues : ${sessions.map((entry) => entry.dir).join(", ")}.`
+          : "Ce test n'a laissé aucune session : aucun scénario n'a produit d'index ni de trace.",
+        true
+      );
+    }
+    const artifact = session.artifacts.find(
+      (entry) => entry.kind === spec.kind
+    );
+    if (!artifact) {
+      return text(
+        `La session « ${session.dir} » n'a pas d'${spec.label} : le scénario ne l'a pas produit.`,
+        true
+      );
+    }
+    if (!allowed(ctx.config, artifact.path)) {
+      return text(RAW_DISABLED, true);
+    }
+    const path = `${session.dir}/${artifact.path}`;
+    await ctx.queue.audit(ctx.user.id, "artifact.read", args.runId, {
+      path,
+      via: "mcp",
+    });
+    const reference = {
+      dir: session.dir,
+      ...(session.id ? { id: session.id } : {}),
+      ...(session.name ? { name: session.name } : {}),
+      ...(session.outcome ? { outcome: session.outcome } : {}),
+    };
+    const meta = { bytes: artifact.bytes, kind: artifact.kind, path };
+    if (artifact.bytes > MAX_INLINE) {
+      return text({
+        artifact: meta,
+        note: `Le fichier fait ${artifact.bytes} octets : au-delà de la taille rendue par le MCP. Le lien signé, valable cinq minutes, rend le fichier entier.`,
+        run: args.runId,
+        session: reference,
+        text: null,
+        url: signedArtifact(args.runId, path, ctx.config),
+      });
+    }
+    const buffer = await readFile(
+      join(ctx.config.QA_DATA_DIR, args.runId, path)
+    );
+    const offset = Math.min(args.offset ?? 0, buffer.length);
+    const cut = safeCut(
+      buffer,
+      offset,
+      Math.min(buffer.length, offset + (args.limit ?? INLINE_PAGE))
+    );
+    return text({
+      artifact: meta,
+      nextOffset: cut < buffer.length ? cut : null,
+      offset,
+      run: args.runId,
+      session: reference,
+      text: buffer.subarray(offset, cut).toString("utf8"),
+      url: null,
+    });
+  } catch (error) {
+    return denial(error);
+  }
+}
+
+const SESSION_READER_TOOLS: Tool[] = SESSION_READERS.map((reader) => ({
+  description: `${reader.description} La session se nomme par le dossier du scénario ou par l'identifiant rendu par list_run_sessions. Le contenu reste soumis à la politique de preuves brutes et chaque lecture est auditée ; au-delà de ${MAX_INLINE} octets, un lien signé remplace le contenu.`,
+  inputSchema: {
+    additionalProperties: false,
+    properties: {
+      limit: {
+        description: `Taille de la page en octets, ${INLINE_PAGE} au plus.`,
+        maximum: INLINE_PAGE,
+        minimum: 1,
+        type: "integer",
+      },
+      offset: {
+        description: "Octet de départ ; reprendre la suite avec nextOffset.",
+        minimum: 0,
+        type: "integer",
+      },
+      runId: {
+        description: "Identifiant du test (UUID).",
+        format: "uuid",
+        type: "string",
+      },
+      session: {
+        description:
+          "Session du test : dossier du scénario ou identifiant de session rendu par list_run_sessions.",
+        type: "string",
+      },
+    },
+    required: ["runId", "session"],
+    type: "object",
+  },
+  name: reader.name,
+  run: (raw, ctx) => readSession(raw, ctx, reader),
+}));
 
 /**
  * The read-only tools an AI agent gets with an API key, plus the one action a
@@ -294,6 +654,50 @@ const tools: Tool[] = [
       }
     },
   },
+  {
+    description:
+      "Les sessions Canary enregistrées d'un test : une par scénario, plus la découverte. Chaque session donne son dossier, son identifiant, son issue et l'inventaire de ses artefacts (index results.json, rapport, trace, HAR, journal, vidéos, captures), avec un lien signé pour ceux qu'aucun autre outil ne rend.",
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        runId: {
+          description: "Identifiant du test (UUID).",
+          format: "uuid",
+          type: "string",
+        },
+      },
+      required: ["runId"],
+      type: "object",
+    },
+    name: "list_run_sessions",
+    run: async (raw, ctx) => {
+      const args = listSessionsArgs.parse(raw);
+      try {
+        const job = await ctx.queue.get(args.runId);
+        if (!job) {
+          return text(
+            `Ce test est introuvable ou a été purgé : ${args.runId}.`,
+            true
+          );
+        }
+        requireAccess(ctx.user, job.repo);
+        const sessions = await runSessions(ctx.config, args.runId);
+        const rawEvidence = ctx.config.QA_RAW_EVIDENCE === "true";
+        return text({
+          count: sessions.length,
+          note: rawEvidence
+            ? "Les preuves brutes sont ouvertes : chaque lecture est auditée."
+            : "Les preuves brutes sont fermées par QA_RAW_EVIDENCE : la trace n'a pas de lien, et les outils d'index, de journal et de HAR les refusent. Le rapport, les vidéos et les captures restent accessibles.",
+          rawEvidence,
+          run: args.runId,
+          sessions,
+        });
+      } catch (error) {
+        return denial(error);
+      }
+    },
+  },
+  ...SESSION_READER_TOOLS,
   {
     description:
       "Historique des lancements automatiques déclenchés par GitHub : état, cause, pull request et SHA de chaque tentative.",
