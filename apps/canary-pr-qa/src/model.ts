@@ -1,10 +1,21 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError, redact } from "./diagnostics.js";
-import { fetchText } from "./http.js";
+import { fetchSse, fetchText } from "./http.js";
 import { assertProvider, runModelConfig } from "./model-catalog.js";
 import { checkBudget, runScope } from "./run-scope.js";
+import { emptyChatStream, reduceChatStream } from "./sse.js";
 import { modelCalls, modelLatency, modelTokens, traced } from "./telemetry.js";
+
+/** Réponse de `chat/completions` dans la forme non streamée, quel que soit le mode de transport. */
+interface ModelResponse {
+  choices?: { finish_reason?: string; message?: { content?: string } }[];
+  usage?: {
+    completion_tokens?: number;
+    prompt_tokens?: number;
+    total_tokens?: number;
+  };
+}
 
 export class Model {
   private readonly config: Config;
@@ -40,50 +51,18 @@ export class Model {
         1_000_000;
       checkBudget(maxTokens + reservedInput, reservedCost);
       const started = Date.now();
-      const { text } = await traced(
+      const response = await traced(
         "model.json",
         {
           model: this.config.OPENAI_MODEL,
           runId: runScope.getStore()?.id ?? "doctor",
         },
-        () =>
-          fetchText(
-            `${this.config.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(this.config.OPENAI_API_KEY
-                  ? { Authorization: `Bearer ${this.config.OPENAI_API_KEY}` }
-                  : {}),
-              },
-              body: JSON.stringify({
-                model: this.config.OPENAI_MODEL,
-                messages,
-                ...(this.config.OPENAI_TEMPERATURE === ""
-                  ? {}
-                  : { temperature: this.config.OPENAI_TEMPERATURE }),
-                [this.config.OPENAI_TOKEN_PARAMETER]: maxTokens,
-                ...(this.config.OPENAI_JSON_MODE === "true"
-                  ? { response_format: { type: "json_object" } }
-                  : {}),
-              }),
-            },
-            this.config.QA_MODEL_TIMEOUT_SECONDS * 1000
-          )
+        () => this.completion(messages, maxTokens)
       );
       modelLatency.observe(
         { model: this.config.OPENAI_MODEL },
         (Date.now() - started) / 1000
       );
-      const response = JSON.parse(text) as {
-        usage?: {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-          total_tokens?: number;
-        };
-        choices?: { message?: { content?: string }; finish_reason?: string }[];
-      };
       const inputTokens =
         response.usage?.prompt_tokens ??
         Math.ceil(JSON.stringify(messages).length / 3);
@@ -114,7 +93,7 @@ export class Model {
         throw new QaError(
           "MODEL_OUTPUT_INCOMPLETE",
           "AI returned an empty or truncated response",
-          "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint."
+          "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
         );
       }
       try {
@@ -157,6 +136,100 @@ export class Model {
       "AI returned invalid structured output twice",
       `Validation: ${validation}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
     );
+  }
+
+  /**
+   * Une génération complète, streamée par défaut.
+   *
+   * Le streaming n'est pas un confort : une réponse non streamée n'envoie aucun octet avant le
+   * dernier token, et le proxy devant l'endpoint coupe alors la requête (Cloudflare répond 524
+   * après ~100 s), ce qui rend un long plan impossible à obtenir. Le raisonnement du modèle
+   * (`reasoning_content`) est compté dans l'usage mais jamais rendu à l'appelant : seul le
+   * contenu JSON lui appartient, et c'est lui que le schéma valide.
+   */
+  private async completion(
+    messages: { content: string; role: string }[],
+    maxTokens: number
+  ): Promise<ModelResponse> {
+    const timeout = this.config.QA_MODEL_TIMEOUT_SECONDS * 1000;
+    const stream = this.config.OPENAI_STREAM === "true";
+    const init: RequestInit = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(stream ? { Accept: "text/event-stream" } : {}),
+        ...(this.config.OPENAI_API_KEY
+          ? { Authorization: `Bearer ${this.config.OPENAI_API_KEY}` }
+          : {}),
+      },
+      body: JSON.stringify({
+        model: this.config.OPENAI_MODEL,
+        messages,
+        ...(this.config.OPENAI_TEMPERATURE === ""
+          ? {}
+          : { temperature: this.config.OPENAI_TEMPERATURE }),
+        [this.config.OPENAI_TOKEN_PARAMETER]: maxTokens,
+        ...(this.config.OPENAI_JSON_MODE === "true"
+          ? { response_format: { type: "json_object" } }
+          : {}),
+        ...(this.config.OPENAI_REASONING_EFFORT === ""
+          ? {}
+          : { reasoning_effort: this.config.OPENAI_REASONING_EFFORT }),
+        ...(stream
+          ? { stream: true, stream_options: { include_usage: true } }
+          : {}),
+      }),
+    };
+    const url = `${this.config.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`;
+    if (!stream) {
+      const { text } = await fetchText(url, init, timeout);
+      return JSON.parse(text) as ModelResponse;
+    }
+    let state = emptyChatStream;
+    await fetchSse(
+      url,
+      init,
+      (event) => {
+        state = reduceChatStream(state, event);
+        // Inutile de payer la fin du flux une fois qu'un échec ou la fin sont connus.
+        return state.error === undefined && !state.done;
+      },
+      timeout
+    );
+    if (state.error !== undefined) {
+      throw new QaError(
+        "MODEL_STREAM_ERROR",
+        `Model endpoint reported an error mid-stream: ${redact(state.error, this.config)}`,
+        "Check the model ID, the endpoint quota and the request parameters; the stream stopped before any JSON content."
+      );
+    }
+    // Un delta illisible retire du contenu : le JSON restant peut encore être valide et
+    // passer le schéma en ayant perdu un scénario. Un flux troué est refusé, jamais accepté.
+    if (state.malformed > 0) {
+      throw new QaError(
+        "MODEL_STREAM_INVALID",
+        `Model stream contained ${state.malformed} unreadable event(s)`,
+        "The response was cut, or the endpoint sent a payload that is not JSON. The plan was refused rather than accepted incomplete: retry the run, and use OPENAI_STREAM=false if the endpoint cannot stream."
+      );
+    }
+    // Un flux fermé proprement sans marqueur terminal est une génération interrompue : elle ne
+    // doit pas être confondue avec un plan complet.
+    if (!(state.done || state.finishReason !== undefined)) {
+      throw new QaError(
+        "MODEL_STREAM_TRUNCATED",
+        "Model stream ended without [DONE] or a finish reason",
+        "The connection closed before the end of the generation: retry the run. An interrupted stream is never accepted as a plan."
+      );
+    }
+    return {
+      choices: [
+        {
+          finish_reason: state.finishReason,
+          message: { content: state.content },
+        },
+      ],
+      usage: state.usage,
+    };
   }
 }
 

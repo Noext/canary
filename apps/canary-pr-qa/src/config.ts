@@ -76,6 +76,14 @@ const envSchema = z.object({
   OPENAI_TEMPERATURE: z
     .union([z.literal(""), z.coerce.number().min(0).max(2)])
     .default(""),
+  // Streamé par défaut : un proxy devant l'endpoint coupe une réponse non streamée (~100 s)
+  // avant la fin d'une longue génération. `false` revient au corps complet, pour un endpoint
+  // qui ne sait pas streamer.
+  OPENAI_STREAM: z.enum(["true", "false"]).default("true"),
+  // Vide : le paramètre n'est pas envoyé (compatible avec les modèles qui le rejettent).
+  OPENAI_REASONING_EFFORT: z
+    .enum(["", "minimal", "low", "medium", "high"])
+    .default(""),
   QA_DATA_DIR: z.string().default("./qa-data"),
   QA_POLICY_DIR: z.string().default(""),
   QA_API_TOKEN: z.string().default(""),
@@ -83,30 +91,32 @@ const envSchema = z.object({
   QA_PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
   QA_MAX_STEPS: z.coerce.number().int().min(1).max(100).default(25),
   QA_MAX_SCENARIOS: z.coerce.number().int().min(1).max(20).default(8),
+  // Plafond haut volontaire : un endpoint streamé peut générer longtemps, et un modèle de
+  // raisonnement peut légitimement consommer plus que l'ancien plafond avant d'émettre son JSON.
   QA_PLAN_MAX_TOKENS: z.coerce
     .number()
     .int()
     .min(128)
-    .max(32_768)
+    .max(1_000_000)
     .default(8000),
   QA_DOCTOR_MAX_TOKENS: z.coerce
     .number()
     .int()
     .min(128)
-    .max(32_768)
+    .max(1_000_000)
     .default(1024),
   QA_STEP_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(120).default(30),
   QA_MODEL_TIMEOUT_SECONDS: z.coerce
     .number()
     .int()
     .min(5)
-    .max(300)
+    .max(900)
     .default(120),
   QA_CONTEXT_CHARS: z.coerce
     .number()
     .int()
     .min(10_000)
-    .max(500_000)
+    .max(1_000_000)
     .default(120_000),
   PREVIEW_ALLOWED_HOSTS: z.string().default(""),
   PREVIEW_URL_TEMPLATE: z.string().default(""),
