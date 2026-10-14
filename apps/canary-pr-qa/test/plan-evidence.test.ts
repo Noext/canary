@@ -454,14 +454,66 @@ describe("sélecteur construit sur une classe ou une couleur", () => {
       "[class|=foo]",
       "[class=foo].bar",
       "div[data-x].b",
-      '[style*="color: rgb(180, 35, 24)"]',
       'p[class*="text-[rgb(180,35,24)]"]',
     ]) {
       expect(refusals(value), value).toHaveLength(1);
     }
   });
-  it("accepte un point, un #hex ou une fonction de couleur hors attribut de style", () => {
+  it("refuse la couleur de la déclaration qui la porte", () => {
     for (const value of [
+      '[style*="color:#fff8"]',
+      '[style*="fill:#FFFFFF80"]',
+      '[style*="color:rgb(180, 35, 24)"]',
+      '[style*="color:hsl(0 80% 50%)"]',
+      '[style*="color: hsla(1,2%,3%,.5)"]',
+      '[style*="color: hwb(0 0% 0%)"]',
+      '[style*="color:lab(50% 0 0)"]',
+      '[style*="color: lch(50% 40 30)"]',
+      '[style*="color: oklab(50% 0.1 0.1)"]',
+      '[style*="color: oklch(50% 0.1 30)"]',
+      '[style*="color: color-mix(in srgb, red, blue)"]',
+      '[style*="color: red"]',
+      '[style*="background:white"]',
+      "[background-color:white]",
+      "[stroke=white]",
+      '[fill="#b42318"]',
+      "[stroke=#fff]",
+      '[style="color:#b42318"]',
+      '[style*="border-color: hsl(0 0% 0%)"]',
+      '[style*="color:transparent"]',
+      '[style*="border:1px solid red"]',
+      '[style*="box-shadow:0 0 0 1px #b42318"]',
+    ]) {
+      expect(refusals(value), value).toHaveLength(1);
+    }
+  });
+  it("cite la déclaration de couleur, sans guillemet ni deux-points voisins", () => {
+    const declaration = refusals('[style*="background:rgb(0,0,0)"]')[0];
+    expect(declaration?.error.message).toContain(
+      "a color value (background:rgb(0,0,0))"
+    );
+    const attribute = refusals('[fill="#b42318"]')[0];
+    expect(attribute?.error.message).toContain("a color value (fill=#b42318)");
+  });
+  it("accepte une référence url(), jamais une couleur", () => {
+    for (const value of [
+      "[fill=url(#abc)]",
+      "[stroke=url(#FFFFFF)]",
+      '[fill="url( #abc )"]',
+      '[fill="url(#gradient-a1b2c3)"]',
+      '[style*="background:url(#abc)"]',
+      '[style*="filter:url(#abc)"]',
+      '[style*="background-image:url(#ffffff)"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("accepte une donnée de la page, même quand sa valeur ressemble à une couleur", () => {
+    for (const value of [
+      "[data-state=red]",
+      "[value=red]",
+      "[data-color=red]",
+      "[fill=none]",
       "[data-file=report.png]",
       "[data-testid=user.name]",
       "[data-x=foo.bar]",
@@ -469,31 +521,29 @@ describe("sélecteur construit sur une classe ou une couleur", () => {
       '[id="#abc"]',
       '[value="#ffffff"]',
       '[data-label="rgb(0,0,0)"]',
+      '[style*="display:none"]',
+      '[style*="background-repeat:no-repeat"]',
     ]) {
       expect(refusals(value), value).toEqual([]);
     }
   });
-  it("lit la couleur dans un attribut de style et cite la fonction seule", () => {
+  it("lit chaque segment d'une chaîne de sélecteurs", () => {
     for (const value of [
-      '[style*="background:rgb(0,0,0)"]',
-      '[style="color:#b42318"]',
-      '[style*="border-color: hsl(0 0% 0%)"]',
-      '[style*="color: hsla(1,2%,3%,.5)"]',
-      '[style*="color: color-mix(in srgb, red, blue)"]',
-      '[style*="color: lab(50% 40 59.5)"]',
-      '[style*="color: lch(50% 40 30)"]',
-      '[style*="color: oklab(50% 0.1 0.1)"]',
-      '[style*="color: oklch(50% 0.1 30)"]',
-      '[fill="#b42318"]',
-      "[stroke=#fff]",
+      "role=button >> .foo",
+      "role=button >> [class*=x]",
+      "text=hi >> css=.text-red-500",
+      '[style*="color:#fff8"] >> role=button',
     ]) {
       expect(refusals(value), value).toHaveLength(1);
     }
-    // Le fragment cité est la fonction seule : ni le guillemet ni le deux-points
-    // qui la précèdent.
-    const fragment = refusals('[style*="background:rgb(0,0,0)"]')[0];
-    expect(fragment?.error.message).toContain("a color literal (rgb()");
-    expect(fragment?.error.message).not.toContain('("rgb(');
+    for (const value of [
+      'role=button[name="Save"]',
+      "text=Se connecter",
+      'role=button >> [aria-label="#abc"]',
+      '[aria-label="a>>b"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
   });
   it("nomme l'assertion refusée, pas seulement son étape", () => {
     const plan = PlanSchema.parse(
