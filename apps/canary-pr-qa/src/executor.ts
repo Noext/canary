@@ -9,7 +9,7 @@ import {
   type Observation,
 } from "./canary.js";
 import type { Config } from "./config.js";
-import { diagnose, QaError } from "./diagnostics.js";
+import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
 import type { ProgressEvent } from "./progress.js";
 import type { Assertion, Scenario, ScenarioResult } from "./schema.js";
@@ -197,6 +197,35 @@ async function captureBaselines(
     }
   }
 }
+/**
+ * Une cible qui n'apparaît jamais est une promesse non tenue, pas une panne :
+ * un `assert` affirme qu'un élément existe, donc son échec est une assertion
+ * fausse et le scénario échoue. Un clic dont la même cible ne résout jamais
+ * reste une panne d'exécution (`false`) : l'action n'a pas atteint son but.
+ */
+function failAssertionOnMissingTarget(
+  result: ScenarioResult,
+  step: Scenario["steps"][number],
+  diagnostic: Diagnostic,
+  baselines: Map<string, unknown>
+): boolean {
+  if (step.action.type !== "assert" || diagnostic.code !== "TARGET_NOT_FOUND") {
+    return false;
+  }
+  const { assertionId } = step.action;
+  if (!result.assertions.some((item) => item.id === assertionId)) {
+    result.assertions.push({
+      id: assertionId,
+      passed: false,
+      actual: undefined,
+      baseline: baselines.get(assertionId),
+    });
+  }
+  result.outcome = "failed";
+  result.diagnostic = diagnostic;
+  result.error = `Assertion ${assertionId} failed: the target never appeared — ${diagnostic.message}`;
+  return true;
+}
 async function driveScenario(
   sessionId: string,
   result: ScenarioResult,
@@ -273,6 +302,11 @@ async function driveScenario(
         outcome: "error",
         diagnostic,
       });
+      // Le verdict et l'erreur nommée sont déjà posés : renvoyer ici évite que
+      // le catch de `executeScenario` les remplace par le message brut.
+      if (failAssertionOnMissingTarget(result, step, diagnostic, baselines)) {
+        return;
+      }
       throw error;
     }
     if (result.outcome === "failed") {
