@@ -1,3 +1,5 @@
+import { isSettingsSection, type SettingsSection } from "@/i18n";
+
 /**
  * The dedicated screen a URL points at: the detail of one automatic attempt, or
  * the detail of one run. Both are addressable so a support conversation can
@@ -12,7 +14,10 @@ export type ScreenRoute =
  * history has always used to select a run in place: it keeps working, and it is
  * deliberately not the same link as the dedicated `run=` screen.
  */
-export type DeepLink = ScreenRoute | { id: string; kind: "legacy" };
+export type DeepLink =
+  | ScreenRoute
+  | { id: string; kind: "legacy" }
+  | { id: SettingsSection; kind: "settings" };
 
 export interface InitialRoute {
   github?: string;
@@ -20,6 +25,8 @@ export interface InitialRoute {
   runId?: string;
   /** Dedicated screen the URL asked for, when it named one. */
   screen?: ScreenRoute;
+  /** Settings page the URL asked for, when it named one. */
+  section?: SettingsSection;
   setupCode?: string;
 }
 
@@ -48,23 +55,41 @@ function screenFromHash(hash: string): ScreenRoute | undefined {
   return;
 }
 
+/** `settings=<id>`; a section this build does not know is not a link. */
+function sectionFromHash(hash: string): SettingsSection | undefined {
+  if (!hash.startsWith("settings=")) {
+    return;
+  }
+  try {
+    const id = decodeURIComponent(hash.slice("settings=".length));
+    return isSettingsSection(id) ? id : undefined;
+  } catch {
+    // A malformed escape is not a link this dashboard ever wrote.
+    return;
+  }
+}
+
 /**
  * Reads the URL once, at load. A link this dashboard wrote stays in the URL, so
- * reloading a shared `#automatic=<id>` or `#run=<uuid>` reopens the same screen
- * instead of dropping it on the first of two refreshes. Only the payloads that
- * must not be replayed — a temporary setup code, the GitHub callback — are
- * erased from the address bar.
+ * reloading a shared `#automatic=<id>`, `#run=<uuid>` or `#settings=<section>`
+ * reopens the same screen instead of dropping it on the first of two refreshes.
+ * Only the payloads that must not be replayed — a temporary setup code, the
+ * GitHub callback — are erased from the address bar.
  */
 export function readInitialRoute(): InitialRoute {
   const hash = window.location.hash.replace(/^#/, "");
   const params = new URLSearchParams(window.location.search);
   const route: InitialRoute = {};
   const screen = screenFromHash(hash);
+  const section = sectionFromHash(hash);
   // A bare `#<uuid>` is the legacy run link, written by `openRun`; it is kept
   // like the screen links so a refresh keeps the run the history selected.
   let keepHash = false;
   if (screen) {
     route.screen = screen;
+    keepHash = true;
+  } else if (section) {
+    route.section = section;
     keepHash = true;
   } else if (RUN_ID.test(hash)) {
     route.runId = hash;

@@ -7,7 +7,14 @@ import { useWorkspace } from "@/app/workspace";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/feedback";
 import { Card, CardHeader, CardTitle } from "@/components/ui/form";
-import { common, home, newTest, settings, type ViewName } from "@/i18n";
+import {
+  common,
+  home,
+  newTest,
+  type SettingsSection,
+  settings,
+  type ViewName,
+} from "@/i18n";
 import { outcomeLabel, stateLabel, type Tone, toneFor } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -229,7 +236,7 @@ export function HomeView({
 }) {
   const { canWrite, isAdmin } = useSession();
   const { models, modelsBusy, modelsError } = useWorkspace();
-  const { navigate, openRun } = useNavigation();
+  const { navigate, openRun, openSection } = useNavigation();
   const { report } = useError();
   // The store instance belongs to this screen, never to module scope: React's
   // first subscription starts the request and abandoning the screen aborts it.
@@ -248,8 +255,16 @@ export function HomeView({
   const returning = canWrite && all.length > 0;
   const readyCount = Number(githubReady) + Number(modelReady);
   const activeStep = activeStepFor(githubReady, modelReady);
-  const stepTarget: ViewName = isAdmin ? "settings" : "new";
   const actionTarget = heroActionTarget(canWrite, githubReady, isAdmin);
+  // Settings is one page per section now: the GitHub step and the model step
+  // name their own instead of reopening whichever section was read last. A
+  // role that may not read settings still lands on « Nouveau test ».
+  const stepAction = (step: SettingsSection) =>
+    isAdmin ? () => openSection(step) : () => navigate("new");
+  const heroAction = () =>
+    actionTarget === "settings"
+      ? openSection("github")
+      : navigate(actionTarget);
 
   return (
     <>
@@ -267,11 +282,7 @@ export function HomeView({
           {heroIntro(canWrite, returning)}
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button
-            id="welcomeAction"
-            onClick={() => navigate(actionTarget)}
-            variant="primary"
-          >
+          <Button id="welcomeAction" onClick={heroAction} variant="primary">
             {canWrite
               ? welcomeActionLabel(githubReady, modelReady)
               : home.actionViewer}
@@ -303,7 +314,7 @@ export function HomeView({
             done={githubReady}
             id="stepGitHub"
             number="1"
-            onClick={() => navigate(stepTarget)}
+            onClick={stepAction("github")}
             state={githubStepState(status, githubReady)}
             stateId="stepGitHubState"
             title={home.onboarding.githubTitle}
@@ -314,7 +325,7 @@ export function HomeView({
             done={modelReady}
             id="stepModel"
             number="2"
-            onClick={() => navigate(stepTarget)}
+            onClick={stepAction("ai")}
             state={modelStepState({
               catalogFailed: modelsError !== undefined,
               catalogLoaded: models !== undefined,

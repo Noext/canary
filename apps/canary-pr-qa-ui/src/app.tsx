@@ -16,7 +16,7 @@ function initialViewFor(route: InitialRoute): ViewName {
   if (route.runId) {
     return "runs";
   }
-  return route.github ? "settings" : "home";
+  return route.github || route.section ? "settings" : "home";
 }
 
 function Screens({ route }: { route: InitialRoute }) {
@@ -34,6 +34,7 @@ function Screens({ route }: { route: InitialRoute }) {
         {...(route.screen?.kind === "automatic"
           ? { initialAutomatic: route.screen.id }
           : {})}
+        {...(route.section ? { initialSection: route.section } : {})}
         initialView={initialViewFor(route)}
       >
         <Shell />

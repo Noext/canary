@@ -233,7 +233,7 @@ export function PreviewSettings(): ReactNode {
     : settings.preview.hostsFallback;
 
   return (
-    <Card>
+    <Card id="previewSettings">
       <CardTitle>{settings.preview.title}</CardTitle>
       <CardDescription className="mt-1">
         {settings.preview.intro}

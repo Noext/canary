@@ -213,7 +213,8 @@ export const views: Record<
   },
   settings: {
     breadcrumb: "Réglages",
-    intro: "Vos connexions et les dépôts que Canary peut tester.",
+    intro:
+      "Vos connexions, l'application à tester, les accès des agents et les comptes.",
     title: "Réglages de votre espace",
   },
   automatic: {
@@ -230,6 +231,33 @@ export const views: Record<
   },
 };
 
+/**
+ * The settings screen is one page per section: the sidebar shows these entries
+ * in this order, under « Réglages », and each id is the section a URL can name
+ * (`#settings=<id>`). The copy carries the order so a new page cannot appear in
+ * the submenu without being reachable, and the other way round.
+ */
+export const settingsNav = [
+  { id: "github", label: "GitHub" },
+  { id: "ai", label: "Fournisseur IA" },
+  { id: "preview", label: "Application à tester" },
+  { id: "apiKeys", label: "Clés API" },
+  { id: "accounts", label: "Comptes utilisateurs" },
+] as const;
+
+export type SettingsSection = (typeof settingsNav)[number]["id"];
+
+/** True for a section id this build knows; anything else is not a link. */
+export function isSettingsSection(value: string): value is SettingsSection {
+  return settingsNav.some((entry) => entry.id === value);
+}
+
+/** The submenu label of a section, for the breadcrumb of its page. */
+export function settingsSectionLabel(section: SettingsSection): string {
+  const entry = settingsNav.find((candidate) => candidate.id === section);
+  return entry ? entry.label : section;
+}
+
 export const shell = {
   account: "Connexion requise",
   breadcrumbFallback: "Vue d’ensemble",
@@ -243,6 +271,7 @@ export const shell = {
     runs: "Historique",
     settings: "Réglages",
   },
+  settingsSections: "Sections des réglages",
   tagline: "QA autonome pour vos PR",
 };
 
@@ -724,8 +753,6 @@ export const settings = {
     title: "Votre fournisseur IA",
   },
   apiKeys,
-  eyebrow: "Connexion 2 / 2",
-  eyebrowGithub: "Connexion 1 / 2",
   github: {
     appName: (slug: string, id: string) => `${slug} · App #${id}`,
     autoRunHelp:
