@@ -5,13 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NavigationProvider, useNavigation } from "./navigation";
 
 const RUN_ID = "74422b90-c70a-11f1-8b8c-69d5033ed7fd";
+const DELIVERY_ID = "delivery:01J8Z";
 
 let session = { canWrite: true, isAdmin: false };
 
 vi.mock("./session", () => ({ useSession: () => session }));
 
 function Probe() {
-  const { navigate, openRun, openSection, section, view } = useNavigation();
+  const {
+    navigate,
+    openAutomatic,
+    openRun,
+    openRunScreen,
+    openSection,
+    section,
+    view,
+  } = useNavigation();
   return (
     <div>
       <span data-testid="view">{view}</span>
@@ -33,6 +42,12 @@ function Probe() {
       </button>
       <button onClick={() => openRun(RUN_ID)} type="button">
         run
+      </button>
+      <button onClick={() => openRunScreen(RUN_ID)} type="button">
+        report
+      </button>
+      <button onClick={() => openAutomatic(DELIVERY_ID)} type="button">
+        automatic
       </button>
     </div>
   );
@@ -71,6 +86,8 @@ describe("NavigationProvider role gating", () => {
     // `/?github=installed` sends anyone to settings; an operator must land home.
     renderAt("settings");
     expect(screen.getByTestId("view")).toHaveTextContent("home");
+    // The panel it named is not a page the bar may keep either.
+    expect(window.location.pathname).toBe("/");
   });
 
   it("keeps the admin panel for an administrator", () => {
@@ -78,7 +95,7 @@ describe("NavigationProvider role gating", () => {
     renderAt("settings");
     expect(screen.getByTestId("view")).toHaveTextContent("settings");
     // The screen the load asked for, and nothing else, is what the bar keeps.
-    expect(window.location.hash).toBe("#settings=github");
+    expect(window.location.pathname).toBe("/settings/github");
   });
 
   it("coerces a write-only panel for a viewer", () => {
@@ -104,13 +121,13 @@ describe("NavigationProvider role gating", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "settings" }));
     expect(screen.getByTestId("view")).toHaveTextContent("home");
-    expect(window.location.hash).toBe("");
+    expect(window.location.pathname).toBe("/");
   });
 
   it("corrects the address of a panel the role loses while it is open", () => {
     session = { canWrite: true, isAdmin: true };
     const { rerender } = renderAt("settings");
-    expect(window.location.hash).toBe("#settings=github");
+    expect(window.location.pathname).toBe("/settings/github");
 
     session = { canWrite: true, isAdmin: false };
     rerender(
@@ -121,6 +138,7 @@ describe("NavigationProvider role gating", () => {
 
     expect(screen.getByTestId("view")).toHaveTextContent("home");
     // A page this role may not read is not an address the bar may keep.
+    expect(window.location.pathname).toBe("/");
     expect(window.location.hash).toBe("");
   });
 });
@@ -138,7 +156,7 @@ describe("NavigationProvider settings pages", () => {
 
     expect(screen.getByTestId("view")).toHaveTextContent("settings");
     // The section is part of the address: a reload reopens the same page.
-    expect(window.location.hash).toBe("#settings=github");
+    expect(window.location.pathname).toBe("/settings/github");
   });
 
   it("switches page without leaving the settings panel", async () => {
@@ -148,7 +166,7 @@ describe("NavigationProvider settings pages", () => {
 
     expect(screen.getByTestId("view")).toHaveTextContent("settings");
     expect(screen.getByTestId("section")).toHaveTextContent("accounts");
-    expect(window.location.hash).toBe("#settings=accounts");
+    expect(window.location.pathname).toBe("/settings/accounts");
   });
 
   it("keeps the section when the sidebar reopens the settings", async () => {
@@ -159,7 +177,7 @@ describe("NavigationProvider settings pages", () => {
     await userEvent.click(screen.getByRole("button", { name: "settings" }));
 
     expect(screen.getByTestId("section")).toHaveTextContent("accounts");
-    expect(window.location.hash).toBe("#settings=accounts");
+    expect(window.location.pathname).toBe("/settings/accounts");
   });
 
   it("refuses a page the role may not read", async () => {
@@ -170,6 +188,7 @@ describe("NavigationProvider settings pages", () => {
 
     expect(screen.getByTestId("view")).toHaveTextContent("home");
     expect(screen.getByTestId("section")).toHaveTextContent("accounts");
+    expect(window.location.pathname).toBe("/");
     expect(window.location.hash).toBe("");
   });
 });
@@ -188,10 +207,22 @@ describe("NavigationProvider addresses", () => {
     await userEvent.click(screen.getByRole("button", { name: "new" }));
 
     expect(screen.getByTestId("view")).toHaveTextContent("new");
+    expect(window.location.pathname).toBe("/new-test");
     expect(pushed).toHaveBeenCalledWith(null, "", "/new-test");
   });
 
-  it("pushes the history path, then the run link it selects", async () => {
+  it("pushes the path of the settings section it opens", async () => {
+    const pushed = vi.spyOn(window.history, "pushState");
+    renderAt("home");
+
+    await userEvent.click(screen.getByRole("button", { name: "accounts" }));
+
+    expect(screen.getByTestId("view")).toHaveTextContent("settings");
+    expect(window.location.pathname).toBe("/settings/accounts");
+    expect(pushed).toHaveBeenCalledWith(null, "", "/settings/accounts");
+  });
+
+  it("pushes the history path, then the run page it selects", async () => {
     const pushed = vi.spyOn(window.history, "pushState");
     renderAt("home");
 
@@ -199,10 +230,37 @@ describe("NavigationProvider addresses", () => {
     expect(window.location.pathname).toBe("/history");
 
     await userEvent.click(screen.getByRole("button", { name: "run" }));
-    expect(window.location.pathname).toBe("/");
-    expect(window.location.hash).toBe(`#${RUN_ID}`);
+    expect(window.location.pathname).toBe(`/history/${RUN_ID}`);
+    expect(window.location.hash).toBe("");
     expect(pushed).toHaveBeenNthCalledWith(1, null, "", "/history");
-    expect(pushed).toHaveBeenNthCalledWith(2, null, "", `/#${RUN_ID}`);
+    expect(pushed).toHaveBeenNthCalledWith(2, null, "", `/history/${RUN_ID}`);
+  });
+
+  it("gives the report its own page, one Back away from the history", async () => {
+    const pushed = vi.spyOn(window.history, "pushState");
+    renderAt("home");
+
+    await userEvent.click(screen.getByRole("button", { name: "runs" }));
+    await userEvent.click(screen.getByRole("button", { name: "report" }));
+    expect(screen.getByTestId("view")).toHaveTextContent("run");
+    expect(window.location.pathname).toBe(`/history/${RUN_ID}/report`);
+
+    // Leaving the report for the list is a page change, not the same address.
+    await userEvent.click(screen.getByRole("button", { name: "runs" }));
+    expect(screen.getByTestId("view")).toHaveTextContent("runs");
+    expect(window.location.pathname).toBe("/history");
+    expect(pushed).toHaveBeenLastCalledWith(null, "", "/history");
+  });
+
+  it("pushes the path of an automatic attempt", async () => {
+    const pushed = vi.spyOn(window.history, "pushState");
+    renderAt("home");
+
+    await userEvent.click(screen.getByRole("button", { name: "automatic" }));
+
+    expect(screen.getByTestId("view")).toHaveTextContent("automatic");
+    expect(window.location.pathname).toBe(`/automatic/${DELIVERY_ID}`);
+    expect(pushed).toHaveBeenCalledWith(null, "", `/automatic/${DELIVERY_ID}`);
   });
 
   it("replays the screen an entry names when the browser goes back", async () => {
@@ -217,19 +275,25 @@ describe("NavigationProvider addresses", () => {
     restore("/history");
 
     expect(screen.getByTestId("view")).toHaveTextContent("runs");
+    expect(window.location.pathname).toBe("/history");
     // Replaying an entry never adds one: Back must stay free.
     expect(pushed).not.toHaveBeenCalled();
   });
 
-  it("brings a forbidden entry home and corrects the address", () => {
+  it("brings a forbidden entry home and corrects its address in place", () => {
+    const pushed = vi.spyOn(window.history, "pushState");
+    const replaced = vi.spyOn(window.history, "replaceState");
     session = { canWrite: true, isAdmin: false };
     renderAt("home");
 
-    restore("/#settings=accounts");
+    restore("/settings/accounts");
 
     expect(screen.getByTestId("view")).toHaveTextContent("home");
-    expect(window.location.hash).toBe("");
     expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("");
+    // The entry is corrected where it stands: no second address to go Back to.
+    expect(replaced).toHaveBeenCalledWith(null, "", "/");
+    expect(pushed).not.toHaveBeenCalled();
   });
 
   it("corrects a path the load was not served for, without pushing an entry", () => {
@@ -268,11 +332,11 @@ describe("NavigationProvider restored entries", () => {
     );
     expect(screen.getByTestId("selected")).toHaveTextContent("aucun");
 
-    // Retour sur une entrée qui nomme un test : le détail suit l'adresse.
-    restore(`/#${RUN_ID}`);
+    // Retour sur une page qui nomme un test : le détail suit l'adresse.
+    restore(`/history/${RUN_ID}`);
     expect(screen.getByTestId("selected")).toHaveTextContent(RUN_ID);
 
-    // Et l'entrée sans test ne garde pas le détail de la précédente.
+    // Et la page sans test ne garde pas le détail de la précédente.
     restore("/history");
     expect(screen.getByTestId("selected")).toHaveTextContent("aucun");
   });

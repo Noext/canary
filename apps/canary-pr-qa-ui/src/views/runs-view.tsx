@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
+import { routeUrl } from "@/app/routing";
 import { useSession } from "@/app/session";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/feedback";
@@ -21,6 +22,7 @@ import {
   stateLabel,
   toneFor,
 } from "@/lib/format";
+import { isPlainLeftClick } from "@/lib/link";
 import { useStore } from "@/lib/store";
 import { modelFromInput, RunDetail } from "./run-detail";
 import { createRunsStore } from "./runs-store";
@@ -147,8 +149,11 @@ export function RunsView() {
                   <td className={cellClass}>
                     <a
                       className="font-medium underline-offset-4 hover:underline"
-                      href={`#${run.id}`}
+                      href={routeUrl({ kind: "runs", runId: run.id })}
                       onClick={(event) => {
+                        if (!isPlainLeftClick(event)) {
+                          return;
+                        }
                         event.preventDefault();
                         open(run.id);
                       }}

@@ -485,7 +485,7 @@ describe("NewTestView", () => {
         publish: true,
       },
     ]);
-    expect(window.location.hash).toBe(`#${RUN_ID}`);
+    expect(window.location.pathname).toBe(`/history/${RUN_ID}`);
     expect(document.getElementById("preflightResult")).toBeNull();
     expect(byId("startRun")).toBeDisabled();
   });

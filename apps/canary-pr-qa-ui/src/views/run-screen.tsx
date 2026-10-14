@@ -17,8 +17,8 @@ interface RunScreenState {
  * The deep link is turned into a run id once, by the first subscription — the
  * moment React mounts the screen — and consumed right away: a request that has
  * become a run id must not outlive the screen it opened, or coming back to
- * `#run=<uuid>` would resurrect it. The id lives in the snapshot, so a
- * re-render (or StrictMode's replayed subscription) reads the same run.
+ * `/history/<uuid>/report` would resurrect it. The id lives in the snapshot, so
+ * a re-render (or StrictMode's replayed subscription) reads the same run.
  */
 function createRunScreenStore(options: {
   consumeRequest: () => string | undefined;
@@ -33,7 +33,8 @@ function createRunScreenStore(options: {
 }
 
 /**
- * The full-screen report of one run, opened from its own link (`#run=<uuid>`).
+ * The full-screen report of one run, opened from its own page
+ * (`/history/<uuid>/report`).
  *
  * The page title and intro belong to the shell: this screen only offers the way
  * back to the history and the way to select the same run there, and hands the

@@ -519,6 +519,26 @@ describe("RunDetail", () => {
     expect(first.readyState).toBe(2);
   });
 
+  it("leaves a modifier-click on a run link to the browser", async () => {
+    window.history.replaceState(null, "", "/");
+    wire.handlers.set("/runs", () => [job()]);
+    render(<Harness />);
+    const link = await screen.findByRole("link", { name: "fixture/app #1" });
+
+    // A click the browser journals itself opens the run's own page in a new
+    // tab: the dashboard must not select that run in this one.
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+    });
+    link.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(false);
+    expect(element("detail")).toHaveAttribute("hidden");
+    expect(window.location.pathname).toBe("/");
+  });
+
   it("closes the stream when the screen unmounts", async () => {
     wire.handlers.set("/runs", () => [job()]);
     wire.handlers.set(`/runs/${runId}`, () => job({ status: "running" }));

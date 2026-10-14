@@ -234,8 +234,8 @@ export const views: Record<
 /**
  * The settings screen is one page per section: the sidebar shows these entries
  * in this order, under « Réglages », and each id is the section a URL can name
- * (`#settings=<id>`). The copy carries the order so a new page cannot appear in
- * the submenu without being reachable, and the other way round.
+ * (`/settings/<section>`). The copy carries the order so a new page cannot
+ * appear in the submenu without being reachable, and the other way round.
  */
 export const settingsNav = [
   { id: "github", label: "GitHub" },

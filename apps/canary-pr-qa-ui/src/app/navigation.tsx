@@ -49,11 +49,11 @@ interface NavigationContextValue {
   consumeRunScreen(): string | undefined;
   navigate(view: ViewName): void;
   openAutomatic(deliveryId: string): void;
-  /** Sélectionne un test dans l'historique, en gardant l'ancien lien `#<uuid>`. */
+  /** Sélectionne un test dans l'historique, à sa page `/history/<uuid>`. */
   openRun(runId: string): void;
-  /** Ouvre le rapport complet d'un test à son propre lien (`#run=<uuid>`). */
+  /** Ouvre le rapport complet d'un test, à sa page `/history/<uuid>/report`. */
   openRunScreen(runId: string): void;
-  /** Ouvre une page de réglages, à son propre lien (`#settings=<section>`). */
+  /** Ouvre une page de réglages, à sa page `/settings/<section>`. */
   openSection(section: SettingsSection): void;
   /** Tentative automatique liée par l'adresse, pas encore consommée. */
   requestedAutomatic?: string;

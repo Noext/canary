@@ -1346,15 +1346,15 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     return { text: String(step.actual ?? ""), url: step.url };
   };
   try {
-    await act("blocked-run-link", {
+    await act("blocked-run-report", {
       type: "goto",
-      path: `/#run=${job.id}`,
+      path: `/history/${job.id}/report`,
     });
     const runScreen = await observed("blocked-run-detail");
-    // A link this dashboard wrote stays in the URL: the operator reloads the
-    // link they are reading, so the screen keeps its own address instead of
-    // falling back home on the second refresh.
-    expect(runScreen.url).toContain(`#run=${job.id}`);
+    // The report has its own page: the operator reloads the address they are
+    // reading, so the server serves that path instead of falling back home.
+    expect(new URL(runScreen.url).pathname).toBe(`/history/${job.id}/report`);
+    expect(new URL(runScreen.url).hash).toBe("");
     expect(runScreen.text).toContain("Détail du test");
     // The cause the operator could not see before: the server diagnostic, its
     // next step, and the phase the run stopped in.
@@ -1373,29 +1373,41 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       "run-link-survives-a-reload",
       `const page=await browser.getPage("qa"); await page.waitForSelector("#runScreen",{timeout:15000}); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#runDiagnostic",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
     );
-    expect(reloadedRun.url).toContain(`#run=${job.id}`);
+    expect(new URL(reloadedRun.url).pathname).toBe(`/history/${job.id}/report`);
     expect(String(reloadedRun.actual)).toContain(
       "Pourquoi ce test n’est pas allé au bout"
     );
+    // The one fragment left in this file: a link cited before the screens had
+    // paths, `#run=<uuid>`, opens the same report and the load rewrites the
+    // address bar onto that page.
+    await act("legacy-run-fragment-link", {
+      type: "goto",
+      path: `/#run=${job.id}`,
+    });
+    const legacyRun = await observed("legacy-run-fragment-opened-report");
+    expect(legacyRun.text).toContain("Détail du test");
+    expect(new URL(legacyRun.url).pathname).toBe(`/history/${job.id}/report`);
+    expect(new URL(legacyRun.url).hash).toBe("");
     await act("back-to-history", {
       type: "click",
       locator: { by: "css", value: "#runScreenBack" },
     });
     const history = await observed("history-after-back");
-    expect(history.url).not.toContain("#run=");
     expect(history.text).toContain("Vos tests");
-    // The list has its own address now: it is the link the operator reloads or
-    // shares, so the server has to serve the document on that path.
+    // The list has its own address: it is the link the operator reloads or
+    // shares, so the server has to serve the document on that path, and Retour
+    // must have left the report's page behind.
     expect(new URL(history.url).pathname).toBe("/history");
+    expect(new URL(history.url).hash).toBe("");
     const reloadedHistory = await canary.act(
       session,
       "history-list-survives-a-reload",
       `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#historyTable",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
     );
-    expect(reloadedHistory.url).toContain("/history");
-    // Retour must move the detail, not only the address: selecting a run pushes
-    // `#<uuid>`, and the entry the browser restores has to re-seed the screen
-    // that read its link once.
+    expect(new URL(reloadedHistory.url).pathname).toBe("/history");
+    // Retour must restore the list, not only move the address: selecting a run
+    // pushes its own page, `/history/<uuid>`, so the entry the browser restores
+    // is a document the dashboard serves.
     await act("select-run-in-history", {
       type: "click",
       locator: { by: "css", value: "#runs tr:first-child a" },
@@ -1405,7 +1417,10 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       "history-run-selected",
       `const page=await browser.getPage("qa"); await page.waitForSelector("#detail",{state:"visible",timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
     );
-    expect(new URL(selectedRun.url).hash).toMatch(/^#[0-9a-f-]{36}$/);
+    expect(new URL(selectedRun.url).pathname).toMatch(
+      /^\/history\/[0-9a-f-]{36}$/
+    );
+    expect(new URL(selectedRun.url).hash).toBe("");
     const backToHistory = await canary.act(
       session,
       "back-to-the-history-list",
@@ -1425,12 +1440,10 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       "new-test-page-survives-a-reload",
       `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#runForm",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
     );
-    expect(reloadedNewTest.url).toContain("/new-test");
+    expect(new URL(reloadedNewTest.url).pathname).toBe("/new-test");
     expect(String(reloadedNewTest.actual)).toContain("Vérifier les accès");
-    // Leaving the screen cleared its hash, which is what keeps a quoted link
-    // from outliving the panel it opened. The dashboard reads a hash once at
-    // load and does not act on a same-document change: reach the home panel on
-    // a fresh document.
+    // Reach the home panel on a fresh document: the dashboard reads the address
+    // of a screen once at load and does not act on a same-document change.
     await act("fresh-document", { type: "goto", path: "/?reload=1" });
     // The failure is actionable where the operator first meets it: the home
     // block offers the same retry as the detail screen, on the same attempt.
@@ -1443,10 +1456,10 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
     expect(String(home.actual)).toContain("Délai dépassé");
     await act("expired-attempt-link", {
       type: "goto",
-      path: "/#automatic=e2e-attempt",
+      path: "/automatic/e2e-attempt",
     });
     const attempt = await observed("expired-attempt-detail");
-    expect(attempt.url).toContain("#automatic=e2e-attempt");
+    expect(new URL(attempt.url).pathname).toBe("/automatic/e2e-attempt");
     expect(attempt.text).toContain("Lancements automatiques");
     expect(attempt.text).toContain("Pourquoi Canary n’a pas démarré le test");
     expect(attempt.text).toContain(
@@ -1470,7 +1483,9 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       "automatic-link-survives-a-reload",
       `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#automaticDetailCause",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
     );
-    expect(reloadedAttempt.url).toContain("#automatic=e2e-attempt");
+    expect(new URL(reloadedAttempt.url).pathname).toBe(
+      "/automatic/e2e-attempt"
+    );
     expect(String(reloadedAttempt.actual)).toContain("Délai d’attente dépassé");
     // An expired attempt is not a dead end any more: the screen the operator is
     // already reading re-arms it, on the same commit, with a fresh window. The

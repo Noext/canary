@@ -489,18 +489,26 @@ Après connexion, l'**Accueil** vous indique la prochaine action : connecter
 GitHub, choisir un modèle disponible ou tester une PR. Les états sont dérivés
 des accès et du catalogue réellement chargé, sans simuler une génération IA.
 
+Chaque écran a son propre chemin : `/`, `/new-test`, `/history`,
+`/history/<run-id>` pour le détail d'un test, `/history/<run-id>/report` pour
+son rapport plein écran, `/automatic/<delivery-id>` et `/settings/<section>`.
+Un rechargement, un lien partagé et le bouton Retour retombent donc sur la même
+page. Les liens plus anciens écrits en fragment (`#run=…`, `#automatic=…`,
+`#settings=…`, `#<run-id>`) restent acceptés et la barre d'adresse est réécrite
+sur le chemin de l'écran au chargement.
+
 1. **Réglages** : le menu latéral ouvre une page par section — GitHub, fournisseur
    IA, application à tester, clés API, comptes utilisateurs — et chaque page a son
-   adresse (`#settings=<section>`). La page GitHub crée/installe l'App et choisit les
+   chemin (`/settings/<section>`). La page GitHub crée/installe l'App et choisit les
    dépôts ; la page « Application à tester » vérifie les contraintes des previews. Sa
    carte « Hôtes autorisés par l'administrateur » ajoute ou retire les hôtes de
    preview (ajout, retrait, enregistrement, retour à la liste du serveur) ; la liste
    est appliquée au navigateur et au proxy de sortie en quelques secondes, sans
    redémarrage, et chaque changement est audité.
 2. **Nouveau test** : coller l'URL de PR, l'URL de son application de test si elle
-   n'est pas fournie par GitHub, puis choisir votre modèle. La page a son adresse
-   (`/new-test`), comme l'historique (`/history`) : un rechargement ou un lien
-   partagé rouvre la même liste.
+   n'est pas fournie par GitHub, puis choisir votre modèle. La page a son propre
+   chemin (`/new-test`), comme l'historique (`/history`) : un rechargement ou un
+   lien partagé rouvre la même page.
 3. **Vérifier les accès** : lecture de la PR et contrôle de la preview au même SHA.
    Aucune génération IA, scénario, vidéo ou écriture GitHub à cette étape.
 4. **Lancer le test** : le moteur prépare et exécute les scénarios. Les paramètres
@@ -511,12 +519,13 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
    « Diagnostic technique ». Un résultat bloqué/annulé ne devient pas un succès.
    Un test qui n'est pas allé au bout affiche d'abord « Pourquoi ce test n'est
    pas allé au bout » : le code du diagnostic serveur, son message et la suite à
-   donner, la phase atteinte et les scénarios en erreur. L'écran détaillé du run
-   est adressable (`#run=<run-id>`) et se partage tel quel, et les boutons Retour
-   et Avant du navigateur suivent les écrans visités.
+   donner, la phase atteinte et les scénarios en erreur. Le détail d'un test est
+   adressable (`/history/<run-id>`) et son rapport plein écran a sa propre page
+   (`/history/<run-id>/report`) : un lien partagé rouvre le même écran, et les
+   boutons Retour et Avant du navigateur suivent les pages visitées.
 6. **Lancements automatiques** : chaque PR détectée mais sans test indique son
    motif (« délai dépassé », « quota horaire ») et renvoie vers un écran dédié
-   (`#automatic=<delivery-id>`) qui montre ce que Canary a vérifié, la preuve de
+   (`/automatic/<delivery-id>`) qui montre ce que Canary a vérifié, la preuve de
    version exigée et le déroulé des vérifications. Une tentative expirée n'est
    jamais rejouée automatiquement : « Relancer la vérification » la réarme sur le
    même commit avec un nouveau délai, depuis la liste comme depuis l'écran de
@@ -539,7 +548,7 @@ Captures réelles des E2E, avec données fictives :
 
 | Endpoint | Fonction |
 | --- | --- |
-| `GET /` | Dashboard, formulaire de lancement, recherche, filtres, détails |
+| `GET /`, `/new-test`, `/history`, … | Shell du dashboard : chaque écran a son chemin, et le client affiche celui que l'adresse nomme |
 | `GET /auth/status` | État de première installation, aucun credential exposé |
 | `POST /auth/setup` | Premier admin, lien privé temporaire requis |
 | `POST /auth/login` | Connexion identifiant/mot de passe, cookie HttpOnly |
