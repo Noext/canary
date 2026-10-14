@@ -174,6 +174,33 @@ interface RunSession {
   outcome?: string;
 }
 /**
+ * Un fichier ou un dossier absent est une réponse du disque ; toute autre panne
+ * — permission refusée, entrée/sortie en erreur — en est une de ce serveur. La
+ * taire ferait passer une perte d'accès pour un test qui n'a rien produit, et
+ * enverrait l'agent chercher des preuves qui existent.
+ */
+function absent(error: unknown) {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+function maybeStat(path: string) {
+  return stat(path).catch((error: NodeJS.ErrnoException) => {
+    if (absent(error)) {
+      return;
+    }
+    throw error;
+  });
+}
+function maybeReaddir(dir: string) {
+  return readdir(dir, { withFileTypes: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (absent(error)) {
+        return [];
+      }
+      throw error;
+    }
+  );
+}
+/**
  * Les artefacts d'une session, tels que `canary end` les a copiés dans le
 dossier du scénario. Le disque est la source de vérité : un run encore en cours
  * n'a pas de résultat, mais la copie des preuves est déjà là.
@@ -181,17 +208,21 @@ dossier du scénario. Le disque est la source de vérité : un run encore en cou
 async function sessionArtifacts(dir: string): Promise<SessionArtifact[]> {
   const artifacts: SessionArtifact[] = [];
   for (const { file, kind } of SESSION_FILES) {
-    const info = await stat(join(dir, file)).catch(() => undefined);
+    const info = await maybeStat(join(dir, file));
     if (info?.isFile()) {
       artifacts.push({ bytes: info.size, kind, path: file });
     }
   }
   for (const { dir: sub, ext, kind } of SESSION_NESTED) {
-    const names = await readdir(join(dir, sub)).catch(() => []);
-    for (const name of names.filter((entry) => entry.endsWith(ext))) {
-      const info = await stat(join(dir, sub, name)).catch(() => undefined);
+    const entries = await maybeReaddir(join(dir, sub));
+    for (const entry of entries.filter((item) => item.name.endsWith(ext))) {
+      const info = await maybeStat(join(dir, sub, entry.name));
       if (info?.isFile()) {
-        artifacts.push({ bytes: info.size, kind, path: `${sub}/${name}` });
+        artifacts.push({
+          bytes: info.size,
+          kind,
+          path: `${sub}/${entry.name}`,
+        });
       }
     }
   }
@@ -270,9 +301,7 @@ async function runSessions(
   config: Config,
   runId: string
 ): Promise<RunSession[]> {
-  const dirs = await readdir(join(config.QA_DATA_DIR, runId), {
-    withFileTypes: true,
-  }).catch(() => []);
+  const dirs = await maybeReaddir(join(config.QA_DATA_DIR, runId));
   const index = await scenarioIndex(config, runId);
   const sessions: RunSession[] = [];
   for (const entry of dirs) {
@@ -307,15 +336,32 @@ async function runSessions(
 function safeCut(buffer: Buffer, start: number, end: number) {
   let cut = end;
   while (cut > start && cut < buffer.length) {
-    // Un octet de continuation s'écrit 10xxxxxx : la page finirait sur la
-    // moitié d'un caractère, que l'agent recollerait en mojibake.
     const byte = buffer[cut];
     if (byte === undefined || byte < 0x80 || byte >= 0xc0) {
       break;
     }
     cut -= 1;
   }
-  return cut;
+  if (cut > start || cut >= buffer.length) {
+    return cut;
+  }
+  // La page n'a pas la place du premier caractère : elle le rend entier plutôt
+  // que de rendre un texte vide au même offset, ce qui boucherait un appelant
+  // qui suit `nextOffset`.
+  return Math.min(buffer.length, start + utf8Width(buffer[start]));
+}
+/** Longueur du caractère dont l'octet de tête est `head`. */
+function utf8Width(head: number | undefined) {
+  if (head === undefined || head < 0x80) {
+    return 1;
+  }
+  if (head < 0xe0) {
+    return 2;
+  }
+  if (head < 0xf0) {
+    return 3;
+  }
+  return 4;
 }
 function text(value: unknown, isError = false): ToolAnswer {
   return {
@@ -494,10 +540,6 @@ async function readSession(
       return text(RAW_DISABLED, true);
     }
     const path = `${session.dir}/${artifact.path}`;
-    await ctx.queue.audit(ctx.user.id, "artifact.read", args.runId, {
-      path,
-      via: "mcp",
-    });
     const reference = {
       dir: session.dir,
       ...(session.id ? { id: session.id } : {}),
@@ -506,15 +548,24 @@ async function readSession(
     };
     const meta = { bytes: artifact.bytes, kind: artifact.kind, path };
     if (artifact.bytes > MAX_INLINE) {
+      // Rien n'a été lu : le fichier voyage par le lien signé, et la route des
+      // artefacts écrit sa propre ligne quand ce lien est suivi. Journaliser
+      // une lecture ici dirait qu'un fichier a été lu alors que personne ne
+      // l'a ouvert.
       return text({
         artifact: meta,
-        note: `Le fichier fait ${artifact.bytes} octets : au-delà de la taille rendue par le MCP. Le lien signé, valable cinq minutes, rend le fichier entier.`,
+        note: `Le fichier fait ${artifact.bytes} octets : au-delà de la taille rendue par le MCP. Le lien signé, valable cinq minutes, rend le fichier entier et sa lecture est auditée.`,
         run: args.runId,
         session: reference,
         text: null,
         url: signedArtifact(args.runId, path, ctx.config),
       });
     }
+    await ctx.queue.audit(ctx.user.id, "artifact.read", args.runId, {
+      delivery: "inline",
+      path,
+      via: "mcp",
+    });
     const buffer = await readFile(
       join(ctx.config.QA_DATA_DIR, args.runId, path)
     );

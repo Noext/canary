@@ -237,9 +237,14 @@ export async function startProductionServer(config: Config) {
       return;
     }
     await serveArtifact(res, config, id, path);
-    if (user) {
-      await queue.audit(user.id, "artifact.read", id, { path });
-    }
+    // Un lien signé se suit sans clé, et c'est le fichier qui compte : la ligne
+    // est écrite dès qu'un contenu a été servi, quel que soit le porteur. Le
+    // porteur signé n'a pas d'identité à nommer, l'acteur dit alors par où il
+    // est entré, comme `webhook` le fait pour les livraisons GitHub.
+    await queue.audit(user?.id ?? "artifact-signature", "artifact.read", id, {
+      path,
+      ...(user ? {} : { via: "signature" }),
+    });
   }
   async function streamRun(
     req: IncomingMessage,

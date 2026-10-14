@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
@@ -708,9 +708,14 @@ it("renders session evidence page by page once the data policy opens it", async 
     session: "welcome",
   });
   expect(har.body).toMatchObject({ text: null });
-  expect(String(har.body.url)).toContain(
-    `/artifacts/${id}/welcome/network.har`
-  );
+  const harUrl = String(har.body.url);
+  expect(harUrl).toContain(`/artifacts/${id}/welcome/network.har`);
+  // Le contenu n'est pas passé par la réponse : rien n'a été lu, donc rien n'est
+  // journalisé comme une lecture. Le lien sert le fichier, et cette lecture-là
+  // est auditée sans clé, car ce qui compte est le fichier servi.
+  const downloaded = await fetch(`${url}${harUrl}`);
+  expect(downloaded.status).toBe(200);
+  expect((await downloaded.arrayBuffer()).byteLength).toBe(300_000);
   // La pagination ne coupe pas un caractère : la suite recolle l'original.
   const head = await tool(url, key, "get_session_console", {
     limit: 8,
@@ -728,9 +733,8 @@ it("renders session evidence page by page once the data policy opens it", async 
   );
   expect(tail.body.nextOffset).toBeNull();
   const reads = await q.pool.query(
-    "SELECT details FROM qa_audit WHERE action='artifact.read' ORDER BY id"
+    "SELECT actor, details FROM qa_audit WHERE action='artifact.read' ORDER BY id"
   );
-  expect(reads.rows).toHaveLength(5);
   expect(
     reads.rows.map((row) => (row as { details: { path: string } }).details.path)
   ).toEqual([
@@ -740,6 +744,58 @@ it("renders session evidence page by page once the data policy opens it", async 
     "welcome/console.log",
     "welcome/console.log",
   ]);
+  // Les lectures rendues par le MCP portent leur mode de livraison ; celle du
+  // lien signé nomme son porteur, qui n'a pas de compte.
+  expect(
+    reads.rows.map(
+      (row) =>
+        (row as { details: { delivery?: string } }).details.delivery ?? null
+    )
+  ).toEqual(["inline", "inline", null, "inline", "inline"]);
+  expect((reads.rows[2] as { actor: string }).actor).toBe("artifact-signature");
+}, 30_000);
+
+it("renders a whole character when the page is shorter than it", async () => {
+  const { dataDir, key, q, url } = await mcpServer("viewer", {
+    QA_RAW_EVIDENCE: "true",
+  });
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  // Trois caractères de deux octets : une page d'un octet ne peut pas les
+  // découper. Sans progression garantie, l'appelant qui suit `nextOffset`
+  // relirait la même page vide à l'infini.
+  await writeFile(join(dataDir, id, "welcome", "console.log"), "ééé");
+  const first = await tool(url, key, "get_session_console", {
+    limit: 1,
+    runId: id,
+    session: "welcome",
+  });
+  expect(first.body.text).toBe("é");
+  expect(first.body.nextOffset).toBe(2);
+  const rest = await tool(url, key, "get_session_console", {
+    offset: 2,
+    runId: id,
+    session: "welcome",
+  });
+  expect(`${first.body.text}${rest.body.text}`).toBe("ééé");
+  expect(rest.body.nextOffset).toBeNull();
+}, 30_000);
+
+it("reports an unreadable session layout as a fault, not as an empty run", async () => {
+  const { dataDir, key, q, url } = await mcpServer();
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  // Un fichier là où la copie des preuves attend un dossier : la panne doit
+  // remonter, sinon `count: 0` ferait passer la perte d'accès pour un test sans
+  // session et l'agent chercherait des preuves qui existent.
+  await rm(join(dataDir, id, "welcome", "video"), { recursive: true });
+  await writeFile(join(dataDir, id, "welcome", "video"), "not a directory");
+  const broken = await call(url, key, "tools/call", {
+    arguments: { runId: id },
+    name: "list_run_sessions",
+  });
+  expect(broken.status).toBe(500);
+  expect(((await broken.json()) as McpAnswer).error?.code).toBe(-32_603);
 }, 30_000);
 
 it("refuses a session of a run the key does not cover", async () => {

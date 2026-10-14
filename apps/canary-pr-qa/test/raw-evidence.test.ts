@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { signedArtifact } from "../src/access.js";
 import type { Config } from "../src/config.js";
 import { startProductionServer } from "../src/production-server.js";
 import { fixture, PR_URL, pgliteQueue, SHA } from "./fixture.js";
@@ -53,6 +54,9 @@ async function evidenceServer(extra: Partial<Config> = {}) {
       fetch(`${url}/artifacts/${queued.id}/${path}`, {
         headers: { Authorization: `Bearer ${f.config.QA_API_TOKEN}` },
       }),
+    // Le lien que le rapport et le MCP distribuent : il se suit sans clé.
+    signed: (path: string) =>
+      fetch(`${url}${signedArtifact(queued.id, path, f.config)}`),
   };
 }
 
@@ -93,4 +97,35 @@ it("keeps the raw evidence policy identical on the HTTP route and the MCP tools"
   expect(
     reads.rows.map((row) => (row as { details: { path: string } }).details.path)
   ).toEqual(["welcome/network.har", "welcome/report.html"]);
+}, 30_000);
+
+it("audits the signed download itself, which carries no key to name", async () => {
+  const server = await evidenceServer();
+  // Le lien signé est une délégation du droit de lire, pas une lecture : c'est
+  // le téléchargement qui compte, et il n'a pas de compte à nommer.
+  expect((await server.signed("welcome/network.har")).status).toBe(403);
+  const opened = await evidenceServer({ QA_RAW_EVIDENCE: "true" });
+  expect((await opened.signed("welcome/network.har")).status).toBe(200);
+  expect((await opened.signed("welcome/report.html")).status).toBe(200);
+  const reads = await opened.q.pool.query(
+    "SELECT actor, details FROM qa_audit WHERE action='artifact.read' ORDER BY id"
+  );
+  expect(
+    reads.rows.map((row) => ({
+      actor: (row as { actor: string }).actor,
+      via: (row as { details: { via?: string } }).details.via ?? null,
+      path: (row as { details: { path: string } }).details.path,
+    }))
+  ).toEqual([
+    {
+      actor: "artifact-signature",
+      path: "welcome/network.har",
+      via: "signature",
+    },
+    {
+      actor: "artifact-signature",
+      path: "welcome/report.html",
+      via: "signature",
+    },
+  ]);
 }, 30_000);
