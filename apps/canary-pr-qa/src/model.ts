@@ -205,6 +205,15 @@ export class Model {
         "Check the model ID, the endpoint quota and the request parameters; the stream stopped before any JSON content."
       );
     }
+    // Un delta illisible retire du contenu : le JSON restant peut encore être valide et
+    // passer le schéma en ayant perdu un scénario. Un flux troué est refusé, jamais accepté.
+    if (state.malformed > 0) {
+      throw new QaError(
+        "MODEL_STREAM_INVALID",
+        `Model stream contained ${state.malformed} unreadable event(s)`,
+        "The response was cut, or the endpoint sent a payload that is not JSON. The plan was refused rather than accepted incomplete: retry the run, and use OPENAI_STREAM=false if the endpoint cannot stream."
+      );
+    }
     return {
       choices: [
         {

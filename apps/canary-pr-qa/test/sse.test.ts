@@ -184,6 +184,30 @@ describe("modalités de transport du modèle", () => {
     }
   });
 
+  it("refuse un plan assemblé sur un flux troué plutôt que de perdre un scénario en silence", async () => {
+    // Le contenu restant est un JSON valide et complet pour le schéma : sans le contrôle des
+    // événements illisibles, le plan serait accepté alors qu'un delta a disparu.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      streamResponse([
+        chunk(content('{"ok":')),
+        "data: {pas du json}\n\n",
+        chunk(content("true}")),
+        "data: [DONE]\n\n",
+      ])
+    );
+    try {
+      await expect(
+        new Model(stubConfig()).json(
+          "JSON",
+          {},
+          z.object({ ok: z.boolean() }).strict()
+        )
+      ).rejects.toThrow("unreadable event");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("échoue explicitement sur une erreur annoncée au milieu du flux", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       streamResponse([
