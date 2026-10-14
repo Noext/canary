@@ -478,15 +478,20 @@ export const runs = {
     model: "Modèle IA",
     pr: "Pull request",
     result: "Résultat",
+    retries: "Reprises",
     status: "État",
   },
   assertions: (passed: number, total: number) =>
     `${passed}/${total} assertions validées`,
   assertionsEmpty: "Aucune assertion exécutée",
-  usage: (tokens: number, costUsd: number, configured: boolean) =>
+  /**
+   * La ligne d'usage ne parle des reprises que lorsqu'il y en a eu : un run
+   * normal ne doit pas afficher « 0 reprise ».
+   */
+  usage: (tokens: number, costUsd: number, configured: boolean, retries = 0) =>
     `${tokens} tokens · ${
       configured ? `coût estimé $${costUsd.toFixed(4)}` : "coût non configuré"
-    }`,
+    }${retries > 0 ? ` · ${retries} reprise${retries > 1 ? "s" : ""}` : ""}`,
   videoLabel: (title: string) => `Vidéo du scénario ${title}`,
   sessionReport: "Rapport de session",
 } as const;

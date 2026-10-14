@@ -74,6 +74,9 @@ export const runJobSchema = z.object({
   sha: z.string(),
   status: runStatusSchema,
   updated_at: z.string(),
+  // Seul le compteur de reprises est lu dans la liste : les autres champs
+  // d'usage sont absents tant que le run n'a pas fini.
+  usage: z.object({ retries: z.number().nullish() }).passthrough().nullish(),
   worker: z.string().nullish(),
 });
 
@@ -254,6 +257,7 @@ export const runResultSchema = z
         estimated: z.boolean().nullish(),
         model: z.string().nullish(),
         pricingConfigured: z.boolean().nullish(),
+        retries: z.number().nullish(),
         tokens: z.number(),
       })
       .nullish(),

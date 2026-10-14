@@ -419,6 +419,57 @@ describe("runner false-green regressions", () => {
         .state
     ).toBe("error");
   });
+  it("retries a model call cut by the transport, and counts it", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // La première proposition de plan est coupée avant toute réponse, donc seule
+    // la seconde — la reprise — est enregistrée par le fixture.
+    expect(f.modelRequests).toHaveLength(1);
+    expect(result.usage?.retries).toBe(1);
+    expect(result.outcome).toBe("passed");
+    // La reprise est publiée pendant l'attente : le tableau de bord ne doit pas
+    // paraître figé, et l'instabilité reste lisible dans l'historique.
+    const events = await readFile(
+      join(f.dataDir, result.id, "events.jsonl"),
+      "utf8"
+    );
+    expect(events).toContain('"retry":{"attempt":1,"max":1,"code":');
+  }, 40_000);
+  it("stops after the configured retries and names the transport failure", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "2" }, modelResets: 9 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toMatch(/ECONNRESET|UND_ERR_SOCKET/);
+    expect(result.error).toContain("(after 2 retries)");
+    expect(result.usage?.retries).toBe(2);
+    expect(result.usage?.calls).toBe(0);
+    expect(f.modelRequests).toHaveLength(0);
+  }, 60_000);
+  it("never spends the transport budget on a semantic refusal", async () => {
+    const ungrounded = structuredClone(plan);
+    ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: { QA_MODEL_RETRIES: "3" },
+      plans: [ungrounded, plan],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Plan refusé puis corrigé : deux appels, et aucune reprise de transport.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.usage?.retries).toBe(0);
+    expect(result.outcome).toBe("passed");
+  });
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();
     fakeBrowser();

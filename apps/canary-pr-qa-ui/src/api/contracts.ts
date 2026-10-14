@@ -48,6 +48,8 @@ export interface Job {
   sha: string;
   status: RunStatus;
   updated_at: string;
+  /** Reprises de transport du run, quand le worker les a enregistrées. */
+  usage?: { retries?: number | null } | null;
   worker?: string | null;
 }
 
@@ -321,6 +323,7 @@ export interface RunResult {
     estimated?: boolean | null;
     model?: string | null;
     pricingConfigured?: boolean | null;
+    retries?: number | null;
     tokens: number;
   } | null;
 }

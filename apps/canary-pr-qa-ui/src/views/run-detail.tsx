@@ -103,7 +103,8 @@ function usageLine(usage: RunResult["usage"]): string {
     // Only a proven `true` may be labelled as an estimate: results persisted
     // before the field existed, or any result that omits it, carry no proof
     // that a tariff was configured.
-    usage.pricingConfigured === true
+    usage.pricingConfigured === true,
+    usage.retries ?? 0
   );
 }
 

@@ -30,7 +30,7 @@ import {
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
-import { checkBudget, runScope } from "./run-scope.js";
+import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
   type Outcome,
   type Plan,
@@ -499,6 +499,17 @@ async function publish(
     }
   }
 }
+/**
+ * Le repli de transport publie sa reprise avant chaque attente : le tableau de
+ * bord ne doit pas paraître figé pendant le backoff, et l'instabilité de l'amont
+ * reste mesurable dans l'historique du run.
+ */
+function relayModelRetries(scope: RunScope | undefined, progress: Progress) {
+  if (scope) {
+    scope.onRetry = (retry) =>
+      void progress.record({ phase: "planning", retry });
+  }
+}
 async function runUnscoped(
   options: RunOptions,
   config: Config
@@ -520,6 +531,7 @@ async function runUnscoped(
   const canary = new Canary(config);
   const model = new Model(config);
   const progress = new Progress(root, id);
+  relayModelRetries(runScope.getStore(), progress);
   let context: PrContext | undefined;
   const reportUrl = config.ARTIFACT_BASE_URL
     ? `${config.ARTIFACT_BASE_URL.replace(/\/$/, "")}/artifacts/${id}/report.html`
@@ -595,6 +607,7 @@ async function runUnscoped(
       tokens: usage.tokens,
       costUsd: usage.costUsd,
       calls: usage.calls,
+      retries: usage.retries ?? 0,
       model: config.OPENAI_MODEL,
       estimated: usage.estimated ?? false,
       pricingConfigured:
@@ -676,6 +689,7 @@ export async function runQa(
         tokens: 0,
         costUsd: 0,
         calls: 0,
+        retries: 0,
         maxTokens: config.QA_RUN_MAX_TOKENS,
         maxCostUsd: config.QA_RUN_MAX_COST_USD,
       },

@@ -220,6 +220,30 @@ describe("RunDetail", () => {
     );
   });
 
+  it("names the transport retries when the worker recorded some", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve({
+          ...result,
+          usage: {
+            calls: 1,
+            costUsd: 0,
+            pricingConfigured: false,
+            retries: 2,
+            tokens: 900,
+          },
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByText("900 tokens · coût non configuré · 2 reprises")
+      ).toBeVisible()
+    );
+  });
+
   it("says the cost is not configured when the server has no pricing", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.endsWith("/result.json")) {
