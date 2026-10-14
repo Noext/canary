@@ -1,11 +1,13 @@
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Script } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertionMatches,
   Canary,
   compileAction,
+  locatorCall,
   locatorExpression,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
@@ -168,41 +170,78 @@ describe("validation and deterministic assertions", () => {
       )
     ).toThrow();
   });
-  it("prefers the exact label match and falls back to the accessible name", () => {
+  it("keeps the exact label as the target and retries it on the accessible name", () => {
     const target = { by: "label" as const, value: "Pharmacie active" };
-    const expression = locatorExpression(target);
     const strict = 'page.getByLabel("Pharmacie active", { exact: true })';
-    // Le contrôle du libellé exact reste prioritaire : l'union n'est consultée
-    // que si ce libellé ne résout rien, donc un locator `by:"label"` qui
-    // fonctionnait ne s'élargit jamais à un contrôle homonyme.
-    expect(expression).toContain(
-      `(await resolveLabel(${strict}, ${strict}.or(`
+    // Le libellé exact reste la cible, avec son attente automatique complète.
+    expect(locatorExpression(target)).toBe(strict);
+    const call = locatorCall(
+      target,
+      'selectOption("DEMO18", { timeout: 10000 })'
     );
+    // Le repli est un appel rejoué, jamais une décision prise sur un `count()`
+    // immédiat : un contrôle homonyme déjà monté ne peut pas gagner contre le
+    // contrôle visé qui n'est pas encore monté.
+    expect(call).toContain(`resolveLabel(${strict}, ${strict}.or(`);
+    expect(call).toMatch(
+      /, \(locator\) => locator\.selectOption\("DEMO18", \{ timeout: 10000 \}\)\)$/
+    );
+    expect(call).not.toContain("count()");
     // Le libellé englobant d'un `<select>` inclut le texte de ses options :
     // l'union par nom accessible rattrape les cas pollués, `<select multiple>`
     // (rôle implicite `listbox`) compris.
-    expect(expression).toContain(
+    expect(call).toContain(
       'page.getByRole("combobox", { name: "Pharmacie active", exact: true })'
     );
-    expect(expression).toContain(
+    expect(call).toContain(
       'page.getByRole("listbox", { name: "Pharmacie active", exact: true })'
     );
-    expect(expression).toContain(
+    expect(call).toContain(
       'page.getByRole("textbox", { name: "Pharmacie active", exact: true })'
     );
     // Jamais de correspondance par sous-chaîne, et jamais un libellé sans
     // exactitude : un libellé qui contient la valeur ne doit pas être choisi.
-    expect(expression).not.toMatch(/getByLabel\("[^"]+"\)/);
+    expect(call).not.toMatch(/getByLabel\("[^"]+"\)/);
+    // Un locator d'un autre type n'est pas enveloppé.
+    expect(
+      locatorCall({ by: "css", value: "#nom" }, "click({ timeout: 10000 })")
+    ).toBe('page.locator("#nom").click({ timeout: 10000 })');
     const command = compileAction(
       { type: "select", locator: target, value: "DEMO18" },
       "https://preview.test"
     );
-    expect(command).toContain(
-      "const resolveLabel = async (strict, fallback) => ((await strict.count()) ? strict : fallback);"
-    );
-    expect(command).toContain(
-      `await ${expression}.selectOption("DEMO18", { timeout: 10000 });`
-    );
+    // Le repli n'est tenté qu'après un échec de résolution du libellé exact.
+    expect(command).toContain("if (await strict.count()) throw error;");
+    expect(command).toContain(`await ${call};`);
+  });
+  it("compiles every action into a syntactically valid script", () => {
+    const label = { by: "label" as const, value: "Pharmacie active" };
+    const css = { by: "css" as const, value: "#caisse" };
+    const assertion = plan.scenarios[0]!.assertions[0]!;
+    const actions: Parameters<typeof compileAction>[0][] = [
+      { type: "goto", path: "/" },
+      { type: "observe" },
+      { type: "click", locator: label, description: "cliquer" },
+      { type: "click", locator: css, description: "cliquer" },
+      { type: "fill", locator: label, value: "2", description: "saisir" },
+      { type: "press", locator: label, key: "Enter", description: "valider" },
+      {
+        type: "select",
+        locator: label,
+        value: "DEMO18",
+        description: "choisir",
+      },
+      { type: "check", locator: css, checked: true, description: "cocher" },
+      { type: "download", locator: label, description: "télécharger" },
+      { type: "popup", locator: label, description: "ouvrir" },
+      { type: "assert", assertionId: assertion.id, locator: label },
+      { type: "assert", assertionId: assertion.id, locator: css },
+    ] as Parameters<typeof compileAction>[0][];
+    for (const action of actions) {
+      const command = compileAction(action, "https://preview.test", assertion);
+      const source = `(async () => {\n${command}\n})`;
+      expect(() => new Script(source), action.type).not.toThrow();
+    }
   });
   it("checks values, visibility, counts and text without model judgement", () => {
     expect(

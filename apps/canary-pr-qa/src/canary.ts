@@ -38,30 +38,65 @@ export type Observation = z.infer<typeof observationSchema>;
  * d'un `<textarea>`. Un libellé réduit à un `sr-only` — « Pharmacie active »,
  * run e6df6014 — ne correspond plus exactement et le locator ne résout rien.
  *
- * Le nom accessible, lui, reste juste. Le contrôle visé reste d'abord celui du
- * libellé exact : l'union n'est consultée que si ce libellé ne résout rien, pour
- * ne pas élargir la cible d'un locator `by:"label"` qui fonctionnait déjà —
- * deux contrôles distincts partageant le même nom accessible échoueraient en
- * strict mode. `Locator.or()` déduplique par élément.
+ * Le nom accessible, lui, reste juste : on garde le libellé exact comme cible,
+ * avec son attente automatique complète, et l'union par nom accessible n'est
+ * tentée qu'après un échec de *résolution* de celui-ci. Décider à partir d'un
+ * `count()` immédiat serait faux : un contrôle homonyme déjà monté gagnerait
+ * contre le contrôle visé qui n'est pas encore monté.
  */
-function labelExpression(value: string): string {
+function labelTargets(value: string): { strict: string; fallback: string } {
   const name = JSON.stringify(value);
   const exact = `{ name: ${name}, exact: true }`;
   const strict = `page.getByLabel(${name}, { exact: true })`;
-  const accessibleName = ["combobox", "listbox", "textbox"].reduce(
+  const fallback = ["combobox", "listbox", "textbox"].reduce(
     (expression, role) =>
       `${expression}.or(page.getByRole(${JSON.stringify(role)}, ${exact}))`,
     strict
   );
-  return `(await resolveLabel(${strict}, ${accessibleName}))`;
+  return { strict, fallback };
 }
 
 /**
- * Émis dans le script compilé par `labelExpression` : le contrôle du libellé
- * exact tant qu'il existe, l'union des deux chemins sinon.
+ * Émis dans le script compilé par `locatorCall` : rejoue l'appel sur le nom
+ * accessible uniquement si le libellé exact n'a rien résolu — s'il a résolu un
+ * contrôle non actionnable, l'erreur remonte au lieu de viser un autre contrôle.
  */
-const RESOLVE_LABEL_HELPER =
-  "const resolveLabel = async (strict, fallback) => ((await strict.count()) ? strict : fallback);";
+const RESOLVE_LABEL_HELPER = `const resolveLabel = async (strict, fallback, act) => {
+  try {
+    return await act(strict);
+  } catch (error) {
+    if (!/Timeout \\d+ms exceeded|strict mode violation/.test(String(error))) throw error;
+    if (await strict.count()) throw error;
+    return await act(fallback);
+  }
+};`;
+
+/**
+ * Appel Playwright sur le contrôle visé, `call` étant un suffixe de méthode
+ * (`click({ timeout: 10000 })`). Un locator `by:"label"` reçoit le repli par nom
+ * accessible ; les autres sont appelés directement.
+ */
+export function locatorCall(locator: Locator, call: string): string {
+  const target = locatorExpression(locator);
+  if (locator.by !== "label") {
+    return `${target}.${call}`;
+  }
+  const { strict, fallback } = labelTargets(locator.value);
+  return `resolveLabel(${strict}, ${fallback}, (locator) => locator.${call})`;
+}
+
+/**
+ * Même repli, pour un corps de plusieurs instructions : `body` manipule le
+ * locator reçu sous le nom `locator`.
+ */
+function locatorRun(locator: Locator, body: string): string {
+  const target = locatorExpression(locator);
+  if (locator.by !== "label") {
+    return `(async (locator) => { ${body} })( ${target} )`;
+  }
+  const { strict, fallback } = labelTargets(locator.value);
+  return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
+}
 
 export function locatorExpression(locator: Locator): string {
   const value = JSON.stringify(locator.value);
@@ -73,7 +108,7 @@ export function locatorExpression(locator: Locator): string {
     case "text":
       return `page.getByText(${value}, { exact: true })`;
     case "label":
-      return labelExpression(locator.value);
+      return labelTargets(locator.value).strict;
     case "placeholder":
       return `page.getByPlaceholder(${value}, { exact: true })`;
     case "testId":
@@ -110,7 +145,7 @@ function readAssertion(assertion: Assertion, locator?: Locator): string {
     if (!locator) {
       throw new Error("Visual assertion requires target");
     }
-    return `Buffer.from(await ${locatorExpression(locator)}.screenshot({ animations: "disabled", timeout: 5000 })).toString("base64")`;
+    return `Buffer.from(await ${locatorCall(locator, `screenshot({ animations: "disabled", timeout: 5000 })`)}).toString("base64")`;
   }
   if (assertion.kind === "url") {
     return "page.url()";
@@ -118,16 +153,15 @@ function readAssertion(assertion: Assertion, locator?: Locator): string {
   if (!locator) {
     throw new Error("A locator is required for this assertion");
   }
-  const loc = locatorExpression(locator);
   switch (assertion.kind) {
     case "text":
-      return `await ${loc}.innerText({ timeout: 5000 })`;
+      return `await ${locatorCall(locator, "innerText({ timeout: 5000 })")}`;
     case "value":
-      return `await ${loc}.inputValue({ timeout: 5000 })`;
+      return `await ${locatorCall(locator, "inputValue({ timeout: 5000 })")}`;
     case "count":
-      return `await ${loc}.count()`;
+      return `await ${locatorCall(locator, "count()")}`;
     default:
-      return `await ${loc}.isVisible()`;
+      return `await ${locatorCall(locator, "isVisible()")}`;
   }
 }
 function compileAssertion(
@@ -164,18 +198,17 @@ function compileInteraction(action: Action): string {
   if (!("locator" in action && action.locator)) {
     throw new Error("Not a browser action");
   }
-  const loc = locatorExpression(action.locator);
   switch (action.type) {
     case "click":
-      return `await ${loc}.click({ timeout: 10000 });`;
+      return `await ${locatorCall(action.locator, "click({ timeout: 10000 })")};`;
     case "fill":
-      return `await ${loc}.fill(${JSON.stringify(action.value)}, { timeout: 10000 });`;
+      return `await ${locatorCall(action.locator, `fill(${JSON.stringify(action.value)}, { timeout: 10000 })`)};`;
     case "press":
-      return `await ${loc}.press(${JSON.stringify(action.key)}, { timeout: 10000 });`;
+      return `await ${locatorCall(action.locator, `press(${JSON.stringify(action.key)}, { timeout: 10000 })`)};`;
     case "select":
-      return `await ${loc}.selectOption(${JSON.stringify(action.value)}, { timeout: 10000 });`;
+      return `await ${locatorCall(action.locator, `selectOption(${JSON.stringify(action.value)}, { timeout: 10000 })`)};`;
     case "check":
-      return `await ${loc}.setChecked(${action.checked}, { timeout: 10000 });`;
+      return `await ${locatorCall(action.locator, `setChecked(${action.checked}, { timeout: 10000 })`)};`;
     default:
       throw new Error("Unsupported browser action");
   }
@@ -206,9 +239,26 @@ export function compileAction(
     }
     command = `await page.goto(${JSON.stringify(target.href)}, { waitUntil: "domcontentloaded", timeout: 15000 });`;
   } else if (action.type === "download") {
-    command = `const waiting = page.waitForEvent("download", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const download = await waiting; if(await download.failure())throw new Error("Download failed"); actual=download.suggestedFilename();`;
+    command = `await ${locatorRun(
+      action.locator,
+      `const waiting = page.waitForEvent("download", { timeout: 10000 });
+await locator.click({ timeout: 10000 });
+const download = await waiting;
+if (await download.failure()) throw new Error("Download failed");
+actual = download.suggestedFilename();`
+    )};`;
   } else if (action.type === "popup") {
-    command = `const waiting = page.waitForEvent("popup", { timeout:10000 }); await ${locatorExpression(action.locator)}.click({timeout:10000}); const popup = await waiting; await popup.waitForLoadState("domcontentloaded"); actual=popup.url(); provenanceUrls.push(actual); if(!actual.startsWith(${JSON.stringify(`${preview.origin}/`)}))throw new Error("Popup left approved origin"); await popup.close();`;
+    command = `await ${locatorRun(
+      action.locator,
+      `const waiting = page.waitForEvent("popup", { timeout: 10000 });
+await locator.click({ timeout: 10000 });
+const popup = await waiting;
+await popup.waitForLoadState("domcontentloaded");
+actual = popup.url();
+provenanceUrls.push(actual);
+if (!actual.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Popup left approved origin");
+await popup.close();`
+    )};`;
   } else if (action.type === "assert") {
     command = compileAssertion(action, assertion);
   } else if (action.type !== "observe") {
