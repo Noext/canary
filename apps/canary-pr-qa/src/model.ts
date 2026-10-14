@@ -18,16 +18,21 @@ interface ModelResponse {
 }
 
 /**
- * Codes de transport rejouables : la connexion meurt avant tout contenu utile,
- * donc la reprise est sans effet de bord et sans double facturation. Tout autre
- * code échoue sans reprise, et un refus sémantique (JSON, schéma, preuve) n'est
- * jamais rejoué parce qu'il est déterministe.
+ * Codes rejouables : la connexion meurt avant tout contenu utile, donc la
+ * reprise est sans effet de bord et sans double facturation. Les deux derniers
+ * sont nos normalisations de transport — `TIMEOUT` (délai du client modèle,
+ * issu d'un `AbortSignal.timeout`) et `MODEL_STREAM_TRUNCATED` (flux fermé
+ * proprement avant `[DONE]`). Tout autre code échoue sans reprise : un refus
+ * sémantique (JSON, schéma, preuve) et une erreur rapportée par l'endpoint
+ * (`MODEL_STREAM_ERROR`) sont déterministes, pas transitoires.
  */
 const TRANSPORT_CODES = new Set([
   "ECONNRESET",
   "ETIMEDOUT",
   "EPIPE",
   "UND_ERR_SOCKET",
+  "TIMEOUT",
+  "MODEL_STREAM_TRUNCATED",
 ]);
 
 /** Délais entre deux reprises ; le nombre de reprises vient de QA_MODEL_RETRIES. */
@@ -67,7 +72,8 @@ function failedAttempt(
   );
 }
 
-function transportCode(error: unknown): string | undefined {
+/** Classe une erreur : code rejouable, ou `undefined` (échec définitif). */
+export function transportCode(error: unknown): string | undefined {
   for (const candidate of [
     error,
     (error as { cause?: { code?: string } } | undefined)?.cause,
@@ -109,15 +115,7 @@ export class Model {
     let validation = "";
     let refused: T | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
-      const inputCostBound =
-        Buffer.byteLength(JSON.stringify(messages), "utf8") +
-        64 * (messages.length + 1);
-      const reservedCost =
-        (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
-          maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
-        1_000_000;
-      checkBudget(maxTokens + reservedInput, reservedCost);
+      this.reserve(messages, maxTokens);
       const started = Date.now();
       const response = await traced(
         "model.json",
@@ -207,6 +205,25 @@ export class Model {
   }
 
   /**
+   * Réservation budgétaire d'une tentative : chaque essai — reprise comprise —
+   * est vérifié contre l'enveloppe du run avant d'être lancé.
+   */
+  private reserve(
+    messages: { content: string; role: string }[],
+    maxTokens: number
+  ) {
+    const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
+    const inputCostBound =
+      Buffer.byteLength(JSON.stringify(messages), "utf8") +
+      64 * (messages.length + 1);
+    const reservedCost =
+      (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
+        maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
+      1_000_000;
+    checkBudget(maxTokens + reservedInput, reservedCost);
+  }
+
+  /**
    * Un appel modèle rejoué sur place quand le transport casse : même prompt,
    * même contexte, aucun effet de bord. Le contenu partiel d'un flux interrompu
    * est jeté — un flux troué n'est jamais accepté comme plan.
@@ -225,6 +242,9 @@ export class Model {
         if (!(code && mayRetry(attempt, max, scope))) {
           throw failedAttempt(error, code, attempt);
         }
+        // Chaque tentative réserve son enveloppe : une connexion coupée a pu
+        // consommer des tokens que l'endpoint ne nous rendra jamais.
+        this.reserve(messages, maxTokens);
         const wait =
           (MODEL_RETRY_DELAYS_MS[
             Math.min(attempt, MODEL_RETRY_DELAYS_MS.length - 1)

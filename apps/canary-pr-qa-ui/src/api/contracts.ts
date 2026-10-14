@@ -32,6 +32,8 @@ export interface Principal {
 export interface RunProgress {
   action?: string | null;
   phase?: string | null;
+  /** Reprise d'un appel modèle après une coupure de transport. */
+  retry?: { attempt: number; code: string; max: number } | null;
   scenarioId?: string | null;
 }
 

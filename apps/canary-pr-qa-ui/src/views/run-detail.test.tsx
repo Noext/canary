@@ -197,6 +197,31 @@ describe("RunDetail", () => {
     expect(FakeEventSource.instances).toHaveLength(0);
   });
 
+  it("shows the transport retry while the run waits", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(
+        job({
+          progress: {
+            phase: "planning",
+            retry: { attempt: 1, code: "ECONNRESET", max: 3 },
+          },
+          status: "running",
+        })
+      );
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Reprise 1/3 de l'appel au modèle après une coupure réseau (ECONNRESET)"
+        )
+      ).toBeVisible()
+    );
+  });
+
   it("renders the usage line through the shared copy", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.endsWith("/result.json")) {

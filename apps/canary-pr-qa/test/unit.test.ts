@@ -12,7 +12,9 @@ import {
   locatorExpression,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
+import { QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
+import { transportCode } from "../src/model.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
 import { saveReport } from "../src/report.js";
 import { runScope } from "../src/run-scope.js";
@@ -25,6 +27,24 @@ import {
 import { BASE_SHA, fixture, PR_URL, plan, SHA } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
+
+/**
+ * Les réservations budgétaires déposées avant chaque tentative modèle : le
+ * wrapper réel est conservé, seul l'appel est observé.
+ */
+const budget = vi.hoisted(() => ({ reserves: [] as number[] }));
+vi.mock("../src/run-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/run-scope.js")>();
+  return {
+    ...actual,
+    checkBudget: (tokens = 0, costUsd = 0) => {
+      if (tokens > 0) {
+        budget.reserves.push(tokens);
+      }
+      return actual.checkBudget(tokens, costUsd);
+    },
+  };
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(close.splice(0).map((fn) => fn()));
@@ -470,6 +490,54 @@ describe("runner false-green regressions", () => {
     expect(result.usage?.retries).toBe(0);
     expect(result.outcome).toBe("passed");
   });
+  it("classes what may be retried and what may not", () => {
+    expect(
+      transportCode(
+        Object.assign(new Error("terminated"), {
+          cause: { code: "ECONNRESET" },
+        })
+      )
+    ).toBe("ECONNRESET");
+    expect(transportCode(new Error("socket hang up"))).toBe("UND_ERR_SOCKET");
+    // Nos normalisations de transport : délai du client et flux tronqué.
+    expect(transportCode(new QaError("TIMEOUT", "x", "y"))).toBe("TIMEOUT");
+    expect(transportCode(new QaError("MODEL_STREAM_TRUNCATED", "x", "y"))).toBe(
+      "MODEL_STREAM_TRUNCATED"
+    );
+    // Déterministes, donc jamais rejoués.
+    expect(
+      transportCode(new QaError("MODEL_STREAM_ERROR", "x", "y"))
+    ).toBeUndefined();
+    expect(
+      transportCode(new QaError("REQUIREMENT_UNGROUNDED", "x", "y"))
+    ).toBeUndefined();
+  });
+  it("retries a stream closed without its terminal marker", async () => {
+    const f = await setup({
+      env: { QA_MODEL_RETRIES: "1" },
+      modelTruncations: 1,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.usage?.retries).toBe(1);
+    expect(result.outcome).toBe("passed");
+    expect(f.modelRequests).toHaveLength(2);
+  }, 40_000);
+  it("reserves the budget of every attempt, retries included", async () => {
+    const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
+    fakeBrowser();
+    const before = budget.reserves.length;
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    // Deux tentatives de plan, donc deux réservations déposées avant chacune.
+    expect(budget.reserves.length - before).toBe(2);
+  }, 40_000);
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();
     fakeBrowser();

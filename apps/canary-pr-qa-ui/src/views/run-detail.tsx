@@ -425,6 +425,15 @@ export function RunDetail({
       <p className="mt-2 text-sm" id="liveMessage">
         {message}
       </p>
+      <p className="mt-2 text-sm" hidden={!progress?.retry} id="retryNotice">
+        {progress?.retry
+          ? copy.retrying(
+              progress.retry.attempt,
+              progress.retry.max,
+              progress.retry.code
+            )
+          : ""}
+      </p>
       <Notice
         className="mt-3"
         hidden={!summary}

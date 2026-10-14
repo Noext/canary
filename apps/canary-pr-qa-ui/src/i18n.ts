@@ -432,6 +432,8 @@ export const runs = {
   copyDone: "Copié",
   copyFailed: "Copie impossible",
   detailEyebrow: "Test en cours",
+  retrying: (attempt: number, max: number, code: string) =>
+    `Reprise ${attempt}/${max} de l'appel au modèle après une coupure réseau (${code})`,
   emptyIntro: "Lancez votre premier test depuis « Nouveau test ».",
   emptyTitle: "Aucun test pour le moment",
   eventsLoading: "En attente du worker…",

@@ -39,6 +39,37 @@ describe("server payloads", () => {
     expect(rows[0]?.worker).toBeNull();
   });
 
+  it("keeps the transport retry of a running job, and its counter", () => {
+    const row = runJobSchema.parse({
+      cancel_requested: false,
+      created_at: "2026-01-01T00:00:00.000Z",
+      error: null,
+      id: "11111111-1111-1111-1111-111111111111",
+      input: { prUrl: "https://github.com/o/r/pull/1", publish: true },
+      outcome: null,
+      owner: "admin",
+      pr: 1,
+      progress: {
+        phase: "planning",
+        retry: { attempt: 2, code: "ECONNRESET", max: 3 },
+      },
+      repo: "o/r",
+      sha: "1".repeat(40),
+      status: "running",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      usage: { calls: 0, retries: 2 },
+      worker: "w",
+    });
+    // Sans le champ dans le schéma, Zod le retirerait et la reprise resterait
+    // invisible pendant l'attente.
+    expect(row.progress?.retry).toEqual({
+      attempt: 2,
+      code: "ECONNRESET",
+      max: 3,
+    });
+    expect(row.usage?.retries).toBe(2);
+  });
+
   it("accepts a running job with a progress snapshot", () => {
     const row = runJobSchema.parse({
       cancel_requested: false,

@@ -57,6 +57,13 @@ const outcomeSchema = z.enum([
 const runProgressSchema = z.object({
   action: z.string().nullish(),
   phase: z.string().nullish(),
+  retry: z
+    .object({
+      attempt: z.number(),
+      code: z.string(),
+      max: z.number(),
+    })
+    .nullish(),
   scenarioId: z.string().nullish(),
 });
 
