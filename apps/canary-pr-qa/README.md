@@ -655,10 +655,12 @@ vidéos, coût, publication. Tout cela reste soumis à la politique de preuves
 brutes : traces, HAR, journaux natifs et `results.json` sont refusés tant que
 `QA_RAW_EVIDENCE` n'est pas à `true`, et chaque lecture de preuve est auditée
 (`artifact.read`). Au-delà de 256 Kio, le contenu n'est plus rendu du tout :
-l'outil rend le lien signé, valable cinq minutes, qui sert le fichier entier et
-dont le téléchargement est audité, avec ou sans clé. C'est le seul chemin vers la
-trace Playwright, que les rapports relient déjà. Un run purgé par la rétention est
-annoncé comme tel, jamais inventé.
+l'outil rend le chemin de l'artefact, à demander avec la même clé API, et dont la
+lecture est auditée. Le chemin n'est pas signé : un porteur anonyme (lien signé
+valable cinq minutes) reste réservé au partage depuis le dashboard, qui exige
+l'autorité d'écrire sur le run et l'audite (`artifact.share`). C'est le seul
+chemin vers la trace Playwright, que les rapports relient déjà. Un run purgé par
+la rétention est annoncé comme tel, jamais inventé.
 
 `launch_run` (`{prUrl,previewUrl?,publish?,model?,idempotencyKey?}`) est le seul
 outil qui écrit, et il exige une clé `operator` : il passe par le même lanceur que

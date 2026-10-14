@@ -8,7 +8,6 @@ import {
   mayLaunch,
   type Principal,
   requireAccess,
-  signedArtifact,
 } from "./access.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
@@ -133,9 +132,9 @@ async function readResult(config: Config, id: string) {
  */
 const INLINE_PAGE = 16_384;
 /**
- * Au-delà, l'artefact n'est plus rendu du tout : le tool rend un lien signé, le
- * même que le navigateur suit depuis le rapport. Un HAR de 8 Mo n'a rien à faire
- * dans une réponse d'outil.
+ * Au-delà, l'artefact n'est plus rendu du tout : le tool rend son chemin, que
+ * l'appelant demande avec sa propre clé. Un HAR de 8 Mo n'a rien à faire dans
+ * une réponse d'outil.
  */
 const MAX_INLINE = 262_144;
 /**
@@ -272,10 +271,15 @@ function allowed(config: Config, path: string) {
 /** Les kinds qu'un tool dédié rend : l'inventaire ne distribue pas leur lien. */
 const READ_BY_TOOL = new Set<ArtifactKind>(["results", "console", "har"]);
 /**
- * Une entrée d'inventaire, avec un lien signé quand aucun tool ne rend le
- * fichier. La trace est un dump brut : sans lien tant que `QA_RAW_EVIDENCE`
- * n'est pas à `true`, sinon l'URL serait refusée par la route HTTP et l'agent
- * croirait à une preuve perdue.
+ * Une entrée d'inventaire, avec le chemin d'un fichier qu'aucun tool ne rend.
+ *
+ * Le MCP ne signe pas ce chemin : un lien signé est un porteur anonyme, et le
+ * dashboard réserve son émission à qui a l'autorité d'écrire sur le run
+ * (`POST /runs/:id/links`, audité `artifact.share`). Une clé API ne l'a jamais,
+ * même en portée `operator`, qui n'ouvre que le lancement. Le chemin rendu se
+ * lit donc avec la clé de l'appelant : chaque lecture reste authentifiée,
+ * vérifiée sur le dépôt du run et auditée, au lieu de céder cinq minutes de
+ * lecture à qui détient l'URL.
  */
 function linked(
   config: Config,
@@ -288,7 +292,7 @@ function linked(
   }
   return {
     ...artifact,
-    url: signedArtifact(runId, `${session}/${artifact.path}`, config),
+    url: `/artifacts/${runId}/${session}/${artifact.path}`,
   };
 }
 /**
@@ -559,17 +563,16 @@ async function readSession(
     };
     const meta = { bytes: artifact.bytes, kind: artifact.kind, path };
     if (artifact.bytes > MAX_INLINE) {
-      // Rien n'a été lu : le fichier voyage par le lien signé, et la route des
-      // artefacts écrit sa propre ligne quand ce lien est suivi. Journaliser
-      // une lecture ici dirait qu'un fichier a été lu alors que personne ne
-      // l'a ouvert.
+      // Rien n'a été lu : le fichier voyage par le chemin rendu, que l'appelant
+      // demande avec sa propre clé. Une lecture qui échoue ne laisse donc pas de
+      // ligne, et le lien anonyme reste l'affaire du dashboard qui l'a autorisé.
       return text({
         artifact: meta,
-        note: `Le fichier fait ${artifact.bytes} octets : au-delà de la taille rendue par le MCP. Le lien signé, valable cinq minutes, rend le fichier entier et sa lecture est auditée.`,
+        note: `Le fichier fait ${artifact.bytes} octets : au-delà de la taille rendue par le MCP. Le chemin rendu sert le fichier entier, à demander avec la même clé API en en-tête Authorization ; sa lecture est auditée.`,
         run: args.runId,
         session: reference,
         text: null,
-        url: signedArtifact(args.runId, path, ctx.config),
+        url: `/artifacts/${args.runId}/${path}`,
       });
     }
     const buffer = await readFile(
@@ -615,7 +618,7 @@ async function readSession(
 }
 
 const SESSION_READER_TOOLS: Tool[] = SESSION_READERS.map((reader) => ({
-  description: `${reader.description} La session se nomme par le dossier du scénario ou par l'identifiant rendu par list_run_sessions. Le contenu reste soumis à la politique de preuves brutes et chaque lecture est auditée ; au-delà de ${MAX_INLINE} octets, un lien signé remplace le contenu.`,
+  description: `${reader.description} La session se nomme par le dossier du scénario ou par l'identifiant rendu par list_run_sessions. Le contenu reste soumis à la politique de preuves brutes et chaque lecture est auditée ; au-delà de ${MAX_INLINE} octets, le chemin de l'artefact est rendu sans contenu, à demander avec la même clé API.`,
   inputSchema: {
     additionalProperties: false,
     properties: {
@@ -733,7 +736,7 @@ const tools: Tool[] = [
   },
   {
     description:
-      "Les sessions Canary enregistrées d'un test : une par scénario, plus la découverte. Chaque session donne son dossier, son identifiant, son issue et l'inventaire de ses artefacts (index results.json, rapport, trace, HAR, journal, vidéos, captures), avec un lien signé pour ceux qu'aucun autre outil ne rend.",
+      "Les sessions Canary enregistrées d'un test : une par scénario, plus la découverte. Chaque session donne son dossier, son identifiant, son issue et l'inventaire de ses artefacts (index results.json, rapport, trace, HAR, journal, vidéos, captures), avec le chemin de ceux qu'aucun autre outil ne rend, à demander avec la même clé API.",
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -764,7 +767,7 @@ const tools: Tool[] = [
           count: sessions.length,
           note: rawEvidence
             ? "Les preuves brutes sont ouvertes : chaque lecture est auditée."
-            : "Les preuves brutes sont fermées par QA_RAW_EVIDENCE : la trace n'a pas de lien, et les outils d'index, de journal et de HAR les refusent. Le rapport, les vidéos et les captures restent accessibles.",
+            : "Les preuves brutes sont fermées par QA_RAW_EVIDENCE : la trace n'a pas de chemin, et les outils d'index, de journal et de HAR les refusent. Le rapport, les vidéos et les captures restent accessibles.",
           rawEvidence,
           run: args.runId,
           sessions,

@@ -629,15 +629,19 @@ it("lists a run's Canary sessions and keeps raw evidence behind the data policy"
     "video",
   ]);
   // Le rapport, la vidéo et la capture sont la sortie du service, pas des
-  // dumps : ils portent un lien signé même politique fermée.
+  // dumps : ils portent un chemin même politique fermée, à demander avec la clé.
   for (const kind of ["report", "video", "screenshot"] as const) {
     expect(byKind[kind]?.url).toContain(`/artifacts/${id}/welcome/`);
+    expect(String(byKind[kind]?.url)).not.toContain("signature=");
   }
-  // La trace et les dumps restent hors de portée : ni lien (l'URL serait
+  // La trace et les dumps restent hors de portée : ni chemin (l'URL serait
   // refusée par la route HTTP), ni contenu.
   for (const kind of ["trace", "results", "console", "har"] as const) {
     expect(byKind[kind]?.url).toBeUndefined();
   }
+  // Le chemin rendu n'est pas un porteur : sans clé, la route refuse.
+  const reportUrl = String(byKind.report?.url);
+  expect((await fetch(`${url}${reportUrl}`)).status).toBe(401);
   for (const name of [
     "get_session_results",
     "get_session_console",
@@ -677,7 +681,8 @@ it("renders session evidence page by page once the data policy opens it", async 
   const listed = await tool(url, key, "list_run_sessions", { runId: id });
   expect(listed.body).toMatchObject({ rawEvidence: true });
   const [session] = listed.body.sessions as SessionRow[];
-  // Ouverte, la politique lie aussi la trace : aucun autre outil ne la rend.
+  // Ouverte, la politique expose aussi le chemin de la trace : aucun autre
+  // outil ne la rend, et le chemin se lit avec la clé de l'appelant.
   expect(byArtifactKind(session!.artifacts).trace?.url).toContain(
     `/artifacts/${id}/welcome/trace.zip`
   );
@@ -710,10 +715,14 @@ it("renders session evidence page by page once the data policy opens it", async 
   expect(har.body).toMatchObject({ text: null });
   const harUrl = String(har.body.url);
   expect(harUrl).toContain(`/artifacts/${id}/welcome/network.har`);
-  // Le contenu n'est pas passé par la réponse : rien n'a été lu, donc rien n'est
-  // journalisé comme une lecture. Le lien sert le fichier, et cette lecture-là
-  // est auditée sans clé, car ce qui compte est le fichier servi.
-  const downloaded = await fetch(`${url}${harUrl}`);
+  // Le MCP ne fabrique pas de porteur anonyme : le chemin rendu se demande avec
+  // la clé de l'appelant, comme le dashboard exige une autorité de partage pour
+  // émettre un lien signé.
+  expect(harUrl).not.toContain("signature=");
+  expect((await fetch(`${url}${harUrl}`)).status).toBe(401);
+  const downloaded = await fetch(`${url}${harUrl}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
   expect(downloaded.status).toBe(200);
   expect((await downloaded.arrayBuffer()).byteLength).toBe(300_000);
   // La pagination ne coupe pas un caractère : la suite recolle l'original.
@@ -752,10 +761,9 @@ it("renders session evidence page by page once the data policy opens it", async 
         (row as { details: { delivery?: string } }).details.delivery ?? null
     )
   ).toEqual(["inline", "inline", null, "inline", "inline"]);
-  expect((reads.rows[2] as { actor: string }).actor).toBe("artifact-signature");
   // La ligne d'audit porte la taille rendue, mesurée après la lecture : un
-  // contenu qui n'a pas été lu ne peut pas y figurer, et le lien signé n'y
-  // ajoute rien puisqu'il n'a rien servi lui-même.
+  // contenu qui n'a pas été lu ne peut pas y figurer, et le chemin d'un gros
+  // artefact n'y ajoute rien avant que la clé ne le demande.
   expect(
     reads.rows.map(
       (row) => (row as { details: { bytes?: number } }).details.bytes ?? null
@@ -767,6 +775,9 @@ it("renders session evidence page by page once the data policy opens it", async 
     8,
     18,
   ]);
+  // La lecture du gros artefact est attribuée à la clé qui l'a demandée, pas à
+  // un porteur anonyme.
+  expect((reads.rows[2] as { actor: string }).actor).toMatch(/^key:/);
 }, 30_000);
 
 it("renders a whole character when the page is shorter than it", async () => {
@@ -820,6 +831,41 @@ it("reports an unreadable session layout as a fault, not as an empty run", async
   });
   expect(broken.status).toBe(500);
   expect(((await broken.json()) as McpAnswer).error?.code).toBe(-32_603);
+}, 30_000);
+
+it("mints an anonymous link only from an operator authority, never from an agent key", async () => {
+  const { admin, dataDir, key, q, url } = await mcpServer();
+  const id = await completedRun(q);
+  await sessionOnDisk(dataDir, id);
+  const share = (token: string) =>
+    fetch(`${url}/runs/${id}/links`, {
+      body: JSON.stringify({ path: "welcome/report.html" }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+  // La clé lit le run, mais le partage anonyme demande l'autorité d'écrire sur
+  // le run : c'est cette règle qui rend le porteur impossible à fabriquer d'ici.
+  expect((await share(key)).status).toBe(403);
+  const shared = await share(admin.Authorization.replace("Bearer ", ""));
+  expect(shared.status).toBe(200);
+  const link = ((await shared.json()) as { url: string }).url;
+  expect(link).toContain("signature=");
+  // Ce lien-là est bien un porteur anonyme, et sa lecture est auditée pour ce
+  // qu'elle est, faute de compte à nommer.
+  expect((await fetch(`${url}${link}`)).status).toBe(200);
+  const audits = await q.pool.query(
+    "SELECT actor, action FROM qa_audit WHERE action IN ('artifact.share','artifact.read') ORDER BY id"
+  );
+  expect(audits.rows.map((row) => (row as { action: string }).action)).toEqual([
+    "artifact.share",
+    "artifact.read",
+  ]);
+  expect((audits.rows[1] as { actor: string }).actor).toBe(
+    "artifact-signature"
+  );
 }, 30_000);
 
 it("refuses a session of a run the key does not cover", async () => {
