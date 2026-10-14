@@ -61,7 +61,16 @@ function labelTargets(value: string): { strict: string; fallback: string } {
  * accessible uniquement si le libellé exact n'a rien résolu — s'il a résolu un
  * contrôle non actionnable, l'erreur remonte au lieu de viser un autre contrôle.
  */
-const RESOLVE_LABEL_HELPER = `const resolveLabel = async (strict, fallback, act) => {
+/**
+ * Émis dans le script compilé par `locatorCall` : rejoue l'appel sur le nom
+ * accessible uniquement si le libellé exact n'a rien résolu — s'il a résolu un
+ * contrôle non actionnable, l'erreur remonte au lieu de viser un autre contrôle.
+ *
+ * Déclaré en fonction, et non en `const` : `compileProbe` injecte sa lecture
+ * juste après `let actual;`, avant cette déclaration, et une liaison `const`
+ * serait dans sa zone morte temporelle à cet endroit.
+ */
+const RESOLVE_LABEL_HELPER = `async function resolveLabel(strict, fallback, act) {
   try {
     return await act(strict);
   } catch (error) {
@@ -69,7 +78,7 @@ const RESOLVE_LABEL_HELPER = `const resolveLabel = async (strict, fallback, act)
     if (await strict.count()) throw error;
     return await act(fallback);
   }
-};`;
+}`;
 
 /**
  * Appel Playwright sur le contrôle visé, `call` étant un suffixe de méthode

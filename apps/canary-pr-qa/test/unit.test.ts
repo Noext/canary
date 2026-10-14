@@ -7,6 +7,7 @@ import {
   assertionMatches,
   Canary,
   compileAction,
+  compileProbe,
   locatorCall,
   locatorExpression,
 } from "../src/canary.js";
@@ -242,6 +243,54 @@ describe("validation and deterministic assertions", () => {
       const source = `(async () => {\n${command}\n})`;
       expect(() => new Script(source), action.type).not.toThrow();
     }
+  });
+  it("runs a label-targeted probe without reading the helper too early", async () => {
+    // `compileProbe` remplace `let actual;` : la lecture du libellé s'exécute
+    // avant la déclaration du helper, qui doit donc être hissé.
+    const command = compileProbe(
+      {
+        id: "a",
+        kind: "text",
+        description: "comptage juste",
+        expected: "Comptage juste",
+        target: { by: "label", value: "Comptage juste" },
+      },
+      "https://preview.test"
+    );
+    let reads = 0;
+    let snapshots = 0;
+    const locator = {
+      or: () => locator,
+      count: async () => 1,
+      innerText: async () => {
+        reads += 1;
+        return "Comptage juste";
+      },
+      inputValue: async () => "",
+      isVisible: async () => true,
+      screenshot: async () => new Uint8Array(),
+    };
+    const page = {
+      getByLabel: () => locator,
+      getByRole: () => locator,
+      locator: () => locator,
+      url: () => "https://preview.test/comptage",
+      snapshotForAI: async () => {
+        snapshots += 1;
+        return { full: "" };
+      },
+    };
+    const context = {
+      browser: { getPage: async () => page },
+      console: { log: () => undefined },
+    };
+    await new Script(`(async () => { ${command} })()`, {
+      filename: "probe.js",
+    }).runInNewContext(context);
+    // Le probe a lu le libellé puis est allé au bout : aucune zone morte
+    // temporelle, contrairement à une déclaration `const` du helper.
+    expect(reads).toBe(1);
+    expect(snapshots).toBe(1);
   });
   it("checks values, visibility, counts and text without model judgement", () => {
     expect(
