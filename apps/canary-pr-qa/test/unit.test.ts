@@ -376,6 +376,49 @@ describe("runner false-green regressions", () => {
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
   });
+  it("returns an ungrounded requirement to the planner before failing", async () => {
+    const ungrounded = structuredClone(plan);
+    ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({ plans: [ungrounded, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus part au planificateur, qui dispose d'une tentative de correction
+    // au lieu de faire échouer le run sur une citation recopiée de mémoire.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain("No source witness for welcome: src/form.ts");
+    expect(correction).toContain(
+      "Quote exact source or diff text; page content alone is not a requirement."
+    );
+    expect(f.modelRequests).toHaveLength(2);
+    // Le plan corrigé passe le contrôle final et le contrat est joué.
+    expect(result.outcome).toBe("passed");
+    expect(result.scenarios[0]?.contract?.completedSteps).toEqual([
+      "enter",
+      "save",
+      "verify",
+    ]);
+  });
+  it("refuses the run when the corrected plan still cites without a witness", async () => {
+    const ungrounded = structuredClone(plan);
+    ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({ plans: [ungrounded, ungrounded] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("REQUIREMENT_UNGROUNDED");
+    expect(result.error).toBe("No source witness for welcome: src/form.ts");
+    expect(result.scenarios).toEqual([]);
+    expect(
+      f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
+        .state
+    ).toBe("error");
+  });
   it("plays the whole frozen contract without asking a model to decide", async () => {
     const f = await setup();
     fakeBrowser();

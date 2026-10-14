@@ -22,6 +22,7 @@ import {
 } from "./plan-evidence.js";
 import {
   trustedPolicy,
+  ungroundedPlanRefusals,
   validateCoverage,
   validateProvider,
   writeEvidenceRefusals,
@@ -279,10 +280,15 @@ async function executePlan(
     config.QA_PLAN_MAX_TOKENS,
     (candidate) => {
       const refusals = writeEvidenceRefusals(candidate, policy);
-      return refusals.length
-        ? `Plan rejected: ${refusals
-            .map((item) => `${item.error.message}. ${item.error.hint}`)
-            .join(" ")} Return the complete corrected plan.`
+      // Même traitement pour une exigence sans témoin textuel : le planificateur
+      // reçoit le refus et dispose d'une tentative de correction, au lieu de
+      // faire échouer le run sur une citation recopiée de mémoire.
+      const messages = [
+        ...refusals.map((item) => `${item.error.message}. ${item.error.hint}`),
+        ...ungroundedPlanRefusals(candidate, context),
+      ];
+      return messages.length
+        ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
         : undefined;
     }
   );
