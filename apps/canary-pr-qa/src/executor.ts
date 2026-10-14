@@ -98,6 +98,51 @@ async function performStep(
     observation: JSON.stringify(observation),
   });
 }
+/**
+ * Relit la cible après le rechargement pour prouver une `persisted`. Une cible
+ * qui disparaît entre la première lecture et cette relecture n'efface pas la
+ * valeur déjà lue : c'est une régression réelle, enregistrée avec cette valeur
+ * plutôt qu'annoncée comme une cible « jamais apparue ».
+ */
+async function readPersisted(
+  sessionId: string,
+  assertion: Assertion,
+  observation: Observation,
+  result: ScenarioResult,
+  preview: string,
+  canary: Canary,
+  config: Config,
+  baseline: unknown
+): Promise<{ handled: true } | { handled: false; persisted: unknown }> {
+  try {
+    const persisted = (
+      await canary.act(
+        sessionId,
+        `persistence-${assertion.id}`,
+        compileProbe(assertion, preview, true)
+      )
+    ).actual;
+    return { handled: false, persisted };
+  } catch (error) {
+    const diagnostic = diagnose(error, config);
+    if (
+      diagnostic.code !== "TARGET_NOT_FOUND" ||
+      observation.actual === undefined
+    ) {
+      throw error;
+    }
+    result.assertions.push({
+      id: assertion.id,
+      passed: false,
+      actual: observation.actual,
+      baseline,
+    });
+    result.outcome = "failed";
+    result.diagnostic = diagnostic;
+    result.error = `Assertion ${assertion.id} failed: the value read before the reload (${JSON.stringify(observation.actual)}) is no longer present in the target after it — persistence is not demonstrated — ${diagnostic.message}`;
+    return { handled: true };
+  }
+}
 async function evaluateAssertion(
   sessionId: string,
   assertion: Assertion,
@@ -112,13 +157,20 @@ async function evaluateAssertion(
   const baseline = baselines.get(assertion.id);
   let persisted: unknown;
   if (assertion.verification === "persisted") {
-    persisted = (
-      await canary.act(
-        sessionId,
-        `persistence-${assertion.id}`,
-        compileProbe(assertion, preview, true)
-      )
-    ).actual;
+    const probe = await readPersisted(
+      sessionId,
+      assertion,
+      observation,
+      result,
+      preview,
+      canary,
+      config,
+      baseline
+    );
+    if (probe.handled) {
+      return;
+    }
+    persisted = probe.persisted;
   }
   const actual =
     assertion.kind === "visual"

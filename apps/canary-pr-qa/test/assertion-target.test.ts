@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
 import { runQa } from "../src/runner.js";
-import { fixture, PR_URL } from "./fixture.js";
+import { fixture, PR_URL, plan } from "./fixture.js";
 
 /**
  * Le délai réel d'une assertion dont la cible ne résout jamais : Playwright
@@ -41,6 +41,33 @@ async function runFailingStep(step: string) {
   return runQa({ prUrl: PR_URL, previewUrl: f.baseUrl }, f.config);
 }
 
+/**
+ * Le cas `persisted` : la lecture d'avant rechargement aboutit, mais la cible
+ * disparaît après le rechargement. La sonde `persistence-*` lève alors le même
+ * délai de cible introuvable ; le relevé déjà obtenu ne doit pas être perdu.
+ */
+async function runMissingPersistedTarget() {
+  const persisted = structuredClone(plan);
+  persisted.scenarios[0]!.assertions[0]!.verification = "persisted";
+  const f = await fixture({ plans: [persisted] });
+  cleanups.push(f.close);
+  vi.spyOn(Canary.prototype, "start").mockResolvedValue("assertion-target");
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_session, label) => {
+      if (label === "persistence-saved") {
+        throw new Error(UNRESOLVED_TARGET);
+      }
+      return {
+        url: "http://fixture/",
+        snapshot: "textbox Name, button Save",
+        actual: label.startsWith("baseline-") ? "Welcome" : "Welcome Ada",
+      };
+    }
+  );
+  vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+  return runQa({ prUrl: PR_URL, previewUrl: f.baseUrl }, f.config);
+}
+
 it("fails the run when an assertion target never resolves", async () => {
   const result = await runFailingStep("3-assert");
   expect(result.outcome).toBe("failed");
@@ -58,6 +85,24 @@ it("fails the run when an assertion target never resolves", async () => {
   expect(scenario?.assertions[0]?.actual).toBeUndefined();
   expect(scenario?.error).toContain("saved");
   expect(scenario?.error).toContain('[data-cash-state="cloture"]');
+});
+
+it("keeps the pre-reload value when a persisted target disappears", async () => {
+  const result = await runMissingPersistedTarget();
+  expect(result.outcome).toBe("failed");
+  const scenario = result.scenarios[0];
+  expect(scenario?.outcome).toBe("failed");
+  expect(scenario?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+  // La valeur lue avant le rechargement est conservée : c'est une observation
+  // réelle, et l'effacer effacerait la régression.
+  expect(scenario?.assertions).toHaveLength(1);
+  expect(scenario?.assertions[0]).toMatchObject({
+    id: "saved",
+    passed: false,
+    actual: "Welcome Ada",
+    baseline: "Welcome",
+  });
+  expect(scenario?.error).toContain("persistence");
 });
 
 it("keeps a click whose target never resolves blocked", async () => {
