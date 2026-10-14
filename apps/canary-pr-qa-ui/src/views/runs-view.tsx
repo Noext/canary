@@ -22,6 +22,7 @@ import {
   stateLabel,
   toneFor,
 } from "@/lib/format";
+import { isPlainLeftClick } from "@/lib/link";
 import { useStore } from "@/lib/store";
 import { modelFromInput, RunDetail } from "./run-detail";
 import { createRunsStore } from "./runs-store";
@@ -150,6 +151,9 @@ export function RunsView() {
                       className="font-medium underline-offset-4 hover:underline"
                       href={routeUrl({ kind: "runs", runId: run.id })}
                       onClick={(event) => {
+                        if (!isPlainLeftClick(event)) {
+                          return;
+                        }
                         event.preventDefault();
                         open(run.id);
                       }}

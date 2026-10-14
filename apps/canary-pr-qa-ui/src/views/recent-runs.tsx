@@ -5,6 +5,7 @@ import { Pill } from "@/components/ui/feedback";
 import { Card, CardHeader, CardTitle } from "@/components/ui/form";
 import { home } from "@/i18n";
 import { outcomeLabel, stateLabel, toneFor } from "@/lib/format";
+import { isPlainLeftClick } from "@/lib/link";
 
 /** The pill follows the run's outcome, falling back to its status. */
 function runLabel(run: RunJob): string {
@@ -65,6 +66,9 @@ export function RecentRunsCard({
               className="font-medium text-sm underline-offset-4 hover:underline"
               href={routeUrl({ kind: "runs", runId: run.id })}
               onClick={(event) => {
+                if (!isPlainLeftClick(event)) {
+                  return;
+                }
                 event.preventDefault();
                 onOpen(run.id);
               }}

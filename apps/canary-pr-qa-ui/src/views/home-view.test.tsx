@@ -281,6 +281,27 @@ describe("HomeView recent runs", () => {
     ).toHaveAttribute("href", `/history/${runId}`);
   });
 
+  it("leaves a modifier-click on a run link to the browser", async () => {
+    window.history.replaceState(null, "", "/");
+    wire.handler = () => [job()];
+    renderHome();
+    const link = await screen.findByRole("link", { name: "fixture/app #1" });
+
+    // A click the browser journals itself — new tab, background tab, new
+    // window — is not the dashboard's to intercept: cancelling it would make
+    // the page address the link carries unusable.
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+    });
+    link.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("route")).toHaveTextContent("home:");
+    expect(window.location.pathname).toBe("/");
+  });
+
   it("opens the history from the card action", async () => {
     const user = userEvent.setup();
     wire.handler = () => [job()];
