@@ -330,16 +330,27 @@ async function runSessions(
   return sessions.sort((left, right) => left.dir.localeCompare(right.dir));
 }
 /**
+ * Un octet de continuation UTF-8 s'écrit 10xxxxxx : il ne peut pas ouvrir un
+ * caractère, donc ni une page, ni un offset demandé par l'appelant.
+ */
+function isContinuation(byte: number | undefined) {
+  return byte !== undefined && byte >= 0x80 && byte < 0xc0;
+}
+/** Début du caractère qui contient `offset`. */
+function boundaryBefore(buffer: Buffer, offset: number) {
+  let start = offset;
+  while (start > 0 && isContinuation(buffer[start])) {
+    start -= 1;
+  }
+  return start;
+}
+/**
  * Recule sur une frontière UTF-8 : une page ne doit pas finir sur la moitié
  * d'un caractère, que l'agent recollerait en mojibake.
  */
 function safeCut(buffer: Buffer, start: number, end: number) {
   let cut = end;
-  while (cut > start && cut < buffer.length) {
-    const byte = buffer[cut];
-    if (byte === undefined || byte < 0x80 || byte >= 0xc0) {
-      break;
-    }
+  while (cut > start && cut < buffer.length && isContinuation(buffer[cut])) {
     cut -= 1;
   }
   if (cut > start || cut >= buffer.length) {
@@ -561,20 +572,34 @@ async function readSession(
         url: signedArtifact(args.runId, path, ctx.config),
       });
     }
-    await ctx.queue.audit(ctx.user.id, "artifact.read", args.runId, {
-      delivery: "inline",
-      path,
-      via: "mcp",
-    });
     const buffer = await readFile(
       join(ctx.config.QA_DATA_DIR, args.runId, path)
     );
     const offset = Math.min(args.offset ?? 0, buffer.length);
+    if (isContinuation(buffer[offset])) {
+      // La page commencerait sur la fin d'un caractère, ce que `nextOffset` ne
+      // rend jamais : le dire vaut mieux que de servir un caractère cassé et de
+      // perdre l'octet.
+      return text(
+        `L'offset ${offset} tombe au milieu d'un caractère UTF-8 : reprendre à ${boundaryBefore(buffer, offset)}, ou à la valeur de nextOffset que rend une page.`,
+        true
+      );
+    }
     const cut = safeCut(
       buffer,
       offset,
       Math.min(buffer.length, offset + (args.limit ?? INLINE_PAGE))
     );
+    // La ligne n'est écrite qu'une fois la lecture faite : elle porte la taille
+    // rendue, donc elle ne peut pas dire qu'un contenu a été lu quand la lecture
+    // a échoué et que l'appel repart en faute du serveur.
+    await ctx.queue.audit(ctx.user.id, "artifact.read", args.runId, {
+      bytes: cut - offset,
+      delivery: "inline",
+      offset,
+      path,
+      via: "mcp",
+    });
     return text({
       artifact: meta,
       nextOffset: cut < buffer.length ? cut : null,
@@ -601,7 +626,8 @@ const SESSION_READER_TOOLS: Tool[] = SESSION_READERS.map((reader) => ({
         type: "integer",
       },
       offset: {
-        description: "Octet de départ ; reprendre la suite avec nextOffset.",
+        description:
+          "Octet de départ, sur une frontière de caractère ; reprendre la suite avec nextOffset. Un offset au milieu d'un caractère est refusé.",
         minimum: 0,
         type: "integer",
       },

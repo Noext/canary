@@ -753,6 +753,20 @@ it("renders session evidence page by page once the data policy opens it", async 
     )
   ).toEqual(["inline", "inline", null, "inline", "inline"]);
   expect((reads.rows[2] as { actor: string }).actor).toBe("artifact-signature");
+  // La ligne d'audit porte la taille rendue, mesurée après la lecture : un
+  // contenu qui n'a pas été lu ne peut pas y figurer, et le lien signé n'y
+  // ajoute rien puisqu'il n'a rien servi lui-même.
+  expect(
+    reads.rows.map(
+      (row) => (row as { details: { bytes?: number } }).details.bytes ?? null
+    )
+  ).toEqual([
+    26,
+    (results.body.artifact as { bytes: number }).bytes,
+    null,
+    8,
+    18,
+  ]);
 }, 30_000);
 
 it("renders a whole character when the page is shorter than it", async () => {
@@ -779,6 +793,16 @@ it("renders a whole character when the page is shorter than it", async () => {
   });
   expect(`${first.body.text}${rest.body.text}`).toBe("ééé");
   expect(rest.body.nextOffset).toBeNull();
+  // Un offset au milieu d'un caractère est refusé, avec la frontière à
+  // reprendre : servir un caractère cassé perdrait l'octet restant.
+  const midCharacter = await tool(url, key, "get_session_console", {
+    offset: 1,
+    runId: id,
+    session: "welcome",
+  });
+  expect(midCharacter.isError).toBe(true);
+  expect(String(midCharacter.body.message)).toContain("milieu d'un caractère");
+  expect(String(midCharacter.body.message)).toContain("reprendre à 0");
 }, 30_000);
 
 it("reports an unreadable session layout as a fault, not as an empty run", async () => {
