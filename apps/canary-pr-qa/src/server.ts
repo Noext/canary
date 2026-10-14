@@ -191,9 +191,25 @@ export async function serveArtifact(
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
   });
-  createReadStream(path)
-    .on("error", () => res.destroy())
-    .pipe(res);
+  // La réponse n'est terminée qu'une fois le fichier remis : un appelant qui
+  // journalise une lecture juste après doit savoir que le contenu est parti,
+  // pas seulement que l'en-tête a été écrit. Un transfert interrompu par le
+  // disque ou par le client remonte donc en erreur, et ne se lit pas comme une
+  // lecture réussie.
+  await new Promise<void>((done, reject) => {
+    const stream = createReadStream(path);
+    stream.on("error", (error) => {
+      res.destroy();
+      reject(error);
+    });
+    res.on("finish", () => done());
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        reject(new Error("Artifact transfer interrupted"));
+      }
+    });
+    stream.pipe(res);
+  });
 }
 
 export async function startServer(config: Config) {

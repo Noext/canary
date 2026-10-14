@@ -741,34 +741,40 @@ it("renders session evidence page by page once the data policy opens it", async 
     "[info] ready\n[error] boom\n"
   );
   expect(tail.body.nextOffset).toBeNull();
-  const reads = await q.pool.query(
-    "SELECT actor, details FROM qa_audit WHERE action='artifact.read' ORDER BY id"
-  );
-  expect(
-    reads.rows.map((row) => (row as { details: { path: string } }).details.path)
-  ).toEqual([
-    "welcome/console.log",
-    "welcome/results.json",
-    "welcome/network.har",
-    "welcome/console.log",
-    "welcome/console.log",
-  ]);
+  // Le journal suit la fin de chaque transfert : la ligne du gros artefact
+  // arrive après que le client a lu les 300 000 octets.
+  const reads = async () => {
+    const rows = await q.pool.query(
+      "SELECT actor, details FROM qa_audit WHERE action='artifact.read' ORDER BY id"
+    );
+    return rows.rows as {
+      actor: string;
+      details: { bytes?: number; delivery?: string; path: string };
+    }[];
+  };
+  await vi.waitFor(async () => {
+    expect((await reads()).map((row) => row.details.path)).toEqual([
+      "welcome/console.log",
+      "welcome/results.json",
+      "welcome/network.har",
+      "welcome/console.log",
+      "welcome/console.log",
+    ]);
+  });
+  const audited = await reads();
   // Les lectures rendues par le MCP portent leur mode de livraison ; celle du
   // lien signé nomme son porteur, qui n'a pas de compte.
-  expect(
-    reads.rows.map(
-      (row) =>
-        (row as { details: { delivery?: string } }).details.delivery ?? null
-    )
-  ).toEqual(["inline", "inline", null, "inline", "inline"]);
+  expect(audited.map((row) => row.details.delivery ?? null)).toEqual([
+    "inline",
+    "inline",
+    null,
+    "inline",
+    "inline",
+  ]);
   // La ligne d'audit porte la taille rendue, mesurée après la lecture : un
   // contenu qui n'a pas été lu ne peut pas y figurer, et le chemin d'un gros
   // artefact n'y ajoute rien avant que la clé ne le demande.
-  expect(
-    reads.rows.map(
-      (row) => (row as { details: { bytes?: number } }).details.bytes ?? null
-    )
-  ).toEqual([
+  expect(audited.map((row) => row.details.bytes ?? null)).toEqual([
     26,
     (results.body.artifact as { bytes: number }).bytes,
     null,
@@ -777,7 +783,7 @@ it("renders session evidence page by page once the data policy opens it", async 
   ]);
   // La lecture du gros artefact est attribuée à la clé qui l'a demandée, pas à
   // un porteur anonyme.
-  expect((reads.rows[2] as { actor: string }).actor).toMatch(/^key:/);
+  expect(audited[2]?.actor).toMatch(/^key:/);
 }, 30_000);
 
 it("renders a whole character when the page is shorter than it", async () => {
@@ -854,18 +860,24 @@ it("mints an anonymous link only from an operator authority, never from an agent
   const link = ((await shared.json()) as { url: string }).url;
   expect(link).toContain("signature=");
   // Ce lien-là est bien un porteur anonyme, et sa lecture est auditée pour ce
-  // qu'elle est, faute de compte à nommer.
-  expect((await fetch(`${url}${link}`)).status).toBe(200);
-  const audits = await q.pool.query(
-    "SELECT actor, action FROM qa_audit WHERE action IN ('artifact.share','artifact.read') ORDER BY id"
-  );
-  expect(audits.rows.map((row) => (row as { action: string }).action)).toEqual([
-    "artifact.share",
-    "artifact.read",
-  ]);
-  expect((audits.rows[1] as { actor: string }).actor).toBe(
-    "artifact-signature"
-  );
+  // qu'elle est, faute de compte à nommer. Le corps est lu jusqu'au bout :
+  // l'audit suit la fin du transfert, pas l'en-tête.
+  const download = await fetch(`${url}${link}`);
+  expect(download.status).toBe(200);
+  await download.arrayBuffer();
+  const audits = () =>
+    q.pool
+      .query(
+        "SELECT actor, action FROM qa_audit WHERE action IN ('artifact.share','artifact.read') ORDER BY id"
+      )
+      .then((result) => result.rows as { action: string; actor: string }[]);
+  await vi.waitFor(async () => {
+    expect((await audits()).map((row) => row.action)).toEqual([
+      "artifact.share",
+      "artifact.read",
+    ]);
+  });
+  expect((await audits())[1]?.actor).toBe("artifact-signature");
 }, 30_000);
 
 it("refuses a session of a run the key does not cover", async () => {
