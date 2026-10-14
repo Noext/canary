@@ -169,6 +169,7 @@ export function compileTargetProbe(
     .join("\n");
   return `const page = await browser.getPage("qa");
 await page.goto(${JSON.stringify(preview.href)}, { waitUntil: "domcontentloaded", timeout: 15000 });
+${RESOLVE_LABEL_HELPER}
 const actual = {
 ${counts}
 };

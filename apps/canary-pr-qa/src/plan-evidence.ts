@@ -271,6 +271,42 @@ function isAssertionStep(
   );
 }
 
+/** Une assertion d'absence attend une cible absente : la sonder n'a pas de sens. */
+function expectsAbsence(assertion: Scenario["assertions"][number]): boolean {
+  if (assertion.kind === "hidden") {
+    return true;
+  }
+  return assertion.kind === "count" && assertion.expected === 0;
+}
+
+/**
+ * Les cibles qu'une sonde navigateur peut vérifier sans mentir : celles dont la
+ * lecture a lieu alors que la page est encore celle de la découverte. Une cible
+ * qui n'apparaît qu'après une navigation, une interaction ou un login ne peut
+ * pas être jugée depuis cette page — la refuser ferait refuser des plans
+ * valides.
+ */
+export function probeableTargets(
+  plan: Plan,
+  discoveryUrl: string
+): { assertionId: string; locator: Locator }[] {
+  return plan.scenarios.flatMap((scenario) => {
+    const unchanged = pageUnchangedByStep(scenario, discoveryUrl);
+    return scenario.assertions
+      .filter((assertion) => {
+        if (!assertion.target || expectsAbsence(assertion)) {
+          return false;
+        }
+        const readIndex = assertionReadIndex(scenario, assertion);
+        return readIndex >= 0 && unchanged[readIndex] === true;
+      })
+      .map((assertion) => ({
+        assertionId: `${scenario.id}/${assertion.id}`,
+        locator: assertion.target as Locator,
+      }));
+  });
+}
+
 export function validatePlanEvidence(
   plan: Plan,
   evidence: DiscoveryEvidence

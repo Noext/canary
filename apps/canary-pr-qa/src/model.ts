@@ -166,20 +166,9 @@ export class Model {
           "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
         );
       }
+      let value: T;
       try {
-        const value = schema.parse(JSON.parse(content));
-        const rejection = await repair?.(value);
-        if (rejection === undefined) {
-          return value;
-        }
-        // One repair attempt for a structurally valid value the caller refuses:
-        // the caller decides what to do with a value the model never fixed.
-        refused = value;
-        messages.push({ role: "assistant", content });
-        messages.push({
-          role: "user",
-          content: redact(rejection, this.config).slice(0, 2000),
-        });
+        value = schema.parse(JSON.parse(content));
       } catch (error) {
         validation =
           error instanceof z.ZodError
@@ -196,7 +185,23 @@ export class Model {
           role: "user",
           content: `Invalid JSON or schema: ${validation}. Return only a JSON object matching the exact schema in the system message. Do not add fields. Preserve the original product requirements and assertion targets.`,
         });
+        continue;
       }
+      // Un échec du contrôle appelé — navigateur, provenance, sonde de cibles —
+      // n'est pas un contenu invalide : il remonte tel quel au lieu d'être
+      // requalifié en « réponse illisible » et de payer un appel de plus.
+      const rejection = await repair?.(value);
+      if (rejection === undefined) {
+        return value;
+      }
+      // One repair attempt for a structurally valid value the caller refuses:
+      // the caller decides what to do with a value the model never fixed.
+      refused = value;
+      messages.push({ role: "assistant", content });
+      messages.push({
+        role: "user",
+        content: redact(rejection, this.config).slice(0, 2000),
+      });
     }
     if (refused !== undefined) {
       return refused;

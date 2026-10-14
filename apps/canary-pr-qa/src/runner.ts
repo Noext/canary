@@ -19,6 +19,7 @@ import {
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
+  probeableTargets,
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
@@ -35,8 +36,6 @@ import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
-  type Assertion,
-  type Locator,
   type Outcome,
   type Plan,
   PlanSchema,
@@ -243,21 +242,12 @@ function refusalDiagnostic(
  * donc une cible qui ne résout rien y est normale. Les autres sont comptées sur
  * la page de découverte avant toute exécution.
  */
-function readsState(assertion: Assertion): boolean {
-  if (!assertion.target) {
-    return false;
-  }
-  if (assertion.kind === "hidden") {
-    return false;
-  }
-  return !(assertion.kind === "count" && assertion.expected === 0);
-}
-
 /**
  * Compte les cibles d'assertion du plan sur la page de découverte : un plan qui
  * lit un élément inexistant — un panneau que la PR a remplacé, par exemple —
  * échouerait sur un simple délai et bloquerait le scénario, donc le run entier.
- * Le planificateur reçoit le refus et corrige sa cible avant d'exécuter.
+ * Seules les cibles que cette page peut juger sont sondées : une cible qui
+ * n'apparaît qu'après une interaction n'est pas du ressort de cette sonde.
  */
 async function absentTargetRefusals(
   plan: Plan,
@@ -265,12 +255,7 @@ async function absentTargetRefusals(
   preview: Preview,
   canary: Canary
 ): Promise<string[]> {
-  const targets = plan.scenarios.flatMap((scenario) =>
-    scenario.assertions.filter(readsState).map((assertion) => ({
-      assertionId: `${scenario.id}/${assertion.id}`,
-      locator: assertion.target as Locator,
-    }))
-  );
+  const targets = probeableTargets(plan, preview.url);
   if (targets.length === 0) {
     return [];
   }
@@ -415,7 +400,12 @@ async function executePlan(
         context,
         preview,
         canary
-      );
+      ).catch((error: unknown) => {
+        // La sonde aide le planificateur, elle ne le juge pas : une session
+        // navigateur indisponible ne refuse aucun plan.
+        logger.warn({ error }, "Plan target probe skipped");
+        return [];
+      });
       const messages = planRefusals(candidate, policy, context, absentTargets);
       return messages.length
         ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
