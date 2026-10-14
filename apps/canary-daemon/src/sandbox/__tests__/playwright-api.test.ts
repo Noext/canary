@@ -44,6 +44,18 @@ const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
       #spacer {
         height: 1400px;
       }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     </style>
   </head>
   <body>
@@ -59,6 +71,28 @@ const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
       <option value="blue">Blue</option>
       <option value="green">Green</option>
     </select>
+    <label class="field">
+      <span class="sr-only">Pharmacie active</span>
+      <select id="pharmacie">
+        <option value="DEMO17">DEMO17 · Pharmacie de démonstration 17</option>
+        <option value="DEMO18">DEMO18 · Pharmacie de démonstration 18</option>
+      </select>
+    </label>
+    <select id="profil" aria-label="Profil de démonstration">
+      <option value="admin">Administrateur démo 1</option>
+    </select>
+    <label class="field">
+      <span class="sr-only">Fournisseurs</span>
+      <select id="fournisseurs" multiple>
+        <option value="alpha">Alpha SA</option>
+        <option value="beta">Beta SARL</option>
+      </select>
+    </label>
+    <label for="recherche-active">Recherche</label>
+    <input id="recherche-active" type="checkbox" />
+    <input id="recherche-libre" type="text" title="Recherche" />
+    <div id="late"></div>
+    <input id="homonyme" type="text" title="Recherche tardive" />
     <button id="submit">Submit</button>
     <button id="disabled" disabled>Disabled</button>
     <button id="focus-target">Focus target</button>
@@ -148,6 +182,11 @@ const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
       setTimeout(() => {
         window.extraReady = "ok";
       }, 120);
+
+      setTimeout(() => {
+        document.getElementById("late").innerHTML =
+          '<label for="tardif">Recherche tardive</label><input id="tardif" type="checkbox" />';
+      }, 300);
     </script>
   </body>
 </html>`;
@@ -721,6 +760,123 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(result.nestedChild).toBe("Nested child");
       expect(result.items).toEqual(["Item 1", "Item 2", "Item 3"]);
     });
+
+    it("reaches a wrapping-label select through its accessible name", async () => {
+      const result = await harness.runJson<{
+        labelOnly: number;
+        withAccessibleName: number;
+        alreadyNamedByAriaLabel: number;
+        selected: string;
+      }>(
+        withTestPage(
+          "locator-label-accessible-name",
+          `
+          const labelOnly = page.getByLabel("Pharmacie active", { exact: true });
+          const withAccessibleName = labelOnly
+            .or(page.getByRole("combobox", { name: "Pharmacie active", exact: true }))
+            .or(page.getByRole("textbox", { name: "Pharmacie active", exact: true }));
+          const byAriaLabel = page
+            .getByLabel("Profil de démonstration", { exact: true })
+            .or(page.getByRole("combobox", { name: "Profil de démonstration", exact: true }));
+          await withAccessibleName.selectOption("DEMO18");
+          console.log(JSON.stringify({
+            labelOnly: await labelOnly.count(),
+            withAccessibleName: await withAccessibleName.count(),
+            alreadyNamedByAriaLabel: await byAriaLabel.count(),
+            selected: await page.locator("#pharmacie").inputValue(),
+          }));
+        `
+        )
+      );
+
+      // Le texte du libellé englobant inclut celui des `option` : l'exactitude
+      // seule ne résout rien, le nom accessible la rattrape.
+      expect(result.labelOnly).toBe(0);
+      expect(result.withAccessibleName).toBe(1);
+      // Un contrôle trouvé par les deux chemins n'est compté qu'une fois :
+      // c'est ce qui rend le repli sûr en strict mode.
+      expect(result.alreadyNamedByAriaLabel).toBe(1);
+      expect(result.selected).toBe("DEMO18");
+    });
+
+    it("retries the exact label on the accessible name after it fails to resolve", async () => {
+      const result = await harness.runJson<{
+        labelOnly: number;
+        multiLabelOnly: number;
+        selected: string;
+        multiSelected: string;
+        labelResolved: boolean;
+        widenedResolvesTwo: boolean;
+        clickedHomonym: boolean;
+        lateChecked: boolean;
+        lateHomonymFocused: boolean;
+      }>(
+        withTestPage(
+          "locator-label-preference",
+          `
+          const resolveLabel = async (strict, fallback, act) => {
+            try {
+              return await act(strict);
+            } catch (error) {
+              if (!/Timeout \\d+ms exceeded|strict mode violation/.test(String(error))) throw error;
+              if (await strict.count()) throw error;
+              return await act(fallback);
+            }
+          };
+          const strictPharmacy = page.getByLabel("Pharmacie active", { exact: true });
+          const fallbackPharmacy = strictPharmacy
+            .or(page.getByRole("combobox", { name: "Pharmacie active", exact: true }))
+            .or(page.getByRole("listbox", { name: "Pharmacie active", exact: true }))
+            .or(page.getByRole("textbox", { name: "Pharmacie active", exact: true }));
+          const strictFournisseurs = page.getByLabel("Fournisseurs", { exact: true });
+          const fallbackFournisseurs = strictFournisseurs
+            .or(page.getByRole("combobox", { name: "Fournisseurs", exact: true }))
+            .or(page.getByRole("listbox", { name: "Fournisseurs", exact: true }))
+            .or(page.getByRole("textbox", { name: "Fournisseurs", exact: true }));
+          await resolveLabel(strictPharmacy, fallbackPharmacy, (locator) => locator.selectOption("DEMO18", { timeout: 1000 }));
+          await resolveLabel(strictFournisseurs, fallbackFournisseurs, (locator) => locator.selectOption("beta", { timeout: 1000 }));
+          // Homonyme : le libellé exact résout déjà, le repli ne doit pas élargir.
+          const strictRecherche = page.getByLabel("Recherche", { exact: true });
+          const widenedRecherche = strictRecherche
+            .or(page.getByRole("textbox", { name: "Recherche", exact: true }));
+          await resolveLabel(strictRecherche, widenedRecherche, (locator) => locator.click({ timeout: 1000 }));
+          // Le contrôle libellé n'existe qu'après le début de l'action : son
+          // attente automatique doit gagner contre l'homonyme déjà monté.
+          const strictTardif = page.getByLabel("Recherche tardive", { exact: true });
+          const fallbackTardif = strictTardif
+            .or(page.getByRole("textbox", { name: "Recherche tardive", exact: true }));
+          await resolveLabel(strictTardif, fallbackTardif, (locator) => locator.click({ timeout: 5000 }));
+          console.log(JSON.stringify({
+            labelOnly: await strictPharmacy.count(),
+            multiLabelOnly: await strictFournisseurs.count(),
+            selected: await page.locator("#pharmacie").inputValue(),
+            multiSelected: await page.locator("#fournisseurs").inputValue(),
+            labelResolved: await strictRecherche.count() === 1,
+            widenedResolvesTwo: await widenedRecherche.count() === 2,
+            clickedHomonym: (await page.evaluate(() => document.activeElement.id)) === "recherche-libre",
+            lateChecked: await page.locator("#tardif").isChecked(),
+            lateHomonymFocused: (await page.evaluate(() => document.activeElement.id)) === "homonyme",
+          }));
+        `
+        )
+      );
+
+      // Libellé pollué par les `option` : rien ne résout sans le repli.
+      expect(result.labelOnly).toBe(0);
+      expect(result.selected).toBe("DEMO18");
+      // `<select multiple>` a le rôle implicite `listbox`, pas `combobox`.
+      expect(result.multiLabelOnly).toBe(0);
+      expect(result.multiSelected).toBe("beta");
+      // Homonyme : le libellé exact résout un contrôle unique, l'union en
+      // résoudrait deux, et le clic ne part pas sur l'homonyme.
+      expect(result.labelResolved).toBe(true);
+      expect(result.widenedResolvesTwo).toBe(true);
+      expect(result.clickedHomonym).toBe(false);
+      // Le contrôle libellé monte après le début de l'action : son attente
+      // automatique doit l'emporter sur l'homonyme déjà présent.
+      expect(result.lateChecked).toBe(true);
+      expect(result.lateHomonymFocused).toBe(false);
+    }, 30_000);
   });
 
   describe.sequential("AI snapshots", () => {
