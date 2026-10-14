@@ -91,30 +91,32 @@ const envSchema = z.object({
   QA_PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
   QA_MAX_STEPS: z.coerce.number().int().min(1).max(100).default(25),
   QA_MAX_SCENARIOS: z.coerce.number().int().min(1).max(20).default(8),
+  // Plafond haut volontaire : un endpoint streamé peut générer longtemps, et un modèle de
+  // raisonnement peut légitimement consommer plus que l'ancien plafond avant d'émettre son JSON.
   QA_PLAN_MAX_TOKENS: z.coerce
     .number()
     .int()
     .min(128)
-    .max(32_768)
+    .max(1_000_000)
     .default(8000),
   QA_DOCTOR_MAX_TOKENS: z.coerce
     .number()
     .int()
     .min(128)
-    .max(32_768)
+    .max(1_000_000)
     .default(1024),
   QA_STEP_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(120).default(30),
   QA_MODEL_TIMEOUT_SECONDS: z.coerce
     .number()
     .int()
     .min(5)
-    .max(300)
+    .max(900)
     .default(120),
   QA_CONTEXT_CHARS: z.coerce
     .number()
     .int()
     .min(10_000)
-    .max(500_000)
+    .max(1_000_000)
     .default(120_000),
   PREVIEW_ALLOWED_HOSTS: z.string().default(""),
   PREVIEW_URL_TEMPLATE: z.string().default(""),
