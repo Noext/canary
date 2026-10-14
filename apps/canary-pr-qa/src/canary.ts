@@ -30,6 +30,26 @@ const observationSchema = z.object({
 });
 export type Observation = z.infer<typeof observationSchema>;
 
+/**
+ * `getByLabel` compare le texte du libellé associé, pas le nom accessible du
+ * contrôle : ce texte est la concaténation de tous les nœuds texte du `<label>`
+ * englobant, donc aussi celle des `option` d'un `<select>` ou du contenu initial
+ * d'un `<textarea>`. Un libellé réduit à un `sr-only` — « Pharmacie active »,
+ * run e6df6014 — ne correspond plus exactement et le locator ne résout rien.
+ * Le nom accessible, lui, reste juste : on garde l'exactitude et on ajoute les
+ * rôles qui le portent. `Locator.or()` fait une union dédupliquée par élément,
+ * donc un contrôle trouvé par les deux chemins reste unique.
+ */
+function labelExpression(value: string): string {
+  const name = JSON.stringify(value);
+  const exact = `{ name: ${name}, exact: true }`;
+  return (
+    `page.getByLabel(${name}, { exact: true })` +
+    `.or(page.getByRole("combobox", ${exact}))` +
+    `.or(page.getByRole("textbox", ${exact}))`
+  );
+}
+
 export function locatorExpression(locator: Locator): string {
   const value = JSON.stringify(locator.value);
   switch (locator.by) {
@@ -40,7 +60,7 @@ export function locatorExpression(locator: Locator): string {
     case "text":
       return `page.getByText(${value}, { exact: true })`;
     case "label":
-      return `page.getByLabel(${value}, { exact: true })`;
+      return labelExpression(locator.value);
     case "placeholder":
       return `page.getByPlaceholder(${value}, { exact: true })`;
     case "testId":

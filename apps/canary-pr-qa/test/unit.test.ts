@@ -168,6 +168,31 @@ describe("validation and deterministic assertions", () => {
       )
     ).toThrow();
   });
+  it("keeps an exact label match and adds the accessible-name path of the same label", () => {
+    const target = { by: "label" as const, value: "Pharmacie active" };
+    const expression = locatorExpression(target);
+    // Le libellé englobant d'un `<select>` inclut le texte de ses options : la
+    // correspondance exacte seule ne résout rien, le nom accessible la rattrape.
+    expect(expression).toContain(
+      'page.getByLabel("Pharmacie active", { exact: true })'
+    );
+    expect(expression).toContain(
+      'page.getByRole("combobox", { name: "Pharmacie active", exact: true })'
+    );
+    expect(expression).toContain(
+      'page.getByRole("textbox", { name: "Pharmacie active", exact: true })'
+    );
+    // Jamais de correspondance par sous-chaîne : un libellé qui contient la
+    // valeur ne doit pas être sélectionné à la place du bon contrôle.
+    expect(expression).not.toMatch(/getByLabel\([^,]+(?:\)|, \))/);
+    const command = compileAction(
+      { type: "select", locator: target, value: "DEMO18" },
+      "https://preview.test"
+    );
+    expect(command).toContain(
+      `await ${expression}.selectOption("DEMO18", { timeout: 10000 });`
+    );
+  });
   it("checks values, visibility, counts and text without model judgement", () => {
     expect(
       assertionMatches(

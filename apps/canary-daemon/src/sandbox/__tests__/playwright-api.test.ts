@@ -44,6 +44,18 @@ const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
       #spacer {
         height: 1400px;
       }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     </style>
   </head>
   <body>
@@ -58,6 +70,16 @@ const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
       <option value="red">Red</option>
       <option value="blue">Blue</option>
       <option value="green">Green</option>
+    </select>
+    <label class="field">
+      <span class="sr-only">Pharmacie active</span>
+      <select id="pharmacie">
+        <option value="DEMO17">DEMO17 · Pharmacie de démonstration 17</option>
+        <option value="DEMO18">DEMO18 · Pharmacie de démonstration 18</option>
+      </select>
+    </label>
+    <select id="profil" aria-label="Profil de démonstration">
+      <option value="admin">Administrateur démo 1</option>
     </select>
     <button id="submit">Submit</button>
     <button id="disabled" disabled>Disabled</button>
@@ -720,6 +742,44 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(result.betaChild).toBe("Child B");
       expect(result.nestedChild).toBe("Nested child");
       expect(result.items).toEqual(["Item 1", "Item 2", "Item 3"]);
+    });
+
+    it("reaches a wrapping-label select through its accessible name", async () => {
+      const result = await harness.runJson<{
+        labelOnly: number;
+        withAccessibleName: number;
+        alreadyNamedByAriaLabel: number;
+        selected: string;
+      }>(
+        withTestPage(
+          "locator-label-accessible-name",
+          `
+          const labelOnly = page.getByLabel("Pharmacie active", { exact: true });
+          const withAccessibleName = labelOnly
+            .or(page.getByRole("combobox", { name: "Pharmacie active", exact: true }))
+            .or(page.getByRole("textbox", { name: "Pharmacie active", exact: true }));
+          const byAriaLabel = page
+            .getByLabel("Profil de démonstration", { exact: true })
+            .or(page.getByRole("combobox", { name: "Profil de démonstration", exact: true }));
+          await withAccessibleName.selectOption("DEMO18");
+          console.log(JSON.stringify({
+            labelOnly: await labelOnly.count(),
+            withAccessibleName: await withAccessibleName.count(),
+            alreadyNamedByAriaLabel: await byAriaLabel.count(),
+            selected: await page.locator("#pharmacie").inputValue(),
+          }));
+        `
+        )
+      );
+
+      // Le texte du libellé englobant inclut celui des `option` : l'exactitude
+      // seule ne résout rien, le nom accessible la rattrape.
+      expect(result.labelOnly).toBe(0);
+      expect(result.withAccessibleName).toBe(1);
+      // Un contrôle trouvé par les deux chemins n'est compté qu'une fois :
+      // c'est ce qui rend le repli sûr en strict mode.
+      expect(result.alreadyNamedByAriaLabel).toBe(1);
+      expect(result.selected).toBe("DEMO18");
     });
   });
 
