@@ -1393,6 +1393,25 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
       `const page=await browser.getPage("qa"); await page.reload({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#historyTable",{timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
     );
     expect(reloadedHistory.url).toContain("/history");
+    // Retour must move the detail, not only the address: selecting a run pushes
+    // `#<uuid>`, and the entry the browser restores has to re-seed the screen
+    // that read its link once.
+    await act("select-run-in-history", {
+      type: "click",
+      locator: { by: "css", value: "#runs tr:first-child a" },
+    });
+    const selectedRun = await canary.act(
+      session,
+      "history-run-selected",
+      `const page=await browser.getPage("qa"); await page.waitForSelector("#detail",{state:"visible",timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(new URL(selectedRun.url).hash).toMatch(/^#[0-9a-f-]{36}$/);
+    const backToHistory = await canary.act(
+      session,
+      "back-to-the-history-list",
+      `const page=await browser.getPage("qa"); await page.goBack({waitUntil:"domcontentloaded",timeout:15000}); await page.waitForSelector("#detail",{state:"hidden",timeout:15000}); const text=await page.evaluate(()=>document.body.innerText); console.log("CANARY_PR_QA_OBSERVATION:"+JSON.stringify({url:page.url(),snapshot:(await page.snapshotForAI()).full,actual:text}));`
+    );
+    expect(new URL(backToHistory.url).pathname).toBe("/history");
     // Same for the page that starts a test: its address is a path too, and a
     // reload is served by the dashboard instead of answering 404.
     await act("open-new-test", {

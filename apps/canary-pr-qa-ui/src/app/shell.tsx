@@ -52,7 +52,7 @@ function Logo() {
 export function Shell() {
   const { canWrite, isAdmin, logout, user } = useSession();
   const { report } = useError();
-  const { navigate, section, view } = useNavigation();
+  const { navigate, restoreCount, section, view } = useNavigation();
   const { githubReady, modelReady, status } = useWorkspace();
   const copy = views[view];
   const current = navParent[view] ?? view;
@@ -153,9 +153,14 @@ export function Shell() {
           />
         ) : null}
         {view === "new" ? <NewTestView /> : null}
-        {view === "runs" ? <RunsView /> : null}
-        {view === "run" ? <RunScreenView /> : null}
-        {view === "automatic" ? <AutomaticDetailView /> : null}
+        {/* Les écrans qui lisent leur lien une seule fois — l'historique, le
+            rapport, la tentative — sont remontés sur l'entrée restaurée : sans
+            cela, Retour changerait l'adresse sans changer le détail affiché. */}
+        {view === "runs" ? <RunsView key={restoreCount} /> : null}
+        {view === "run" ? <RunScreenView key={restoreCount} /> : null}
+        {view === "automatic" ? (
+          <AutomaticDetailView key={restoreCount} />
+        ) : null}
         {view === "settings" ? <SettingsView section={section} /> : null}
         {view === "home" && !canWrite ? (
           <p className="sr-only">{home.titleViewer}</p>

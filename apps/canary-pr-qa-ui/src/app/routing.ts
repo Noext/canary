@@ -134,6 +134,16 @@ export function viewOf(route: Route): ViewName {
 }
 
 /**
+ * L'écran qu'un chargement ouvre. Le retour du callback GitHub ouvre la page de
+ * connexion GitHub, mais seulement quand l'adresse ne nomme aucun écran : un
+ * lien explicite (`#run=`, `#automatic=`, `#settings=`, `#<uuid>`) gagne sur la
+ * destination du callback.
+ */
+export function initialViewFor(route: Route, github?: string): ViewName {
+  return route.kind === "home" && github ? "settings" : viewOf(route);
+}
+
+/**
  * Preuve de compilation qu'une union est entièrement traitée : un écran ajouté
  * sans adresse ne compile pas, au lieu de retomber silencieusement sur l'accueil.
  */

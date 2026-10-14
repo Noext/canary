@@ -34,6 +34,12 @@ interface NavigationState {
   requestedRun?: string;
   requestedRunScreen?: string;
   requestedView: ViewName;
+  /**
+   * Le nombre d'entrées que Retour ou Avant a restaurées. Un écran qui lit son
+   * lien une seule fois se remonte sur cette valeur : l'adresse redevient ce qui
+   * décide du détail affiché.
+   */
+  restoreCount: number;
   section: SettingsSection;
 }
 
@@ -54,6 +60,12 @@ interface NavigationContextValue {
   requestedRun?: string;
   /** Écran de test lié par l'adresse, distinct du choix dans l'historique. */
   requestedRunScreen?: string;
+  /**
+   * Incrémenté à chaque entrée restaurée par Retour ou Avant. Les écrans qui
+   * lisent leur lien une seule fois s'en servent de `key`, pour rouvrir le lien
+   * de l'entrée restaurée au lieu de garder le détail de la précédente.
+   */
+  restoreCount: number;
   /** Page de réglages que l'écran visible affiche. */
   section: SettingsSection;
   view: ViewName;
@@ -110,6 +122,7 @@ function replay(store: Store<NavigationState>, role: Role): void {
     requestedRun: shown.kind === "runs" ? shown.runId : undefined,
     requestedRunScreen: shown.kind === "run" ? shown.id : undefined,
     requestedView: viewOf(shown),
+    restoreCount: current.restoreCount + 1,
     section: shown.kind === "settings" ? shown.section : current.section,
   }));
   // Une entrée que ce rôle ne peut pas lire ne reste pas dans la barre : elle est
@@ -181,6 +194,7 @@ export function NavigationProvider({
       requestedRun: initialRun,
       requestedRunScreen: initialRunScreen,
       requestedView: initialView,
+      restoreCount: 0,
       section: initialSection,
     })
   );
@@ -310,6 +324,7 @@ export function NavigationProvider({
       requestedAutomatic: state.requestedAutomatic,
       requestedRun: state.requestedRun,
       requestedRunScreen: state.requestedRunScreen,
+      restoreCount: state.restoreCount,
       section: state.section,
       // Dérivé plutôt que corrigé par un effet : le rôle peut changer sous nos
       // pieds (un rafraîchissement de session), et un panneau que le rôle courant

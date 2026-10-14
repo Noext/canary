@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { pushRoute, type Route, readInitialRoute, readRoute } from "./routing";
+import {
+  initialViewFor,
+  pushRoute,
+  type Route,
+  readInitialRoute,
+  readRoute,
+} from "./routing";
 
 const RUN_ID = "74422b90-c70a-11f1-8b8c-69d5033ed7fd";
 const DELIVERY_ID = "delivery:01J8Z";
@@ -147,5 +153,33 @@ describe("pushRoute", () => {
       expect(readRoute()).toEqual(route);
       expect(readInitialRoute()).toEqual({ route });
     }
+  });
+});
+
+describe("initialViewFor", () => {
+  it("opens the GitHub connection the callback came back for", () => {
+    expect(initialViewFor({ kind: "home" }, "installed")).toBe("settings");
+  });
+
+  it("lets an explicit link win over the callback destination", () => {
+    // The callback appends its own query, and an address that names a screen
+    // still names it: the retained `#automatic=` link is the screen to open.
+    expect(
+      initialViewFor({ id: DELIVERY_ID, kind: "automatic" }, "installed")
+    ).toBe("automatic");
+    expect(initialViewFor({ id: RUN_ID, kind: "run" }, "installed")).toBe(
+      "run"
+    );
+    expect(initialViewFor({ kind: "runs", runId: RUN_ID }, "installed")).toBe(
+      "runs"
+    );
+    expect(
+      initialViewFor({ kind: "settings", section: "accounts" }, "installed")
+    ).toBe("settings");
+  });
+
+  it("opens the screen the address names without a callback", () => {
+    expect(initialViewFor({ kind: "home" })).toBe("home");
+    expect(initialViewFor({ kind: "new" })).toBe("new");
   });
 });

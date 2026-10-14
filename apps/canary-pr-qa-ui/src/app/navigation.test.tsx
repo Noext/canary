@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NavigationProvider, useNavigation } from "./navigation";
 
@@ -239,5 +240,40 @@ describe("NavigationProvider addresses", () => {
 
     expect(window.location.pathname).toBe("/");
     expect(pushed).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Un écran qui lit son lien une seule fois, comme l'historique, le rapport ou
+ * la tentative : le shell le remonte sur l'entrée restaurée.
+ */
+function RunsScreen() {
+  const { consumeRun } = useNavigation();
+  const [selected] = useState(() => consumeRun());
+  return <span data-testid="selected">{selected ?? "aucun"}</span>;
+}
+
+function RestoredRuns() {
+  const { restoreCount } = useNavigation();
+  return <RunsScreen key={restoreCount} />;
+}
+
+describe("NavigationProvider restored entries", () => {
+  it("re-seeds a screen that reads its link once", () => {
+    window.history.replaceState(null, "", "/history");
+    render(
+      <NavigationProvider initialView="runs">
+        <RestoredRuns />
+      </NavigationProvider>
+    );
+    expect(screen.getByTestId("selected")).toHaveTextContent("aucun");
+
+    // Retour sur une entrée qui nomme un test : le détail suit l'adresse.
+    restore(`/#${RUN_ID}`);
+    expect(screen.getByTestId("selected")).toHaveTextContent(RUN_ID);
+
+    // Et l'entrée sans test ne garde pas le détail de la précédente.
+    restore("/history");
+    expect(screen.getByTestId("selected")).toHaveTextContent("aucun");
   });
 });
