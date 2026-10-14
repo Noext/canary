@@ -41,6 +41,21 @@ describe("readInitialRoute", () => {
     expect(window.location.hash).toBe(`#${RUN_ID}`);
   });
 
+  it("reads a settings link and leaves it in the URL", () => {
+    open("/#settings=accounts");
+
+    expect(readInitialRoute()).toEqual({ section: "accounts" });
+    // A shared settings link reopens the same page, section included.
+    expect(window.location.hash).toBe("#settings=accounts");
+  });
+
+  it("discards a settings link to a page this build does not have", () => {
+    open("/#settings=nope");
+
+    expect(readInitialRoute()).toEqual({});
+    expect(window.location.hash).toBe("");
+  });
+
   it("erases a temporary setup code after reading it", () => {
     open("/#setup=secret-code");
 

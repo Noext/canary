@@ -6,6 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardError } from "@/api/client";
 import type {
@@ -17,7 +18,12 @@ import type {
 import { ErrorAlert, ErrorProvider } from "@/app/errors";
 import { SessionProvider } from "@/app/session";
 import { WorkspaceProvider } from "@/app/workspace";
-import { common, settings } from "@/i18n";
+import { common, type SettingsSection, settings } from "@/i18n";
+import { AccountsSettings } from "./accounts";
+import { AiSettings } from "./ai-settings";
+import { ApiKeysSettings } from "./api-keys-settings";
+import { GithubSettings } from "./github-settings";
+import { PreviewSettings } from "./preview-settings";
 import { SettingsView } from "./settings-view";
 
 interface ApiCall {
@@ -286,16 +292,42 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderSettings(): ReturnType<typeof render> {
-  return render(
+function providers(children: ReactNode): ReactNode {
+  return (
     <ErrorProvider>
       <ErrorAlert />
       <SessionProvider>
-        <WorkspaceProvider>
-          <SettingsView />
-        </WorkspaceProvider>
+        <WorkspaceProvider>{children}</WorkspaceProvider>
       </SessionProvider>
     </ErrorProvider>
+  );
+}
+
+/**
+ * One settings page, as the shell renders it. The Chromium e2e walks the same
+ * submenu; this is the counterpart that asserts a page never carries another
+ * page's controls.
+ */
+function renderSection(section: SettingsSection): ReturnType<typeof render> {
+  return render(providers(<SettingsView section={section} />));
+}
+
+/**
+ * Every settings panel in one container. The assertions below address every
+ * control by its id, exactly like the browser tests do, whichever page now
+ * carries it.
+ */
+function renderSettings(): ReturnType<typeof render> {
+  return render(
+    providers(
+      <section data-panel="settings" id="settingsPanel">
+        <GithubSettings />
+        <AiSettings />
+        <PreviewSettings />
+        <ApiKeysSettings />
+        <AccountsSettings />
+      </section>
+    )
   );
 }
 
@@ -369,6 +401,31 @@ const CONTROL_IDS = [
 ] as const;
 
 describe("SettingsView", () => {
+  const pages: [SettingsSection, string][] = [
+    ["github", "githubSettings"],
+    ["ai", "aiSettings"],
+    ["preview", "previewSettings"],
+    ["apiKeys", "apiKeysSettings"],
+    ["accounts", "accountsSettings"],
+  ];
+
+  it("renders one settings page at a time", () => {
+    for (const [section, root] of pages) {
+      const { container, unmount } = renderSection(section);
+      expect(byId(container, root)).toBeInTheDocument();
+      for (const [other, rootId] of pages) {
+        if (other !== section) {
+          expect(container.querySelector(`[id="${rootId}"]`)).toBeNull();
+        }
+      }
+      expect(container.querySelector("#settingsPanel")).toHaveAttribute(
+        "data-section",
+        section
+      );
+      unmount();
+    }
+  });
+
   it("offers a retry instead of the creation form when the GitHub status fails", async () => {
     githubFailure = new DashboardError("Contrat GitHub indisponible.");
     const container = renderSettings().container;

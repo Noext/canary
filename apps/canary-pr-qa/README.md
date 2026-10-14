@@ -470,11 +470,13 @@ Après connexion, l'**Accueil** vous indique la prochaine action : connecter
 GitHub, choisir un modèle disponible ou tester une PR. Les états sont dérivés
 des accès et du catalogue réellement chargé, sans simuler une génération IA.
 
-1. **Réglages** : créer/installer l'App, choisir les dépôts ; vérifier l'accès au
-   fournisseur et consulter les contraintes des previews. La carte « Hôtes
-   autorisés par l'administrateur » ajoute ou retire les hôtes de preview
-   (ajout, retrait, enregistrement, retour à la liste du serveur) ; la liste est
-   appliquée au navigateur et au proxy de sortie en quelques secondes, sans
+1. **Réglages** : le menu latéral ouvre une page par section — GitHub, fournisseur
+   IA, application à tester, clés API, comptes utilisateurs — et chaque page a son
+   adresse (`#settings=<section>`). La page GitHub crée/installe l'App et choisit les
+   dépôts ; la page « Application à tester » vérifie les contraintes des previews. Sa
+   carte « Hôtes autorisés par l'administrateur » ajoute ou retire les hôtes de
+   preview (ajout, retrait, enregistrement, retour à la liste du serveur) ; la liste
+   est appliquée au navigateur et au proxy de sortie en quelques secondes, sans
    redémarrage, et chaque changement est audité.
 2. **Nouveau test** : coller l'URL de PR, l'URL de son application de test si elle
    n'est pas fournie par GitHub, puis choisir votre modèle.

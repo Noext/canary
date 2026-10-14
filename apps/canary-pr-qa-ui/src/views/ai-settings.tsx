@@ -34,14 +34,9 @@ export function AiSettings(): ReactNode {
     modelsError ?? (models ? settings.ai.catalog(models.data.length) : "");
 
   return (
-    <Card>
+    <Card id="aiSettings">
       <CardHeader>
-        <div>
-          <p className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-            {settings.eyebrow}
-          </p>
-          <CardTitle>{settings.ai.title}</CardTitle>
-        </div>
+        <CardTitle>{settings.ai.title}</CardTitle>
         <Pill id="aiConnection" tone={connection.tone}>
           {connection.label}
         </Pill>

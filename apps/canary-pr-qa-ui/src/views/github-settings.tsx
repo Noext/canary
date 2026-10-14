@@ -290,12 +290,7 @@ export function GithubSettings(): ReactNode {
   return (
     <Card id="githubSettings">
       <CardHeader>
-        <div>
-          <p className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-            {settings.eyebrowGithub}
-          </p>
-          <CardTitle>{settings.github.title}</CardTitle>
-        </div>
+        <CardTitle>{settings.github.title}</CardTitle>
         <Pill id="githubConnection" tone={connection.tone}>
           {connection.label}
         </Pill>

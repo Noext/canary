@@ -6,9 +6,12 @@ import {
   useMemo,
   useState,
 } from "react";
-import type { ViewName } from "@/i18n";
+import { type SettingsSection, settingsNav, type ViewName } from "@/i18n";
 import { type DeepLink, replaceHash } from "./routing";
 import { useSession } from "./session";
+
+/** The page « Réglages » opens when nothing else was asked for. */
+const DEFAULT_SECTION: SettingsSection = settingsNav[0].id;
 
 interface NavigationContextValue {
   consumeAutomatic(): string | undefined;
@@ -20,11 +23,15 @@ interface NavigationContextValue {
   openRun(runId: string): void;
   /** Opens the full-screen run report at its own link (`#run=<uuid>`). */
   openRunScreen(runId: string): void;
+  /** Opens one settings page, at its own link (`#settings=<section>`). */
+  openSection(section: SettingsSection): void;
   /** Deep-linked automatic attempt not consumed yet. */
   requestedAutomatic?: string;
   requestedRun?: string;
   /** Deep-linked run screen not consumed yet; distinct from the history pick. */
   requestedRunScreen?: string;
+  /** Settings page the visible screen shows. */
+  section: SettingsSection;
   view: ViewName;
 }
 
@@ -60,16 +67,19 @@ export function NavigationProvider({
   initialAutomatic,
   initialRun,
   initialRunScreen,
+  initialSection = DEFAULT_SECTION,
   initialView = "home",
 }: {
   children: ReactNode;
   initialAutomatic?: string;
   initialRun?: string;
   initialRunScreen?: string;
+  initialSection?: SettingsSection;
   initialView?: ViewName;
 }) {
   const { canWrite, isAdmin } = useSession();
   const [requestedView, setView] = useState<ViewName>(initialView);
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [requestedRun, setRequestedRun] = useState(initialRun);
   const [requestedRunScreen, setRequestedRunScreen] =
     useState(initialRunScreen);
@@ -83,9 +93,30 @@ export function NavigationProvider({
         : "home";
       setView(target);
       // A screen link belongs to the screen that opened it: leaving it clears
-      // the hash, so going back to a list never resurrects a stale detail.
-      if (!screenViews.includes(target)) {
+      // the hash, so going back to a list never resurrects a stale detail. The
+      // settings page is the exception — its section is part of its address.
+      if (target === "settings") {
+        replaceHash({ id: section, kind: "settings" });
+      } else if (!screenViews.includes(target)) {
         replaceHash(undefined);
+      }
+      window.scrollTo({ behavior: "instant", top: 0 });
+    },
+    [canWrite, isAdmin, section]
+  );
+
+  /**
+   * The one entry point that picks a settings page. The sidebar submenu uses it
+   * directly; the home screen uses it to send an administrator to the GitHub
+   * connection it just told them to make.
+   */
+  const openSection = useCallback(
+    (next: SettingsSection) => {
+      const allowed = isAllowed("settings", canWrite, isAdmin);
+      setSection(next);
+      setView(allowed ? "settings" : "home");
+      if (allowed) {
+        replaceHash({ id: next, kind: "settings" });
       }
       window.scrollTo({ behavior: "instant", top: 0 });
     },
@@ -150,9 +181,11 @@ export function NavigationProvider({
       openAutomatic,
       openRun,
       openRunScreen,
+      openSection,
       requestedAutomatic,
       requestedRun,
       requestedRunScreen,
+      section,
       // Derived rather than corrected by an effect: the role can change under
       // us (a session refresh), and a panel the current role may not read is
       // simply never the visible one.
@@ -170,10 +203,12 @@ export function NavigationProvider({
       openAutomatic,
       openRun,
       openRunScreen,
+      openSection,
       requestedAutomatic,
       requestedRun,
       requestedRunScreen,
       requestedView,
+      section,
     ]
   );
 

@@ -2,9 +2,17 @@ import type { ReactNode } from "react";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
 import { useSession } from "@/app/session";
+import { SettingsNav } from "@/app/settings-nav";
 import { useWorkspace } from "@/app/workspace";
 import { Pill } from "@/components/ui/feedback";
-import { home, roles, shell, type ViewName, views } from "@/i18n";
+import {
+  home,
+  roles,
+  settingsSectionLabel,
+  shell,
+  type ViewName,
+  views,
+} from "@/i18n";
 import { cn } from "@/lib/utils";
 import { AutomaticDetailView } from "@/views/automatic-detail";
 import { HomeView } from "@/views/home-view";
@@ -44,10 +52,16 @@ function Logo() {
 export function Shell() {
   const { canWrite, isAdmin, logout, user } = useSession();
   const { report } = useError();
-  const { navigate, view } = useNavigation();
+  const { navigate, section, view } = useNavigation();
   const { githubReady, modelReady, status } = useWorkspace();
   const copy = views[view];
   const current = navParent[view] ?? view;
+  // The panel title stays the group's ("Réglages de votre espace"): the page
+  // itself is named by the submenu, and the breadcrumb says which one is open.
+  const breadcrumb =
+    view === "settings"
+      ? `${copy.breadcrumb} · ${settingsSectionLabel(section)}`
+      : copy.breadcrumb;
 
   const visible = navItems.filter((item) => {
     if (item.view === "settings") {
@@ -74,21 +88,25 @@ export function Shell() {
           className="mt-6 flex flex-col gap-1"
         >
           {visible.map((item) => (
-            <button
-              aria-current={current === item.view ? "page" : undefined}
-              className={cn(
-                "rounded-md px-3 py-2 text-left text-sm",
-                current === item.view
-                  ? "bg-primary/20 font-semibold text-ink-strong"
-                  : "text-foreground hover:bg-well-2"
-              )}
-              id={item.id}
-              key={item.id}
-              onClick={() => navigate(item.view)}
-              type="button"
-            >
-              {item.label}
-            </button>
+            <div key={item.id}>
+              <button
+                aria-current={current === item.view ? "page" : undefined}
+                className={cn(
+                  "w-full rounded-md px-3 py-2 text-left text-sm",
+                  current === item.view
+                    ? "bg-primary/20 font-semibold text-ink-strong"
+                    : "text-foreground hover:bg-well-2"
+                )}
+                id={item.id}
+                onClick={() => navigate(item.view)}
+                type="button"
+              >
+                {item.label}
+              </button>
+              {item.view === "settings" && view === "settings" ? (
+                <SettingsNav />
+              ) : null}
+            </div>
           ))}
         </nav>
         <div className="mt-6 border-line border-t pt-4 text-muted-foreground text-xs">
@@ -99,7 +117,7 @@ export function Shell() {
       <main className="min-w-0 px-4 py-5 md:px-8">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <span className="text-muted-foreground text-sm" id="breadcrumb">
-            {copy.breadcrumb}
+            {breadcrumb}
           </span>
           <div className="flex items-center gap-3">
             <Pill id="connection">
@@ -138,7 +156,7 @@ export function Shell() {
         {view === "runs" ? <RunsView /> : null}
         {view === "run" ? <RunScreenView /> : null}
         {view === "automatic" ? <AutomaticDetailView /> : null}
-        {view === "settings" ? <SettingsView /> : null}
+        {view === "settings" ? <SettingsView section={section} /> : null}
         {view === "home" && !canWrite ? (
           <p className="sr-only">{home.titleViewer}</p>
         ) : null}
