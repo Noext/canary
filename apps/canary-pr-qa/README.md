@@ -337,6 +337,16 @@ compris, ce que le second clic d'un opérateur doit voir. Chaque relance est
 auditée `automatic.retried` avec le nombre de vérifications déjà dépensé, et les
 compteurs de probes repartent de zéro.
 
+`DELETE /dashboard/automatic/:id` supprime une tentative en échec, pour vider une
+liste qui la conserve sinon 24 heures. Les deux mêmes états sont concernés : une
+tentative en attente appartient encore au worker de probe, et une tentative promue
+est la trace du run qu'elle a lancé. L'écriture est refusée à un viewer (403). Une
+tentative qui a changé d'état entre-temps est refusée (`AUTOMATIC_NOT_DELETABLE`)
+au lieu d'être supprimée, et une tentative déjà purgée ou déjà supprimée répond
+`AUTOMATIC_UNKNOWN`. La suppression est auditée `automatic.deleted` avec le dépôt,
+la PR, le SHA et le nombre de vérifications dépensé : la ligne `qa_deliveries`
+disparaît, la trace d'audit reste.
+
 | État | Audit | Cause |
 | --- | --- | --- |
 | en attente | `automatic.preview_wait` | preview sans preuve du SHA complet |
@@ -496,7 +506,8 @@ des accès et du catalogue réellement chargé, sans simuler une génération IA
    version exigée et le déroulé des vérifications. Une tentative expirée n'est
    jamais rejouée automatiquement : « Relancer la vérification » la réarme sur le
    même commit avec un nouveau délai, depuis la liste comme depuis l'écran de
-   détail.
+   détail. Une tentative en échec que personne ne relancera se supprime depuis ces
+   deux écrans, avec une confirmation en place.
 
 Le catalogue accessible ne prouve pas encore qu'une génération réussira. Une
 preview vérifiée ne prouve pas que les assertions fonctionnelles réussiront.
@@ -528,6 +539,7 @@ Captures réelles des E2E, avec données fictives :
 | `GET /dashboard/automatic` | Tentatives automatiques en attente/expirées/quota, limitées aux dépôts de l'utilisateur |
 | `GET /dashboard/automatic/:id` | Détail d'une tentative : motif, preuve de version exigée (admin) et piste d'audit ; 403 hors de ses dépôts |
 | `POST /dashboard/automatic/:id/retry` | Réarme une tentative expirée ou refusée par le quota avec une nouvelle fenêtre ; 403 pour un viewer, 400 si l'état ou le dépôt ne le permettent pas |
+| `DELETE /dashboard/automatic/:id` | Supprime une tentative expirée ou refusée par le quota et rend l'état qu'elle avait ; 403 pour un viewer, 400 `AUTOMATIC_NOT_DELETABLE` si elle attend encore ou a produit un run, `AUTOMATIC_UNKNOWN` si elle a déjà été purgée |
 | `POST /runs/preflight` | `{prUrl,previewUrl?,model}` ; accès/provenance sans enqueue ni publication |
 | `GET /me` | Identité et dépôts accessibles |
 | `GET /accounts` | Comptes humains : `{accounts:[{id,username,role,repos,createdAt}]}`, administrateur d'instance uniquement (403 `ACCOUNT_SCOPE_REQUIRED` si son accès ne couvre pas tous les dépôts) |

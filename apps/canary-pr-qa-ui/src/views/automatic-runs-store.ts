@@ -11,12 +11,16 @@ export interface AutomaticRunsState {
   /** Message of a failed `/dashboard/automatic`, so the block can explain it. */
   error?: string;
   loading: boolean;
+  /** Attempt being deleted: its row reports the wait instead of firing twice. */
+  removing?: string;
   /** Attempt being re-armed: its button reports the wait instead of firing twice. */
   retrying?: string;
   status: AutomaticStatus;
 }
 
 export interface AutomaticRunsStore extends Readable<AutomaticRunsState> {
+  /** Clears a failed attempt from the list, then reloads it. */
+  remove(id: string): void;
   /** Re-arms a failed attempt and reloads the list with the state it now has. */
   retry(id: string): void;
 }
@@ -82,6 +86,34 @@ async function retryAutomatic(
 }
 
 /**
+ * Removes one failed attempt, then reloads the list.
+ *
+ * The reload happens whether the write succeeded or not, because the list is the
+ * only source of what is left: an attempt a refused write left in place is what
+ * the operator has to see, and one another operator already cleared disappears
+ * either way. The answer of the write is not read for the same reason as a
+ * retry: nobody renders it, and the reloaded list is the schema-guarded truth.
+ */
+async function removeAutomatic(
+  store: Store<AutomaticRunsState>,
+  id: string,
+  report: (failure: unknown) => void
+) {
+  store.set((current) => ({ ...current, removing: id }));
+  try {
+    await api(`/dashboard/automatic/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      unvalidated: true,
+    });
+  } catch (failure) {
+    report(failure);
+  } finally {
+    await loadAutomatic(store, report);
+    store.set((current) => ({ ...current, removing: undefined }));
+  }
+}
+
+/**
  * The automatic attempts the home screen reports.
  *
  * The request is a real lifecycle: the screen owns it and abandons it on
@@ -108,6 +140,9 @@ export function createAutomaticRunsStore(
 
   return {
     getSnapshot: state.getSnapshot,
+    remove: (id) => {
+      void removeAutomatic(state, id, report);
+    },
     retry: (id) => {
       void retryAutomatic(state, id, report);
     },

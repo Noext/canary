@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
+  AutomaticAttempt,
   AutomaticDetail,
   AutomaticStatus,
 } from "../src/dashboard/contracts.js";
@@ -595,6 +596,166 @@ it("refuses a retry a viewer cannot make, an unknown attempt, or a disabled swit
   expect(await delivery(q, "expired-attempt")).toMatchObject({
     status: "expired",
   });
+}, 30_000);
+
+it("deletes a failure the dashboard no longer needs, and refuses what a delete would lose", async () => {
+  const q = await pgliteQueue(cleanup);
+  const f = await fixture();
+  cleanup.push(f.close);
+  const viewer = "automatic-delete-viewer-token-0123456789";
+  const usersFile = join(f.dataDir, "automatic-delete-users.json");
+  await writeFile(
+    usersFile,
+    JSON.stringify([
+      {
+        id: "delete-viewer",
+        repos: ["fixture/app"],
+        role: "viewer",
+        tokenSha256: createHash("sha256").update(viewer).digest("hex"),
+      },
+    ])
+  );
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    GITHUB_ALLOWED_REPOS: "fixture/app",
+    QA_PORT: 0,
+    QA_USERS_FILE: usersFile,
+    allowedRepos: ["fixture/app"],
+  };
+  // The two failures a delete may clear, then the two states it must not: an
+  // attempt the probe loop still owns, and one that produced a real run. One
+  // probe that cannot prove the SHA, then the deadline closes: the failure the
+  // list keeps for 24 hours.
+  expect(
+    await q.acceptDelivery("removable", "pull_request", attempt, 1800)
+  ).toBe(true);
+  await processDelivery(q, config);
+  await q.pool.query(
+    "UPDATE qa_deliveries SET deadline_at=now()-interval '1 second',retry_at=now()-interval '1 second' WHERE id='removable'"
+  );
+  await processDelivery(q, config);
+  expect(await delivery(q, "removable")).toMatchObject({
+    attempts: 1,
+    reason: "PREVIEW_NOT_FOUND",
+    status: "expired",
+  });
+  for (const [index, id] of ["waiting", "promoted"].entries()) {
+    expect(
+      await q.acceptDelivery(
+        id,
+        "pull_request",
+        { ...attempt, number: index + 2 },
+        1800
+      )
+    ).toBe(true);
+  }
+  // The one the probe loop keeps: its next probe is scheduled, so it is not due
+  // and the promotion below can only be the attempt that asked for the preview.
+  await processDelivery(q, config);
+  expect(await delivery(q, "waiting")).toMatchObject({ status: "pending" });
+  await processDelivery(q, { ...config, PREVIEW_URL_TEMPLATE: f.baseUrl });
+  const promoted = await delivery(q, "promoted");
+  expect(promoted).toMatchObject({ status: "processed" });
+  expect(promoted.run_id).toEqual(expect.any(String));
+  // A refusal by the hourly budget is a failure without a run too: the state is
+  // the precondition of this test, not what it measures.
+  expect(
+    await q.acceptDelivery(
+      "throttled",
+      "pull_request",
+      { ...attempt, number: 4 },
+      -1
+    )
+  ).toBe(true);
+  await q.pool.query(
+    "UPDATE qa_deliveries SET status='rate_limited',reason='WEBHOOK_RATE_LIMIT' WHERE id='throttled'"
+  );
+  const server = await startProductionServer(config);
+  cleanup.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const remove = async (id: string, token: string) => {
+    const response = await fetch(`${url}/dashboard/automatic/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return {
+      body: (await response.json()) as {
+        code?: string;
+      } & Partial<AutomaticAttempt>,
+      status: response.status,
+    };
+  };
+  // Deleting is a write on the repository's data: a reader of the same
+  // repository is refused, and the attempt keeps its place in the list.
+  expect(await remove("removable", viewer)).toMatchObject({ status: 403 });
+  expect(await delivery(q, "removable")).toMatchObject({ status: "expired" });
+  // An attempt the probe loop owns is not an error the operator can clear: the
+  // answer says why, and the row keeps its window.
+  const waiting = await remove("waiting", config.QA_API_TOKEN);
+  expect(waiting.status).toBe(400);
+  expect(waiting.body).toMatchObject({ code: "AUTOMATIC_NOT_DELETABLE" });
+  expect(await delivery(q, "waiting")).toMatchObject({ status: "pending" });
+  // A promoted attempt is the trace of a real test: removing it would lose the
+  // link between the failure and the run it eventually started.
+  expect(await remove("promoted", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_NOT_DELETABLE" },
+    status: 400,
+  });
+  expect(await delivery(q, "promoted")).toMatchObject({
+    run_id: promoted.run_id,
+    status: "processed",
+  });
+  expect(await remove("no-such-attempt", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_UNKNOWN" },
+    status: 400,
+  });
+  // The write answers with the attempt as it was, so a caller that renders a
+  // confirmation has what it removed without a second read.
+  const removed = await remove("removable", config.QA_API_TOKEN);
+  expect(removed.status).toBe(200);
+  expect(removed.body).toMatchObject({
+    attempts: 1,
+    id: "removable",
+    pr: 1,
+    repo: "fixture/app",
+    sha: SHA,
+    state: "expired",
+  });
+  // The row is what the list and the detail screen read: it is gone, and the
+  // list the operator reloads no longer reports it.
+  expect(await q.delivery("removable", 1800)).toBeUndefined();
+  expect(await q.automatic(["fixture/app"], 1800)).toMatchObject({
+    attempts: [
+      { id: "throttled", state: "rate_limited" },
+      { id: "waiting", state: "waiting" },
+    ],
+    summary: { expired: 0, rateLimited: 1, waiting: 1 },
+  });
+  // The audit row outlives the attempt it describes.
+  expect(await audits(q, "automatic.deleted")).toMatchObject([
+    {
+      details: {
+        attempts: 1,
+        delivery: "removable",
+        pr: 1,
+        repo: "fixture/app",
+        sha: SHA,
+      },
+    },
+  ]);
+  // Deleting twice converges: the second call finds nothing to delete and says
+  // so, which is what the second click of two operators gets.
+  expect(await remove("removable", config.QA_API_TOKEN)).toMatchObject({
+    body: { code: "AUTOMATIC_UNKNOWN" },
+    status: 400,
+  });
+  // A refusal by the hourly budget is cleared the same way.
+  expect(await remove("throttled", config.QA_API_TOKEN)).toMatchObject({
+    body: { id: "throttled", state: "rate_limited" },
+    status: 200,
+  });
+  expect(await q.delivery("throttled", 1800)).toBeUndefined();
 }, 30_000);
 
 it("records auto_disabled attempts when automatic runs are switched off", async () => {

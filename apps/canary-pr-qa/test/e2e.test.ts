@@ -1471,6 +1471,206 @@ it("explains a blocked run and an expired automatic attempt on their own deep li
   }
 }, 180_000);
 
+it("clears a failed automatic attempt from the list once the confirmation is answered", async () => {
+  await dashboardDatabase();
+  const f = await fixture();
+  closers.push(f.close);
+  const config = {
+    ...f.config,
+    DATABASE_URL: "postgres://fixture",
+    QA_PORT: 0,
+  };
+  const server = await startProductionServer(config);
+  closers.push(() => server.shutdown());
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const queue = new Queue(config.DATABASE_URL);
+  // Two failures of the same repository: only the one the operator confirms may
+  // leave the list, so the assertion below cannot pass on an empty list.
+  await queue.pool.query(
+    `INSERT INTO qa_deliveries(id,event,payload,status,attempts,reason,deadline_at,updated_at)
+     SELECT id,'pull_request',$1::jsonb||jsonb_build_object('number',number),'expired',3,'PREVIEW_NOT_FOUND',now(),now()
+     FROM (VALUES('delete-me',1),('keep-me',2)) AS rows(id,number)`,
+    [JSON.stringify({ prUrl: PR_URL, repo: "fixture/app", sha: SHA })]
+  );
+  const login = await fetch(`${url}/session`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.QA_API_TOKEN}` },
+  });
+  const value = login.headers
+    .get("set-cookie")!
+    .split(";")[0]!
+    .slice("qa_session=".length);
+  const hosts = [...config.allowedHosts, new URL(url).host];
+  const canary = new Canary({
+    ...config,
+    allowedHosts: hosts,
+    PREVIEW_ALLOWED_HOSTS: hosts.join(","),
+  });
+  const session = await canary.start("Delete a failed automatic attempt", {
+    cookies: [
+      {
+        name: "qa_session",
+        value,
+        domain: "127.0.0.1",
+        path: "/",
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+        expires: -1,
+      },
+    ],
+    origins: [],
+  });
+  const act = (
+    label: string,
+    action: Parameters<typeof compileAction>[0],
+    assertion?: Parameters<typeof compileAction>[2]
+  ) => canary.act(session, label, compileAction(action, url, assertion));
+  try {
+    await act("open-home", { type: "goto", path: "/" });
+    // The row offers the two actions of a failure: re-arm it, or clear it.
+    await act(
+      "delete-offered",
+      {
+        type: "assert",
+        assertionId: "delete-offered",
+        locator: { by: "css", value: "#automaticDelete-delete-me" },
+      },
+      {
+        id: "delete-offered",
+        description: "La tentative en échec propose sa suppression",
+        kind: "visible",
+        verification: "state",
+      }
+    );
+    await act("delete-click", {
+      type: "click",
+      locator: { by: "css", value: "#automaticDelete-delete-me" },
+    });
+    // The first click only asks: the failure is still listed until it is
+    // answered, and the two answers are both on screen.
+    await act(
+      "confirmation-asked",
+      {
+        type: "assert",
+        assertionId: "confirmation-asked",
+        locator: {
+          by: "css",
+          value: "#automaticDelete-delete-me-question-text",
+        },
+      },
+      {
+        id: "confirmation-asked",
+        description: "Supprimer cette tentative en échec ?",
+        expected: "Supprimer cette tentative en échec ?",
+        kind: "text",
+        verification: "state",
+      }
+    );
+    expect(
+      (await queue.delivery("delete-me", 1800))?.status,
+      "the question deletes nothing"
+    ).toBe("expired");
+    await act("cancel-click", {
+      type: "click",
+      locator: { by: "css", value: "#automaticDelete-delete-me-cancel" },
+    });
+    await act(
+      "cancel-keeps-the-attempt",
+      {
+        type: "assert",
+        assertionId: "cancel-keeps-the-attempt",
+        locator: { by: "css", value: "#automaticDelete-delete-me" },
+      },
+      {
+        id: "cancel-keeps-the-attempt",
+        description: "Annuler laisse la tentative en place",
+        kind: "visible",
+        verification: "state",
+      }
+    );
+    expect(
+      (await queue.delivery("delete-me", 1800))?.status,
+      "cancel deletes nothing"
+    ).toBe("expired");
+    // The same two clicks, answered this time.
+    await act("delete-again", {
+      type: "click",
+      locator: { by: "css", value: "#automaticDelete-delete-me" },
+    });
+    await act("confirm-click", {
+      type: "click",
+      locator: { by: "css", value: "#automaticDelete-delete-me-confirm" },
+    });
+    await act(
+      "deleted-attempt-gone",
+      {
+        type: "assert",
+        assertionId: "deleted-attempt-gone",
+        locator: { by: "css", value: "#automaticDelete-delete-me" },
+      },
+      {
+        id: "deleted-attempt-gone",
+        description: "La tentative supprimée a quitté la liste",
+        kind: "hidden",
+        verification: "state",
+      }
+    );
+    // The failure the operator did not touch is still there, and the count the
+    // block displays followed the deletion.
+    await act(
+      "other-attempt-kept",
+      {
+        type: "assert",
+        assertionId: "other-attempt-kept",
+        locator: { by: "css", value: "#automaticDelete-keep-me" },
+      },
+      {
+        id: "other-attempt-kept",
+        description: "L'autre tentative reste listée",
+        kind: "visible",
+        verification: "state",
+      }
+    );
+    await act(
+      "summary-followed",
+      {
+        type: "assert",
+        assertionId: "summary-followed",
+        locator: { by: "css", value: "#automaticSummary" },
+      },
+      {
+        id: "summary-followed",
+        description: "1 délai(s) dépassé(s)",
+        expected: "1 délai(s) dépassé(s)",
+        kind: "text",
+        verification: "state",
+      }
+    );
+    // The row is what the list, the detail screen and the probes read: it is
+    // gone from the database too, and the audit trail says who removed it.
+    expect(await queue.delivery("delete-me", 1800)).toBeUndefined();
+    expect(await queue.delivery("keep-me", 1800)).toMatchObject({
+      status: "expired",
+    });
+    const audit = await queue.pool.query<{ details: Record<string, unknown> }>(
+      "SELECT details FROM qa_audit WHERE action='automatic.deleted'"
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]!.details).toMatchObject({
+      attempts: 3,
+      delivery: "delete-me",
+      pr: 1,
+      repo: "fixture/app",
+      sha: SHA,
+    });
+    await canary.end(session, join(f.dataDir, "deleted-attempt-evidence"));
+  } catch (error) {
+    await canary.abort(session);
+    throw error;
+  }
+}, 180_000);
+
 it("removes the connected GitHub App from the dashboard only after an explicit confirmation", async () => {
   await dashboardDatabase();
   const f = await githubSetupFixture();

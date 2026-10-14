@@ -491,6 +491,26 @@ export class Queue {
     ).rows[0];
   }
   /**
+   * Removes one attempt that stopped without a run, so an operator can clear a
+   * failure it will not re-arm from a list that keeps it for 24 hours.
+   *
+   * The condition is the authority on what may be removed, read again at the
+   * moment of the write: a `pending` row belongs to the probe loop, a row with a
+   * run is the trace of a real test, and an attempt another operator just
+   * re-armed must not lose the window it was given. Returns nothing when the row
+   * no longer qualifies, which is what the caller reports instead of a delete it
+   * did not make.
+   */
+  async deleteDelivery(id: string) {
+    return (
+      await this.pool.query<DeliveryRow>(
+        `DELETE FROM qa_deliveries WHERE id=$1 AND status IN ('expired','rate_limited') AND run_id IS NULL
+         RETURNING id,payload,status,attempts,reason,deadline_at,run_id,updated_at,created_at`,
+        [id]
+      )
+    ).rows[0];
+  }
+  /**
    * Attempts the dashboard may show, scoped to `repos`. A pending delivery
    * accepted before `deadline_at` existed (schema v5 and earlier) has no stored
    * deadline: it is resolved here with the same rule the worker applies, so the

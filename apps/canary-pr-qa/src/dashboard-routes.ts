@@ -4,6 +4,7 @@ import { type Principal, requireAccess } from "./access.js";
 import type { ApiKeys } from "./api-keys.js";
 import type { Config } from "./config.js";
 import type {
+  AutomaticAttempt,
   AutomaticDetail,
   Preflight,
   PreviewSettings,
@@ -251,6 +252,13 @@ export function dashboardRoutes(
           rest.slice(0, -RETRY_SUFFIX.length)
         )
       );
+      return true;
+    }
+    // `DELETE :id` clears a failure nobody will re-arm, where `GET :id` reads
+    // one back. Ids are opaque and never contain a slash, so each shape
+    // addresses exactly one attempt.
+    if (req.method === "DELETE") {
+      json(res, 200, await deleteAutomatic(setup, queue, user, rest));
       return true;
     }
     if (req.method !== "GET") {
@@ -535,6 +543,52 @@ async function retryAutomatic(
     });
   }
   return automaticDetail(config, queue, user, id);
+}
+
+/**
+ * Removes a failed attempt from the dashboard.
+ *
+ * A failure stays listed for 24 hours so the operator can act on it, which is
+ * why clearing one is its own explicit write. Only the two states that stopped
+ * without a run can be removed, and the row is what limits it: a waiting attempt
+ * still owns a probe window, and a promoted one is the trace of a test that
+ * started. The write is refused to a viewer here, not only in the UI, and an
+ * attempt that changed state under the caller is answered as such instead of
+ * deleting a row that was just re-armed.
+ */
+async function deleteAutomatic(
+  setup: GitHubSetup,
+  queue: Queue,
+  user: Principal,
+  id: string
+): Promise<AutomaticAttempt> {
+  const effective = await setup.effective();
+  const row = await attemptRow(
+    queue,
+    id,
+    effective.QA_AUTO_PREVIEW_WAIT_SECONDS
+  );
+  const repo = row.payload.repo ?? "";
+  requireAccess(user, repo, true);
+  const deleted = await queue.deleteDelivery(id);
+  if (!deleted) {
+    throw new QaError(
+      "AUTOMATIC_NOT_DELETABLE",
+      "Cette tentative ne peut pas être supprimée : elle a été relancée, elle a produit un test, ou elle n’est plus en échec.",
+      "Rouvrez l’accueil pour voir l’état actuel de vos tentatives."
+    );
+  }
+  // The audit row outlives the attempt it describes: the detail screen is gone
+  // with the row, so the instance's history is what still names what was
+  // cleared, by whom, and on which commit.
+  await queue.audit(user.id, "automatic.deleted", undefined, {
+    attempts: row.attempts,
+    delivery: id,
+    pr: deleted.payload.number ?? 0,
+    repo,
+    sha: deleted.payload.sha ?? "",
+  });
+  return automaticAttempt(deleted);
 }
 
 function githubMode(config: Config) {

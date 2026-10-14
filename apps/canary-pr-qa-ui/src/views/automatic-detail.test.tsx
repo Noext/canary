@@ -29,20 +29,24 @@ vi.mock("@/app/session", () => ({
 
 const wire = vi.hoisted(() => ({
   calls: [] as string[],
-  handler: undefined as ((path: string) => unknown) | undefined,
+  handler: undefined as
+    | ((path: string, options?: { method?: string }) => unknown)
+    | undefined,
+  methods: [] as string[],
 }));
 
 vi.mock("@/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/client")>();
   return {
     ...actual,
-    api: (path: string) => {
+    api: (path: string, options?: { method?: string }) => {
       wire.calls.push(path);
+      wire.methods.push(options?.method ?? "GET");
       const handler = wire.handler;
       // Resolve in a task so a throwing handler becomes a rejection, exactly
       // like the real client.
       return handler
-        ? Promise.resolve().then(() => handler(path))
+        ? Promise.resolve().then(() => handler(path, options))
         : Promise.reject(new Error(`Unexpected api call: ${path}`));
     },
   };
@@ -109,6 +113,7 @@ beforeEach(() => {
   session.isAdmin = true;
   wire.calls.length = 0;
   wire.handler = undefined;
+  wire.methods.length = 0;
   window.scrollTo = vi.fn();
 });
 
@@ -482,6 +487,68 @@ describe("AutomaticDetailView", () => {
     // write the server refuses, so it is not offered either.
     expect(document.getElementById("automaticDetailRunCta")).toBeNull();
     expect(document.getElementById("automaticDetailRetry")).toBeNull();
+    expect(document.getElementById("automaticDetailDelete")).toBeNull();
+  });
+
+  it("deletes the attempt and hands the screen back to the list it left", async () => {
+    const user = userEvent.setup();
+    wire.handler = () => detail();
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+    await waitFor(() =>
+      expect(byId("automaticDetailDelete")).toHaveTextContent(automatic.delete)
+    );
+
+    await user.click(byId("automaticDetailDelete"));
+    // The question is asked in place: showing it deletes nothing.
+    expect(wire.methods).not.toContain("DELETE");
+    expect(byId("automaticDetailDelete-question")).not.toHaveAttribute(
+      "hidden"
+    );
+
+    await user.click(byId("automaticDetailDelete-confirm"));
+
+    // The row is gone once the write is done, so the screen has nothing left to
+    // show: the operator lands on the list that still has the others.
+    await waitFor(() =>
+      expect(screen.getByTestId("route")).toHaveTextContent("home:")
+    );
+    expect(wire.calls).toContain(`/dashboard/automatic/${DELIVERY_ID}`);
+    expect(wire.methods).toContain("DELETE");
+  });
+
+  it("keeps the attempt on screen when the server refuses the delete", async () => {
+    const user = userEvent.setup();
+    wire.handler = (_path, options) => {
+      if (options?.method === "DELETE") {
+        throw new DashboardError("Tentative relancée entre-temps", {
+          code: "AUTOMATIC_NOT_DELETABLE",
+        });
+      }
+      return detail();
+    };
+    render(
+      <Harness initialAutomatic={DELIVERY_ID}>
+        <AutomaticDetailView />
+      </Harness>
+    );
+    await waitFor(() =>
+      expect(byId("automaticDetailDelete")).toBeInTheDocument()
+    );
+
+    await user.click(byId("automaticDetailDelete"));
+    await user.click(byId("automaticDetailDelete-confirm"));
+
+    // Another operator re-armed the attempt since this screen was read: the
+    // refusal is reported, and the screen stays on the attempt it opened.
+    await waitFor(() =>
+      expect(byId("error")).toHaveTextContent("Tentative relancée entre-temps")
+    );
+    expect(screen.getByTestId("route")).toHaveTextContent("automatic:");
+    expect(byId("automaticDetailDelete")).not.toBeDisabled();
   });
 
   it("re-arms the attempt and shows it waiting again with the step that did it", async () => {

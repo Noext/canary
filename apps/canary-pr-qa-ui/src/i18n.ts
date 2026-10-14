@@ -466,6 +466,10 @@ export const automatic = {
   attempts: (count: number) =>
     count === 1 ? "1 tentative" : `${count} tentatives`,
   deadline: (date: string) => `Délai : ${date}`,
+  delete: "Supprimer",
+  deleteQuestion:
+    "Supprimer cette tentative en échec ? Elle disparaîtra de cette liste ; le test pourra toujours être lancé depuis « Nouveau test ».",
+  deleting: "Suppression…",
   detail: "Voir le détail",
   empty: "Aucune tentative automatique en attente.",
   emptyHint:
@@ -492,6 +496,8 @@ export const automatic = {
  * does not know still renders its raw name: the trail is never hidden.
  */
 export const automaticSteps: Record<string, string> = {
+  "automatic.deleted":
+    "Supprimée depuis le tableau de bord : cette tentative en échec n’est plus suivie.",
   "automatic.disabled":
     "Lancements automatiques désactivés sur le serveur : aucune vérification n’a été faite.",
   "automatic.preview_expired":

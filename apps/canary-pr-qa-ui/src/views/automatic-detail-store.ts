@@ -9,6 +9,8 @@ import {
 } from "@/lib/store";
 
 export interface AutomaticDetailState {
+  /** A delete is in flight: the button reports it instead of firing twice. */
+  deleting?: boolean;
   detail?: AutomaticDetail;
   error?: string;
   loading: boolean;
@@ -18,6 +20,11 @@ export interface AutomaticDetailState {
 }
 
 export interface AutomaticDetailStore extends Readable<AutomaticDetailState> {
+  /**
+   * Removes the attempt. `true` means nothing is left to read here, so the
+   * screen that called it is the one that decides where to go next.
+   */
+  remove(): Promise<boolean>;
   /** Re-arms the attempt and shows the fresh state the server answers with. */
   retry(): void;
 }
@@ -88,6 +95,32 @@ async function rearm(
 }
 
 /**
+ * Removes the attempt this screen was opened on. The write is the same one the
+ * row offers: the server decides whether this state can go, and a refusal — an
+ * attempt re-armed by another operator since this screen was read — is reported
+ * with the state the reload shows.
+ */
+async function remove(
+  store: Store<AutomaticDetailState>,
+  id: string,
+  report: (failure: unknown) => void
+): Promise<boolean> {
+  store.set((current) => ({ ...current, deleting: true }));
+  try {
+    await api(`/dashboard/automatic/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      unvalidated: true,
+    });
+    return true;
+  } catch (failure) {
+    report(failure);
+    return false;
+  } finally {
+    store.set((current) => ({ ...current, deleting: false }));
+  }
+}
+
+/**
  * One automatic attempt and the evidence of why it never became a run.
  *
  * The id is read once, at construction: `requested` is the deep link the screen
@@ -131,6 +164,7 @@ export function createAutomaticDetailStore(options: {
 
   return {
     getSnapshot: state.getSnapshot,
+    remove: () => (id ? remove(state, id, report) : Promise.resolve(false)),
     retry: () => {
       if (!id) {
         return;
