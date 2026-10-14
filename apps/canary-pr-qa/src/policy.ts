@@ -4,6 +4,8 @@ import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
 import type { Plan, Scenario } from "./schema.js";
 
+type Requirement = Scenario["requirements"][number];
+
 export const PolicySchema = z
   .object({
     version: z.literal(1),
@@ -135,6 +137,61 @@ export function writeEvidenceRefusals(
   }
   return refusals;
 }
+/**
+ * Texte témoin d'une exigence : le patch du fichier dans la PR, complété par
+ * les contenus contextuels récupérés pour ce chemin.
+ */
+export function requirementEvidence(
+  requirement: Requirement,
+  context: PrContext
+): string {
+  return [
+    context.files.find((file) => file.filename === requirement.sourceFile)
+      ?.patch ?? "",
+    ...context.context
+      .filter((item) => item.path === requirement.sourceFile)
+      .map((item) => item.content),
+  ].join("\n");
+}
+
+/**
+ * Une exigence dont la citation n'apparaît mot pour mot nulle part n'a pas de
+ * témoin : le plan est refusé plutôt que testé sur une preuve inventée.
+ */
+export function ungroundedRequirement(
+  scenarioId: string,
+  requirement: Requirement
+): QaError {
+  return new QaError(
+    "REQUIREMENT_UNGROUNDED",
+    `No source witness for ${scenarioId}: ${requirement.sourceFile}`,
+    "Quote exact source or diff text; page content alone is not a requirement."
+  );
+}
+
+/**
+ * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
+ * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
+ * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
+ * final et refuse le plan si la correction n'a pas suffi.
+ */
+export function ungroundedPlanRefusals(
+  plan: Plan,
+  context: PrContext
+): string[] {
+  return plan.scenarios.flatMap((scenario) =>
+    scenario.requirements
+      .filter(
+        (requirement) =>
+          !requirementEvidence(requirement, context).includes(requirement.quote)
+      )
+      .map((requirement) => {
+        const error = ungroundedRequirement(scenario.id, requirement);
+        return `${error.message}. ${error.hint}`;
+      })
+  );
+}
+
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -155,19 +212,10 @@ export function validateCoverage(
       if (!scenario.sourceFiles.includes(requirement.sourceFile)) {
         throw new Error("Requirement must cite a scenario source file");
       }
-      const evidence = [
-        context.files.find((f) => f.filename === requirement.sourceFile)
-          ?.patch ?? "",
-        ...context.context
-          .filter((c) => c.path === requirement.sourceFile)
-          .map((c) => c.content),
-      ].join("\n");
-      if (!evidence.includes(requirement.quote)) {
-        throw new QaError(
-          "REQUIREMENT_UNGROUNDED",
-          `No source witness for ${scenario.id}: ${requirement.sourceFile}`,
-          "Quote exact source or diff text; page content alone is not a requirement."
-        );
+      if (
+        !requirementEvidence(requirement, context).includes(requirement.quote)
+      ) {
+        throw ungroundedRequirement(scenario.id, requirement);
       }
       covered.add(requirement.sourceFile);
     }
