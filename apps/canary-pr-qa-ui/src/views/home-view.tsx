@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { RunJob, SetupStatus } from "@/api/contracts";
+import type { SetupStatus } from "@/api/contracts";
 import { useError } from "@/app/errors";
 import { useNavigation } from "@/app/navigation";
 import { useSession } from "@/app/session";
@@ -15,11 +15,12 @@ import {
   settings,
   type ViewName,
 } from "@/i18n";
-import { outcomeLabel, stateLabel, type Tone, toneFor } from "@/lib/format";
+import type { Tone } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AutomaticRuns } from "./automatic-runs";
 import { createHomeStore } from "./home-runs-store";
+import { RecentRunsCard } from "./recent-runs";
 
 /** The label of `#welcomeAction`, derived from readiness exactly like the legacy `syncReadiness()`. */
 function welcomeActionLabel(githubReady: boolean, modelReady: boolean): string {
@@ -62,11 +63,6 @@ function modelStepState(state: {
     return home.modelStateUnavailable;
   }
   return state.catalogFailed ? home.modelStateRetry : newTest.modelLoading;
-}
-
-/** The pill follows the run's outcome, falling back to its status. */
-function recentRunLabel(run: RunJob): string {
-  return run.outcome ? outcomeLabel(run.outcome) : stateLabel(run.status);
 }
 
 function Stat({
@@ -369,58 +365,14 @@ export function HomeView({
         />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{home.cardTitle}</CardTitle>
-          <Button
-            id="showHistory"
-            onClick={() => navigate("runs")}
-            variant="quiet"
-          >
-            {home.showHistory}
-          </Button>
-        </CardHeader>
-        {loading || error ? (
-          <p className="text-muted-foreground text-sm" role="status">
-            {error ?? home.runsLoading}
-          </p>
-        ) : null}
-        <div
-          className="py-6 text-center"
-          hidden={loading || Boolean(error) || all.length > 0}
-          id="overviewEmpty"
-        >
-          <div aria-hidden="true" className="text-2xl">
-            ✓
-          </div>
-          <h3 className="mt-2 font-semibold text-sm">{home.emptyTitle}</h3>
-          <p className="mt-1 text-muted-foreground text-sm">
-            {home.emptyIntro}
-          </p>
-        </div>
-        <div className="grid gap-2" id="recentRuns">
-          {recent.map((run) => (
-            <div
-              className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
-              key={run.id}
-            >
-              <a
-                className="font-medium text-sm underline-offset-4 hover:underline"
-                href={`#${run.id}`}
-                onClick={(event) => {
-                  event.preventDefault();
-                  openRun(run.id);
-                }}
-              >
-                {`${run.repo} #${run.pr}`}
-              </a>
-              <Pill tone={toneFor(run.outcome ?? run.status)}>
-                {recentRunLabel(run)}
-              </Pill>
-            </div>
-          ))}
-        </div>
-      </Card>
+      <RecentRunsCard
+        all={all}
+        error={error}
+        loading={loading}
+        onOpen={openRun}
+        onShowHistory={() => navigate("runs")}
+        recent={recent}
+      />
     </>
   );
 }

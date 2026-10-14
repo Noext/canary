@@ -57,13 +57,38 @@ function json(res: ServerResponse, status: number, value: unknown) {
 }
 
 /**
- * Chemins qui reçoivent le même shell mono-document : le routeur client de
- * `apps/canary-pr-qa-ui/src/app/routing.ts` choisit l'écran une fois la page
- * chargée. Cette liste et celle du routeur client se lisent donc ensemble.
- * Aucun autre chemin ne tombe dans ce shell, et notamment pas `GET /runs` ni
- * `GET /runs/<id>`, qui restent les réponses JSON de l'API.
+ * Les adresses qui reçoivent le même shell mono-document : chaque écran a son
+ * chemin, et le routeur client de `apps/canary-pr-qa-ui/src/app/routing.ts`
+ * choisit l'écran une fois la page chargée. Ces motifs sont donc ceux que ce
+ * routeur sait lire, et rien de plus : tout autre chemin reste un 404 JSON, le
+ * shell n'est jamais un repli. `GET /runs` et `GET /runs/<id>` sont notamment
+ * les réponses JSON de l'API, jamais cette page.
  */
-const SHELL_PATHS = new Set(["/", "/history", "/new-test"]);
+const SHELL_PATHS = [
+  /^\/$/,
+  /^\/history$/,
+  /^\/new-test$/,
+  /^\/history\/[0-9a-f-]{36}$/,
+  /^\/history\/[0-9a-f-]{36}\/report$/,
+  /^\/automatic\/[A-Za-z0-9._:-]{1,128}$/,
+  // Le client écrit l'identifiant de sa section tel quel (`/settings/apiKeys`)
+  // et corrige lui-même une section qu'il ne connaît pas : la forme est bornée
+  // ici, pas énumérée.
+  /^\/settings\/[a-z][A-Za-z-]{0,31}$/,
+];
+
+/**
+ * Ce chemin reçoit le shell. Un unique `/` final tapé à la main (`/history/`)
+ * désigne la page elle-même : le client réécrit ensuite la barre sur le chemin
+ * canonique.
+ */
+function servesShell(pathname: string) {
+  const path =
+    pathname.length > 1 && pathname.endsWith("/")
+      ? pathname.slice(0, -1)
+      : pathname;
+  return SHELL_PATHS.some((pattern) => pattern.test(path));
+}
 
 /** Le shell du dashboard et ses en-têtes, identiques quel que soit le chemin. */
 function dashboardShell(res: ServerResponse) {
@@ -389,7 +414,7 @@ export async function startProductionServer(config: Config) {
       res.end(asset.body);
       return true;
     }
-    if (req.method === "GET" && SHELL_PATHS.has(url.pathname)) {
+    if (req.method === "GET" && servesShell(url.pathname)) {
       dashboardShell(res);
       return true;
     }

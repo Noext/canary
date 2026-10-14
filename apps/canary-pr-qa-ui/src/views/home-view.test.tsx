@@ -278,7 +278,7 @@ describe("HomeView recent runs", () => {
     expect(screen.getByTestId("route")).toHaveTextContent(`runs:${runId}`);
     expect(
       screen.getByRole("link", { name: "fixture/app #1" })
-    ).toHaveAttribute("href", `#${runId}`);
+    ).toHaveAttribute("href", `/history/${runId}`);
   });
 
   it("opens the history from the card action", async () => {

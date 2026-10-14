@@ -67,6 +67,6 @@ describe("SettingsNav", () => {
     expect(screen.getByRole("button", { name: "GitHub" })).not.toHaveAttribute(
       "aria-current"
     );
-    expect(window.location.hash).toBe("#settings=accounts");
+    expect(window.location.pathname).toBe("/settings/accounts");
   });
 });

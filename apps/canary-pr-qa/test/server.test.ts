@@ -307,6 +307,8 @@ describe("persistent authenticated job service", () => {
 });
 
 describe("dashboard shell routes", () => {
+  const RUN_ID = "74422b90-c70a-11f1-8b8c-69d5033ed7fd";
+  const DELIVERY_ID = "delivery:01J8Z";
   /** Le shell est public, comme `/` : le routeur client choisit l'écran. */
   const shellHeaders = {
     "Content-Security-Policy":
@@ -315,6 +317,37 @@ describe("dashboard shell routes", () => {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
   };
+  /**
+   * Une entrée par famille d'écran du routeur client, plus les trois chemins
+   * historiques, et le `/` final toléré sur une adresse tapée à la main.
+   */
+  const shellPaths = [
+    "/",
+    "/history",
+    "/new-test",
+    `/history/${RUN_ID}`,
+    `/history/${RUN_ID}/report`,
+    `/automatic/${DELIVERY_ID}`,
+    "/settings/accounts",
+    // Le client nomme cette section avec une majuscule : la recharger doit
+    // rendre la page, pas un 404 JSON.
+    "/settings/apiKeys",
+    "/history/",
+    `/history/${RUN_ID}/`,
+  ];
+  /**
+   * Un chemin voisin d'une page du shell, mais qu'aucun écran ne porte : le
+   * shell n'est pas un repli, la réponse reste un 404 JSON.
+   */
+  const unknownPaths = [
+    "/does-not-exist",
+    `/history/${RUN_ID}/autre`,
+    "/history/tronque",
+    "/settings/",
+    "/settings/NOPE",
+    "/settings/api.key",
+    "/automatic/",
+  ];
   /**
    * Le serveur historique que démarre `service()` ne sert pas le dashboard : ces
    * routes vivent dans le serveur de production, avec la même mise en place
@@ -344,13 +377,13 @@ describe("dashboard shell routes", () => {
       },
     };
   }
-  it("serves the same shell on /history and /new-test, with the root headers", async () => {
+  it("serves the same shell and headers on every routed address", async () => {
     const s = await dashboardService();
     const root = await fetch(`${s.url}/`);
     expect(root.status).toBe(200);
     const shell = await root.text();
     expect(shell).not.toBe("");
-    for (const path of ["/history", "/new-test"]) {
+    for (const path of shellPaths) {
       const response = await fetch(`${s.url}${path}`);
       expect(response.status).toBe(200);
       for (const [header, value] of Object.entries(shellHeaders)) {
@@ -359,13 +392,13 @@ describe("dashboard shell routes", () => {
       expect(await response.text()).toBe(shell);
     }
   });
-  it("keeps unknown paths a 404 instead of falling back to the shell", async () => {
+  it("keeps a path no screen carries a 404 instead of the shell", async () => {
     const s = await dashboardService();
-    const response = await fetch(`${s.url}/does-not-exist`, {
-      headers: s.headers,
-    });
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "Not found" });
+    for (const path of unknownPaths) {
+      const response = await fetch(`${s.url}${path}`, { headers: s.headers });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Not found" });
+    }
   });
   it("still answers /runs with JSON, not the shell", async () => {
     const s = await dashboardService();

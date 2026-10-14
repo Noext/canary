@@ -8,8 +8,9 @@ import { cn } from "@/lib/utils";
  * `settingsNav` declares. It only renders while « Réglages » is the visible
  * panel, so the sidebar never grows a section list the operator cannot read.
  *
- * The addresses it writes (`#settings=<id>`) are the ones `readInitialRoute`
- * reads back, which is what makes a settings page shareable.
+ * The addresses it writes (`/settings/<section>`) are the ones the address bar
+ * and `readInitialRoute` agree on, which is what makes a settings page
+ * shareable.
  */
 export function SettingsNav(): ReactNode {
   const { openSection, section } = useNavigation();
