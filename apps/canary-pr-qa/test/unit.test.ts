@@ -1345,6 +1345,57 @@ describe("runner false-green regressions", () => {
     expect(correction).toContain(UNGROUNDED_WEAK_REMEDY);
     expect(lineEnd).toBeLessThan(2000);
   }, 60_000);
+  /**
+   * Défaut signalé par la vérification interne : sous onze classes fatales
+   * saturées, le préambule borné repoussait le détail par exigence au-delà de la
+   * troncature à 2000 de `model.ts`, donc la suggestion de ligne disparaissait
+   * et le planificateur ne recevait plus que le conseil générique — exactement
+   * ce que la suggestion devait éviter. Elle remplace ce conseil sur la ligne de
+   * sa classe, que le préambule protège : elle survit, entière, dans le message
+   * reçu.
+   */
+  it("keeps the suggested real line inside the saturated fatal prelude", async () => {
+    const saturated = saturatedFatalCandidate();
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/form.ts");
+    first!.requirements[0] = {
+      behavior: "The absent quote is replaced by a real line",
+      quote: "show('Welcome '+nom) and save",
+      sourceFile: "src/form.ts",
+    };
+    const f = await setup({ plans: [saturated, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    const suggestion = `Real lines of src/form.ts to quote instead: 1: ${JSON.stringify("Use the Name textbox and Save button; status displays Welcome <name>")}.`;
+    // Onze classes saturées : la correction est bien tronquée à la fenêtre de
+    // `model.ts`.
+    expect(correction).toHaveLength(2000);
+    // La suggestion survit entière sur la ligne de sa classe, avant la
+    // troncature, là où le détail par exigence qui la portait a disparu.
+    expect(correction).toContain(suggestion);
+    expect(correction.indexOf(suggestion) + suggestion.length).toBeLessThan(
+      2000
+    );
+    // Elle a remplacé le conseil générique au lieu de s'y ajouter : le
+    // planificateur ne reçoit plus que des lignes réelles à citer.
+    expect(correction).not.toContain(UNGROUNDED_ABSENT_REMEDY);
+    // Le préambule complet tient sous son plafond mesuré : la suggestion comme
+    // les dix autres lignes de classe survivent à la troncature.
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    const preludeLength = preludeEnd - "Plan rejected: ".length - 1;
+    expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+    expect(FATAL_PRELUDE_CHARS - preludeLength).toBeGreaterThan(0);
+  }, 60_000);
   it("returns an unwitnessed source file to the planner before failing", async () => {
     const withoutWitness = structuredClone(plan);
     withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");

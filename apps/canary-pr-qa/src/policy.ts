@@ -10,7 +10,11 @@ import {
   type Scenario,
 } from "./schema.js";
 
-type Requirement = Scenario["requirements"][number];
+/**
+ * Une exigence de scénario : le type que les refus de couverture et le canal de
+ * correction échangent entre `policy.ts` et `runner.ts`.
+ */
+export type Requirement = Scenario["requirements"][number];
 
 export const PolicySchema = z
   .object({
@@ -329,9 +333,10 @@ export function hasWeakWitness(
 
 /**
  * Remède d'une citation absente : elle n'existe nulle part, mot pour mot. Le
- * refus par exigence et la classe fatale agrégée le partagent, pour que les
- * deux moitiés du message — celle qui survit à la troncature et le détail —
- * disent la même règle.
+ * refus par exigence et la classe fatale agrégée le partagent — sauf quand le
+ * critère trouve des lignes réelles à citer : la classe porte alors ces lignes
+ * à sa place (voir `absentRemedy`, runner.ts) pour qu'elles survivent à la
+ * troncature, et le refus par exigence les ajoute au conseil.
  */
 export const UNGROUNDED_ABSENT_REMEDY =
   "Quote exact source or diff text; page content alone is not a requirement.";
@@ -582,10 +587,13 @@ export function suggestedQuoteLines(
  * planificateur peut citer à la place, au plus deux. Jamais proposé quand la
  * citation existe ailleurs — le remède est alors l'attribution à l'autre
  * fichier, pas une autre ligne de celui-ci — ni quand aucune ligne ne franchit
- * le seuil de recouvrement.
+ * le seuil de recouvrement. La classe fatale agrégée du canal de correction la
+ * porte aussi (voir `absentRemedy` dans runner.ts) : le préambule fatal la
+ * protège de la troncature, là où le détail par exigence qui la portait
+ * disparaissait sous des classes saturées.
  */
-function quoteSuggestion(
-  requirement: Requirement,
+export function quoteSuggestion(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
   policy: Policy
 ): string {

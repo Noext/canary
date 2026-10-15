@@ -27,6 +27,8 @@ import {
   hasWeakWitness,
   type Policy,
   quoteExcerpt,
+  quoteSuggestion,
+  type Requirement,
   repairRequirementAttribution,
   requirementSourceRefusal,
   trustedPolicy,
@@ -334,6 +336,30 @@ function witnessRemedy(
   return hasWeak ? weak : absent;
 }
 /**
+ * Remède de la classe `REQUIREMENT_UNGROUNDED` pour une citation absente : les
+ * lignes réelles du fichier cité quand le critère en trouve, à la place du
+ * conseil générique. Cette ligne de classe survit à la troncature à 2000 de
+ * `model.ts` — le préambule est borné pour ça — alors que la suggestion portée
+ * par le détail par exigence tombe au-delà sous des classes saturées, ne
+ * laissant que le conseil générique. La suggestion remplace donc le conseil au
+ * lieu de s'y ajouter, et nomme la citation fautive montrée sur la même ligne :
+ * c'est l'exigence que le planificateur doit corriger.
+ */
+function absentRemedy(
+  ungrounded: { requirement: Requirement; scenarioId: string }[],
+  context: PrContext,
+  policy: Policy
+): string {
+  const [shown] = ungrounded;
+  if (!shown || hasWeakWitness(shown.requirement, context, policy)) {
+    return UNGROUNDED_ABSENT_REMEDY;
+  }
+  return (
+    quoteSuggestion(shown.requirement, context, policy).trim() ||
+    UNGROUNDED_ABSENT_REMEDY
+  );
+}
+/**
  * Classes fatales de couverture, agrégées en tête du canal de correction.
  * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
  * refus par scénario qui suivent la même liste.
@@ -378,7 +404,7 @@ function coverageFatalClasses(
         (item) => `${item.scenarioId}:${item.requirement.sourceFile}`
       ),
       hint: witnessRemedy(
-        UNGROUNDED_ABSENT_REMEDY,
+        absentRemedy(ungrounded, context, policy),
         UNGROUNDED_WEAK_REMEDY,
         weak.length > 0,
         weak.length < ungrounded.length
