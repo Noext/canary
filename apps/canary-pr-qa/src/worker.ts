@@ -123,6 +123,8 @@ export async function startWorker(
             signal: controller.signal,
             tokens: 0,
             costUsd: 0,
+            reservedTokens: 0,
+            reservedCostUsd: 0,
             calls: 0,
             maxTokens: config.QA_RUN_MAX_TOKENS,
             maxCostUsd: config.QA_RUN_MAX_COST_USD,

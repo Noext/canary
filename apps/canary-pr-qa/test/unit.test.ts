@@ -686,7 +686,7 @@ describe("runner false-green regressions", () => {
     expect(mayRetry(0, 5, 9)).toBe(false);
     expect(mayRetry(5, 5, 0)).toBe(false);
   });
-  it("debits the lost attempt before allowing its retry", async () => {
+  it("debits the lost attempt apart from the consumed budget", async () => {
     const env = { QA_MODEL_RETRIES: "1", QA_PLAN_MAX_TOKENS: "5000" };
     const reference = await setup({ env: { QA_PLAN_MAX_TOKENS: "5000" } });
     fakeBrowser();
@@ -702,10 +702,12 @@ describe("runner false-green regressions", () => {
     );
     expect(retried.usage?.retries).toBe(1);
     expect(retried.outcome).toBe("passed");
-    // La tentative perdue est débitée au pire cas — au moins la sortie maximale
-    // réservée — avant que la reprise ne réserve son propre engagement.
-    const delta = (retried.usage?.tokens ?? 0) - (baseline.usage?.tokens ?? 0);
-    expect(delta).toBeGreaterThanOrEqual(5000);
+    // La tentative perdue est chiffrée au pire cas — au moins la sortie maximale
+    // réservée — à part des tokens rapportés par l'endpoint : la reprise est
+    // admise sur l'usage consommé, jamais sur le cumul des coupures.
+    expect(retried.usage?.reservedTokens ?? 0).toBeGreaterThanOrEqual(5000);
+    expect(retried.usage?.tokens).toBe(baseline.usage?.tokens);
+    expect(retried.usage?.estimated).toBe(true);
   }, 40_000);
   it("debits the last attempt too when no retry follows", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "0" }, modelResets: 1 });
@@ -717,10 +719,88 @@ describe("runner false-green regressions", () => {
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toMatch(/ECONNRESET|UND_ERR_SOCKET/);
     expect(result.usage?.retries).toBe(0);
-    // Aucune reprise ne suit, mais la tentative perdue est quand même débitée :
-    // elle a pu consommer une génération entière.
-    expect(result.usage?.tokens ?? 0).toBeGreaterThan(0);
+    // Aucune reprise ne suit et rien n'a été rapporté : la tentative perdue
+    // reste chiffrée, au pire cas, sans devenir un token consommé.
+    expect(result.usage?.tokens).toBe(0);
+    expect(result.usage?.reservedTokens ?? 0).toBeGreaterThan(0);
     expect(result.usage?.estimated).toBe(true);
+  }, 40_000);
+  it("no longer opposes a lost attempt's reserve to the next correction", async () => {
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: {
+        QA_MODEL_RETRIES: "1",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "1000000",
+      },
+      modelResets: 1,
+      plans: [refused, plan],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le run 23d0807e : plan coupé, reprise réussie, plan refusé sur sa preuve,
+    // puis correction — refusée à tort parce que la borne de la tentative perdue
+    // s'ajoutait au débit consommé et dépassait l'enveloppe du run.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.calls).toBe(2);
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.tokens ?? 0).toBeLessThan(200_000);
+    expect(result.usage?.reservedTokens ?? 0).toBeGreaterThanOrEqual(400_000);
+    expect(result.usage?.estimated).toBe(true);
+    expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
+  }, 40_000);
+  it("admits the next attempt once the lost bound stops counting as spend", async () => {
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: {
+        QA_MODEL_RETRIES: "1",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "700000",
+      },
+      modelResets: 1,
+      plans: [refused, plan],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Même forme que le run 23d0807e (540 073 + M + R₂ > 1 000 000), ramenée à
+    // l'enveloppe du fixture : en comptant la borne perdue comme une dépense
+    // (403 443 + 403 443 = 806 886 > 700 000), la tentative suivante était
+    // refusée à tort. L'usage consommé seul la couvre (36 + 403 881).
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.reservedTokens ?? 0).toBeGreaterThan(0);
+    expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
+  }, 40_000);
+  it("refuses the first attempt a run envelope cannot cover, without sending it", async () => {
+    const f = await setup({
+      env: { QA_PLAN_MAX_TOKENS: "400000", QA_RUN_MAX_TOKENS: "100000" },
+    });
+    fakeBrowser();
+    const request = vi.spyOn(globalThis, "fetch");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le garde-fou reste réel : une enveloppe inférieure à la première
+    // réservation refuse l'appel avant tout envoi, donc sans dépense.
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    expect(f.modelRequests).toHaveLength(0);
+    expect(
+      request.mock.calls.some(([url]) =>
+        String(url).endsWith("/chat/completions")
+      )
+    ).toBe(false);
+    expect(result.usage?.tokens).toBe(0);
+    expect(result.usage?.reservedTokens).toBe(0);
   }, 40_000);
   it("never lets a retry progress write take the worker down", async () => {
     const rejections: unknown[] = [];
@@ -732,6 +812,8 @@ describe("runner false-green regressions", () => {
       id: "retry-progress",
       maxCostUsd: 1,
       maxTokens: 1000,
+      reservedTokens: 0,
+      reservedCostUsd: 0,
       signal: AbortSignal.timeout(1000),
       tokens: 0,
     };
@@ -932,6 +1014,8 @@ it("closes an interrupted pinned GitHub check without publishing success", async
       tokens: 0,
       calls: 0,
       costUsd: 0,
+      reservedTokens: 0,
+      reservedCostUsd: 0,
       maxTokens: 100_000,
       maxCostUsd: 10,
     },
@@ -1015,6 +1099,8 @@ it("rejects publication when worker ownership cannot be verified, even after pas
       tokens: 0,
       calls: 0,
       costUsd: 0,
+      reservedTokens: 0,
+      reservedCostUsd: 0,
       maxTokens: 100_000,
       maxCostUsd: 10,
       verifyOwnership: async () => {

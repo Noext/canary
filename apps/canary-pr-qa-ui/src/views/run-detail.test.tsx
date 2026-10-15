@@ -245,6 +245,35 @@ describe("RunDetail", () => {
     );
   });
 
+  it("keeps the worst-case reserve of a lost attempt visible, apart from the spend", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve({
+          ...result,
+          usage: {
+            calls: 2,
+            costUsd: 0.5,
+            estimated: true,
+            pricingConfigured: true,
+            reservedCostUsd: 0.0012,
+            reservedTokens: 403_443,
+            retries: 1,
+            tokens: 36,
+          },
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "36 tokens · coût estimé $0.5000 · 1 reprise · jusqu'à 403443 tokens et $0.0012 d'un essai perdu"
+        )
+      ).toBeVisible()
+    );
+  });
+
   it("names the transport retries when the worker recorded some", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.endsWith("/result.json")) {

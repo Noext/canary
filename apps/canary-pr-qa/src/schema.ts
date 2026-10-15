@@ -293,6 +293,13 @@ export interface RunResult {
   usage?: {
     tokens: number;
     costUsd: number;
+    /**
+     * Cumul des bornes « au pire cas » des tentatives perdues, chiffré à part
+     * des tokens que l'endpoint a rapportés. Jamais compté dans l'admission du
+     * run : une coupure réseau ne bloque plus la tentative suivante.
+     */
+    reservedTokens?: number;
+    reservedCostUsd?: number;
     calls: number;
     model?: string;
     estimated?: boolean;

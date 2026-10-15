@@ -112,6 +112,42 @@ describe("server payloads", () => {
     expect(result.scenarios[0]?.artifacts).toEqual(["video.webm"]);
   });
 
+  it("keeps the worst-case reserve of a lost attempt in the result usage", () => {
+    const result = runResultSchema.parse({
+      endedAt: "2026-01-01T00:05:00.000Z",
+      error: null,
+      id: "44444444-4444-4444-4444-444444444444",
+      outcome: "passed",
+      preview: null,
+      prUrl: "https://github.com/o/r/pull/4",
+      publication: null,
+      scenarios: [
+        {
+          artifacts: ["video.webm"],
+          error: null,
+          outcome: "passed",
+          scenario: { id: "welcome", title: "Welcome" },
+        },
+      ],
+      sha: "4".repeat(40),
+      startedAt: "2026-01-01T00:00:00.000Z",
+      usage: {
+        calls: 2,
+        costUsd: 0.5,
+        estimated: true,
+        pricingConfigured: true,
+        reservedCostUsd: 0.0012,
+        reservedTokens: 403_443,
+        retries: 1,
+        tokens: 36,
+      },
+    });
+    // Sans les champs dans le schéma, Zod les retirerait et la borne d'un essai
+    // perdu resterait invisible dans le dashboard.
+    expect(result.usage?.reservedTokens).toBe(403_443);
+    expect(result.usage?.reservedCostUsd).toBe(0.0012);
+  });
+
   it("accepts a setup status without the admin-only preview fields", () => {
     const status = setupStatusSchema.parse({
       ai: { defaultModel: "model-x", endpoint: "ai.example.com" },

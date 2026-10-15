@@ -237,7 +237,9 @@ export class Model {
 
   /**
    * Aucune tentative n'est lancée si l'enveloppe du run ne couvre pas son pire
-   * cas — y compris après le débit des tentatives perdues.
+   * cas en plus de l'usage déjà consommé. Les bornes des tentatives perdues
+   * restent à part : c'est l'appel à venir qui doit être couvert, pas le cumul
+   * des coupures déjà déclarées dans `usage.reservedTokens`.
    */
   private claim(
     messages: { content: string; role: string }[],
@@ -246,6 +248,25 @@ export class Model {
     const reservation = this.reservation(messages, maxTokens);
     checkBudget(reservation.tokens, reservation.costUsd);
     return reservation;
+  }
+
+  /**
+   * Comptabilise la borne au pire cas d'une tentative perdue à part de l'usage
+   * rapporté, y compris quand elle est la dernière — reprises épuisées ou
+   * plafond d'appels atteint. Une coupure a pu consommer une génération entière
+   * que l'endpoint ne nous rendra jamais : la borne reste chiffrée sans devenir
+   * un débit consommé, sans quoi chaque coupure refuserait la tentative suivante
+   * d'un run que l'enveloppe couvre. Le run passe en estimé : ce débit n'est pas
+   * un usage rapporté par l'endpoint.
+   */
+  private reserveLost(lost: { costUsd: number; tokens: number }): void {
+    const scope = runScope.getStore();
+    if (!scope) {
+      return;
+    }
+    scope.reservedTokens += lost.tokens;
+    scope.reservedCostUsd += lost.costUsd;
+    scope.estimated = true;
   }
 
   /**
@@ -268,17 +289,8 @@ export class Model {
         }
         const scope = runScope.getStore();
         const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
-        // Une connexion coupée a pu consommer des tokens que l'endpoint ne nous
-        // rendra jamais : la tentative est débitée au pire cas, y compris
-        // quand elle est la dernière — reprises épuisées ou plafond d'appels
-        // atteint. Le run passe en estimé : ce débit n'est pas un usage
-        // rapporté par l'endpoint.
         const lost = this.reservation(messages, maxTokens);
-        if (scope) {
-          scope.tokens += lost.tokens;
-          scope.costUsd += lost.costUsd;
-          scope.estimated = true;
-        }
+        this.reserveLost(lost);
         if (!mayRetry(attempt, max, used)) {
           throw failedAttempt(error, code, attempt);
         }

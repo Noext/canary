@@ -325,6 +325,9 @@ export interface RunResult {
     estimated?: boolean | null;
     model?: string | null;
     pricingConfigured?: boolean | null;
+    /** Cumul des bornes « au pire cas » des tentatives perdues. */
+    reservedCostUsd?: number | null;
+    reservedTokens?: number | null;
     retries?: number | null;
     tokens: number;
   } | null;

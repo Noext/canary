@@ -264,6 +264,8 @@ export const runResultSchema = z
         estimated: z.boolean().nullish(),
         model: z.string().nullish(),
         pricingConfigured: z.boolean().nullish(),
+        reservedCostUsd: z.number().nullish(),
+        reservedTokens: z.number().nullish(),
         retries: z.number().nullish(),
         tokens: z.number(),
       })

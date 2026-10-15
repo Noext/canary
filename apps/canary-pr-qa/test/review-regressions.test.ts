@@ -28,6 +28,8 @@ it("refuses a billable model request before exceeding its configured cost ceilin
         signal: new AbortController().signal,
         tokens: 0,
         costUsd: 0,
+        reservedTokens: 0,
+        reservedCostUsd: 0,
         calls: 0,
         maxTokens: 100_000,
         maxCostUsd: 0.000_01,

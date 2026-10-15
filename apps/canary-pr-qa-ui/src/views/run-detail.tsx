@@ -103,7 +103,9 @@ function usageLine(usage: RunResult["usage"]): string {
     // before the field existed, or any result that omits it, carry no proof
     // that a tariff was configured.
     usage.pricingConfigured === true,
-    usage.retries ?? 0
+    usage.retries ?? 0,
+    usage.reservedTokens ?? 0,
+    usage.reservedCostUsd ?? 0
   );
 }
 

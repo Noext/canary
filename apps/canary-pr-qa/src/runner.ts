@@ -669,6 +669,8 @@ async function runUnscoped(
     result.usage = {
       tokens: usage.tokens,
       costUsd: usage.costUsd,
+      reservedTokens: usage.reservedTokens,
+      reservedCostUsd: usage.reservedCostUsd,
       calls: usage.calls,
       retries: usage.retries ?? 0,
       model: config.OPENAI_MODEL,
@@ -751,6 +753,8 @@ export async function runQa(
         signal: controller.signal,
         tokens: 0,
         costUsd: 0,
+        reservedTokens: 0,
+        reservedCostUsd: 0,
         calls: 0,
         retries: 0,
         maxTokens: config.QA_RUN_MAX_TOKENS,
