@@ -331,6 +331,50 @@ export function unwitnessedPlanRefusals(
   return refusals;
 }
 
+/**
+ * Une exigence attribuée à un fichier que le scénario ne déclare pas : la
+ * preuve citée n'appartient pas au scénario, donc elle ne couvre rien. Le refus
+ * nomme le scénario et le fichier fautif, pour que le planificateur corrige sa
+ * liste de sources dans sa tentative, comme `COVERAGE_WITNESS_MISSING`.
+ */
+export function undeclaredRequirementSource(
+  scenarioId: string,
+  file: string,
+  declared: string[]
+): QaError {
+  const candidates = declared.length
+    ? `one of the files the scenario declares (${declared.join(", ")})`
+    : "a file the scenario declares";
+  return new QaError(
+    "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+    `Scenario ${scenarioId} attributes a requirement to ${file}, which it does not declare in sourceFiles`,
+    `Declare ${file} in this scenario's sourceFiles, or attribute the requirement to ${candidates}.`
+  );
+}
+
+/**
+ * Exigences attribuées à un fichier hors de `sourceFiles`, sous forme de refus
+ * rendus au planificateur. Fatal comme `COVERAGE_WITNESS_MISSING` : il bloque
+ * tout le run via `validateCoverage`, donc il passe avant les refus par
+ * scénario, qui restent rapportés et bloqués individuellement.
+ */
+export function undeclaredSourcePlanRefusals(plan: Plan): string[] {
+  const refusals: string[] = [];
+  for (const scenario of plan.scenarios) {
+    for (const requirement of scenario.requirements) {
+      if (!scenario.sourceFiles.includes(requirement.sourceFile)) {
+        const error = undeclaredRequirementSource(
+          scenario.id,
+          requirement.sourceFile,
+          scenario.sourceFiles
+        );
+        refusals.push(`${error.message}. ${error.hint}`);
+      }
+    }
+  }
+  return refusals;
+}
+
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -349,7 +393,11 @@ export function validateCoverage(
     }
     for (const requirement of scenario.requirements) {
       if (!scenario.sourceFiles.includes(requirement.sourceFile)) {
-        throw new Error("Requirement must cite a scenario source file");
+        throw undeclaredRequirementSource(
+          scenario.id,
+          requirement.sourceFile,
+          scenario.sourceFiles
+        );
       }
       if (
         !requirementEvidence(requirement, context).includes(requirement.quote)

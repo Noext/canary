@@ -5,6 +5,7 @@ import { type PrContext, parsePrUrl } from "../src/github.js";
 import {
   isDocumentationPath,
   PolicySchema,
+  undeclaredSourcePlanRefusals,
   unwitnessedPlanRefusals,
   validateCoverage,
 } from "../src/policy.js";
@@ -196,6 +197,35 @@ it("accumulates witnesses across scenarios exactly like the coverage gate", () =
       config
     ).gate
   ).toBe("complete");
+});
+
+it("names the scenario and the undeclared source file of a requirement", () => {
+  const plan = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/a.ts"],
+      requirements: [
+        { sourceFile: "src/a.ts", quote: "Alpha witness text" },
+        { sourceFile: "src/decoy.ts", quote: "Alpha witness text" },
+      ],
+    },
+  ]);
+  const refusals = undeclaredSourcePlanRefusals(plan);
+  expect(refusals).toHaveLength(1);
+  expect(refusals[0]).toContain(
+    "Scenario flow attributes a requirement to src/decoy.ts, which it does not declare in sourceFiles"
+  );
+  expect(refusals[0]).toContain(
+    "Declare src/decoy.ts in this scenario's sourceFiles, or attribute the requirement to one of the files the scenario declares (src/a.ts)."
+  );
+  const refusal = refusalOfPlan(plan, witnessContext, policyFor());
+  expect(refusal.code).toBe("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+  expect(refusal.message).toBe(
+    "Scenario flow attributes a requirement to src/decoy.ts, which it does not declare in sourceFiles"
+  );
+  expect(refusal.hint).toBe(
+    "Declare src/decoy.ts in this scenario's sourceFiles, or attribute the requirement to one of the files the scenario declares (src/a.ts)."
+  );
 });
 
 it("never treats a skipped documentation file under a critical prefix as critical", () => {

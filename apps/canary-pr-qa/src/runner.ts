@@ -25,6 +25,7 @@ import {
   type Policy,
   repairRequirementAttribution,
   trustedPolicy,
+  undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
   unwitnessedPlanRefusals,
   validateCoverage,
@@ -247,7 +248,8 @@ function refusalDiagnostic(
 /**
  * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
  * sélecteur construit sur une classe ou une couleur, exigence sans témoin
- * textuel, cible absente de la page de découverte.
+ * textuel, exigence attribuée à un fichier hors du scénario, cible absente de
+ * la page de découverte.
  */
 function planRefusals(
   candidate: Plan,
@@ -260,6 +262,9 @@ function planRefusals(
     // requête de correction (2000 caractères dans `model.ts`), contrairement
     // aux refus par scénario, qui restent rapportés et bloqués individuellement.
     ...unwitnessedPlanRefusals(candidate, context),
+    // Une exigence attribuée à un fichier hors du scénario bloque aussi tout le
+    // run, pour la même raison.
+    ...undeclaredSourcePlanRefusals(candidate),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),

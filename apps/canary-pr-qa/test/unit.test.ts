@@ -1244,6 +1244,52 @@ describe("runner false-green regressions", () => {
     );
     expect(result.scenarios).toEqual([]);
   });
+  it("returns a requirement attributed to an undeclared file to the planner", async () => {
+    const misattributed = structuredClone(plan);
+    misattributed.scenarios[0]!.requirements[0] = {
+      behavior: "Save the name via the form",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/other.ts",
+    };
+    const corrected = structuredClone(plan);
+    const f = await setup({ plans: [misattributed, corrected] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus nomme le scénario et le fichier cité au planificateur : il
+    // corrige sa liste de sources dans la même tentative au lieu de faire
+    // échouer le run sur une erreur nue, hors du canal réparable.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(
+      "Scenario welcome attributes a requirement to src/other.ts, which it does not declare in sourceFiles"
+    );
+    expect(correction).toContain(
+      "Declare src/other.ts in this scenario's sourceFiles, or attribute the requirement to one of the files the scenario declares (src/form.ts)."
+    );
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  });
+  it("blocks the run when the corrected plan still attributes a requirement to an undeclared file", async () => {
+    const misattributed = structuredClone(plan);
+    misattributed.scenarios[0]!.requirements[0] = {
+      behavior: "Save the name via the form",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/other.ts",
+    };
+    const f = await setup({ plans: [misattributed, misattributed] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(result.error).toContain("welcome");
+    expect(result.error).toContain("src/other.ts");
+    expect(result.scenarios).toEqual([]);
+  });
   it("retries a model call cut by the transport, and counts it", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
     fakeBrowser();
