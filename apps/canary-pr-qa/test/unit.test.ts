@@ -20,6 +20,7 @@ import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
 import {
+  quoteExcerpt,
   repairRequirementAttribution,
   ungroundedPlanRefusals,
 } from "../src/policy.js";
@@ -1508,6 +1509,85 @@ describe("runner false-green regressions", () => {
     const preludeEnd = correction.indexOf("Scenario welcome declares");
     expect(preludeEnd).toBeGreaterThan(0);
     expect(preludeEnd).toBeLessThan(1900);
+  }, 60_000);
+  /**
+   * La citation fautive est le détail que le planificateur doit lire : elle
+   * passe en tête de la ligne de sa classe, avant le remède et les valeurs
+   * fautives, donc une ligne rognée la garde. Huit classes fatales saturées
+   * laissent 193 caractères par ligne — de quoi porter l'extrait de 120 et son
+   * libellé — et la citation survit donc à la troncature à 2000 de `model.ts`.
+   */
+  it("keeps the rejected quote on its fatal line under eight saturated classes", async () => {
+    const invented = `the plan invented ${"x".repeat(100)} tail`;
+    const saturated = structuredClone(plan);
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/no-witness.ts");
+    first!.requirements.push({
+      behavior: "The requirement belongs to an undeclared source",
+      quote: invented,
+      sourceFile: "src/undeclared.ts",
+    });
+    for (let index = 0; index < 22; index++) {
+      first!.steps.push({
+        description: "Observe the page",
+        id: `warmup-${index}`,
+        action: { type: "observe" as const },
+      });
+    }
+    saturated.skipped = [
+      {
+        reason: "Not reachable from a browser scenario",
+        sourceFile: "src/second.ts",
+      },
+    ];
+    for (let index = 1; index < 9; index++) {
+      saturated.scenarios.push({
+        ...structuredClone(saturated.scenarios[0]!),
+        id: `extra-${index}`,
+      });
+    }
+    const corrected = structuredClone(plan);
+    corrected.scenarios[0]!.sourceFiles.push("src/second.ts");
+    corrected.scenarios[0]!.requirements.push({
+      behavior: "The second changed file is reviewed",
+      quote: SECOND_FILE_QUOTE,
+      sourceFile: "src/second.ts",
+    });
+    const f = await setup({
+      plans: [saturated, corrected],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Huit classes fatales saturées : la correction est bien tronquée à 2000.
+    expect(correction).toHaveLength(2000);
+    const header = correction.slice(
+      correction.indexOf("): ") + 3,
+      correction.indexOf(".")
+    );
+    expect(header.split(", ")).toEqual([
+      "COVERAGE_WITNESS_MISSING",
+      "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+      "REQUIREMENT_UNGROUNDED",
+      "CRITICAL_COVERAGE_MISSING",
+      "CONTEXT_INCOMPLETE",
+      "CONTRACT_BUDGET",
+      "PLAN_TOO_MANY_SCENARIOS",
+      "PLAN_SOURCE_OUTSIDE_DIFF",
+    ]);
+    // L'extrait entier, non rogné, précède le remède sur la ligne de sa classe.
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quote: ${JSON.stringify(quoteExcerpt(invented))}`
+    );
   }, 60_000);
   /**
    * CONTEXT_INCOMPLETE et CONTRACT_BUDGET bloquaient le run sans jamais passer

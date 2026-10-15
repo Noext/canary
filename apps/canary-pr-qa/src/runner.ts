@@ -25,6 +25,7 @@ import {
   contractBudgetRefusals,
   criticalSkipRefused,
   type Policy,
+  quoteExcerpt,
   repairRequirementAttribution,
   requirementSourceRefusal,
   trustedPolicy,
@@ -180,6 +181,12 @@ export interface FatalClass {
   entries: string[];
   hint: string;
   label: string;
+  /**
+   * Détail placé avant le remède et les valeurs fautives sur la ligne agrégée,
+   * pour qu'une ligne rognée le garde : la citation fautive que le planificateur
+   * doit lire survit à la troncature, pas le remède qui la suit.
+   */
+  lead?: string;
 }
 /**
  * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur.
@@ -199,11 +206,14 @@ function boundedEntries(entries: string[]): string {
 }
 /**
  * Ligne d'une classe fatale : l'en-tête du préambule porte déjà que chaque
- * classe bloque le run, donc la ligne va droit au code et au remède — c'est le
- * remède qu'une ligne tronquée doit encore porter au planificateur.
+ * classe bloque le run, donc la ligne va droit au code, puis au détail qui doit
+ * survivre à la troncature — l'extrait de la citation fautive — puis au remède
+ * et aux valeurs fautives.
  */
 function fatalLine(refusal: FatalClass): string {
-  return `${refusal.code}: ${refusal.hint} Faulty values: ${boundedEntries(refusal.entries)}`;
+  const lead = refusal.lead ? `${refusal.lead} ` : "";
+  const values = boundedEntries(refusal.entries);
+  return `${refusal.code}: ${lead}${refusal.hint} Faulty values: ${values}`;
 }
 function fatalError(refusal: FatalClass): QaError {
   return new QaError(
@@ -219,7 +229,10 @@ function fatalError(refusal: FatalClass): QaError {
  * troncature, et les dernières, dont `PLAN_SCENARIO_ID_RESERVED`,
  * disparaissaient du message : le planificateur perdait sa seule tentative de
  * correction. L'en-tête nomme donc tous les codes fatals avant toute entrée, et
- * chaque classe reçoit une place égale dans ce plafond global.
+ * chaque classe reçoit une place égale dans ce plafond global. La place d'une
+ * ligne doit aussi porter le détail placé en tête — huit classes saturées
+ * laissent 193 caractères, de quoi garder l'extrait de citation de 120 et son
+ * libellé, que la troncature coupe avant le remède.
  */
 const FATAL_PRELUDE_CHARS = 1800;
 function boundedText(text: string, limit: number): string {
@@ -302,6 +315,13 @@ function coverageFatalClasses(
       ),
       hint: "Quote exact source or diff text; page content alone is not a requirement.",
       label: "requirements whose quote has no source witness",
+      lead: `Rejected quote: ${[
+        ...new Set(
+          ungrounded.map((item) =>
+            JSON.stringify(quoteExcerpt(item.requirement.quote))
+          )
+        ),
+      ].join(", ")}`,
     });
   }
   // Un skip de chemin critique sans approbation bloque le run : le

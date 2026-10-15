@@ -329,10 +329,11 @@ export function ungroundedRequirements(
  * Forme courte de la citation fautive : un refus qui ne nomme que le scénario
  * et le fichier laisse le planificateur deviner laquelle de ses exigences est
  * fausse. La ligne reste bornée — le préambule fatal et la troncature de
- * `model.ts` se partagent un budget de correction.
+ * `model.ts` se partagent un budget de correction. L'extrait est aussi le
+ * détail placé en tête de la ligne fatale, pour qu'une ligne rognée le garde.
  */
 const QUOTE_EXCERPT_CHARS = 120;
-function quoteExcerpt(quote: string): string {
+export function quoteExcerpt(quote: string): string {
   const compact = normalizeQuoteText(quote);
   return compact.length <= QUOTE_EXCERPT_CHARS
     ? compact
