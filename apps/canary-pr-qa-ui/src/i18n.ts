@@ -737,7 +737,7 @@ export const runAdvice: Record<string, string> = {
   RUN_DEADLINE:
     "Vérifiez la phase atteinte dans le rapport, puis augmentez `QA_RUN_TIMEOUT_SECONDS` si le test mérite plus de temps.",
   REQUIREMENT_UNGROUNDED:
-    "Citez un extrait exact et suffisant du fichier changé ou de son diff : le contenu de la page ne suffit pas comme exigence, et un chemin critique demande un fragment qui porte au moins une lettre ou un chiffre, par exemple un identifiant, un mot-clé, un nombre ou un message — jamais de la ponctuation seule. Corrigez la citation puis relancez.",
+    "Citez un extrait exact et suffisant du fichier changé ou de son diff : le contenu de la page ne suffit pas comme exigence ; après normalisation, une citation garde au moins huit caractères et deux jetons, et un chemin critique demande en plus un fragment qui porte au moins une lettre ou un chiffre visible, par exemple un identifiant, un mot-clé, un nombre ou un message — jamais de la ponctuation seule ni un caractère que rien n’affiche. Corrigez la citation puis relancez.",
   STALE_HEAD:
     "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
   TRANSITION_NOT_OBSERVED:

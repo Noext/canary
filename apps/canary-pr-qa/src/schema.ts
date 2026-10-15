@@ -47,9 +47,16 @@ export function normalizeQuoteText(value: string): string {
  * Sur un chemin critique, la citation doit donc porter au moins
  * `CRITICAL_QUOTE_MIN_WORD_CHARS` lettre ou chiffre — un identifiant, un
  * mot-clé, un nombre ou un message — c'est-à-dire du contenu visible, jamais de
- * la ponctuation seule. Le seuil est le plus bas que les deux revues
- * permettent : `if (x) {` porte trois lettres et `{"x": 1}` deux, donc
- * compter les lettres au-delà de leur présence rouvrirait le plan juste bloqué.
+ * la ponctuation seule. Une lettre peut elle-même être invisible : les quatre
+ * remplisseurs Hangul (U+115F, U+1160, U+3164, U+FFA0) appartiennent à
+ * `Default_Ignorable_Code_Point`, donc le compteur les retire avant de compter.
+ * Sans ce retrait, un diff hostile fournit un « contenu visible » que la pile
+ * de rendu ne dessine pas — huit remplisseurs et un blanc passent le plancher
+ * universel et satisfont une lettre.
+ *
+ * Le seuil est le plus bas que les deux revues permettent : `if (x) {` porte
+ * trois lettres et `{"x": 1}` deux, donc compter les lettres au-delà de leur
+ * présence rouvrirait le plan juste bloqué.
  *
  * La gradation vit ici et non dans le schéma Zod, qui valide une citation sans
  * savoir de quel fichier elle vient : le schéma applique le plancher universel,
@@ -60,6 +67,24 @@ export const QUOTE_MIN_TEXT_CHARS = 8;
 export const QUOTE_MIN_TOKENS = 2;
 export const CRITICAL_QUOTE_MIN_WORD_CHARS = 1;
 const WORD_CHARS = /[\p{L}\p{N}]/gu;
+/**
+ * Caractères que la pile de rendu ne dessine pas, quelle que soit leur
+ * catégorie Unicode : U+00AD, U+200B..U+200F, U+2060..U+206F, U+FE00..U+FE0F,
+ * U+FFF0..U+FFF8, U+E0000..U+E0FFF, et les quatre remplisseurs Hangul cités
+ * plus haut. `\p{L}` les couvre sans les distinguer — les remplisseurs Hangul
+ * sont des lettres — donc compter les lettres ne suffit pas : il faut qu'elles
+ * s'affichent.
+ */
+const DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+/**
+ * Lettres et chiffres d'une chaîne qui s'affichent réellement : le compteur de
+ * contenu visible, qui ne retient pas un caractère default-ignorable.
+ */
+function visibleWordChars(value: string): number {
+  return (value.match(WORD_CHARS) ?? []).filter(
+    (char) => !DEFAULT_IGNORABLE.test(char)
+  ).length;
+}
 /**
  * Jetons d'une citation normalisée : chaque suite de caractères non blancs
  * compte pour un. Un jeton unique — `};`, une accolade, un mot isolé — ne
@@ -78,8 +103,7 @@ export function quoteCarriesContent(value: string, critical = false): boolean {
     return false;
   }
   return (
-    !critical ||
-    (normalized.match(WORD_CHARS)?.length ?? 0) >= CRITICAL_QUOTE_MIN_WORD_CHARS
+    !critical || visibleWordChars(normalized) >= CRITICAL_QUOTE_MIN_WORD_CHARS
   );
 }
 

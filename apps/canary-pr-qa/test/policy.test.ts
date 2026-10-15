@@ -490,6 +490,28 @@ it("refuses a critical quote with no visible content", () => {
   ).toBe("complete");
 });
 
+it("does not count a default-ignorable letter as visible content", () => {
+  // U+115F HANGUL CHOSEONG FILLER, U+1160 HANGUL JUNGSEONG FILLER, U+3164
+  // HANGUL FILLER et U+FFA0 HALFWIDTH HANGUL FILLER sont à la fois `\p{L}` et
+  // `Default_Ignorable_Code_Point` : invisibles, ils satisfaisaient la lettre
+  // exigée d'un témoin critique. Un diff hostile les plante et couvrait le
+  // fichier sans rien montrer.
+  for (const filler of ["\u115f", "\u1160", "\u3164", "\uffa0"]) {
+    const quote = `${filler.repeat(4)} ${filler.repeat(4)}`;
+    // Le plancher universel est franchi : assez de caractères, deux jetons.
+    expect(quote.length).toBeGreaterThanOrEqual(QUOTE_MIN_TEXT_CHARS);
+    expect(quoteCarriesContent(quote)).toBe(true);
+    // Mais aucun caractère visible ne subsiste, donc aucun témoin critique.
+    expect(quoteCarriesContent(quote, true)).toBe(false);
+    expect(quoteHasWitness(`+ ${quote}`, quote, true)).toBe(false);
+  }
+  // Une vraie lettre ou un vrai chiffre reste visible, y compris quand la
+  // source en offre peu — les cas que la revue du tour 3 demandait de garder.
+  for (const visible of ["if (x) {", JSON_QUOTE, "value 12"]) {
+    expect(quoteCarriesContent(visible, true)).toBe(true);
+  }
+});
+
 it("refuses a quote reduced to a single token, exact or not", () => {
   const line = "finish(function(){return;});";
   // Longue mais d'un seul jeton : elle ne désigne aucun endroit précis, et le
@@ -936,6 +958,52 @@ it("names the scenario and the file it cannot witness", () => {
   expect(refusals).toHaveLength(1);
   expect(refusals[0]).toContain("Scenario flow");
   expect(refusals[0]).toContain("src/b.ts");
+});
+
+/**
+ * La citation exacte mais sans contenu visible d'un fichier critique laisse le
+ * fichier sans témoin, mais le remède ne peut pas demander une citation déjà
+ * présente : le planificateur renverrait la même et tournerait pour rien. Le
+ * refus distingue donc la substance de l'existence, pour les deux moitiés du
+ * message — le détail par fichier et la classe fatale agrégée.
+ */
+it("asks for substance, not presence, when an exact quote carries no visible content", () => {
+  const separator = "// ------ --";
+  const weak = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/a.ts"],
+      requirements: [{ sourceFile: "src/a.ts", quote: separator }],
+    },
+  ]);
+  const context = contextWith([
+    { filename: "src/a.ts", patch: `+ ${separator}` },
+  ]);
+  const [line = ""] = unwitnessedPlanRefusals(weak, context, policyFor());
+  expect(line).toContain("A requirement already cites src/a.ts");
+  expect(line).not.toContain("Add a requirement whose quote exists verbatim");
+  // Le seul repli proposé reste le skip approuvé, que le gate accepterait.
+  expect(line).toContain(".canary/qa.json");
+  expect(refusalOfPlan(weak, context, policyFor()).code).toBe(
+    "REQUIREMENT_UNGROUNDED"
+  );
+  // Une citation réellement absente garde le remède d'existence : la
+  // distinction n'inverse pas le cas d'origine.
+  const missing = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/a.ts"],
+      requirements: [{ sourceFile: "src/a.ts", quote: "Alpha absent text" }],
+    },
+  ]);
+  const [absentLine = ""] = unwitnessedPlanRefusals(
+    missing,
+    context,
+    policyFor()
+  );
+  expect(absentLine).toContain(
+    "Add a requirement whose quote exists verbatim in src/a.ts"
+  );
 });
 
 it("accumulates witnesses across scenarios exactly like the coverage gate", () => {

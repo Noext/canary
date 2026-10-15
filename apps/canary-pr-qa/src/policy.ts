@@ -248,6 +248,47 @@ export function requirementHasWitness(
 }
 
 /**
+ * Vrai si la citation existe pourtant mot pour mot dans un segment témoin du
+ * fichier cité, sans porter le contenu visible qu'exige un chemin critique : le
+ * défaut est la substance de la citation, pas sa présence. Les refus et leurs
+ * classes fatales agrégées s'en servent pour distinguer les deux remèdes —
+ * citer un fragment plus substantiel, ou faire approuver le skip — au lieu de
+ * demander une citation déjà présente que le planificateur renverrait telle
+ * quelle.
+ */
+export function hasWeakWitness(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): boolean {
+  return (
+    quoteCarriesContent(requirement.quote) &&
+    requirementEvidence(requirement, context).some((segment) =>
+      quoteAppears(segment, requirement.quote)
+    ) &&
+    isCriticalPath(policy, requirement.sourceFile)
+  );
+}
+
+/**
+ * Remède d'une citation absente : elle n'existe nulle part, mot pour mot. Le
+ * refus par exigence et la classe fatale agrégée le partagent, pour que les
+ * deux moitiés du message — celle qui survit à la troncature et le détail —
+ * disent la même règle.
+ */
+export const UNGROUNDED_ABSENT_REMEDY =
+  "Quote exact source or diff text; page content alone is not a requirement.";
+
+/**
+ * Remède d'un témoin exact mais trop pauvre sur un chemin critique, quand la
+ * classe fatale agrège plusieurs fichiers : la citation est présente, c'est son
+ * contenu qui manque. Le texte reste compact — la classe le partage avec dix
+ * autres dans un préambule plafonné à `FATAL_PRELUDE_CHARS` (runner.ts).
+ */
+export const UNGROUNDED_WEAK_REMEDY =
+  "The quote exists in the cited critical file but carries no letter or digit: quote a substantial fragment, or get that file's skip approved in .canary/qa.json on the trusted base branch.";
+
+/**
  * Une exigence dont la citation n'a pas de témoin acceptable : soit elle
  * n'apparaît nulle part, même à l'espacement près, soit elle apparaît mais ne
  * porte aucun contenu visible alors qu'elle est attribuée à un fichier
@@ -265,22 +306,17 @@ export function ungroundedRequirement(
   context: PrContext,
   policy: Policy
 ): QaError {
-  const present =
-    quoteCarriesContent(requirement.quote) &&
-    requirementEvidence(requirement, context).some((segment) =>
-      quoteAppears(segment, requirement.quote)
-    );
-  if (present && isCriticalPath(policy, requirement.sourceFile)) {
+  if (hasWeakWitness(requirement, context, policy)) {
     return new QaError(
       "REQUIREMENT_UNGROUNDED",
       `Weak source witness for ${scenarioId}: ${requirement.sourceFile}`,
-      `The quote exists in ${requirement.sourceFile}, a critical file: a witness there must carry at least ${CRITICAL_QUOTE_MIN_WORD_CHARS} letter or digit of real content, so a punctuation fragment or a run of invisibles copied in passing cannot prove it. Quote an exact fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
+      `The quote exists in ${requirement.sourceFile}, a critical file: a witness there must carry at least ${CRITICAL_QUOTE_MIN_WORD_CHARS} letter or digit of visible content, so a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
     );
   }
   return new QaError(
     "REQUIREMENT_UNGROUNDED",
     `No source witness for ${scenarioId}: ${requirement.sourceFile}`,
-    "Quote exact source or diff text; page content alone is not a requirement."
+    UNGROUNDED_ABSENT_REMEDY
   );
 }
 
@@ -465,18 +501,28 @@ function coverWitnessedSourceFiles(
  * critique du diff demande un skip approuvé (`CRITICAL_COVERAGE_MISSING`).
  * Proposer un skip que le gate refuse ferait tourner la tentative de correction
  * du planificateur pour rien.
+ *
+ * `weak` distingue le cas où une exigence cite déjà le fichier mais avec une
+ * citation trop pauvre : le remède n'est plus d'ajouter une citation, déjà
+ * présente, mais de la rendre substantielle — sinon le planificateur renvoie
+ * la même citation exacte et le fichier reste sans témoin.
  */
 export function unwitnessedRequirement(
   scenarioId: string,
   file: string,
   policy: Policy,
-  inDiff: boolean
+  inDiff: boolean,
+  weak = false
 ): QaError {
-  let hint = `Add a requirement whose quote exists verbatim in ${file}, or drop it from sourceFiles and list it in skipped.`;
+  let hint: string;
   if (!inDiff) {
     hint = `This PR does not change ${file}, so it cannot be listed in skipped: drop it from sourceFiles and quote a changed file instead.`;
+  } else if (weak) {
+    hint = `A requirement already cites ${file}, but its exact quote carries no letter or digit to witness this critical file: quote a substantial fragment of ${file}${criticalSkipRefused(policy, file) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`;
   } else if (criticalSkipRefused(policy, file)) {
     hint = `Add a requirement whose quote exists verbatim in ${file}; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch.`;
+  } else {
+    hint = `Add a requirement whose quote exists verbatim in ${file}, or drop it from sourceFiles and list it in skipped.`;
   }
   return new QaError(
     "COVERAGE_WITNESS_MISSING",
@@ -486,21 +532,45 @@ export function unwitnessedRequirement(
 }
 
 /**
+ * Vrai si le scénario déclare `file` sans le témoigner alors qu'une de ses
+ * exigences vise ce fichier et y porte une citation exacte, trop pauvre pour
+ * témoigner sur ce chemin critique : le fichier reste sans témoin, mais le
+ * remède porte sur la substance de la citation, pas sur son existence.
+ */
+function weakWitnessForFile(
+  scenario: Scenario,
+  file: string,
+  context: PrContext,
+  policy: Policy
+): boolean {
+  return scenario.requirements.some(
+    (requirement) =>
+      requirement.sourceFile === file &&
+      hasWeakWitness(requirement, context, policy)
+  );
+}
+
+/**
  * Paires (scénario, fichier) des sources déclarées sans témoin, dans l'ordre du
- * plan : le couvert est cumulatif, exactement comme `validateCoverage`.
+ * plan : le couvert est cumulatif, exactement comme `validateCoverage`. `weak`
+ * marque les fichiers qu'une exigence cite déjà avec une citation trop pauvre.
  */
 export function unwitnessedSources(
   plan: Plan,
   context: PrContext,
   policy: Policy
-): { file: string; scenarioId: string }[] {
+): { file: string; scenarioId: string; weak: boolean }[] {
   const covered = new Set<string>();
-  const entries: { file: string; scenarioId: string }[] = [];
+  const entries: { file: string; scenarioId: string; weak: boolean }[] = [];
   for (const scenario of plan.scenarios) {
     coverWitnessedSourceFiles(covered, scenario, context, policy);
     for (const file of scenario.sourceFiles) {
       if (!covered.has(file)) {
-        entries.push({ file, scenarioId: scenario.id });
+        entries.push({
+          file,
+          scenarioId: scenario.id,
+          weak: weakWitnessForFile(scenario, file, context, policy),
+        });
       }
     }
   }
@@ -519,12 +589,13 @@ export function unwitnessedPlanRefusals(
 ): string[] {
   const changed = new Set(context.files.map((file) => file.filename));
   return unwitnessedSources(plan, context, policy).map(
-    ({ file, scenarioId }) => {
+    ({ file, scenarioId, weak }) => {
       const error = unwitnessedRequirement(
         scenarioId,
         file,
         policy,
-        changed.has(file)
+        changed.has(file),
+        weak
       );
       return `${error.message}. ${error.hint}`;
     }

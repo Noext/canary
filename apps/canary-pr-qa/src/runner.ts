@@ -24,11 +24,14 @@ import {
 import {
   contractBudgetRefusals,
   criticalSkipRefused,
+  hasWeakWitness,
   type Policy,
   quoteExcerpt,
   repairRequirementAttribution,
   requirementSourceRefusal,
   trustedPolicy,
+  UNGROUNDED_ABSENT_REMEDY,
+  UNGROUNDED_WEAK_REMEDY,
   undeclaredSourcePlanRefusals,
   undeclaredSources,
   ungroundedPlanRefusals,
@@ -305,6 +308,32 @@ function namedFatalClass(refusals: QaError[], label: string): FatalClass[] {
     : [];
 }
 /**
+ * Remède d'un fichier déclaré sans témoin dont la citation existe pourtant
+ * exactement : la classe fatale `COVERAGE_WITNESS_MISSING` agrège les deux
+ * défauts, et celui-ci ne se répare pas en ajoutant une citation déjà présente.
+ */
+const WEAK_UNWITNESSED_REMEDY =
+  "A requirement already cites a listed file, but its exact quote carries no letter or digit to witness that critical file: quote a substantial fragment, or get its skip approved in .canary/qa.json on the trusted base branch.";
+/**
+ * Remède d'une classe fatale de témoin : elle agrège les citations absentes et
+ * les citations exactes mais trop pauvres, dont les remèdes n'ont rien à voir.
+ * `FATAL_PRELUDE_CHARS` ne garde que cette ligne quand les autres classes
+ * saturent, donc elle doit dire la vérité seule — un message qui demande de
+ * citer le texte réel à une citation déjà présente fait renvoyer la même
+ * citation au planificateur.
+ */
+function witnessRemedy(
+  absent: string,
+  weak: string,
+  hasWeak: boolean,
+  hasAbsent: boolean
+): string {
+  if (hasWeak && hasAbsent) {
+    return `${absent} ${weak}`;
+  }
+  return hasWeak ? weak : absent;
+}
+/**
  * Classes fatales de couverture, agrégées en tête du canal de correction.
  * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
  * refus par scénario qui suivent la même liste.
@@ -320,7 +349,12 @@ function coverageFatalClasses(
     classes.push({
       code: "COVERAGE_WITNESS_MISSING",
       entries: unwitnessed.map((item) => `${item.scenarioId}:${item.file}`),
-      hint: "Add a requirement whose quote exists verbatim in each listed file.",
+      hint: witnessRemedy(
+        "Add a requirement whose quote exists verbatim in each listed file.",
+        WEAK_UNWITNESSED_REMEDY,
+        unwitnessed.some((item) => item.weak),
+        unwitnessed.some((item) => !item.weak)
+      ),
       label: "declared sources with no requirement witness",
     });
   }
@@ -335,12 +369,20 @@ function coverageFatalClasses(
   }
   const ungrounded = ungroundedRequirements(candidate, context, policy);
   if (ungrounded.length > 0) {
+    const weak = ungrounded.filter((item) =>
+      hasWeakWitness(item.requirement, context, policy)
+    );
     classes.push({
       code: "REQUIREMENT_UNGROUNDED",
       entries: ungrounded.map(
         (item) => `${item.scenarioId}:${item.requirement.sourceFile}`
       ),
-      hint: "Quote exact source or diff text; page content alone is not a requirement.",
+      hint: witnessRemedy(
+        UNGROUNDED_ABSENT_REMEDY,
+        UNGROUNDED_WEAK_REMEDY,
+        weak.length > 0,
+        weak.length < ungrounded.length
+      ),
       label: "requirements whose quote has no source witness",
       quotes: [...new Set(ungrounded.map((item) => item.requirement.quote))],
     });
