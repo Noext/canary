@@ -484,6 +484,59 @@ it("measures text and placeholder spellings in actual Chromium", async () => {
       expect(count.actual, target.by).toBe(1);
       expect(count.targetName, target.by).toBe(exposed);
     }
+    // Libellés français à trois puis quatre signes repliables (27 et 81
+    // graphies) : au plafond historique de 16 la lecture retombait sur la
+    // graphie brute, donc « hidden » passait sur un texte pourtant affiché. Les
+    // verdicts doivent porter sur la graphie que Chromium expose.
+    for (const [route, label] of [
+      ["/typographie-texte-long", "l'écart d'espèces n'est pas justifié"],
+      [
+        "/typographie-texte-long-four",
+        "l'écart d'espèces n'est pas justifié par l'opérateur",
+      ],
+    ] as const) {
+      const longExposed = label.replace(/'/g, "\u2019");
+      await canary.act(
+        id,
+        `open-${route}`,
+        compileAction({ type: "goto", path: route }, f.baseUrl)
+      );
+      for (const target of [
+        { by: "text" as const, value: label },
+        { by: "placeholder" as const, value: label },
+      ]) {
+        const visible = await canary.act(
+          id,
+          `visible-${route}-${target.by}`,
+          reading(target, "visible")
+        );
+        expect(visible.actual, `${route} ${target.by}`).toBe(true);
+        expect(visible.targetName, `${route} ${target.by}`).toBe(longExposed);
+        const hidden = await canary.act(
+          id,
+          `hidden-${route}-${target.by}`,
+          reading(target, "hidden")
+        );
+        expect(hidden.actual, `${route} ${target.by}`).toBe(true);
+        expect(
+          assertionMatches(
+            {
+              id: "hidden",
+              kind: "hidden",
+              description: "l'écart d'espèces n'est pas justifié",
+            },
+            hidden.actual
+          ),
+          `${route} ${target.by}`
+        ).toBe(false);
+        const count = await canary.act(
+          id,
+          `count-${route}-${target.by}`,
+          reading(target, "count")
+        );
+        expect(count.actual, `${route} ${target.by}`).toBe(1);
+      }
+    }
     // Un comptage honnête additionne les graphies décalées : deux éléments pour
     // un compte de deux est vrai, trois pour deux est faux, sans ambiguïté.
     await canary.act(

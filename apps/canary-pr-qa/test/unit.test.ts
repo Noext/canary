@@ -225,6 +225,19 @@ const plannedTarget = {
   name: "Justification de l'écart",
 };
 
+/**
+ * Libellés français réels à trois puis quatre signes repliables : leur produit
+ * (27 puis 81 graphies) dépassait l'ancien plafond de 16, donc la lecture
+ * retombait sur la graphie brute en croyant mesurer.
+ */
+const THREE_SIGN_LABEL = "l'écart d'espèces n'est pas justifié";
+const FOUR_SIGN_LABEL = "l'écart d'espèces n'est pas justifié par l'opérateur";
+
+/** Même libellé écrit avec la graphie d'apostrophe indiquée (`’` par défaut). */
+function spelled(label: string, apostrophe = "\u2019"): string {
+  return label.replace(/'/g, apostrophe);
+}
+
 /** Même lecture, sur la cible role+nom historique. */
 function runTypographicRead(
   kind: "visible" | "hidden" | "count",
@@ -497,10 +510,10 @@ describe("validation and deterministic assertions", () => {
     expect(foldTypography("Montant d’espèces\u00a0attendu")).toBe(
       foldTypography("Montant d'espèces attendu")
     );
-    expect(typographicVariants(planned)).toEqual([
-      "Justification de l‘écart",
-      "Justification de l’écart",
-    ]);
+    expect(typographicVariants(planned)).toEqual({
+      planned,
+      names: ["Justification de l‘écart", "Justification de l’écart"],
+    });
     expect(typographicCodepoints(planned, "Justification de l’écart")).toBe(
       "U+0027"
     );
@@ -513,19 +526,36 @@ describe("validation and deterministic assertions", () => {
         "Montant d'espèces\u00a0attendu"
       )
     ).toBe("U+0020");
-    // Un nom sans signe repliable garde son appel direct.
-    expect(typographicVariants("Save")).toEqual([]);
+    // Un nom sans signe repliable garde son appel direct : la liste vide dit
+    // « rien à replier », jamais « le repli a échoué ».
+    expect(typographicVariants("Save")).toEqual({
+      planned: "Save",
+      names: [],
+    });
   });
 
-  it("borne le repli : espace ordinaire intact, plafond sur un nom saturé", () => {
+  it("borne le repli : espace ordinaire intact, plafond déclaré au lieu d'une liste vide", () => {
     // L'espace insécable revient à l'espace ordinaire, l'inverse n'est pas
     // énuméré : un nom compte plusieurs espaces et le produit exploserait.
-    const variants = typographicVariants("Montant d'espèces\u00a0attendu");
+    const variants = typographicVariants(
+      "Montant d'espèces\u00a0attendu"
+    ).names;
     expect(variants).toContain("Montant d'espèces attendu");
     expect(variants).toContain("Montant d’espèces attendu");
     expect(variants).not.toContain("Montant\u00a0d’espèces attendu");
-    expect(typographicVariants("l'l'")).toHaveLength(8);
-    expect(typographicVariants("l'l'l'")).toEqual([]);
+    expect(typographicVariants("l'l'").names).toHaveLength(8);
+    // Trois signes repliables tiennent désormais dans le plafond : un libellé
+    // français ordinaire n'est plus replié en silence.
+    expect(typographicVariants("l'l'l'").names).toHaveLength(26);
+    // Au-delà, l'énumération s'arrête et le déclare : une liste vide ne peut plus
+    // se confondre avec « aucun signe repliable ».
+    const saturated = typographicVariants("l'l'l'l'l'l'");
+    expect(saturated.names).toEqual([]);
+    expect(saturated.overflow).toEqual({
+      signs: 6,
+      variants: 729,
+      ceiling: 256,
+    });
   });
 
   it("vise l'élément réel quand la page n'expose qu'une autre graphie", async () => {
@@ -735,6 +765,118 @@ describe("validation and deterministic assertions", () => {
         expect(read.observation, `${target.by} ${kind}`).toBeUndefined();
       }
     }
+  });
+
+  it("mesure un libellé à deux, trois et quatre signes repliables sur la graphie exposée", async () => {
+    // Le défaut mesuré : au-delà de deux apostrophes, le produit des graphies
+    // dépassait l'ancien plafond de 16, `typographicVariants` rendait une liste
+    // vide, et la lecture retombait sur la graphie brute — « hidden » passait
+    // sur un texte affiché, « visible » et « count » échouaient dessus. Les trois
+    // verdicts doivent porter sur la graphie que la page expose, pour chacun des
+    // libellés ci-dessous.
+    for (const label of [
+      "l'écart d'espèces",
+      THREE_SIGN_LABEL,
+      FOUR_SIGN_LABEL,
+    ]) {
+      const exposed = spelled(label, "\u2019");
+      for (const target of [
+        { by: "role" as const, value: "textbox", name: label },
+        { by: "text" as const, value: label },
+        { by: "placeholder" as const, value: label },
+      ]) {
+        // La mesure passe bien par la résolution de la graphie, pas par l'appel
+        // direct qui aurait rendu le verdict de la graphie brute.
+        expect(locatorCall(target, "isVisible()", "measure"), label).toContain(
+          "readSpelling("
+        );
+        expect(locatorCount(target), label).toContain("countSpelling(");
+        const visible = await readSpelling("visible", target, [exposed]);
+        expect(visible.failure, `${label} ${target.by}`).toBeUndefined();
+        expect(visible.actual, `${label} ${target.by}`).toBe(true);
+        expect(visible.passed, `${label} ${target.by}`).toBe(true);
+        expect(visible.observation?.targetName, `${label} ${target.by}`).toBe(
+          exposed
+        );
+        const hidden = await readSpelling("hidden", target, [exposed]);
+        // Le texte est affiché : « hidden » est faux, jamais vrai sur un locator
+        // vide.
+        expect(hidden.actual, `${label} ${target.by}`).toBe(true);
+        expect(hidden.passed, `${label} ${target.by}`).toBe(false);
+        const count = await readSpelling("count", target, [exposed], 1);
+        expect(count.actual, `${label} ${target.by}`).toBe(1);
+        expect(count.passed, `${label} ${target.by}`).toBe(true);
+      }
+    }
+  });
+
+  it("refuse deux graphies concurrentes d'un libellé à trois signes, sans lire", async () => {
+    // Deux graphies concurrentes : l'échec est explicite et aucune observation
+    // n'est publiée, donc aucun verdict rendu sur un locator vide. La cible
+    // role+nom suit la même règle.
+    const targets = [
+      { by: "role" as const, value: "textbox", name: THREE_SIGN_LABEL },
+      { by: "text" as const, value: THREE_SIGN_LABEL },
+      { by: "placeholder" as const, value: THREE_SIGN_LABEL },
+    ];
+    for (const target of targets) {
+      const read = await readSpelling("hidden", target, [
+        spelled(THREE_SIGN_LABEL, "\u2019"),
+        spelled(THREE_SIGN_LABEL, "\u2018"),
+      ]);
+      const failure = read.failure as { message?: string; name?: string };
+      expect(failure?.name, target.by).toBe("AmbiguousTargetError");
+      expect(String(failure?.message), target.by).toContain("Ambiguous");
+      expect(read.observation, target.by).toBeUndefined();
+    }
+  });
+
+  it("lève au plafond de graphies au lieu de mesurer la graphie brute", async () => {
+    // Six signes repliables dépassent le plafond : les graphies ne sont pas
+    // énumérables, et la lecture le dit au lieu de rendre le verdict de la
+    // graphie brute (qui aurait fait passer « hidden » sur la cible exposée).
+    const saturated = "l'l'l'l'l'l'";
+    const exposed = spelled(saturated, "\u2019");
+    for (const kind of ["visible", "hidden"] as const) {
+      for (const target of [
+        { by: "text" as const, value: saturated },
+        { by: "role" as const, value: "textbox", name: saturated },
+      ]) {
+        const read = await readSpelling(kind, target, [exposed]);
+        const failure = read.failure as { message?: string; name?: string };
+        expect(failure?.name, `${target.by} ${kind}`).toBe(
+          "SpellingLimitError"
+        );
+        expect(String(failure?.message), `${target.by} ${kind}`).toContain(
+          "6 foldable signs produce 729 competing spellings"
+        );
+        expect(String(failure?.message), `${target.by} ${kind}`).toContain(
+          "ceiling of 256"
+        );
+        expect(read.observation, `${target.by} ${kind}`).toBeUndefined();
+      }
+    }
+    // La graphie exacte reste lisible sans repli : le plafond ne condamne pas un
+    // plan qui vise la graphie réellement exposée.
+    const exact = await readSpelling(
+      "visible",
+      { by: "text", value: saturated },
+      [saturated]
+    );
+    expect(exact.failure).toBeUndefined();
+    expect(exact.actual).toBe(true);
+    expect(exact.passed).toBe(true);
+    // Un comptage ne peut pas prétendre à un total sans énumérer toutes les
+    // graphies : il lève, au lieu d'un total tronqué qui aurait l'air mesuré.
+    const count = await readSpelling(
+      "count",
+      { by: "text", value: saturated },
+      [saturated],
+      1
+    );
+    expect((count.failure as { name?: string })?.name).toBe(
+      "SpellingLimitError"
+    );
   });
 
   it("suit l'union du libellé avant de lire, au lieu d'un libellé exact vide", async () => {

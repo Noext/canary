@@ -17,9 +17,12 @@ import type { Locator, Plan, Scenario } from "./schema.js";
  * toute exécution au lieu d'échouer en plein run sur un élément inventé.
  *
  * L'évidence reste incomplète par nature : l'instantané est limité à 12 niveaux
- * de profondeur et les types de locator css/text/label/placeholder/testId lisent
- * le DOM, pas l'arbre d'accessibilité. Ces cas sont rapportés « non concluant »
- * (jamais un refus) pour ne pas remplacer un contrôle réel par un faux contrôle.
+ * de profondeur, et les types de locator css/label/testId lisent le DOM, pas
+ * l'arbre d'accessibilité. Un texte ou un placeholder n'y est lu que lorsque
+ * l'instantané le porte ; le reste est rapporté « non concluant » (jamais un
+ * refus), pour ne pas remplacer un contrôle réel par un faux contrôle. Une
+ * ambiguïté réellement exposée, elle, est refusée : deux graphies concurrentes
+ * rendent la cible inexécutable, comme pour role+nom.
  *
  * Une assertion de comptage échappe à l'exigence d'unicité : l'exécution
  * additionne les graphies du même signe, donc une seule graphie présente suffit
@@ -48,7 +51,11 @@ const CONTAMINATING = new Set([
 
 interface AriaNames {
   nodes: AriaNameNode[];
+  /** Valeurs de `placeholder` de l'instantané, pour un locator `by:"placeholder"`. */
+  placeholders: string[];
   roles: Map<string, Set<string>>;
+  /** Contenus texte de l'instantané, seuls visibles d'un locator `by:"text"`. */
+  texts: string[];
 }
 
 export interface PlanEvidenceRefusal {
@@ -139,6 +146,59 @@ export function ariaRoleNameNodes(aria: string): AriaNameNode[] {
 /** Noms accessibles par rôle, normalisés comme avant la comparaison exacte. */
 export function ariaRoleNames(aria: string): Map<string, Set<string>> {
   return roleNameSets(ariaRoleNameNodes(aria));
+}
+
+/** Valeur littérale d'une ligne de l'instantané : entre guillemets ou brute. */
+function readSpellingValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"')) {
+    return readQuoted(trimmed);
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length > 1) {
+    return trimmed.slice(1, -1).replace(/\\'/g, "'");
+  }
+  return trimmed;
+}
+
+/**
+ * Textes littéraux que l'instantané porte, séparés par famille de locator :
+ * contenu texte d'un nœud (`- text: …`, `- paragraph: …`) et valeur d'un
+ * `placeholder` (`- /placeholder: …`). `getByText` lit le contenu et jamais le
+ * nom, `getByPlaceholder` la valeur du contrôle ; l'absence de l'un ou de
+ * l'autre ne prouve donc rien, seule leur présence instruit le contrôle.
+ */
+export function ariaLiteralSpellings(aria: string): {
+  texts: string[];
+  placeholders: string[];
+} {
+  const texts: string[] = [];
+  const placeholders: string[] = [];
+  for (const line of aria.split("\n")) {
+    const node = line.trim();
+    if (!node.startsWith("- ")) {
+      continue;
+    }
+    const body = node.slice(2);
+    if (body.startsWith("/")) {
+      const property = /^\/placeholder:\s*(.+)$/.exec(body);
+      if (property?.[1]) {
+        placeholders.push(readSpellingValue(property[1]));
+      }
+      continue;
+    }
+    const role = /^[a-z]+/i.exec(body)?.[0];
+    if (!role) {
+      continue;
+    }
+    // Le nom accessible entre guillemets n'est pas du texte ; le contenu texte
+    // suit les attributs d'un `: `, ou ouvre directement la ligne.
+    const rest = body.slice(role.length).replace(/^\s*"(?:[^"\\]|\\.)*"/, "");
+    const inline = /:\s+(.+)$/.exec(rest)?.[1];
+    if (inline) {
+      texts.push(readSpellingValue(inline));
+    }
+  }
+  return { texts, placeholders };
 }
 
 function roleNameSets(nodes: AriaNameNode[]): Map<string, Set<string>> {
@@ -313,6 +373,10 @@ function checkTarget(
     });
     return;
   }
+  if (locator.by === "text" || locator.by === "placeholder") {
+    checkLiteralTarget(scenario, stepId, locator, names, report, counting);
+    return;
+  }
   if (locator.by !== "role") {
     report.inconclusive.push({
       scenarioId: scenario.id,
@@ -330,7 +394,7 @@ function checkTarget(
   // il n'en retient une que si elle atteint exactement un élément. Une page qui
   // expose deux graphies du même nom n'est donc pas exécutable : l'accepter ici
   // échangerait un refus propre contre un run perdu sans explication.
-  const variants = typographicVariants(locator.name);
+  const variants = typographicVariants(locator.name).names;
   const folded = names.nodes.filter(
     (node) => node.role === role && variants.includes(node.name)
   );
@@ -341,6 +405,81 @@ function checkTarget(
   // (« count: 2 » sur deux éléments) par un refus qui n'a pas de sens pour un
   // compte.
   if (counting === undefined ? folded.length === 1 : folded.length > 0) {
+    return;
+  }
+  report.refusals.push({
+    scenarioId: scenario.id,
+    stepId,
+    target: describeTarget(locator),
+  });
+}
+
+/**
+ * Cible littérale (texte, placeholder) : l'instantané ne la porte que lorsqu'il
+ * l'expose, donc une absence de preuve reste non concluante. En revanche, dès
+ * qu'il l'expose, la même exigence d'unicité que pour role+nom s'applique : deux
+ * graphies concurrentes rendent la cible inexécutable — le repli d'exécution
+ * lève sur l'ambiguïté — et sont refusées avant toute dépense, au lieu de
+ * laisser le run se perdre.
+ *
+ * L'évidence littérale compte des graphies, pas des éléments : le nom accessible
+ * d'un contrôle peut répéter sa valeur de `placeholder`, et un texte apparaît
+ * dans un nœud comme dans son descendant. L'unicité d'élément reste donc jugée à
+ * l'exécution ; ici, seule une ambiguïté réellement exposée est refusée.
+ */
+function checkLiteralTarget(
+  scenario: Scenario,
+  stepId: string,
+  locator: Locator & { by: "text" | "placeholder" },
+  names: AriaNames,
+  report: PlanEvidenceReport,
+  counting: number | undefined
+) {
+  const exposed = (
+    locator.by === "text"
+      ? names.texts
+      : [...names.nodes.map((node) => node.name), ...names.placeholders]
+  ).map(normalizeText);
+  const planned = normalizeText(locator.value);
+  if (exposed.includes(planned)) {
+    return;
+  }
+  const inconclusive = (reason: string) =>
+    report.inconclusive.push({
+      scenarioId: scenario.id,
+      stepId,
+      target: describeTarget(locator),
+      reason,
+    });
+  const spelling = typographicVariants(locator.value);
+  if (spelling.overflow) {
+    // Aucune graphie n'est énumérable : l'exécution lève dès que la page n'expose
+    // pas la graphie du plan. Un jumeau typographique exposé le prouve ; sans lui
+    // la graphie du plan peut être celle de la page, et la preuve manque.
+    const twin = exposed.some(
+      (item) =>
+        item !== planned && foldTypography(item) === foldTypography(planned)
+    );
+    if (!twin) {
+      inconclusive(
+        "graphies de la cible non énumérables au plafond du repli, et aucune n'est exposée"
+      );
+      return;
+    }
+    report.refusals.push({
+      scenarioId: scenario.id,
+      stepId,
+      target: describeTarget(locator),
+    });
+    return;
+  }
+  const variants = spelling.names.map(normalizeText);
+  const folded = new Set(exposed.filter((item) => variants.includes(item)));
+  if (counting === undefined ? folded.size === 1 : folded.size > 0) {
+    return;
+  }
+  if (folded.size === 0) {
+    inconclusive("aucune graphie de la cible dans l'instantané de découverte");
     return;
   }
   report.refusals.push({
@@ -433,7 +572,11 @@ export function validatePlanEvidence(
     return report;
   }
   const nodes = ariaRoleNameNodes(evidence.aria);
-  const names: AriaNames = { nodes, roles: roleNameSets(nodes) };
+  const names: AriaNames = {
+    nodes,
+    roles: roleNameSets(nodes),
+    ...ariaLiteralSpellings(evidence.aria),
+  };
   for (const scenario of plan.scenarios) {
     inspectScenario(scenario, evidence, names, report);
   }
@@ -454,6 +597,6 @@ export function planEvidenceDiagnostic(
     : "";
   return {
     message: `Scénario ${scenario.id} non exécuté : cible absente de l'instantané de la page de découverte (${targets})`,
-    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur et ne couvre pas les types css/text/label/placeholder/testId.${unresolved}`,
+    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
   };
 }

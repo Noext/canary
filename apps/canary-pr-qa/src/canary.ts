@@ -71,10 +71,13 @@ const TYPOGRAPHIC_FOLD = new Map<string, string>(
 );
 
 /**
- * Plafond des variantes essayées après l'échec du nom exact : chaque position
- * repliable multiplierait les candidats, et un nom reste lisible au-delà.
+ * Plafond des graphies énumérées pour un libellé : chaque signe repliable
+ * multiplie les candidats, et les essayer tous est le seul repli exact. Un
+ * libellé réel en compte peu ; au-delà du plafond, le repli n'est plus
+ * énumérable et devient un cas explicite (`overflow`), jamais une lecture de la
+ * graphie brute qui croirait avoir mesuré.
  */
-const MAX_TYPOGRAPHIC_VARIANTS = 16;
+const MAX_TYPOGRAPHIC_VARIANTS = 256;
 
 /** Nom ramené aux graphies représentatives de ses signes. */
 export function foldTypography(value: string): string {
@@ -109,25 +112,58 @@ function typographicEquivalents(char: string): string[] {
 }
 
 /**
- * Noms accessibles que le même locator role+nom peut viser par repli. L'espace
- * ordinaire ne se replie pas position par position : un nom en compte
- * plusieurs, et le produit dépasserait le plafond pour la plupart des noms. Le
- * repli couvre donc l'apostrophe et le guillemet (la cause observée) ainsi que
- * l'espace insécable ramené à l'espace ordinaire ; l'écart inverse reste nommé
- * par le diagnostic, jamais cliqué.
+ * Graphies que la même cible peut viser par repli. `names` est vide seulement
+ * quand le libellé ne porte aucun signe repliable : une liste vide ne dit donc
+ * jamais « le repli a échoué ». Le produit des graphies croît avec chaque signe
+ * repliable ; au plafond, l'énumération s'arrête et `overflow` le déclare, pour
+ * que l'appelant en fasse un cas explicite au lieu de mesurer la graphie brute.
  */
-export function typographicVariants(name: string): string[] {
+export interface TypographicVariants {
+  /** Graphies de rechange à essayer, sans la graphie du plan. */
+  names: string[];
+  /** Signes repliables du libellé et graphies qu'ils produisent, au-delà du plafond. */
+  overflow?: { signs: number; variants: number; ceiling: number };
+  /** Graphie littérale que le plan vise, telle quelle. */
+  planned: string;
+}
+
+/**
+ * Graphies d'un libellé pour le même locator. L'espace ordinaire ne se replie
+ * pas position par position : un nom en compte plusieurs, et le produit
+ * dépasserait le plafond pour la plupart des noms. Le repli couvre donc
+ * l'apostrophe et le guillemet (la cause observée) ainsi que l'espace insécable
+ * ramené à l'espace ordinaire ; l'écart inverse reste nommé par le diagnostic,
+ * jamais cliqué.
+ */
+export function typographicVariants(name: string): TypographicVariants {
   let variants = [""];
+  let signs = 0;
+  let product = 1;
   for (const char of name) {
     const equivalents = typographicEquivalents(char);
-    if (variants.length * equivalents.length > MAX_TYPOGRAPHIC_VARIANTS) {
-      return [];
+    if (equivalents.length > 1) {
+      signs += 1;
     }
-    variants = variants.flatMap((prefix) =>
-      equivalents.map((equivalent) => prefix + equivalent)
-    );
+    // Le produit sature : un libellé saturé de signes repliables en compterait
+    // plus que ce que le diagnostic a besoin de nommer.
+    product = Math.min(product * equivalents.length, 1_000_000);
+    if (product <= MAX_TYPOGRAPHIC_VARIANTS) {
+      variants = variants.flatMap((prefix) =>
+        equivalents.map((equivalent) => prefix + equivalent)
+      );
+    }
   }
-  return variants.filter((variant) => variant !== name);
+  if (product > MAX_TYPOGRAPHIC_VARIANTS) {
+    return {
+      planned: name,
+      names: [],
+      overflow: { signs, variants: product, ceiling: MAX_TYPOGRAPHIC_VARIANTS },
+    };
+  }
+  return {
+    planned: name,
+    names: variants.filter((variant) => variant !== name),
+  };
 }
 
 /**
@@ -186,14 +222,18 @@ const RESOLVE_LABEL_HELPER = `async function resolveLabel(strict, fallback, act)
  * exact et uniquement si ces graphies atteignent exactement un élément au
  * total. Une cible absente de la page ne peut donc pas devenir un clic sur un
  * homonyme, et deux graphies concurrentes gardent l'échec d'origine. Le nom
- * réellement visé est publié dans l'observation, jamais tu.
+ * réellement visé est publié dans l'observation, jamais tu. Une énumération
+ * refusée par le plafond remonte comme erreur explicite : sans graphies, il n'y
+ * a aucun repli à essayer.
  */
-const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act) {
+const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, spelling, act) {
   try {
     return await act(exact);
   } catch (error) {
     if (!/Timeout \\d+ms exceeded|strict mode violation/.test(String(error))) throw error;
     if (await exact.count()) throw error;
+    if (spelling.overflow) throw spellingLimit(spelling);
+    const names = spelling.names;
     let used;
     let matched = 0;
     for (const name of names) {
@@ -206,6 +246,21 @@ const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act)
     targetName = used.name;
     return await act(used.candidate);
   }
+}`;
+
+/**
+ * Émis dans le script compilé : le plafond de graphies atteint interdit d'énumérer
+ * le repli. La lecture ne peut alors pas se rabattre sur la graphie brute en
+ * croyant avoir mesuré : elle lève une erreur nommée qui dit le plafond et ce
+ * qu'il reste à faire. Jetée sous forme d'objet, comme l'ambiguïté : un `Error`
+ * créé dans QuickJS perd son message en traversant la frontière.
+ */
+const SPELLING_LIMIT_HELPER = `function spellingLimit(spelling) {
+  const overflow = spelling.overflow;
+  return {
+    name: "SpellingLimitError",
+    message: "Unfoldable spelling " + JSON.stringify(spelling.planned) + ": its " + overflow.signs + " foldable signs produce " + overflow.variants + " competing spellings, above the ceiling of " + overflow.ceiling + ", so no spelling can be enumerated; retarget the assertion on the exact spelling the page exposes",
+  };
 }`;
 
 /**
@@ -225,12 +280,13 @@ const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act)
  * ne lirait pas la cause. Un objet dont `message` est propre la porte jusqu'au
  * rapport.
  */
-const RESOLVE_SPELLING_READ_HELPER = `async function readSpelling(exact, build, label, names, planned, read) {
+const RESOLVE_SPELLING_READ_HELPER = `async function readSpelling(exact, build, label, spelling, read) {
   if (await exact.count()) return await read(exact);
+  if (spelling.overflow) throw spellingLimit(spelling);
   let used;
   let matched = 0;
   const exposed = [];
-  for (const name of names) {
+  for (const name of spelling.names) {
     const candidate = build(name);
     const count = await candidate.count();
     matched += count;
@@ -239,7 +295,7 @@ const RESOLVE_SPELLING_READ_HELPER = `async function readSpelling(exact, build, 
   }
   if (matched === 0) return await read(exact);
   if (!(used && matched === 1)) {
-    throw { name: "AmbiguousTargetError", message: "Ambiguous " + label + " " + JSON.stringify(planned) + ": the page exposes " + exposed.join(" and ") + ", so no spelling is chosen; retarget the assertion on one unambiguous spelling" };
+    throw { name: "AmbiguousTargetError", message: "Ambiguous " + label + " " + JSON.stringify(spelling.planned) + ": the page exposes " + exposed.join(" and ") + ", so no spelling is chosen; retarget the assertion on one unambiguous spelling" };
   }
   targetName = used.name;
   return await read(used.candidate);
@@ -253,13 +309,16 @@ const RESOLVE_SPELLING_READ_HELPER = `async function readSpelling(exact, build, 
  * réel d'éléments, jamais sur celui d'une graphie choisie au hasard. Aucune
  * unicité n'est exigée ici : un compte faux reste un compte faux au lieu de
  * devenir une erreur d'ambiguïté. La substitution n'est publiée que lorsqu'une
- * graphie unique remplace la graphie exacte absente.
+ * graphie unique remplace la graphie exacte absente. Un repli non énumérable
+ * (plafond) interdit de prétendre à un total : c'est une erreur explicite, pas
+ * un compte tronqué qui aurait l'air mesuré.
  */
-const RESOLVE_SPELLING_COUNT_HELPER = `async function countSpelling(exact, build, names) {
+const RESOLVE_SPELLING_COUNT_HELPER = `async function countSpelling(exact, build, spelling) {
+  if (spelling.overflow) throw spellingLimit(spelling);
   const count = await exact.count();
   const exposed = [];
   let total = count;
-  for (const name of names) {
+  for (const name of spelling.names) {
     const found = await build(name).count();
     if (found) exposed.push(name);
     total += found;
@@ -294,10 +353,19 @@ function spellingValue(locator: Locator): string | undefined {
   return;
 }
 
-/** Variantes repliables de la graphie visée, jamais calculées pour un autre type. */
-function spellingVariants(locator: Locator): string[] {
+/** Repli repliable de la graphie visée, jamais calculé pour un autre type. */
+function spellingVariants(locator: Locator): TypographicVariants | undefined {
   const value = spellingValue(locator);
-  return value === undefined ? [] : typographicVariants(value);
+  return value === undefined ? undefined : typographicVariants(value);
+}
+
+/**
+ * L'énumération porte-t-elle quelque chose à essayer ? Faux seulement quand le
+ * libellé ne porte aucun signe repliable : un plafond dépassé reste un cas à
+ * traiter (erreur explicite), jamais un repli silencieux sur la graphie brute.
+ */
+function spellingFoldable(variants: TypographicVariants): boolean {
+  return variants.names.length > 0 || variants.overflow !== undefined;
 }
 
 /** Construction du locator pour une graphie de la même famille que le locator visé. */
@@ -336,7 +404,10 @@ function spellingLabel(locator: Locator): string {
  * `mode` dit ce que l'appel fait d'un locator vide : une action ou une lecture
  * qui lève (`click`, `innerText`) est rejouée sur le repli après l'échec de la
  * graphie exacte, alors qu'une lecture qui mesure (`isVisible`) doit résoudre la
- * graphie exposée d'abord — un locator vide y rend false sans jamais lever.
+ * graphie exposée d'abord — un locator vide y rend false sans jamais lever. Une
+ * énumération refusée par le plafond de graphies lève une erreur nommée au lieu
+ * de rendre un verdict : la lecture ne mesure jamais la graphie brute sans
+ * l'avoir résolue.
  */
 export function locatorCall(
   locator: Locator,
@@ -351,12 +422,11 @@ export function locatorCall(
       : `resolveLabel(${strict}, ${fallback}, ${read})`;
   }
   const read = `(locator) => locator.${call}`;
-  const names = spellingVariants(locator);
-  if (mode === "measure" && names.length > 0) {
+  const spelling = spellingVariants(locator);
+  if (mode === "measure" && spelling && spellingFoldable(spelling)) {
     // La lecture reçoit aussi la graphie du plan et sa famille : c'est ce que
     // l'échec d'ambiguïté nomme, faute de pouvoir désigner une seule graphie.
-    const planned = JSON.stringify(spellingValue(locator));
-    return `readSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(spellingLabel(locator))}, ${JSON.stringify(names)}, ${planned}, ${read})`;
+    return `readSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(spellingLabel(locator))}, ${JSON.stringify(spelling)}, ${read})`;
   }
   return nameFallback(locator, read) ?? `${locatorExpression(locator)}.${call}`;
 }
@@ -365,30 +435,31 @@ export function locatorCall(
  * Lecture d'une assertion `count` : la multiplicité est le sujet, donc aucune
  * unicité n'est exigée. Le total additionne les graphies du même signe, et un
  * compte qui ne tombe pas juste reste une assertion fausse, pas une ambiguïté.
+ * Un repli non énumérable (plafond) lève : un total tronqué aurait l'air mesuré.
  */
 export function locatorCount(locator: Locator): string {
   if (locator.by === "label") {
     const { strict, fallback } = labelTargets(locator.value);
     return `readLabel(${strict}, ${fallback}, (locator) => locator.count())`;
   }
-  const names = spellingVariants(locator);
-  return names.length === 0
-    ? `${locatorExpression(locator)}.count()`
-    : `countSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(names)})`;
+  const spelling = spellingVariants(locator);
+  return spelling && spellingFoldable(spelling)
+    ? `countSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(spelling)})`
+    : `${locatorExpression(locator)}.count()`;
 }
 
 /**
  * Repli typographique d'un locator role+nom : `undefined` quand le nom ne porte
- * aucun signe repliable, ou quand ses variantes dépassent le plafond.
+ * aucun signe repliable, ou quand le plan vise une autre famille de locator.
  */
 function nameFallback(locator: Locator, act: string): string | undefined {
   if (locator.by !== "role") {
     return;
   }
-  const names = typographicVariants(locator.name);
-  return names.length === 0
-    ? undefined
-    : `resolveName(${locatorExpression(locator)}, ${JSON.stringify(locator.value)}, ${JSON.stringify(names)}, ${act})`;
+  const spelling = typographicVariants(locator.name);
+  return spellingFoldable(spelling)
+    ? `resolveName(${locatorExpression(locator)}, ${JSON.stringify(locator.value)}, ${JSON.stringify(spelling)}, ${act})`
+    : undefined;
 }
 
 /**
@@ -583,6 +654,7 @@ let actual;
 const provenanceUrls = [];
 ${RESOLVE_LABEL_HELPER}
 ${RESOLVE_LABEL_READ_HELPER}
+${SPELLING_LIMIT_HELPER}
 ${RESOLVE_NAME_HELPER}
 ${RESOLVE_SPELLING_READ_HELPER}
 ${RESOLVE_SPELLING_COUNT_HELPER}

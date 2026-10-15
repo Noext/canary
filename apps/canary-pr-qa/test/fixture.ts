@@ -317,13 +317,25 @@ export async function fixture(
       // Textes et placeholders qui ne diffèrent du plan que par la graphie de
       // l'apostrophe : le plan recopie U+0027, la page expose U+2019. Le titre
       // de la page garde le texte des ancêtres différent de chaque graphie,
-      // pour que `getByText` exact ne résolve que le paragraphe visé.
-      const spelled = "Justification de l\u2019\u00e9cart";
-      const shifted = "Justification de l\u2018\u00e9cart";
+      // pour que `getByText` exact ne résolve que le paragraphe visé. Les deux
+      // libellés longs portent trois puis quatre signes repliables (27 et 81
+      // graphies), au-delà du plafond historique de 16 : la mesure y retombait
+      // sur la graphie brute. Les suffixes `-double` et `-triple` font
+      // concurrencer les graphies ou en répètent une seule.
+      const suffix = ["-double", "-triple"].find((item) => path.endsWith(item));
+      const route = path.slice(0, path.length - (suffix?.length ?? 0));
+      let label = "Justification de l'écart";
+      if (route.endsWith("-long-four")) {
+        label = "l'écart d'espèces n'est pas justifié par l'opérateur";
+      } else if (route.endsWith("-long")) {
+        label = "l'écart d'espèces n'est pas justifié";
+      }
+      const spelled = label.replace(/'/g, "\u2019");
+      const shifted = label.replace(/'/g, "\u2018");
       let spellings = [spelled];
-      if (path.endsWith("-double")) {
+      if (suffix === "-double") {
         spellings = [spelled, shifted];
-      } else if (path.endsWith("-triple")) {
+      } else if (suffix === "-triple") {
         spellings = [spelled, spelled, spelled];
       }
       res.writeHead(200, {
