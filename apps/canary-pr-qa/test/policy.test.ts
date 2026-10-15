@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
+import { PLANNER_PROMPT } from "../src/model.js";
 import {
   isDocumentationPath,
   PolicySchema,
@@ -1548,4 +1549,20 @@ it("refuses a quote stitched across two reconstructed hunks", () => {
       policyFor()
     )
   ).toHaveLength(1);
+});
+
+it("forbids stitching two real lines into one quote in the planner prompt", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  expect(prompt).toMatch(/never stitch two separate lines into one quote/i);
+  // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
+  // lot E — et la reformulation en une ligne qui « devrait » exister est
+  // interdite ; c'est la distinction que le prompt doit enseigner.
+  expect(prompt).toMatch(
+    /Reflowing a multi-line block onto one line stays allowed/i
+  );
+  // Le contre-exemple réel du lot F est enseigné, dans ses deux lignes réelles
+  // et dans la citation recousue qu'elles ont produite.
+  expect(prompt).toContain('const result = countCash({ "500": "3,5" });');
+  expect(prompt).toContain("expect(result.ok).toBe(false);");
+  expect(prompt).toContain(STITCHED_QUOTE);
 });
