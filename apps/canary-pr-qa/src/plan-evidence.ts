@@ -1,4 +1,9 @@
-import { PLAN_EVIDENCE_SNAPSHOT_CHARS } from "./canary.js";
+import {
+  foldTypography,
+  PLAN_EVIDENCE_SNAPSHOT_CHARS,
+  typographicCodepoints,
+  typographicVariants,
+} from "./canary.js";
 import { QaError } from "./diagnostics.js";
 import { unstableSelectorReason } from "./plan-selector.js";
 import type { Locator, Plan, Scenario } from "./schema.js";
@@ -7,7 +12,8 @@ import type { Locator, Plan, Scenario } from "./schema.js";
  * Contrôle d'évidence du plan : juste après la planification, l'instantané
  * d'accessibilité de la page de découverte est la seule preuve disponible sur ce
  * qui existe réellement dans l'interface. Une cible role+nom absente de cet
- * instantané ne peut pas être résolue par Canary : le scénario est refusé avant
+ * instantané — ses graphies typographiques comprises, que le repli d'exécution
+ * vise — ne peut pas être résolue par Canary : le scénario est refusé avant
  * toute exécution au lieu d'échouer en plein run sur un élément inventé.
  *
  * L'évidence reste incomplète par nature : l'instantané est limité à 12 niveaux
@@ -19,6 +25,11 @@ import type { Locator, Plan, Scenario } from "./schema.js";
 /** Seul alias de rôle accepté par getByRole qui diffère du rôle imprimé par l'instantané. */
 const ROLE_ALIASES: Record<string, string> = { image: "img" };
 
+/** Rôle de l'instantané correspondant au rôle d'un locator. */
+function ariaRole(value: string): string {
+  return ROLE_ALIASES[value.toLowerCase()] ?? value.toLowerCase();
+}
+
 /** Actions qui modifient la page : tout ce qui les suit n'est plus équivalent à la page de découverte. */
 const CONTAMINATING = new Set([
   "click",
@@ -29,6 +40,11 @@ const CONTAMINATING = new Set([
   "download",
   "popup",
 ]);
+
+interface AriaNames {
+  nodes: AriaNameNode[];
+  roles: Map<string, Set<string>>;
+}
 
 export interface PlanEvidenceRefusal {
   scenarioId: string;
@@ -84,14 +100,19 @@ function readQuoted(value: string): string {
   return result;
 }
 
+export interface AriaNameNode {
+  name: string;
+  role: string;
+}
+
 /**
  * Inventaire des noms accessibles par rôle, lu depuis l'arbre d'accessibilité :
  * une ligne « - role "nom" [attributs] » par nœud. Les nœuds texte
  * (« - text: … ») et les propriétés (« - /url: … ») sont ignorés, comme le fait
  * un locator role : seul le nom accessible compte.
  */
-export function ariaRoleNames(aria: string): Map<string, Set<string>> {
-  const roles = new Map<string, Set<string>>();
+export function ariaRoleNameNodes(aria: string): AriaNameNode[] {
+  const nodes: AriaNameNode[] = [];
   for (const line of aria.split("\n")) {
     const node = line.trim();
     if (!node.startsWith("- ") || /^- \/|^- text\b/.test(node)) {
@@ -102,11 +123,55 @@ export function ariaRoleNames(aria: string): Map<string, Set<string>> {
       continue;
     }
     const rest = node.slice(2 + role.length).trimStart();
-    const names = roles.get(role.toLowerCase()) ?? new Set<string>();
-    names.add(normalizeText(rest.startsWith('"') ? readQuoted(rest) : ""));
-    roles.set(role.toLowerCase(), names);
+    nodes.push({
+      role: role.toLowerCase(),
+      name: rest.startsWith('"') ? readQuoted(rest) : "",
+    });
+  }
+  return nodes;
+}
+
+/** Noms accessibles par rôle, normalisés comme avant la comparaison exacte. */
+export function ariaRoleNames(aria: string): Map<string, Set<string>> {
+  return roleNameSets(ariaRoleNameNodes(aria));
+}
+
+function roleNameSets(nodes: AriaNameNode[]): Map<string, Set<string>> {
+  const roles = new Map<string, Set<string>>();
+  for (const { role, name } of nodes) {
+    const names = roles.get(role) ?? new Set<string>();
+    names.add(normalizeText(name));
+    roles.set(role, names);
   }
   return roles;
+}
+
+/**
+ * Explication d'un nom accessible resté introuvable : le plan vise une graphie,
+ * la page en expose une autre, et les deux noms se replient l'un sur l'autre
+ * (`’` U+2019 contre `'` U+0027, espace insécable contre espace). Le relevé ne
+ * décide rien : il n'est produit qu'après un échec déjà constaté, et un
+ * candidat ambigu ou absent laisse le message générique. Le repli d'exécution
+ * est plus étroit (il n'essaie pas l'espace ordinaire) ; ce message décrit donc
+ * aussi les écarts qu'il n'essaie pas.
+ */
+export function typographicTargetNote(
+  planned: string,
+  role: string,
+  nodes: AriaNameNode[]
+): string | undefined {
+  const matches = nodes
+    .filter((node) => node.role === ariaRole(role))
+    .map((node) => node.name)
+    .filter(
+      (name) =>
+        name !== planned && foldTypography(name) === foldTypography(planned)
+    );
+  if (matches.length !== 1) {
+    return;
+  }
+  const exposed = matches[0] as string;
+  return `le plan vise ${planned} (${typographicCodepoints(planned, exposed)}) ; la page expose ${exposed} (${typographicCodepoints(exposed, planned)})`;
 }
 
 function describeTarget(locator: Locator): string {
@@ -178,7 +243,7 @@ function assertionReadIndex(
 function inspectScenario(
   scenario: Scenario,
   evidence: DiscoveryEvidence,
-  roles: Map<string, Set<string>>,
+  names: AriaNames,
   report: PlanEvidenceReport
 ) {
   const pageUnchanged = pageUnchangedByStep(scenario, evidence.url);
@@ -190,7 +255,7 @@ function inspectScenario(
         step.id,
         locator,
         pageUnchanged[index] ?? false,
-        roles,
+        names,
         report
       );
     }
@@ -214,7 +279,7 @@ function inspectScenario(
       scenario.steps[readIndex]?.id ?? assertion.id,
       assertion.target,
       pageUnchanged[readIndex] ?? false,
-      roles,
+      names,
       report
     );
   }
@@ -225,7 +290,7 @@ function checkTarget(
   stepId: string,
   locator: Locator,
   pageUnchanged: boolean,
-  roles: Map<string, Set<string>>,
+  names: AriaNames,
   report: PlanEvidenceReport
 ) {
   if (!pageUnchanged) {
@@ -247,9 +312,19 @@ function checkTarget(
     });
     return;
   }
-  const role =
-    ROLE_ALIASES[locator.value.toLowerCase()] ?? locator.value.toLowerCase();
-  if (roles.get(role)?.has(normalizeText(locator.name))) {
+  const role = ariaRole(locator.value);
+  if (names.roles.get(role)?.has(normalizeText(locator.name))) {
+    return;
+  }
+  // Le repli d'exécution vise ces mêmes variantes (`canary.ts` les compile) :
+  // refuser ici un nom que le run saurait résoudre remplacerait un contrôle réel
+  // par un faux refus.
+  const variants = typographicVariants(locator.name);
+  if (
+    names.nodes.some(
+      (node) => node.role === role && variants.includes(node.name)
+    )
+  ) {
     return;
   }
   report.refusals.push({
@@ -341,9 +416,10 @@ export function validatePlanEvidence(
     report.incomplete = `instantané de découverte coupé au plafond de ${PLAN_EVIDENCE_SNAPSHOT_CHARS} caractères`;
     return report;
   }
-  const roles = ariaRoleNames(evidence.aria);
+  const nodes = ariaRoleNameNodes(evidence.aria);
+  const names: AriaNames = { nodes, roles: roleNameSets(nodes) };
   for (const scenario of plan.scenarios) {
-    inspectScenario(scenario, evidence, roles, report);
+    inspectScenario(scenario, evidence, names, report);
   }
   return report;
 }

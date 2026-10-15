@@ -290,6 +290,29 @@ export async function fixture(
       res.end("<!doctype html><h1>Popup evidence</h1>");
       return;
     }
+    if (path === "/typographie" || path === "/typographie-double") {
+      // Noms accessibles qui ne diffèrent du plan que par la graphie de
+      // l'apostrophe : le cas réel où le plan recopie U+0027 et la page expose
+      // U+2019. La seconde page en expose deux, pour prouver qu'aucune n'est
+      // choisie quand elles se concurrencent.
+      const labels =
+        path === "/typographie"
+          ? [
+              '<label for="justification">Justification de l\u2019écart</label><textarea id="justification"></textarea>',
+            ]
+          : [
+              '<label for="droite">Justification de l\u2019écart</label><textarea id="droite"></textarea>',
+              '<label for="gauche">Justification de l\u2018écart</label><textarea id="gauche"></textarea>',
+            ];
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "x-commit-sha": SHA,
+      });
+      res.end(
+        `<!doctype html><html lang="fr"><body>${labels.join("")}</body></html>`
+      );
+      return;
+    }
     if (path === "/version.json") {
       json(res, { sha: options.noSha ? BASE_SHA : SHA });
       return;

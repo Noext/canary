@@ -8,8 +8,11 @@ import {
   Canary,
   compileAction,
   compileProbe,
+  foldTypography,
   locatorCall,
   locatorExpression,
+  typographicCodepoints,
+  typographicVariants,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { diagnose, QaError } from "../src/diagnostics.js";
@@ -70,6 +73,72 @@ function fakeBrowser() {
     "video.webm",
     "trace.zip",
   ]);
+}
+
+/**
+ * Exécute le script compilé contre un faux Playwright, comme le fait le daemon :
+ * seules les graphies listées existent, et leur méthode d'action échoue avec le
+ * délai d'une cible introuvable, jamais avec un autre message.
+ */
+async function runTypographicAction(exposed: string[]): Promise<{
+  acted: string[];
+  failure: unknown;
+  observation: { targetName?: string } | undefined;
+}> {
+  const acted: string[] = [];
+  const locator = (name: string) => ({
+    count: async () => (exposed.includes(name) ? 1 : 0),
+    fill: async () => {
+      if (!exposed.includes(name)) {
+        throw new Error(
+          `Timeout 10000ms exceeded.\n  - waiting for getByRole("textbox", { name: ${JSON.stringify(name)} })`
+        );
+      }
+      acted.push(name);
+    },
+  });
+  const logs: string[] = [];
+  const context = {
+    browser: {
+      getPage: async () => ({
+        getByRole: (_role: string, options: { name: string }) =>
+          locator(options.name),
+        url: () => "https://preview.test/caisse",
+        snapshotForAI: async () => ({ full: "" }),
+      }),
+    },
+    console: { log: (line: string) => logs.push(line) },
+  };
+  const script = compileAction(
+    {
+      type: "fill",
+      locator: {
+        by: "role",
+        value: "textbox",
+        name: "Justification de l'écart",
+      },
+      value: "Écart constaté",
+    },
+    "https://preview.test"
+  );
+  let failure: unknown;
+  try {
+    await new Script(`(async () => { ${script} })()`, {
+      filename: "action.js",
+    }).runInNewContext(context);
+  } catch (error) {
+    failure = error;
+  }
+  const marker = logs.find((line) =>
+    line.startsWith("CANARY_PR_QA_OBSERVATION:")
+  );
+  return {
+    acted,
+    failure,
+    observation: marker
+      ? JSON.parse(marker.slice("CANARY_PR_QA_OBSERVATION:".length))
+      : undefined,
+  };
 }
 
 describe("validation and deterministic assertions", () => {
@@ -243,12 +312,20 @@ describe("validation and deterministic assertions", () => {
   it("compiles every action into a syntactically valid script", () => {
     const label = { by: "label" as const, value: "Pharmacie active" };
     const css = { by: "css" as const, value: "#caisse" };
+    // Un nom accessible avec apostrophe compile le repli typographique : sa
+    // syntaxe est validée avec celle de toutes les autres actions.
+    const named = {
+      by: "role" as const,
+      value: "textbox",
+      name: "Justification de l'écart",
+    };
     const assertion = plan.scenarios[0]!.assertions[0]!;
     const actions: Parameters<typeof compileAction>[0][] = [
       { type: "goto", path: "/" },
       { type: "observe" },
       { type: "click", locator: label, description: "cliquer" },
       { type: "click", locator: css, description: "cliquer" },
+      { type: "click", locator: named, description: "cliquer" },
       { type: "fill", locator: label, value: "2", description: "saisir" },
       { type: "press", locator: label, key: "Enter", description: "valider" },
       {
@@ -260,8 +337,10 @@ describe("validation and deterministic assertions", () => {
       { type: "check", locator: css, checked: true, description: "cocher" },
       { type: "download", locator: label, description: "télécharger" },
       { type: "popup", locator: label, description: "ouvrir" },
+      { type: "popup", locator: named, description: "ouvrir" },
       { type: "assert", assertionId: assertion.id, locator: label },
       { type: "assert", assertionId: assertion.id, locator: css },
+      { type: "assert", assertionId: assertion.id, locator: named },
     ] as Parameters<typeof compileAction>[0][];
     for (const action of actions) {
       const command = compileAction(action, "https://preview.test", assertion);
@@ -316,6 +395,75 @@ describe("validation and deterministic assertions", () => {
     // temporelle, contrairement à une déclaration `const` du helper.
     expect(reads).toBe(1);
     expect(snapshots).toBe(1);
+  });
+
+  it("replie les graphies d'un signe, jamais le sens du nom", () => {
+    const planned = "Justification de l'écart";
+    expect(foldTypography("Justification de l’écart")).toBe(
+      foldTypography(planned)
+    );
+    expect(foldTypography("Montant d’espèces\u00a0attendu")).toBe(
+      foldTypography("Montant d'espèces attendu")
+    );
+    expect(typographicVariants(planned)).toEqual([
+      "Justification de l‘écart",
+      "Justification de l’écart",
+    ]);
+    expect(typographicCodepoints(planned, "Justification de l’écart")).toBe(
+      "U+0027"
+    );
+    expect(typographicCodepoints("Justification de l’écart", planned)).toBe(
+      "U+2019"
+    );
+    expect(
+      typographicCodepoints(
+        "Montant d'espèces attendu",
+        "Montant d'espèces\u00a0attendu"
+      )
+    ).toBe("U+0020");
+    // Un nom sans signe repliable garde son appel direct.
+    expect(typographicVariants("Save")).toEqual([]);
+  });
+
+  it("borne le repli : espace ordinaire intact, plafond sur un nom saturé", () => {
+    // L'espace insécable revient à l'espace ordinaire, l'inverse n'est pas
+    // énuméré : un nom compte plusieurs espaces et le produit exploserait.
+    const variants = typographicVariants("Montant d'espèces\u00a0attendu");
+    expect(variants).toContain("Montant d'espèces attendu");
+    expect(variants).toContain("Montant d’espèces attendu");
+    expect(variants).not.toContain("Montant\u00a0d’espèces attendu");
+    expect(typographicVariants("l'l'")).toHaveLength(8);
+    expect(typographicVariants("l'l'l'")).toEqual([]);
+  });
+
+  it("vise l'élément réel quand la page n'expose qu'une autre graphie", async () => {
+    const { acted, failure, observation } = await runTypographicAction([
+      "Justification de l’écart",
+    ]);
+    // Le nom exact n'a rien résolu : le repli vise ce que la page expose, et le
+    // nom réellement utilisé reste dans l'observation.
+    expect(failure).toBeUndefined();
+    expect(acted).toEqual(["Justification de l’écart"]);
+    expect(observation?.targetName).toBe("Justification de l’écart");
+  });
+
+  it("ne vise rien quand deux graphies concurrentes existent", async () => {
+    const { acted, failure, observation } = await runTypographicAction([
+      "Justification de l’écart",
+      "Justification de l‘écart",
+    ]);
+    expect(String(failure)).toContain("Timeout 10000ms exceeded");
+    expect(acted).toEqual([]);
+    expect(observation).toBeUndefined();
+  });
+
+  it("n'essaie aucun repli quand le nom exact existe", async () => {
+    const { acted, failure, observation } = await runTypographicAction([
+      "Justification de l'écart",
+    ]);
+    expect(failure).toBeUndefined();
+    expect(acted).toEqual(["Justification de l'écart"]);
+    expect(observation?.targetName).toBeUndefined();
   });
   it("checks values, visibility, counts and text without model judgement", () => {
     expect(

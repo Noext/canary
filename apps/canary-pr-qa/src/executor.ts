@@ -7,13 +7,88 @@ import {
   compileAction,
   compileProbe,
   type Observation,
+  PLAN_EVIDENCE_SNAPSHOT_CHARS,
 } from "./canary.js";
 import type { Config } from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
+import { ariaRoleNameNodes, typographicTargetNote } from "./plan-evidence.js";
 import type { ProgressEvent } from "./progress.js";
-import type { Assertion, Scenario, ScenarioResult } from "./schema.js";
+import type { Assertion, Locator, Scenario, ScenarioResult } from "./schema.js";
 import { compareVisual } from "./visual.js";
+
+/** Locator qui porte un nom accessible : le seul concerné par la graphie d'un signe. */
+type NamedTarget = Extract<Locator, { by: "role" }>;
+
+/**
+ * Cible role+nom d'une étape ou de l'assertion qu'elle exécute. Les autres types
+ * de locator ne portent pas de nom accessible.
+ */
+function roleNameTarget(
+  scenario: Scenario,
+  step: Scenario["steps"][number]
+): NamedTarget | undefined {
+  const { action } = step;
+  const assertion =
+    action.type === "assert"
+      ? scenario.assertions.find((item) => item.id === action.assertionId)
+      : undefined;
+  const target =
+    ("locator" in action ? action.locator : undefined) ?? assertion?.target;
+  return target?.by === "role" ? target : undefined;
+}
+
+/**
+ * Une cible role+nom restée introuvable est expliquée avec le nom que la page
+ * expose : Playwright compare le nom accessible caractère par caractère
+ * (`exact: true`), et le plan recopie souvent la ponctuation de la source
+ * (U+0027) là où l'application expose l'apostrophe typographique (U+2019), ou
+ * l'inverse. Le relevé n'a lieu qu'après l'échec, n'énonce aucun refus et ne
+ * bloque aucun run qui réussissait ; une page qui ne répond plus, aucun candidat
+ * ou plusieurs candidats gardent le message générique.
+ */
+async function explainMissingTarget(
+  failure: unknown,
+  sessionId: string,
+  step: Scenario["steps"][number],
+  scenario: Scenario,
+  preview: string,
+  canary: Canary,
+  config: Config
+): Promise<{ diagnostic: Diagnostic; note?: string }> {
+  const diagnostic = diagnose(failure, config);
+  const locator = roleNameTarget(scenario, step);
+  if (diagnostic.code !== "TARGET_NOT_FOUND" || !locator) {
+    return { diagnostic };
+  }
+  try {
+    const current = await canary.act(
+      sessionId,
+      "target-name-check",
+      compileAction({ type: "observe" }, preview, undefined, {
+        evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
+      })
+    );
+    const note = typographicTargetNote(
+      locator.name,
+      locator.value,
+      ariaRoleNameNodes(current.evidence ?? current.snapshot)
+    );
+    return note
+      ? {
+          diagnostic: {
+            ...diagnostic,
+            message: `${diagnostic.message} — ${note}`,
+          },
+          note,
+        }
+      : { diagnostic };
+  } catch {
+    // Le relevé est un confort : une page qui ne répond plus garde le message
+    // générique, et l'échec d'origine reste celui qui est rapporté.
+    return { diagnostic };
+  }
+}
 
 function finish(result: ScenarioResult) {
   if (result.contract?.completedSteps.length !== result.scenario.steps.length) {
@@ -343,14 +418,22 @@ async function driveScenario(
         durationMs: Date.now() - started,
       });
     } catch (error) {
-      const diagnostic = diagnose(error, config);
+      const explained = await explainMissingTarget(
+        error,
+        sessionId,
+        step,
+        result.scenario,
+        preview,
+        canary,
+        config
+      );
       result.steps.push({
         index,
         stepId: step.id,
         action: step.action,
         ok: false,
-        reason: diagnostic.message,
-        observation: diagnostic.message,
+        reason: explained.diagnostic.message,
+        observation: explained.diagnostic.message,
       });
       await record({
         phase: "execution",
@@ -358,12 +441,28 @@ async function driveScenario(
         step: index,
         action: step.action.type,
         outcome: "error",
-        diagnostic,
+        diagnostic: explained.diagnostic,
       });
       // Le verdict et l'erreur nommée sont déjà posés : renvoyer ici évite que
       // le catch de `executeScenario` les remplace par le message brut.
-      if (failAssertionOnMissingTarget(result, step, diagnostic, baselines)) {
+      if (
+        failAssertionOnMissingTarget(
+          result,
+          step,
+          explained.diagnostic,
+          baselines
+        )
+      ) {
         return;
+      }
+      if (explained.note) {
+        // L'erreur publiée doit porter l'explication : `diagnose` reprend un
+        // `QaError` tel quel, alors que l'erreur brute serait rendue sans elle.
+        throw new QaError(
+          explained.diagnostic.code,
+          explained.diagnostic.message,
+          explained.diagnostic.hint
+        );
       }
       throw error;
     }

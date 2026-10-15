@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { cp, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
+import { createLogger } from "@usecanary/logger";
 import type { BrowserAuth } from "@usecanary/protocol";
 import { z } from "zod";
 import type { Config } from "./config.js";
@@ -11,8 +12,11 @@ import { verifyPreviewUrl } from "./preview.js";
 import { checkBudget, runScope } from "./run-scope.js";
 import type { Action, Assertion, Locator } from "./schema.js";
 
+const logger = createLogger({ name: "pr-qa-browser" });
+
 /** Budget d'instantané transmis au modèle : la planification et l'exécution gardent cette taille. */
 export const MODEL_SNAPSHOT_CHARS = 14_000;
+
 /**
  * Plafond de l'instantané conservé comme évidence de validation du plan. Au
  * plafond, l'instantané est coupé : le contrôle d'évidence est « non concluant »
@@ -27,8 +31,90 @@ const observationSchema = z.object({
   actual: z.unknown().optional(),
   evidence: z.string().optional(),
   provenanceUrls: z.array(z.string().url()).max(5).optional(),
+  /** Nom accessible réellement visé, renseigné seulement après un repli typographique. */
+  targetName: z.string().optional(),
 });
 export type Observation = z.infer<typeof observationSchema>;
+
+/**
+ * Graphies équivalentes d'un même signe : le premier membre est le
+ * représentant vers lequel le repli ramène les autres. Un lecteur ne distingue
+ * pas « Justification de l’écart » de « Justification de l'écart » ; Playwright,
+ * avec `exact: true`, compare le nom accessible caractère par caractère et ne
+ * résout jamais l'autre graphie.
+ */
+const TYPOGRAPHIC_CLASSES: readonly (readonly string[])[] = [
+  ["'", "\u2018", "\u2019"],
+  ['"', "\u00ab", "\u00bb"],
+  [" ", "\u00a0", "\u202f"],
+];
+
+/** Repli de chaque graphie vers le représentant de sa classe, sa propre graphie comprise. */
+const TYPOGRAPHIC_FOLD = new Map<string, string>(
+  TYPOGRAPHIC_CLASSES.flatMap((members) =>
+    members.map((member): [string, string] => [member, members[0] ?? member])
+  )
+);
+
+/**
+ * Plafond des variantes essayées après l'échec du nom exact : chaque position
+ * repliable multiplierait les candidats, et un nom reste lisible au-delà.
+ */
+const MAX_TYPOGRAPHIC_VARIANTS = 16;
+
+/** Nom ramené aux graphies représentatives de ses signes. */
+export function foldTypography(value: string): string {
+  return [...value].map((char) => TYPOGRAPHIC_FOLD.get(char) ?? char).join("");
+}
+
+/**
+ * Codepoints des signes par lesquels deux noms repliables diffèrent, dans
+ * l'ordre d'apparition : deux noms que `foldTypography` confond ont la même
+ * longueur, donc l'écart se lit position par position. C'est ce qui rend la
+ * différence nommable sans ambiguïté (`U+0027` contre `U+2019`).
+ */
+export function typographicCodepoints(value: string, other: string): string {
+  const points = new Set<string>();
+  const compared = [...other];
+  for (const [index, char] of [...value].entries()) {
+    if (char !== compared[index] && TYPOGRAPHIC_FOLD.has(char)) {
+      const code = (char.codePointAt(0) ?? 0).toString(16).toUpperCase();
+      points.add(`U+${code.padStart(4, "0")}`);
+    }
+  }
+  return [...points].join(" ");
+}
+
+/**
+ * Graphies que ce signe peut prendre : toute sa classe. L'espace ordinaire
+ * n'en sort pas, parce que `typographicVariants` ne le replie jamais.
+ */
+function typographicEquivalents(char: string): string[] {
+  const members = TYPOGRAPHIC_CLASSES.find((klass) => klass.includes(char));
+  return !members || char === " " ? [char] : [...members];
+}
+
+/**
+ * Noms accessibles que le même locator role+nom peut viser par repli. L'espace
+ * ordinaire ne se replie pas position par position : un nom en compte
+ * plusieurs, et le produit dépasserait le plafond pour la plupart des noms. Le
+ * repli couvre donc l'apostrophe et le guillemet (la cause observée) ainsi que
+ * l'espace insécable ramené à l'espace ordinaire ; l'écart inverse reste nommé
+ * par le diagnostic, jamais cliqué.
+ */
+export function typographicVariants(name: string): string[] {
+  let variants = [""];
+  for (const char of name) {
+    const equivalents = typographicEquivalents(char);
+    if (variants.length * equivalents.length > MAX_TYPOGRAPHIC_VARIANTS) {
+      return [];
+    }
+    variants = variants.flatMap((prefix) =>
+      equivalents.map((equivalent) => prefix + equivalent)
+    );
+  }
+  return variants.filter((variant) => variant !== name);
+}
 
 /**
  * `getByLabel` compare le texte du libellé associé, pas le nom accessible du
@@ -81,17 +167,62 @@ const RESOLVE_LABEL_HELPER = `async function resolveLabel(strict, fallback, act)
 }`;
 
 /**
+ * Émis dans le script compilé par `locatorCall` : rejoue le même appel sur les
+ * graphies équivalentes du nom accessible, uniquement après l'échec du nom
+ * exact et uniquement si ces graphies atteignent exactement un élément au
+ * total. Une cible absente de la page ne peut donc pas devenir un clic sur un
+ * homonyme, et deux graphies concurrentes gardent l'échec d'origine. Le nom
+ * réellement visé est publié dans l'observation, jamais tu.
+ */
+const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act) {
+  try {
+    return await act(exact);
+  } catch (error) {
+    if (!/Timeout \\d+ms exceeded|strict mode violation/.test(String(error))) throw error;
+    if (await exact.count()) throw error;
+    let used;
+    let matched = 0;
+    for (const name of names) {
+      const candidate = page.getByRole(role, { name, exact: true });
+      const count = await candidate.count();
+      matched += count;
+      if (count === 1) used = { candidate, name };
+    }
+    if (!(used && matched === 1)) throw error;
+    targetName = used.name;
+    return await act(used.candidate);
+  }
+}`;
+
+/**
  * Appel Playwright sur le contrôle visé, `call` étant un suffixe de méthode
  * (`click({ timeout: 10000 })`). Un locator `by:"label"` reçoit le repli par nom
- * accessible ; les autres sont appelés directement.
+ * accessible, un locator `by:"role"` le repli par graphie du nom `name`, les
+ * autres sont appelés directement.
  */
 export function locatorCall(locator: Locator, call: string): string {
-  const target = locatorExpression(locator);
-  if (locator.by !== "label") {
-    return `${target}.${call}`;
+  if (locator.by === "label") {
+    const { strict, fallback } = labelTargets(locator.value);
+    return `resolveLabel(${strict}, ${fallback}, (locator) => locator.${call})`;
   }
-  const { strict, fallback } = labelTargets(locator.value);
-  return `resolveLabel(${strict}, ${fallback}, (locator) => locator.${call})`;
+  return (
+    nameFallback(locator, `(locator) => locator.${call}`) ??
+    `${locatorExpression(locator)}.${call}`
+  );
+}
+
+/**
+ * Repli typographique d'un locator role+nom : `undefined` quand le nom ne porte
+ * aucun signe repliable, ou quand ses variantes dépassent le plafond.
+ */
+function nameFallback(locator: Locator, act: string): string | undefined {
+  if (locator.by !== "role") {
+    return;
+  }
+  const names = typographicVariants(locator.name);
+  return names.length === 0
+    ? undefined
+    : `resolveName(${locatorExpression(locator)}, ${JSON.stringify(locator.value)}, ${JSON.stringify(names)}, ${act})`;
 }
 
 /**
@@ -99,12 +230,14 @@ export function locatorCall(locator: Locator, call: string): string {
  * locator reçu sous le nom `locator`.
  */
 function locatorRun(locator: Locator, body: string): string {
-  const target = locatorExpression(locator);
-  if (locator.by !== "label") {
-    return `(async (locator) => { ${body} })( ${target} )`;
+  if (locator.by === "label") {
+    const { strict, fallback } = labelTargets(locator.value);
+    return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
   }
-  const { strict, fallback } = labelTargets(locator.value);
-  return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
+  return (
+    nameFallback(locator, `async (locator) => { ${body} }`) ??
+    `(async (locator) => { ${body} })( ${locatorExpression(locator)} )`
+  );
 }
 
 export function locatorExpression(locator: Locator): string {
@@ -279,14 +412,16 @@ await popup.close();`
     ? `, evidence: ariaSnapshot.slice(0, ${options.evidenceSnapshotChars})`
     : "";
   return `const page = await browser.getPage("qa");
+let targetName;
 let actual;
 const provenanceUrls = [];
 ${RESOLVE_LABEL_HELPER}
+${RESOLVE_NAME_HELPER}
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
 const ariaSnapshot = (await page.snapshotForAI({ depth: 12 })).full;
-console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS})${evidence}, actual, provenanceUrls }));`;
+console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS})${evidence}, actual, targetName, provenanceUrls }));`;
 }
 
 export class Canary {
@@ -441,6 +576,18 @@ export class Canary {
     const observation = observationSchema.parse(
       JSON.parse(line.slice(MARKER.length))
     );
+    if (observation.targetName) {
+      // Le plan vise un nom, la page en expose un autre : la substitution est
+      // une preuve du run, elle ne peut pas rester tacite.
+      logger.info(
+        {
+          runId: runScope.getStore()?.id,
+          step: label,
+          name: observation.targetName,
+        },
+        "Nom accessible résolu par repli typographique"
+      );
+    }
     const sha = runScope.getStore()?.previewSha;
     if (sha) {
       for (const url of new Set([

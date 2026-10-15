@@ -80,6 +80,108 @@ async function runMissingPersistedTarget(observed = "Welcome Ada") {
   return { result, f };
 }
 
+/**
+ * Cible role+nom du run f0f24722 : le plan recopie l'apostrophe ASCII de sa
+ * source, la page expose l'apostrophe typographique. Playwright compare le nom
+ * accessible caractère par caractère avec `exact: true`, donc le locator ne
+ * résout rien et le délai expire.
+ */
+const PLANNED_NAME = "Justification de l'écart";
+const EXPOSED_NAME = "Justification de l’écart";
+const UNRESOLVED_NAMED_TARGET = `Canary action failed: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByRole("textbox", { name: ${JSON.stringify(PLANNED_NAME)}, exact: true })`;
+
+/**
+ * Le scénario observé : la vue qui porte le contrôle exige un clic, donc la
+ * cible n'est pas dans l'instantané de découverte (non concluante, jamais
+ * refusée), et l'étape qui la vise est la dernière du contrat.
+ */
+function typographicPlan() {
+  const contract = structuredClone(plan);
+  const scenario = contract.scenarios[0]!;
+  scenario.steps.push(
+    {
+      id: "caisse",
+      description: "ouvrir la vue Caisse",
+      action: {
+        type: "click",
+        locator: { by: "role", value: "button", name: "Caisse" },
+      },
+    },
+    {
+      id: "justification",
+      description: "saisir la justification de l'écart",
+      action: {
+        type: "fill",
+        locator: { by: "role", value: "textbox", name: PLANNED_NAME },
+        value: "Écart constaté",
+      },
+    }
+  );
+  return contract;
+}
+
+/**
+ * Le faux Canary ne rejoue pas le script : il refuse la dernière étape avec le
+ * délai réel d'une cible introuvable, et rend l'arbre d'accessibilité courant au
+ * relevé que demande le diagnostic.
+ */
+async function runMissingNamedTarget(aria: string) {
+  const f = await fixture({ plans: [typographicPlan()] });
+  cleanups.push(f.close);
+  vi.spyOn(Canary.prototype, "start").mockResolvedValue("typographic-name");
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_session, label) => {
+      if (label === "5-fill") {
+        throw new Error(UNRESOLVED_NAMED_TARGET);
+      }
+      return {
+        url: "http://fixture/",
+        snapshot: "textbox Name, button Save",
+        ...(label === "target-name-check" ? { evidence: aria } : {}),
+        actual: label.startsWith("baseline-") ? "Welcome" : "Welcome Ada",
+      };
+    }
+  );
+  vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  return { result, f };
+}
+
+it("names both typographic spellings when a role+name target never resolves", async () => {
+  const { result, f } = await runMissingNamedTarget(
+    `- main [ref=e1]:\n  - button "Caisse" [ref=e2]\n  - textbox "${EXPOSED_NAME}" [ref=e3]`
+  );
+  expect(result.outcome).toBe("blocked");
+  const scenario = result.scenarios[0];
+  expect(scenario?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+  // Les deux graphies et leurs codepoints : la cause est nommée, pas devinée.
+  expect(scenario?.diagnostic?.message).toContain(
+    `le plan vise ${PLANNED_NAME} (U+0027) ; la page expose ${EXPOSED_NAME} (U+2019)`
+  );
+  expect(scenario?.error).toBe(scenario?.diagnostic?.message);
+  // Le commentaire de PR porte la même cause : l'opérateur n'a pas à ouvrir le run.
+  const published = f.outgoing.find((request) =>
+    request.path.endsWith("/comments")
+  )?.payload.body;
+  expect(String(published)).toContain(
+    `la page expose ${EXPOSED_NAME} (U+2019)`
+  );
+});
+
+it("keeps the generic message when the page exposes no neighbouring name", async () => {
+  const { result } = await runMissingNamedTarget(
+    `- main [ref=e1]:\n  - textbox "Recherche" [ref=e3]`
+  );
+  expect(result.outcome).toBe("blocked");
+  const scenario = result.scenarios[0];
+  expect(scenario?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+  expect(scenario?.diagnostic?.message).not.toContain("le plan vise");
+  expect(scenario?.diagnostic?.message).toContain("Timeout 5000ms exceeded");
+});
+
 it("fails the run when an assertion target never resolves", async () => {
   const result = await runFailingStep("3-assert");
   expect(result.outcome).toBe("failed");

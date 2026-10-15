@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Canary, compileAction } from "../src/canary.js";
+import { Canary, compileAction, compileProbe } from "../src/canary.js";
 import { doctor } from "../src/doctor.js";
 import { executeScenario } from "../src/executor.js";
 import { GitHubSetup } from "../src/github-setup.js";
@@ -195,6 +195,74 @@ it("rejects static matching output as transition evidence in actual Chromium", a
     actual: "Welcome Ada",
     passed: false,
   });
+}, 180_000);
+/**
+ * Le cas réel f0f24722 : le plan recopie la ponctuation de sa source (U+0027),
+ * l'application expose l'apostrophe typographique (U+2019), et Playwright
+ * compare le nom accessible caractère par caractère avec `exact: true`. Le repli
+ * ne vise l'autre graphie que si elle atteint exactement un élément, et le nom
+ * réellement visé est publié avec l'observation.
+ */
+it("targets the exposed spelling in actual Chromium, and nothing when two compete", async () => {
+  const f = await fixture();
+  closers.push(f.close);
+  const canary = new Canary(f.config);
+  const id = await canary.start("Typographic accessible name");
+  const planned = {
+    by: "role" as const,
+    value: "textbox",
+    name: "Justification de l'écart",
+  };
+  try {
+    await canary.act(
+      id,
+      "open",
+      compileAction({ type: "goto", path: "/typographie" }, f.baseUrl)
+    );
+    const filled = await canary.act(
+      id,
+      "fill",
+      compileAction(
+        { type: "fill", locator: planned, value: "Écart constaté" },
+        f.baseUrl
+      )
+    );
+    expect(filled.targetName).toBe("Justification de l\u2019écart");
+    const read = await canary.act(
+      id,
+      "read",
+      compileProbe(
+        {
+          id: "justification",
+          kind: "value",
+          description: "la justification saisie est relue",
+          expected: "Écart constaté",
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(read.actual).toBe("Écart constaté");
+    // Deux graphies concurrentes : la cible du plan ne résout toujours rien, et
+    // l'échec d'origine remonte au lieu d'un contrôle choisi au hasard.
+    await canary.act(
+      id,
+      "open-double",
+      compileAction({ type: "goto", path: "/typographie-double" }, f.baseUrl)
+    );
+    await expect(
+      canary.act(
+        id,
+        "ambiguous-fill",
+        compileAction(
+          { type: "fill", locator: planned, value: "Écart constaté" },
+          f.baseUrl
+        )
+      )
+    ).rejects.toThrow(/Timeout \d+ms exceeded/);
+  } finally {
+    await canary.abort(id).catch(() => undefined);
+  }
 }, 180_000);
 it("checks persistence after real reload and fails a missing storage write", async () => {
   for (const broken of [false, true]) {

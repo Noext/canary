@@ -9,8 +9,10 @@ import {
 } from "../src/canary.js";
 import { Model } from "../src/model.js";
 import {
+  ariaRoleNameNodes,
   ariaRoleNames,
   planEvidenceDiagnostic,
+  typographicTargetNote,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
@@ -190,7 +192,82 @@ describe("inventaire des noms accessibles", () => {
   });
 });
 
+describe("explication d'une cible typographiquement voisine", () => {
+  const nodes = ariaRoleNameNodes(
+    `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`
+  );
+
+  it("nomme les deux graphies et leurs codepoints", () => {
+    expect(
+      typographicTargetNote("Justification de l'écart", "textbox", nodes)
+    ).toBe(
+      "le plan vise Justification de l'écart (U+0027) ; la page expose Justification de l’écart (U+2019)"
+    );
+  });
+
+  it("nomme l'espace insécable, que le repli d'exécution n'essaie pas", () => {
+    const spaced = ariaRoleNameNodes(
+      `- textbox "Montant d’espèces\u00a0attendu" [ref=e1]`
+    );
+    expect(
+      typographicTargetNote("Montant d'espèces attendu", "textbox", spaced)
+    ).toContain("(U+2019 U+00A0)");
+  });
+
+  it("reste muet pour un nom identique, un nom différent, un autre rôle ou deux candidats", () => {
+    // Le nom exact ne demande aucune explication, et une cible réellement
+    // différente n'a pas de voisin typographique à nommer.
+    expect(
+      typographicTargetNote("Justification de l’écart", "textbox", nodes)
+    ).toBeUndefined();
+    expect(
+      typographicTargetNote("Justification du montant", "textbox", nodes)
+    ).toBeUndefined();
+    expect(
+      typographicTargetNote("Justification de l'écart", "button", nodes)
+    ).toBeUndefined();
+    // Deux graphies concurrentes : le message reste générique, comme le repli
+    // ne vise aucune des deux.
+    const ambiguous = ariaRoleNameNodes(
+      `- textbox "Justification de l’écart" [ref=e1]\n  - textbox "Justification de l‘écart" [ref=e2]`
+    );
+    expect(
+      typographicTargetNote("Justification de l'écart", "textbox", ambiguous)
+    ).toBeUndefined();
+  });
+});
+
 describe("validation du plan contre l'instantané de découverte", () => {
+  it("accepte un nom accessible que le repli d'exécution saura viser", () => {
+    const aria = `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`;
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        })
+      ),
+      { url: "https://preview.test/", aria }
+    );
+    // Le refus porterait sur un élément que la page expose réellement : la même
+    // relation que le repli décide de l'acceptation.
+    expect(report).toEqual({ refusals: [], inconclusive: [] });
+  });
+  it("refuse encore un nom que le repli ne saurait pas viser", () => {
+    const aria = `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`;
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l’écart du jour",
+        })
+      ),
+      { url: "https://preview.test/", aria }
+    );
+    expect(report.refusals).toHaveLength(1);
+  });
   it("refuse une cible role+nom absente de la page de découverte", () => {
     const report = validatePlanEvidence(PlanSchema.parse(observedPlan()), {
       url: "https://preview.test/",
