@@ -7,6 +7,8 @@ import {
   PolicySchema,
   quoteHasWitness,
   repairRequirementAttribution,
+  requirementEvidence,
+  requirementHasWitness,
   undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
   ungroundedRequirements,
@@ -164,6 +166,10 @@ const reflowedCashContext: PrContext = {
   ...contextWith([{ filename: "src/cash.ts", patch: cashPatch }]),
   context: [{ content: CASH_FILE, path: "src/cash.ts", ref: context.sha }],
 };
+/** Le même fichier sans son contenu de tête : seul le patch témoigne. */
+const cashPatchOnly: PrContext = contextWith([
+  { filename: "src/cash.ts", patch: cashPatch },
+]);
 function cashPlan(quote: string): Plan {
   return planWithWitnesses([
     {
@@ -201,15 +207,12 @@ it("still refuses a quote with one different character", () => {
 });
 
 it("does not read the patch marker as whitespace", () => {
-  const patchOnly: PrContext = contextWith([
-    { filename: "src/cash.ts", patch: cashPatch },
-  ]);
   const plan = cashPlan(REFLOWED_QUOTE);
   // Sans le contenu du fichier, les `+` du patch séparent les lignes que la
   // citation a recollées : seuls les blancs sont tolérés, jamais un caractère
   // non blanc — et le contenu accompagne toujours le patch dans un vrai
   // contexte, donc ce refus ne se produit pas en run.
-  expect(ungroundedRequirements(plan, patchOnly)).toHaveLength(1);
+  expect(ungroundedRequirements(plan, cashPatchOnly)).toHaveLength(1);
 });
 
 it("refuses a quote that normalizes to nothing", () => {
@@ -231,6 +234,90 @@ it("refuses a quote that normalizes to nothing", () => {
   expect(
     ungroundedRequirements(cashPlan("\u200b".repeat(8)), reflowedCashContext)
   ).toHaveLength(1);
+});
+
+/**
+ * Deux segments témoins ne se recousent pas : une citation n'est un témoin que
+ * si un seul segment la porte entière. Replier les blancs après avoir joint les
+ * segments acceptait une citation assemblée de deux morceaux différents.
+ */
+it("refuses a quote stitched across the patch and content junction", () => {
+  const stitched = "}; function report(denomination, quantities) {";
+  const segments = requirementEvidence(
+    { quote: stitched, sourceFile: "src/cash.ts" },
+    reflowedCashContext
+  );
+  expect(segments).toHaveLength(2);
+  // L'ancienne comparaison joignait ces segments avant de replier les blancs :
+  // la chaîne ainsi obtenue contient la citation, et aucun segment seul ne la
+  // porte. C'est ce faux témoin que la comparaison par segment refuse.
+  expect(quoteHasWitness(segments.join("\n"), stitched)).toBe(true);
+  expect(
+    requirementHasWitness(
+      { quote: stitched, sourceFile: "src/cash.ts" },
+      reflowedCashContext
+    )
+  ).toBe(false);
+  expect(
+    ungroundedRequirements(cashPlan(stitched), reflowedCashContext)
+  ).toHaveLength(1);
+  expect(
+    refusalOfPlan(cashPlan(stitched), reflowedCashContext, policyFor()).code
+  ).toBe("REQUIREMENT_UNGROUNDED");
+});
+it("refuses a quote stitched across the head and base contents", () => {
+  const head = "const head = 'alpha tail witness';";
+  const base = "const base = 'beta head witness';";
+  const junction: PrContext = {
+    ...cashPatchOnly,
+    context: [
+      { content: head, path: "src/cash.ts", ref: context.sha },
+      { content: base, path: "src/cash.ts", ref: context.baseSha },
+    ],
+  };
+  const stitched = "alpha tail witness'; const base = 'beta head witness";
+  const segments = requirementEvidence(
+    { quote: stitched, sourceFile: "src/cash.ts" },
+    junction
+  );
+  expect(segments).toHaveLength(3);
+  expect(quoteHasWitness(segments.join("\n"), stitched)).toBe(true);
+  expect(
+    requirementHasWitness(
+      { quote: stitched, sourceFile: "src/cash.ts" },
+      junction
+    )
+  ).toBe(false);
+  expect(ungroundedRequirements(cashPlan(stitched), junction)).toHaveLength(1);
+});
+it("accepts a quote contained in the patch alone", () => {
+  const plan = cashPlan("ok: false,");
+  expect(
+    requirementHasWitness(
+      { quote: "ok: false,", sourceFile: "src/cash.ts" },
+      cashPatchOnly
+    )
+  ).toBe(true);
+  expect(ungroundedRequirements(plan, cashPatchOnly)).toEqual([]);
+  expect(validateCoverage(plan, cashPatchOnly, policyFor(), config).gate).toBe(
+    "complete"
+  );
+});
+it("accepts a reflowed quote contained in one content segment alone", () => {
+  // Le patch seul refuse cette citation recollée : c'est le contenu de tête,
+  // segment à part entière, qui la porte.
+  expect(
+    requirementHasWitness(
+      { quote: REFLOWED_QUOTE, sourceFile: "src/cash.ts" },
+      cashPatchOnly
+    )
+  ).toBe(false);
+  expect(
+    requirementHasWitness(
+      { quote: REFLOWED_QUOTE, sourceFile: "src/cash.ts" },
+      reflowedCashContext
+    )
+  ).toBe(true);
 });
 
 it("names the rejected quote in the refusal, bounded to its short form", () => {

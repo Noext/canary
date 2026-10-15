@@ -152,20 +152,25 @@ export function writeEvidenceRefusals(
   return refusals;
 }
 /**
- * Texte témoin d'une exigence : le patch du fichier dans la PR, complété par
- * les contenus contextuels récupérés pour ce chemin.
+ * Segments témoins d'une exigence : le patch du fichier dans la PR, puis chaque
+ * contenu contextuel récupéré pour ce chemin. Chaque élément est un témoin à
+ * part entière, comparé seul : une citation qui n'existe qu'en recousant la fin
+ * d'un segment au début du suivant — jonction patch→contenu, ou contenu de tête
+ * → contenu de base — n'a pas de témoin.
  */
 export function requirementEvidence(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext
-): string {
+): string[] {
+  const patch = context.files.find(
+    (file) => file.filename === requirement.sourceFile
+  )?.patch;
   return [
-    context.files.find((file) => file.filename === requirement.sourceFile)
-      ?.patch ?? "",
+    ...(patch ? [patch] : []),
     ...context.context
       .filter((item) => item.path === requirement.sourceFile)
       .map((item) => item.content),
-  ].join("\n");
+  ];
 }
 
 /**
@@ -185,7 +190,7 @@ function normalizeQuoteText(value: string): string {
 }
 
 /**
- * Vrai si la citation apparaît dans le témoin, à l'espacement près.
+ * Vrai si la citation apparaît dans ce segment témoin, à l'espacement près.
  * Une citation qui se normalise en chaîne vide n'a jamais de témoin :
  * `includes("")` est toujours vrai, et l'accepter ferait passer pour une preuve
  * une citation qui n'existe nulle part.
@@ -196,6 +201,19 @@ export function quoteHasWitness(evidence: string, quote: string): boolean {
     return false;
   }
   return normalizeQuoteText(evidence).includes(normalized);
+}
+
+/**
+ * Vrai si la citation est contenue dans l'un des segments témoins du fichier
+ * cité, jamais dans leur recousage.
+ */
+export function requirementHasWitness(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext
+): boolean {
+  return requirementEvidence(requirement, context).some((segment) =>
+    quoteHasWitness(segment, requirement.quote)
+  );
 }
 
 /**
@@ -226,10 +244,7 @@ export function witnessFiles(quote: string, context: PrContext): string[] {
     ...context.context.map((item) => item.path),
   ];
   return [...new Set(paths)].filter((path) =>
-    quoteHasWitness(
-      requirementEvidence({ quote, sourceFile: path }, context),
-      quote
-    )
+    requirementHasWitness({ quote, sourceFile: path }, context)
   );
 }
 
@@ -252,22 +267,11 @@ export function repairRequirementAttribution(
   }[] = [];
   for (const scenario of plan.scenarios) {
     for (const requirement of scenario.requirements) {
-      if (
-        quoteHasWitness(
-          requirementEvidence(requirement, context),
-          requirement.quote
-        )
-      ) {
+      if (requirementHasWitness(requirement, context)) {
         continue;
       }
       const candidates = scenario.sourceFiles.filter((sourceFile) =>
-        quoteHasWitness(
-          requirementEvidence(
-            { quote: requirement.quote, sourceFile },
-            context
-          ),
-          requirement.quote
-        )
+        requirementHasWitness({ quote: requirement.quote, sourceFile }, context)
       );
       const [target] = candidates;
       if (candidates.length !== 1 || !target) {
@@ -316,13 +320,7 @@ export function ungroundedRequirements(
 ): { requirement: Requirement; scenarioId: string }[] {
   return plan.scenarios.flatMap((scenario) =>
     scenario.requirements
-      .filter(
-        (requirement) =>
-          !quoteHasWitness(
-            requirementEvidence(requirement, context),
-            requirement.quote
-          )
-      )
+      .filter((requirement) => !requirementHasWitness(requirement, context))
       .map((requirement) => ({ requirement, scenarioId: scenario.id }))
   );
 }
@@ -376,12 +374,7 @@ function coverWitnessedSourceFiles(
   context: PrContext
 ): void {
   for (const requirement of scenario.requirements) {
-    if (
-      quoteHasWitness(
-        requirementEvidence(requirement, context),
-        requirement.quote
-      )
-    ) {
+    if (requirementHasWitness(requirement, context)) {
       covered.add(requirement.sourceFile);
     }
   }
@@ -597,12 +590,7 @@ export function validateCoverage(
       throw budget;
     }
     for (const requirement of scenario.requirements) {
-      if (
-        !quoteHasWitness(
-          requirementEvidence(requirement, context),
-          requirement.quote
-        )
-      ) {
+      if (!requirementHasWitness(requirement, context)) {
         throw ungroundedRequirement(scenario.id, requirement);
       }
     }
