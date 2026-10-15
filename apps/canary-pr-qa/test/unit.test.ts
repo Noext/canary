@@ -32,10 +32,18 @@ import {
   ActionSchema,
   type Assertion,
   type Locator,
+  type Plan,
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
-import { BASE_SHA, fixture, PR_URL, plan, SHA } from "./fixture.js";
+import {
+  BASE_SHA,
+  fixture,
+  PR_URL,
+  plan,
+  SECOND_FILE_QUOTE,
+  SHA,
+} from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
 
@@ -990,12 +998,19 @@ describe("runner false-green regressions", () => {
     );
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("CONTEXT_INCOMPLETE");
+    // Le refus nommé atteint le planificateur avec les classes de couverture :
+    // sans diff ni source, c'est lui qui explique l'impasse, et non le remède
+    // inapplicable d'une classe de couverture.
+    expect(JSON.stringify(f.modelRequests.at(-1))).toContain(
+      "CONTEXT_INCOMPLETE"
+    );
+    expect(f.modelRequests).toHaveLength(2);
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
-  });
+  }, 60_000);
   /** Ce que le fixture renvoie pour un commentaire réellement écrit. */
   const commentUrl = `${PR_URL}#issuecomment-1`;
   /**
@@ -1187,6 +1202,374 @@ describe("runner false-green regressions", () => {
         .state
     ).toBe("error");
   });
+  it("returns an unwitnessed source file to the planner before failing", async () => {
+    const withoutWitness = structuredClone(plan);
+    withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
+    const corrected = structuredClone(plan);
+    corrected.scenarios[0]!.sourceFiles.push("src/second.ts");
+    corrected.scenarios[0]!.requirements.push({
+      behavior: "The second changed file is reviewed",
+      quote: SECOND_FILE_QUOTE,
+      sourceFile: "src/second.ts",
+    });
+    const f = await setup({
+      plans: [withoutWitness, corrected],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus nomme le scénario et le fichier au planificateur, qui corrige
+    // dans la même tentative au lieu de laisser le gate final bloquer le run.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(
+      "Scenario welcome declares src/second.ts without a source requirement witness"
+    );
+    expect(correction).toContain(
+      "Add a requirement whose quote exists verbatim in src/second.ts; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch."
+    );
+    // Un chemin critique ne se voit jamais proposer le remède skip, que le
+    // gate refuserait.
+    expect(correction).not.toContain("list it in skipped");
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  });
+  it("blocks the run when the corrected plan still declares an unwitnessed file", async () => {
+    const withoutWitness = structuredClone(plan);
+    withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
+    const f = await setup({
+      plans: [withoutWitness, withoutWitness],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("COVERAGE_WITNESS_MISSING");
+    expect(result.error).toBe(
+      "Scenario welcome declares src/second.ts without a source requirement witness"
+    );
+    expect(result.scenarios).toEqual([]);
+  });
+  it("returns a requirement attributed to an undeclared file to the planner", async () => {
+    const misattributed = structuredClone(plan);
+    misattributed.scenarios[0]!.requirements[0] = {
+      behavior: "Save the name via the form",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/other.ts",
+    };
+    const corrected = structuredClone(plan);
+    const f = await setup({ plans: [misattributed, corrected] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus nomme le scénario et le fichier cité au planificateur : il
+    // corrige sa liste de sources dans la même tentative au lieu de faire
+    // échouer le run sur une erreur nue, hors du canal réparable.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(
+      "Scenario welcome attributes a requirement to src/other.ts, which it does not declare in sourceFiles"
+    );
+    expect(correction).toContain(
+      "This PR does not change src/other.ts, so it cannot be declared: attribute the requirement to one of the files the scenario declares (src/form.ts)."
+    );
+    // Le remède refusé par la forme du plan n'est ni proposé au planificateur
+    // ni montré à l'opérateur.
+    expect(correction).not.toContain("Declare src/other.ts");
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  });
+  it("blocks the run when the corrected plan still attributes a requirement to an undeclared file", async () => {
+    const misattributed = structuredClone(plan);
+    misattributed.scenarios[0]!.requirements[0] = {
+      behavior: "Save the name via the form",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/other.ts",
+    };
+    const f = await setup({ plans: [misattributed, misattributed] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(result.error).toContain("welcome");
+    expect(result.error).toContain("src/other.ts");
+    expect(result.scenarios).toEqual([]);
+  });
+  /**
+   * Un candidat fautif par refus de forme du plan : le planificateur reçoit le
+   * code nommé dans sa tentative de correction, et le plan corrigé passe.
+   */
+  function shapeRefusalCandidates(): { candidate: Plan; code: string }[] {
+    const tooMany = structuredClone(plan);
+    for (let index = tooMany.scenarios.length; index < 9; index++) {
+      tooMany.scenarios.push({
+        ...structuredClone(plan.scenarios[0]!),
+        id: `extra-${index}`,
+      });
+    }
+    const reserved = structuredClone(plan);
+    reserved.scenarios[0]!.id = "_discovery";
+    const cited = structuredClone(plan);
+    cited.scenarios[0]!.sourceFiles.push("docs/outside.md");
+    const skipped = structuredClone(plan);
+    skipped.skipped = [
+      {
+        sourceFile: "lib/outside.ts",
+        reason: "Not reachable from a browser scenario",
+      },
+    ];
+    const uncovered = structuredClone(plan);
+    uncovered.scenarios = [];
+    return [
+      { candidate: tooMany, code: "PLAN_TOO_MANY_SCENARIOS" },
+      { candidate: reserved, code: "PLAN_SCENARIO_ID_RESERVED" },
+      { candidate: cited, code: "PLAN_SOURCE_OUTSIDE_DIFF" },
+      { candidate: skipped, code: "PLAN_SKIP_OUTSIDE_DIFF" },
+      { candidate: uncovered, code: "PLAN_CHANGED_FILE_UNCOVERED" },
+    ];
+  }
+  it.each(
+    shapeRefusalCandidates()
+  )("returns the named refusal $code to the planner, then passes the corrected plan", async ({
+    candidate,
+    code,
+  }) => {
+    const f = await setup({ plans: [candidate, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(code);
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
+  it.each(
+    shapeRefusalCandidates()
+  )("blocks an uncorrected plan with the named refusal $code, without executing a scenario", async ({
+    candidate,
+    code,
+  }) => {
+    const f = await setup({ plans: [candidate, candidate] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe(code);
+    expect(result.scenarios).toEqual([]);
+  }, 60_000);
+  it("names the coverage refusal when a plan also cites a file outside the diff", async () => {
+    const cumulative = structuredClone(plan);
+    cumulative.scenarios[0]!.sourceFiles.push("docs/outside.md");
+    cumulative.scenarios[0]!.requirements.push({
+      behavior: "The requirement belongs to an undeclared source",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/undeclared.ts",
+    });
+    const f = await setup({ plans: [cumulative, cumulative] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus nommé et réparable du canal de couverture n'est plus masqué par
+    // la forme du plan : le cumul ne finit plus en QA_ERROR anonyme.
+    expect(result.diagnostic?.code).toBe("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(result.outcome).toBe("blocked");
+    expect(result.scenarios).toEqual([]);
+    // Les deux classes fatales ont été montrées au planificateur dans la même
+    // tentative de correction.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(correction).toContain("PLAN_SOURCE_OUTSIDE_DIFF");
+  });
+  it("keeps both fatal refusal classes inside the truncated correction", async () => {
+    const flooded = structuredClone(plan);
+    const [scenario] = flooded.scenarios;
+    for (let index = 0; index < 28; index++) {
+      scenario!.sourceFiles.push(`src/no-witness-${index}.ts`);
+    }
+    scenario!.requirements.push({
+      behavior: "The requirement belongs to an undeclared source",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/undeclared.ts",
+    });
+    const f = await setup({ plans: [flooded, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const request = f.modelRequests.at(-1)!;
+    const messages = request.messages as { content: string; role: string }[];
+    const correction = messages.at(-1)!.content;
+    // Le message de correction est bien tronqué à 2000 caractères...
+    expect(correction).toHaveLength(2000);
+    // ...et les deux classes fatales y survivent, agrégées en tête de message,
+    // même quand les chemins sans témoin remplissent à eux seuls la fin utile.
+    expect(correction).toContain("COVERAGE_WITNESS_MISSING");
+    expect(correction).toContain("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(correction).not.toContain("src/no-witness-27.ts");
+  });
+  /**
+   * Chaque classe fatale du canal de correction, saturée : les onze classes
+   * (couverture, contexte, budget, forme) portent leurs entrées fautives en
+   * même temps, et le préambule fatal doit tenir dans la troncature à 2000
+   * caractères de `model.ts` — codes compris — sans perdre la dernière classe.
+   */
+  function saturatedFatalCandidate(): Plan {
+    const saturated = structuredClone(plan);
+    const [first] = saturated.scenarios;
+    first!.sourceFiles = Array.from(
+      { length: 6 },
+      (_, index) => `src/no-witness-${index}.ts`
+    );
+    first!.requirements.push(
+      ...Array.from({ length: 7 }, (_, index) => ({
+        behavior: "The requirement belongs to an undeclared source",
+        quote: "a quote the fixture diff does not carry",
+        sourceFile: `src/undeclared-${index}.ts`,
+      }))
+    );
+    for (let index = 0; index < 22; index++) {
+      first!.steps.push({
+        description: "Observe the page",
+        id: `warmup-${index}`,
+        action: { type: "observe" as const },
+      });
+    }
+    saturated.skipped = Array.from({ length: 7 }, (_, index) => ({
+      reason: "Not reachable from a browser scenario",
+      sourceFile: `src/other-${index}.ts`,
+    }));
+    for (let index = 1; index < 13; index++) {
+      saturated.scenarios.push({
+        ...structuredClone(plan.scenarios[0]!),
+        id: index === 1 ? "_discovery" : `extra-${index}`,
+        requirements: [
+          {
+            behavior: "The requirement belongs to an undeclared source",
+            quote: "a quote the fixture diff does not carry",
+            sourceFile: `src/clone-${index}.ts`,
+          },
+        ],
+        sourceFiles: [`src/clone-${index}.ts`],
+      });
+    }
+    return saturated;
+  }
+  it("bounds the whole fatal prelude inside the truncated correction", async () => {
+    const f = await setup({ plans: [saturatedFatalCandidate(), plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const request = f.modelRequests.at(-1)!;
+    const messages = request.messages as { content: string; role: string }[];
+    const correction = messages.at(-1)!.content;
+    // Onze classes fatales saturées dépassent largement la fenêtre : la
+    // correction est bien tronquée à 2000 caractères.
+    expect(correction).toHaveLength(2000);
+    expect(correction.startsWith("Plan rejected: Fatal refusals")).toBe(true);
+    // L'en-tête nomme d'abord tous les codes fatals : chacun survit à la
+    // troncature, y compris PLAN_SCENARIO_ID_RESERVED et les suivants.
+    expect(correction).toContain(
+      "Fatal refusals (each one blocks the whole run): COVERAGE_WITNESS_MISSING, COVERAGE_REQUIREMENT_SOURCE_MISSING, REQUIREMENT_UNGROUNDED, CRITICAL_COVERAGE_MISSING, CONTEXT_INCOMPLETE, CONTRACT_BUDGET, PLAN_TOO_MANY_SCENARIOS, PLAN_SCENARIO_ID_RESERVED, PLAN_SOURCE_OUTSIDE_DIFF, PLAN_SKIP_OUTSIDE_DIFF, PLAN_CHANGED_FILE_UNCOVERED."
+    );
+    // Et chaque classe reçoit encore sa ligne bornée : l'en-tête ne remplace pas
+    // les remèdes, il les protège. La dernière classe est le témoin du bornage
+    // global — sa ligne n'existerait pas sous les bornes par classe.
+    expect(correction).toContain("PLAN_CHANGED_FILE_UNCOVERED: ");
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    expect(preludeEnd).toBeLessThan(1900);
+  }, 60_000);
+  /**
+   * CONTEXT_INCOMPLETE et CONTRACT_BUDGET bloquaient le run sans jamais passer
+   * par le canal réparable : le planificateur épuisait sa tentative sans les
+   * voir, et le refus masquait REQUIREMENT_UNGROUNDED. Nommés dans le préambule
+   * fatal, ils atteignent le planificateur, qui corrige dans la même tentative.
+   */
+  it.each([
+    {
+      candidate: () => {
+        const candidate = structuredClone(plan);
+        candidate.scenarios[0]!.sourceFiles.push("src/outside.ts");
+        return candidate;
+      },
+      code: "CONTEXT_INCOMPLETE",
+      name: "a scenario citing a path without source evidence",
+    },
+    {
+      candidate: () => {
+        const candidate = structuredClone(plan);
+        for (let index = 0; index < 22; index++) {
+          candidate.scenarios[0]!.steps.push({
+            description: "Observe the page",
+            id: `warmup-${index}`,
+            action: { type: "observe" as const },
+          });
+        }
+        return candidate;
+      },
+      code: "CONTRACT_BUDGET",
+      name: "a scenario over the step budget",
+    },
+  ])("returns $code to the planner, then passes the corrected plan ($name)", async ({
+    candidate,
+    code,
+  }) => {
+    const f = await setup({ plans: [candidate(), plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(code);
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
+  it("gives CRITICAL_COVERAGE_MISSING a correction attempt, and names the exception in the prompt", async () => {
+    const skipped = structuredClone(plan);
+    skipped.skipped = [
+      {
+        reason: "Not reachable from a browser scenario",
+        sourceFile: "src/form.ts",
+      },
+    ];
+    const f = await setup({ plans: [skipped, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le plan fautif consomme une tentative de correction au lieu de bloquer le
+    // run directement sur le contrôle final.
+    expect(f.modelRequests).toHaveLength(2);
+    const request = f.modelRequests.at(-1)!;
+    const messages = request.messages as { content: string; role: string }[];
+    expect(messages.at(-1)!.content).toContain("CRITICAL_COVERAGE_MISSING");
+    // Le prompt enseigne l'exception des chemins critiques après la règle du
+    // skip, et non la règle seule.
+    expect(messages[0]!.content).toContain("CRITICAL_COVERAGE_MISSING");
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
   it("retries a model call cut by the transport, and counts it", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
     fakeBrowser();

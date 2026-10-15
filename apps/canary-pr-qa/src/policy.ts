@@ -100,6 +100,20 @@ export function approvedSkipCovers(pattern: string, file: string): boolean {
   }
   return segmentsMatch(segments, file.split("/").filter(Boolean));
 }
+/**
+ * Un skip que le gate de couverture refuserait : chemin critique non
+ * documenté, sans approbation sur la branche de base. Le remède « retirez le
+ * fichier des sources et listez-le dans skipped » ne vaut donc que si ce
+ * prédicat est faux, et le gate comme les remèdes rendus au planificateur
+ * lisent la même règle.
+ */
+export function criticalSkipRefused(policy: Policy, file: string): boolean {
+  return (
+    !isDocumentationPath(file) &&
+    policy.criticalPaths.some((prefix) => file.startsWith(prefix)) &&
+    !policy.approvedSkips.some((skip) => approvedSkipCovers(skip.path, file))
+  );
+}
 export interface ScenarioRefusal {
   error: QaError;
   scenario: Scenario;
@@ -250,6 +264,25 @@ function witnessHint(quote: string, context: PrContext): string {
 }
 
 /**
+ * Exigences citées sans témoin textuel, avec le scénario qui les porte : la
+ * classe fatale `REQUIREMENT_UNGROUNDED` en est rendue une par entrée, et le
+ * canal de correction peut aussi l'agréger en une seule ligne.
+ */
+export function ungroundedRequirements(
+  plan: Plan,
+  context: PrContext
+): { requirement: Requirement; scenarioId: string }[] {
+  return plan.scenarios.flatMap((scenario) =>
+    scenario.requirements
+      .filter(
+        (requirement) =>
+          !requirementEvidence(requirement, context).includes(requirement.quote)
+      )
+      .map((requirement) => ({ requirement, scenarioId: scenario.id }))
+  );
+}
+
+/**
  * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
  * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
  * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
@@ -259,17 +292,224 @@ export function ungroundedPlanRefusals(
   plan: Plan,
   context: PrContext
 ): string[] {
-  return plan.scenarios.flatMap((scenario) =>
-    scenario.requirements
-      .filter(
-        (requirement) =>
-          !requirementEvidence(requirement, context).includes(requirement.quote)
-      )
-      .map((requirement) => {
-        const error = ungroundedRequirement(scenario.id, requirement);
-        return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
-      })
+  return ungroundedRequirements(plan, context).map(
+    ({ requirement, scenarioId }) => {
+      const error = ungroundedRequirement(scenarioId, requirement);
+      return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
+    }
   );
+}
+
+/**
+ * Marque comme couverts les fichiers témoignés par les exigences d'un scénario,
+ * et seulement ceux-là : une exigence dont la citation n'existe pas mot pour mot
+ * n'ajoute rien, comme `validateCoverage` l'aurait refusée juste avant. Le
+ * couvert est cumulatif sur tout le plan, dans l'ordre des scénarios.
+ * `unwitnessedPlanRefusals` et `validateCoverage` partagent ce pas pour que le
+ * refus rendu au planificateur nomme exactement le fichier que le gate
+ * refuserait ensuite, et jamais un fichier que le gate accepterait.
+ */
+function coverWitnessedSourceFiles(
+  covered: Set<string>,
+  scenario: Scenario,
+  context: PrContext
+): void {
+  for (const requirement of scenario.requirements) {
+    if (requirementEvidence(requirement, context).includes(requirement.quote)) {
+      covered.add(requirement.sourceFile);
+    }
+  }
+}
+
+/**
+ * Un fichier déclaré par un scénario qu'aucune exigence témoignée ne couvre :
+ * sans témoin, le plan ne peut pas prouver la couverture qu'il annonce. Le
+ * remède de repli — retirer le fichier des sources — n'est proposé que si le
+ * gate accepterait le remède qui le complète : un fichier que la PR ne change
+ * pas ne se liste jamais dans `skipped` (`PLAN_SKIP_OUTSIDE_DIFF`), et un chemin
+ * critique du diff demande un skip approuvé (`CRITICAL_COVERAGE_MISSING`).
+ * Proposer un skip que le gate refuse ferait tourner la tentative de correction
+ * du planificateur pour rien.
+ */
+export function unwitnessedRequirement(
+  scenarioId: string,
+  file: string,
+  policy: Policy,
+  inDiff: boolean
+): QaError {
+  let hint = `Add a requirement whose quote exists verbatim in ${file}, or drop it from sourceFiles and list it in skipped.`;
+  if (!inDiff) {
+    hint = `This PR does not change ${file}, so it cannot be listed in skipped: drop it from sourceFiles and quote a changed file instead.`;
+  } else if (criticalSkipRefused(policy, file)) {
+    hint = `Add a requirement whose quote exists verbatim in ${file}; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch.`;
+  }
+  return new QaError(
+    "COVERAGE_WITNESS_MISSING",
+    `Scenario ${scenarioId} declares ${file} without a source requirement witness`,
+    hint
+  );
+}
+
+/**
+ * Paires (scénario, fichier) des sources déclarées sans témoin, dans l'ordre du
+ * plan : le couvert est cumulatif, exactement comme `validateCoverage`.
+ */
+export function unwitnessedSources(
+  plan: Plan,
+  context: PrContext
+): { file: string; scenarioId: string }[] {
+  const covered = new Set<string>();
+  const entries: { file: string; scenarioId: string }[] = [];
+  for (const scenario of plan.scenarios) {
+    coverWitnessedSourceFiles(covered, scenario, context);
+    for (const file of scenario.sourceFiles) {
+      if (!covered.has(file)) {
+        entries.push({ file, scenarioId: scenario.id });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Fichiers cités sans témoin, sous forme de refus rendus au planificateur : il
+ * apprend la règle ici, dispose d'une tentative de correction, et
+ * `validateCoverage` reste le contrôle final qui refuse un plan non corrigé.
+ */
+export function unwitnessedPlanRefusals(
+  plan: Plan,
+  context: PrContext,
+  policy: Policy
+): string[] {
+  const changed = new Set(context.files.map((file) => file.filename));
+  return unwitnessedSources(plan, context).map(({ file, scenarioId }) => {
+    const error = unwitnessedRequirement(
+      scenarioId,
+      file,
+      policy,
+      changed.has(file)
+    );
+    return `${error.message}. ${error.hint}`;
+  });
+}
+
+/**
+ * Une exigence attribuée à un fichier que le scénario ne déclare pas : la
+ * preuve citée n'appartient pas au scénario, donc elle ne couvre rien. Le refus
+ * nomme le scénario et le fichier fautif, et ne propose de déclarer ce fichier
+ * que si la PR le change : hors du diff, la validation de forme refuserait la
+ * déclaration et la tentative de correction serait consommée pour rien.
+ */
+export function undeclaredRequirementSource(
+  scenarioId: string,
+  file: string,
+  declared: string[],
+  inDiff: boolean
+): QaError {
+  const candidates = declared.length
+    ? `one of the files the scenario declares (${declared.join(", ")})`
+    : "a file the scenario declares";
+  return new QaError(
+    "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+    `Scenario ${scenarioId} attributes a requirement to ${file}, which it does not declare in sourceFiles`,
+    inDiff
+      ? `Declare ${file} in this scenario's sourceFiles, or attribute the requirement to ${candidates}.`
+      : `This PR does not change ${file}, so it cannot be declared: attribute the requirement to ${candidates}.`
+  );
+}
+
+/** Fichiers cités par les exigences d'un scénario qu'il ne déclare pas. */
+function undeclaredFiles(scenario: Scenario): string[] {
+  return scenario.requirements
+    .map((requirement) => requirement.sourceFile)
+    .filter((file) => !scenario.sourceFiles.includes(file));
+}
+
+/**
+ * Paires (scénario, fichier) des exigences attribuées hors des sources
+ * déclarées, dans l'ordre du plan.
+ */
+export function undeclaredSources(
+  plan: Plan
+): { file: string; scenarioId: string }[] {
+  return plan.scenarios.flatMap((scenario) =>
+    undeclaredFiles(scenario).map((file) => ({ file, scenarioId: scenario.id }))
+  );
+}
+
+/**
+ * Exigences attribuées à un fichier hors de `sourceFiles`, sous forme de refus
+ * rendus au planificateur. Fatal comme `COVERAGE_WITNESS_MISSING` : il bloque
+ * tout le run via `validateCoverage`, donc il passe avant les refus par
+ * scénario, qui restent rapportés et bloqués individuellement.
+ */
+export function undeclaredSourcePlanRefusals(
+  plan: Plan,
+  context: PrContext
+): string[] {
+  const changed = new Set(context.files.map((file) => file.filename));
+  const declared = new Map(
+    plan.scenarios.map((scenario) => [scenario.id, scenario.sourceFiles])
+  );
+  return undeclaredSources(plan).map(({ file, scenarioId }) => {
+    const error = undeclaredRequirementSource(
+      scenarioId,
+      file,
+      declared.get(scenarioId) ?? [],
+      changed.has(file)
+    );
+    return `${error.message}. ${error.hint}`;
+  });
+}
+
+/**
+ * Premier refus d'attribution d'exigence, sans aucune dépendance à l'évidence.
+ * Le contrôle final (`validateCoverage`) et le règlement du plan le partagent,
+ * et il passe avant les refus de forme : un fichier hors diff, qui rend le plan
+ * inexécutable, ne doit jamais masquer ce refus nommé et réparable.
+ */
+export function requirementSourceRefusal(
+  plan: Plan,
+  context: PrContext
+): QaError | undefined {
+  const changed = new Set(context.files.map((file) => file.filename));
+  for (const scenario of plan.scenarios) {
+    const [file] = undeclaredFiles(scenario);
+    if (file !== undefined) {
+      return undeclaredRequirementSource(
+        scenario.id,
+        file,
+        scenario.sourceFiles,
+        changed.has(file)
+      );
+    }
+  }
+}
+
+/**
+ * Un scénario dont les étapes ne tiennent pas dans le budget d'actions : son
+ * contrat ne peut pas être exécuté. Le refus est nommé, remonte au
+ * planificateur comme le refus d'attribution, et le contrôle final lève le
+ * premier de la liste.
+ */
+export function contractBudgetRefusal(
+  scenario: Scenario,
+  config: Config
+): QaError | undefined {
+  return scenario.steps.length + 1 > config.QA_MAX_STEPS
+    ? new QaError(
+        "CONTRACT_BUDGET",
+        `Scenario ${scenario.id} cannot complete within QA_MAX_STEPS`,
+        "Increase the budget or split the scenario before execution."
+      )
+    : undefined;
+}
+
+/** Budgets de scénario refusés, dans l'ordre du plan. */
+export function contractBudgetRefusals(plan: Plan, config: Config): QaError[] {
+  return plan.scenarios
+    .map((scenario) => contractBudgetRefusal(scenario, config))
+    .filter((refusal): refusal is QaError => refusal !== undefined);
 }
 
 export function validateCoverage(
@@ -279,39 +519,37 @@ export function validateCoverage(
   config: Config
 ) {
   const covered = new Set<string>();
+  const changed = new Set(context.files.map((file) => file.filename));
   validateProvider(policy, config);
+  const source = requirementSourceRefusal(plan, context);
+  if (source) {
+    throw source;
+  }
   for (const scenario of plan.scenarios) {
-    if (scenario.steps.length + 1 > config.QA_MAX_STEPS) {
-      throw new QaError(
-        "CONTRACT_BUDGET",
-        `Scenario ${scenario.id} cannot complete within QA_MAX_STEPS`,
-        "Increase the budget or split the scenario before execution."
-      );
+    const budget = contractBudgetRefusal(scenario, config);
+    if (budget) {
+      throw budget;
     }
     for (const requirement of scenario.requirements) {
-      if (!scenario.sourceFiles.includes(requirement.sourceFile)) {
-        throw new Error("Requirement must cite a scenario source file");
-      }
       if (
         !requirementEvidence(requirement, context).includes(requirement.quote)
       ) {
         throw ungroundedRequirement(scenario.id, requirement);
       }
-      covered.add(requirement.sourceFile);
     }
-    if (scenario.sourceFiles.some((f) => !covered.has(f))) {
-      throw new Error(
-        "Every cited changed file needs a source requirement witness"
+    coverWitnessedSourceFiles(covered, scenario, context);
+    const unwitnessed = scenario.sourceFiles.find((file) => !covered.has(file));
+    if (unwitnessed !== undefined) {
+      throw unwitnessedRequirement(
+        scenario.id,
+        unwitnessed,
+        policy,
+        changed.has(unwitnessed)
       );
     }
   }
-  const denied = plan.skipped.filter(
-    (skip) =>
-      !isDocumentationPath(skip.sourceFile) &&
-      policy.criticalPaths.some((p) => skip.sourceFile.startsWith(p)) &&
-      !policy.approvedSkips.some((s) =>
-        approvedSkipCovers(s.path, skip.sourceFile)
-      )
+  const denied = plan.skipped.filter((skip) =>
+    criticalSkipRefused(policy, skip.sourceFile)
   );
   if (denied.length) {
     throw new QaError(

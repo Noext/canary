@@ -518,6 +518,70 @@ describe("RunDetail diagnostic", () => {
     );
   });
 
+  it.each([
+    "CONTEXT_INCOMPLETE",
+    "CONTRACT_BUDGET",
+    "COVERAGE_WITNESS_MISSING",
+    "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+    "CRITICAL_COVERAGE_MISSING",
+    "PLAN_CHANGED_FILE_UNCOVERED",
+    "PLAN_SCENARIO_ID_RESERVED",
+    "PLAN_SELECTOR_UNSTABLE",
+    "PLAN_SKIP_OUTSIDE_DIFF",
+    "PLAN_SOURCE_OUTSIDE_DIFF",
+    "PLAN_TOO_MANY_SCENARIOS",
+    "REQUIREMENT_UNGROUNDED",
+  ])("explains the plan refusal %s in French", async (code) => {
+    const french = errorMessages[code];
+    const advice = runAdvice[code];
+    // The catalogue is the contract: a code the runner can stop a plan on has
+    // its own copy, so the English server wording never reaches the interface.
+    expect(french).toBeDefined();
+    expect(advice).toBeDefined();
+    mockBlocked({
+      diagnostic: {
+        code,
+        hint: "Server hint that stays English.",
+        message: "Server message that stays English.",
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    expect(element("runDiagnostic").textContent).toContain(french);
+    expect(element("runDiagnostic").textContent).not.toContain(
+      "Server message that stays English."
+    );
+    expect(element("runDiagnosticHint").textContent).toBe(
+      `À faire : ${advice}`
+    );
+  });
+
+  it("explains a refused scenario from the shared catalogue too", async () => {
+    mockBlocked({
+      scenarios: [
+        {
+          artifacts: [],
+          diagnostic: {
+            code: "PLAN_SELECTOR_UNSTABLE",
+            hint: "Server hint that stays English.",
+            message: "Server message that stays English.",
+          },
+          error: "Server message that stays English.",
+          outcome: "blocked",
+          scenario: { id: "welcome", title: "Accueil" },
+        },
+      ],
+    });
+    renderDetail();
+
+    await waitFor(() => expect(element("runDiagnostic")).toBeVisible());
+    const block = element("runDiagnostic").textContent ?? "";
+    expect(block).toContain(errorMessages.PLAN_SELECTOR_UNSTABLE!);
+    expect(block).toContain(`À faire : ${runAdvice.PLAN_SELECTOR_UNSTABLE!}`);
+    expect(block).not.toContain("Server message that stays English.");
+  });
+
   it("does not repeat the raw server error next to its French explanation", async () => {
     mockBlocked({
       diagnostic: {

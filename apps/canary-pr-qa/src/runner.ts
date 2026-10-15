@@ -22,10 +22,18 @@ import {
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
+  contractBudgetRefusals,
+  criticalSkipRefused,
   type Policy,
   repairRequirementAttribution,
+  requirementSourceRefusal,
   trustedPolicy,
+  undeclaredSourcePlanRefusals,
+  undeclaredSources,
   ungroundedPlanRefusals,
+  ungroundedRequirements,
+  unwitnessedPlanRefusals,
+  unwitnessedSources,
   validateCoverage,
   validateProvider,
   writeEvidenceRefusals,
@@ -107,50 +115,297 @@ function validateSourceEvidence(
   scenarioId: string,
   path: string
 ) {
+  if (sourceEvidenceAvailable(context, path)) {
+    return;
+  }
+  throw new QaError(
+    "CONTEXT_INCOMPLETE",
+    `Scenario ${scenarioId} cites ${path} without a textual diff or complete head/base source`,
+    CONTEXT_INCOMPLETE_HINT
+  );
+}
+/**
+ * Conseil du refus `CONTEXT_INCOMPLETE`, partagé par le refus nommé du contrôle
+ * final et par la classe fatale du canal de correction : un scénario qui cite
+ * un chemin sans diff textuel ni source complète aux deux révisions ne peut pas
+ * prouver le changement testé depuis la source. Le refus est nommé, et non une
+ * erreur nue : il remonte au planificateur avec le préambule fatal, et le
+ * contrôle final lève le premier — sans masquer les refus de couverture que le
+ * canal réparable apprend à corriger.
+ */
+const CONTEXT_INCOMPLETE_HINT =
+  "Check GitHub Contents permissions and context budget. Unsupported/binary changes must be explicitly skipped; never infer a tested change from the page alone.";
+function sourceEvidenceAvailable(context: PrContext, path: string): boolean {
   const file = context.files.find((item) => item.filename === path);
   if (file?.patch) {
-    return;
+    return true;
   }
   const headAvailable =
     file?.status === "removed" || completeSource(context, path, context.sha);
   const baseAvailable =
     file?.status === "added" ||
     completeSource(context, file?.previous_filename ?? path, context.baseSha);
-  if (!(headAvailable && baseAvailable)) {
-    throw new QaError(
-      "CONTEXT_INCOMPLETE",
-      `Scenario ${scenarioId} cites ${path} without a textual diff or complete head/base source`,
-      "Check GitHub Contents permissions and context budget. Unsupported/binary changes must be explicitly skipped; never infer a tested change from the page alone."
-    );
-  }
+  return headAvailable && baseAvailable;
 }
-function validatePlan(plan: Plan, context: PrContext, config: Config) {
+/**
+ * Cas du refus `CONTEXT_INCOMPLETE` : une classe fatale du canal de correction,
+ * comme les classes de couverture. Les scénarios qui citent un chemin sans
+ * évidence bloquent le run au contrôle final, donc ils ne peuvent pas attendre
+ * après la tentative de correction du planificateur.
+ */
+function contextFatalClasses(plan: Plan, context: PrContext): FatalClass[] {
+  const missing = plan.scenarios.flatMap((scenario) =>
+    scenario.sourceFiles
+      .filter((path) => !sourceEvidenceAvailable(context, path))
+      .map((path) => `${scenario.id}:${path}`)
+  );
+  return missing.length === 0
+    ? []
+    : [
+        {
+          code: "CONTEXT_INCOMPLETE",
+          entries: missing,
+          hint: CONTEXT_INCOMPLETE_HINT,
+          label: "scenarios citing a path without source evidence",
+        },
+      ];
+}
+/**
+ * Une classe de refus fatal au plan : le code, ce qu'elle constate, les valeurs
+ * fautives et le remède. Le canal de correction en agrège une ligne bornée par
+ * classe, et le contrôle final lève le message complet.
+ */
+export interface FatalClass {
+  code: string;
+  entries: string[];
+  hint: string;
+  label: string;
+}
+/**
+ * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur.
+ */
+const FATAL_ENTRIES_LISTED = 6;
+const FATAL_ENTRY_CHARS = 80;
+function boundedEntries(entries: string[]): string {
+  const shown = entries
+    .slice(0, FATAL_ENTRIES_LISTED)
+    .map((entry) =>
+      entry.length > FATAL_ENTRY_CHARS
+        ? `${entry.slice(0, FATAL_ENTRY_CHARS - 1)}…`
+        : entry
+    );
+  const hidden = entries.length - shown.length;
+  return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
+}
+/**
+ * Ligne d'une classe fatale : l'en-tête du préambule porte déjà que chaque
+ * classe bloque le run, donc la ligne va droit au code et au remède — c'est le
+ * remède qu'une ligne tronquée doit encore porter au planificateur.
+ */
+function fatalLine(refusal: FatalClass): string {
+  return `${refusal.code}: ${refusal.hint} Faulty values: ${boundedEntries(refusal.entries)}`;
+}
+function fatalError(refusal: FatalClass): QaError {
+  return new QaError(
+    refusal.code,
+    `${refusal.label}: ${refusal.entries.join(", ")}`,
+    refusal.hint
+  );
+}
+/**
+ * Plafond du préambule fatal complet, en caractères : la correction est
+ * tronquée à 2000 par `model.ts`. Les bornes par classe ne suffisaient pas —
+ * huit classes saturées (6 entrées × 80 caractères chacune) dépassaient la
+ * troncature, et les dernières, dont `PLAN_SCENARIO_ID_RESERVED`,
+ * disparaissaient du message : le planificateur perdait sa seule tentative de
+ * correction. L'en-tête nomme donc tous les codes fatals avant toute entrée, et
+ * chaque classe reçoit une place égale dans ce plafond global.
+ */
+const FATAL_PRELUDE_CHARS = 1800;
+function boundedText(text: string, limit: number): string {
+  if (limit <= 0) {
+    return "";
+  }
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+function fatalPrelude(classes: FatalClass[]): string[] {
+  const [first] = classes;
+  if (!first) {
+    return [];
+  }
+  const header = `Fatal refusals (each one blocks the whole run): ${classes
+    .map((refusal) => refusal.code)
+    .join(", ")}.`;
+  const slot = Math.floor(
+    (FATAL_PRELUDE_CHARS - header.length) / classes.length
+  );
+  return [
+    header,
+    ...classes
+      .map((refusal) => boundedText(fatalLine(refusal), slot))
+      .filter((line) => line.length > 0),
+  ];
+}
+/**
+ * Une classe fatale tenue par des refus nommés — contexte incomplet, budget de
+ * scénario : le code du premier nomme la classe, son conseil vaut pour toutes
+ * ses entrées.
+ */
+function namedFatalClass(refusals: QaError[], label: string): FatalClass[] {
+  const [first] = refusals;
+  return first
+    ? [
+        {
+          code: first.code,
+          entries: refusals.map((refusal) => refusal.message),
+          hint: first.hint,
+          label,
+        },
+      ]
+    : [];
+}
+/**
+ * Classes fatales de couverture, agrégées en tête du canal de correction.
+ * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
+ * refus par scénario qui suivent la même liste.
+ */
+function coverageFatalClasses(
+  candidate: Plan,
+  context: PrContext,
+  policy: Policy
+): FatalClass[] {
+  const classes: FatalClass[] = [];
+  const unwitnessed = unwitnessedSources(candidate, context);
+  if (unwitnessed.length > 0) {
+    classes.push({
+      code: "COVERAGE_WITNESS_MISSING",
+      entries: unwitnessed.map((item) => `${item.scenarioId}:${item.file}`),
+      hint: "Add a requirement whose quote exists verbatim in each listed file.",
+      label: "declared sources with no requirement witness",
+    });
+  }
+  const undeclared = undeclaredSources(candidate);
+  if (undeclared.length > 0) {
+    classes.push({
+      code: "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+      entries: undeclared.map((item) => `${item.scenarioId}:${item.file}`),
+      hint: "Attribute each requirement to a file the scenario declares, or declare the cited file when the PR changes it.",
+      label: "requirements attributed to a file the scenario does not declare",
+    });
+  }
+  const ungrounded = ungroundedRequirements(candidate, context);
+  if (ungrounded.length > 0) {
+    classes.push({
+      code: "REQUIREMENT_UNGROUNDED",
+      entries: ungrounded.map(
+        (item) => `${item.scenarioId}:${item.requirement.sourceFile}`
+      ),
+      hint: "Quote exact source or diff text; page content alone is not a requirement.",
+      label: "requirements whose quote has no source witness",
+    });
+  }
+  // Un skip de chemin critique sans approbation bloque le run : le
+  // planificateur doit en disposer comme des autres classes fatales, et non
+  // d'un refus qui n'arrive qu'après sa tentative de correction.
+  const denied = candidate.skipped
+    .filter((skip) => criticalSkipRefused(policy, skip.sourceFile))
+    .map((skip) => skip.sourceFile);
+  if (denied.length > 0) {
+    classes.push({
+      code: "CRITICAL_COVERAGE_MISSING",
+      entries: denied,
+      hint: "Add scenarios, or approve the exact skip with a reason in .canary/qa.json on the trusted base branch. A PR cannot approve its own skip.",
+      label: "critical changes skipped without an approved skip",
+    });
+  }
+  return classes;
+}
+/**
+ * Formes de plan qui rendent le plan inexécutable : budget de scénarios,
+ * identifiant réservé, fichier cité ou ignoré hors du diff, fichier changé non
+ * couvert. Chaque refus nomme ses valeurs fautives : le planificateur les reçoit
+ * dans sa tentative de correction, et le contrôle final lève un `QaError` nommé
+ * au lieu d'une `Error` nue qui ne dit rien à personne.
+ */
+export function planShapeRefusals(
+  plan: Plan,
+  context: PrContext,
+  config: Config
+): FatalClass[] {
+  const refusals: FatalClass[] = [];
   if (plan.scenarios.length > config.QA_MAX_SCENARIOS) {
-    throw new Error("AI plan exceeds QA_MAX_SCENARIOS");
+    refusals.push({
+      code: "PLAN_TOO_MANY_SCENARIOS",
+      entries: [
+        `${plan.scenarios.length} scenarios for a limit of ${config.QA_MAX_SCENARIOS}`,
+      ],
+      hint: `Return at most ${config.QA_MAX_SCENARIOS} scenarios, and keep every changed file covered.`,
+      label: "the plan declares more scenarios than the run allows",
+    });
+  }
+  const reserved = plan.scenarios
+    .filter((scenario) => scenario.id === "_discovery")
+    .map((scenario) => scenario.id);
+  if (reserved.length > 0) {
+    refusals.push({
+      code: "PLAN_SCENARIO_ID_RESERVED",
+      entries: reserved,
+      hint: "Rename these scenarios; _discovery is reserved for the discovery navigation.",
+      label: "the plan reuses the reserved scenario id",
+    });
   }
   const changed = new Set(context.files.map((file) => file.filename));
+  const cited = plan.scenarios.flatMap((scenario) =>
+    scenario.sourceFiles
+      .filter((file) => !changed.has(file))
+      .map((file) => `${scenario.id}:${file}`)
+  );
+  if (cited.length > 0) {
+    refusals.push({
+      code: "PLAN_SOURCE_OUTSIDE_DIFF",
+      entries: cited,
+      hint: "Use only filenames from pr.files in sourceFiles; pr.context is evidence, never the list of changed files.",
+      label: "scenarios cite files this PR does not change",
+    });
+  }
+  const skipped = plan.skipped
+    .filter((item) => !changed.has(item.sourceFile))
+    .map((item) => item.sourceFile);
+  if (skipped.length > 0) {
+    refusals.push({
+      code: "PLAN_SKIP_OUTSIDE_DIFF",
+      entries: skipped,
+      hint: "Use only filenames from pr.files in skipped, and never add an unchanged context file.",
+      label: "skipped files this PR does not change",
+    });
+  }
+  const uncovered = [...changed].filter(
+    (file) =>
+      !(
+        plan.scenarios.some((scenario) =>
+          scenario.sourceFiles.includes(file)
+        ) || plan.skipped.some((item) => item.sourceFile === file)
+      )
+  );
+  if (uncovered.length > 0) {
+    refusals.push({
+      code: "PLAN_CHANGED_FILE_UNCOVERED",
+      entries: uncovered,
+      hint: "Cover each listed changed file with a scenario; ignoring one is only allowed where the policy approves the skip.",
+      label:
+        "changed files neither covered by a scenario nor listed in skipped",
+    });
+  }
+  return refusals;
+}
+function validatePlan(plan: Plan, context: PrContext, config: Config) {
+  const [refusal] = planShapeRefusals(plan, context, config);
+  if (refusal) {
+    throw fatalError(refusal);
+  }
   for (const scenario of plan.scenarios) {
-    if (scenario.id === "_discovery") {
-      throw new Error("Reserved scenario id");
-    }
-    if (scenario.sourceFiles.some((file) => !changed.has(file))) {
-      throw new Error("AI plan cites a file outside the PR diff");
-    }
     for (const path of scenario.sourceFiles) {
       validateSourceEvidence(context, scenario.id, path);
-    }
-  }
-  if (plan.skipped.some((item) => !changed.has(item.sourceFile))) {
-    throw new Error("AI plan skips a file outside the PR diff");
-  }
-  for (const file of changed) {
-    if (
-      !(
-        plan.scenarios.some((s) => s.sourceFiles.includes(file)) ||
-        plan.skipped.some((s) => s.sourceFile === file)
-      )
-    ) {
-      throw new Error(`AI plan omitted changed file: ${file}`);
     }
   }
 }
@@ -244,30 +499,51 @@ function refusalDiagnostic(
  * la page de découverte avant toute exécution.
  */
 /**
- * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
- * sélecteur construit sur une classe ou une couleur, exigence sans témoin
- * textuel, cible absente de la page de découverte.
+ * Les refus rendus au planificateur pour un plan candidat. Les classes fatales
+ * — celles qui bloquent tout le run — passent en tête, agrégées dans un
+ * préambule borné : la correction est tronquée à 2000 caractères par `model.ts`,
+ * et aucune classe fatale ne doit disparaître parce qu'une autre a rempli le
+ * message. Le détail par entrée et les refus par scénario suivent, ceux-là
+ * bloquant leur scénario seul.
  */
 function planRefusals(
   candidate: Plan,
   policy: Policy,
-  context: PrContext
+  context: PrContext,
+  config: Config
 ): string[] {
+  const shape = planShapeRefusals(candidate, context, config);
   return [
+    ...fatalPrelude([
+      ...coverageFatalClasses(candidate, context, policy),
+      ...contextFatalClasses(candidate, context),
+      ...namedFatalClass(
+        contractBudgetRefusals(candidate, config),
+        "scenarios that cannot complete within QA_MAX_STEPS"
+      ),
+      ...shape,
+    ]),
+    ...unwitnessedPlanRefusals(candidate, context, policy),
+    ...undeclaredSourcePlanRefusals(candidate, context),
+    ...shape.map(
+      (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
+    ),
+    ...ungroundedPlanRefusals(candidate, context),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
     ...unstableSelectorRefusals(candidate).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
-    ...ungroundedPlanRefusals(candidate, context),
   ];
 }
 /**
  * Après la planification : une citation réelle attribuée au mauvais fichier est
  * réparée — la preuve ne change pas, seule la mention du fichier était fausse —
  * le contrat est validé, et un plan qui lit une cible absente de la page de
- * découverte est refusé avant d'exécuter quoi que ce soit.
+ * découverte est refusé avant d'exécuter quoi que ce soit. Le refus d'attribution
+ * nommé passe avant les refus de forme : un fichier hors diff ne doit jamais
+ * masquer le refus que le planificateur est en train d'apprendre à corriger.
  */
 function settlePlan(
   plan: Plan,
@@ -285,6 +561,10 @@ function settlePlan(
       },
       "Requirement attribution repaired"
     );
+  }
+  const source = requirementSourceRefusal(plan, context);
+  if (source) {
+    throw source;
   }
   validatePlan(plan, context, config);
 }
@@ -337,7 +617,7 @@ async function executePlan(
       // Le planificateur reçoit les refus et dispose d'une tentative de
       // correction, au lieu de faire échouer le run sur une citation recopiée
       // de mémoire ou attribuée au mauvais fichier.
-      const messages = planRefusals(candidate, policy, context);
+      const messages = planRefusals(candidate, policy, context, config);
       return messages.length
         ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
         : undefined;
