@@ -210,14 +210,14 @@ const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act)
 
 /**
  * Émis dans le script compilé par `locatorCall` pour les lectures qui mesurent
- * un locator vide sans lever (`isVisible`, `count`) : elles rendent false/0 au
- * lieu du délai qui déclencherait le repli de `resolveName`, donc le repli
- * n'aurait jamais lieu. Le nom réellement exposé est ici résolu avant la
- * lecture, sur le compte des variantes lu par `getByRole` — donc dans l'arbre
- * d'accessibilité, comme le nom lui-même — et deux graphies concurrentes lèvent
- * un échec explicite au lieu d'être départagées au hasard. Une cible réellement
- * absente garde la lecture honnête du nom exact (0/false), sans laquelle
- * `hidden` et `count: 0` ne seraient plus exprimables.
+ * un locator vide sans lever (`isVisible`) : elles rendent false au lieu du
+ * délai qui déclencherait le repli après échec, donc le repli n'aurait jamais
+ * lieu. La graphie réellement exposée est ici résolue avant la lecture, `build`
+ * reconstruisant le locator de la même famille — nom accessible d'un rôle,
+ * texte, placeholder — et deux graphies concurrentes lèvent un échec explicite
+ * au lieu d'être départagées au hasard. Une cible réellement absente garde la
+ * lecture honnête de la graphie exacte (false), sans laquelle `hidden` ne serait
+ * plus exprimable.
  *
  * L'ambiguïté est jetée sous forme d'objet `{ name, message }`, pas d'un
  * `new Error` : un `Error` créé dans le bac à sable QuickJS perd son message en
@@ -225,13 +225,13 @@ const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act)
  * ne lirait pas la cause. Un objet dont `message` est propre la porte jusqu'au
  * rapport.
  */
-const RESOLVE_NAME_READ_HELPER = `async function readName(exact, role, names, planned, read) {
+const RESOLVE_SPELLING_READ_HELPER = `async function readSpelling(exact, build, label, names, planned, read) {
   if (await exact.count()) return await read(exact);
   let used;
   let matched = 0;
   const exposed = [];
   for (const name of names) {
-    const candidate = page.getByRole(role, { name, exact: true });
+    const candidate = build(name);
     const count = await candidate.count();
     matched += count;
     if (count) exposed.push(JSON.stringify(name) + " (" + count + ")");
@@ -239,10 +239,33 @@ const RESOLVE_NAME_READ_HELPER = `async function readName(exact, role, names, pl
   }
   if (matched === 0) return await read(exact);
   if (!(used && matched === 1)) {
-    throw { name: "AmbiguousTargetError", message: "Ambiguous accessible name " + JSON.stringify(planned) + " (role " + role + "): the page exposes " + exposed.join(" and ") + ", so no spelling is chosen; retarget the assertion on one unambiguous name" };
+    throw { name: "AmbiguousTargetError", message: "Ambiguous " + label + " " + JSON.stringify(planned) + ": the page exposes " + exposed.join(" and ") + ", so no spelling is chosen; retarget the assertion on one unambiguous spelling" };
   }
   targetName = used.name;
   return await read(used.candidate);
+}`;
+
+/**
+ * Émis dans le script compilé par `locatorCount` : une assertion de comptage ne
+ * choisit pas un élément, elle compte le signe visé sous toutes ses graphies. Le
+ * total additionne la graphie exacte et ses variantes — deux graphies exactes ne
+ * peuvent pas désigner le même élément — donc le verdict porte sur le nombre
+ * réel d'éléments, jamais sur celui d'une graphie choisie au hasard. Aucune
+ * unicité n'est exigée ici : un compte faux reste un compte faux au lieu de
+ * devenir une erreur d'ambiguïté. La substitution n'est publiée que lorsqu'une
+ * graphie unique remplace la graphie exacte absente.
+ */
+const RESOLVE_SPELLING_COUNT_HELPER = `async function countSpelling(exact, build, names) {
+  const count = await exact.count();
+  const exposed = [];
+  let total = count;
+  for (const name of names) {
+    const found = await build(name).count();
+    if (found) exposed.push(name);
+    total += found;
+  }
+  if (count === 0 && exposed.length === 1) targetName = exposed[0];
+  return total;
 }`;
 
 /**
@@ -257,15 +280,63 @@ const RESOLVE_LABEL_READ_HELPER = `async function readLabel(strict, fallback, re
 }`;
 
 /**
+ * Graphie littérale visée par un locator dont la graphie d'un signe peut
+ * différer de celle de la page : nom accessible d'un rôle, texte, placeholder.
+ * `css` et `testId` ne portent aucun texte, `label` a son propre repli.
+ */
+function spellingValue(locator: Locator): string | undefined {
+  if (locator.by === "role") {
+    return locator.name;
+  }
+  if (locator.by === "text" || locator.by === "placeholder") {
+    return locator.value;
+  }
+  return;
+}
+
+/** Variantes repliables de la graphie visée, jamais calculées pour un autre type. */
+function spellingVariants(locator: Locator): string[] {
+  const value = spellingValue(locator);
+  return value === undefined ? [] : typographicVariants(value);
+}
+
+/** Construction du locator pour une graphie de la même famille que le locator visé. */
+function spellingBuilder(locator: Locator): string {
+  switch (locator.by) {
+    case "role":
+      return `(name) => page.getByRole(${JSON.stringify(locator.value)}, { name: name, exact: true })`;
+    case "text":
+      return "(name) => page.getByText(name, { exact: true })";
+    case "placeholder":
+      return "(name) => page.getByPlaceholder(name, { exact: true })";
+    default:
+      throw new Error("Unsupported locator");
+  }
+}
+
+/** Famille nommée dans l'échec d'ambiguïté, pour que la cause soit lisible sans le script. */
+function spellingLabel(locator: Locator): string {
+  switch (locator.by) {
+    case "role":
+      return `accessible name (role ${JSON.stringify(locator.value)})`;
+    case "text":
+    case "placeholder":
+      return locator.by;
+    default:
+      throw new Error("Unsupported locator");
+  }
+}
+
+/**
  * Appel Playwright sur le contrôle visé, `call` étant un suffixe de méthode
  * (`click({ timeout: 10000 })`). Un locator `by:"label"` reçoit le repli par nom
  * accessible, un locator `by:"role"` le repli par graphie du nom `name`, les
  * autres sont appelés directement.
  *
  * `mode` dit ce que l'appel fait d'un locator vide : une action ou une lecture
- * qui lève (`click`, `innerText`) est rejouée sur le repli après l'échec du nom
- * exact, alors qu'une lecture qui mesure (`isVisible`, `count`) doit résoudre le
- * nom d'abord — un locator vide y rend false/0 sans jamais lever.
+ * qui lève (`click`, `innerText`) est rejouée sur le repli après l'échec de la
+ * graphie exacte, alors qu'une lecture qui mesure (`isVisible`) doit résoudre la
+ * graphie exposée d'abord — un locator vide y rend false sans jamais lever.
  */
 export function locatorCall(
   locator: Locator,
@@ -279,35 +350,45 @@ export function locatorCall(
       ? `readLabel(${strict}, ${fallback}, ${read})`
       : `resolveLabel(${strict}, ${fallback}, ${read})`;
   }
-  return (
-    nameFallback(locator, `(locator) => locator.${call}`, mode) ??
-    `${locatorExpression(locator)}.${call}`
-  );
+  const read = `(locator) => locator.${call}`;
+  const names = spellingVariants(locator);
+  if (mode === "measure" && names.length > 0) {
+    // La lecture reçoit aussi la graphie du plan et sa famille : c'est ce que
+    // l'échec d'ambiguïté nomme, faute de pouvoir désigner une seule graphie.
+    const planned = JSON.stringify(spellingValue(locator));
+    return `readSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(spellingLabel(locator))}, ${JSON.stringify(names)}, ${planned}, ${read})`;
+  }
+  return nameFallback(locator, read) ?? `${locatorExpression(locator)}.${call}`;
+}
+
+/**
+ * Lecture d'une assertion `count` : la multiplicité est le sujet, donc aucune
+ * unicité n'est exigée. Le total additionne les graphies du même signe, et un
+ * compte qui ne tombe pas juste reste une assertion fausse, pas une ambiguïté.
+ */
+export function locatorCount(locator: Locator): string {
+  if (locator.by === "label") {
+    const { strict, fallback } = labelTargets(locator.value);
+    return `readLabel(${strict}, ${fallback}, (locator) => locator.count())`;
+  }
+  const names = spellingVariants(locator);
+  return names.length === 0
+    ? `${locatorExpression(locator)}.count()`
+    : `countSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(names)})`;
 }
 
 /**
  * Repli typographique d'un locator role+nom : `undefined` quand le nom ne porte
  * aucun signe repliable, ou quand ses variantes dépassent le plafond.
  */
-function nameFallback(
-  locator: Locator,
-  act: string,
-  mode: "act" | "measure"
-): string | undefined {
+function nameFallback(locator: Locator, act: string): string | undefined {
   if (locator.by !== "role") {
     return;
   }
   const names = typographicVariants(locator.name);
-  if (names.length === 0) {
-    return;
-  }
-  const exact = locatorExpression(locator);
-  const role = JSON.stringify(locator.value);
-  // En mode `measure`, la lecture reçoit aussi le nom du plan : c'est lui que
-  // l'échec d'ambiguïté nomme, faute de pouvoir désigner une seule graphie.
-  return mode === "measure"
-    ? `readName(${exact}, ${role}, ${JSON.stringify(names)}, ${JSON.stringify(locator.name)}, ${act})`
-    : `resolveName(${exact}, ${role}, ${JSON.stringify(names)}, ${act})`;
+  return names.length === 0
+    ? undefined
+    : `resolveName(${locatorExpression(locator)}, ${JSON.stringify(locator.value)}, ${JSON.stringify(names)}, ${act})`;
 }
 
 /**
@@ -320,7 +401,7 @@ function locatorRun(locator: Locator, body: string): string {
     return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
   }
   return (
-    nameFallback(locator, `async (locator) => { ${body} }`, "act") ??
+    nameFallback(locator, `async (locator) => { ${body} }`) ??
     `(async (locator) => { ${body} })( ${locatorExpression(locator)} )`
   );
 }
@@ -386,7 +467,7 @@ function readAssertion(assertion: Assertion, locator?: Locator): string {
     case "value":
       return `await ${locatorCall(locator, "inputValue({ timeout: 5000 })")}`;
     case "count":
-      return `await ${locatorCall(locator, "count()", "measure")}`;
+      return `await ${locatorCount(locator)}`;
     default:
       return `await ${locatorCall(locator, "isVisible()", "measure")}`;
   }
@@ -503,7 +584,8 @@ const provenanceUrls = [];
 ${RESOLVE_LABEL_HELPER}
 ${RESOLVE_LABEL_READ_HELPER}
 ${RESOLVE_NAME_HELPER}
-${RESOLVE_NAME_READ_HELPER}
+${RESOLVE_SPELLING_READ_HELPER}
+${RESOLVE_SPELLING_COUNT_HELPER}
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");

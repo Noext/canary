@@ -17,7 +17,7 @@ import {
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
 import { runQa } from "../src/runner.js";
-import { type Plan, PlanSchema } from "../src/schema.js";
+import { type Locator, type Plan, PlanSchema } from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
@@ -144,6 +144,21 @@ function readOnlyPlan(
     ],
     skipped: [],
   };
+}
+
+/** Scénario sans interaction qui compte les éléments portant la cible visée. */
+function countPlan(target: Locator, expected: number): Plan {
+  const contract = readOnlyPlan(target);
+  contract.scenarios[0]!.assertions[0] = {
+    id: "heading",
+    description: "Le titre de l'en-tête apparaît le nombre de fois attendu",
+    kind: "count",
+    expected,
+    target,
+    afterStep: "load",
+    verification: "state",
+  };
+  return contract;
 }
 
 function scriptPlan(plan: Plan) {
@@ -295,6 +310,58 @@ describe("validation du plan contre l'instantané de découverte", () => {
       { url: "https://preview.test/", aria }
     );
     expect(report.refusals).toHaveLength(1);
+  });
+  it("accepte un comptage porté par la seule graphie décalée, sans exiger l'unicité", () => {
+    const target = {
+      by: "role" as const,
+      value: "textbox",
+      name: "Justification de l'écart",
+    };
+    // Deux éléments portent la graphie exposée : « count: 2 » est vrai, mais
+    // deux nœuds ne sont pas un candidat unique. Une assertion de comptage ne
+    // choisit pas un élément, donc l'unicité n'a pas de sens ici.
+    const twice = validatePlanEvidence(PlanSchema.parse(countPlan(target, 2)), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]`,
+    });
+    expect(twice).toEqual({ refusals: [], inconclusive: [] });
+    // Un total qui ne tombe pas juste reste un comptage honnête : la cible est
+    // présente, donc le plan est exécutable et le verdict appartient à
+    // l'exécution, jamais à un refus d'unicité.
+    const mismatched = validatePlanEvidence(
+      PlanSchema.parse(countPlan(target, 2)),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]\n  - textbox "Justification de l’écart" [ref=e4]`,
+      }
+    );
+    expect(mismatched).toEqual({ refusals: [], inconclusive: [] });
+    // En revanche une cible que rien ne porte reste refusée : un comptage ne
+    // peut pas s'appuyer sur une graphie absente de la page.
+    const absent = validatePlanEvidence(
+      PlanSchema.parse(countPlan(target, 2)),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "Justification du montant" [ref=e2]`,
+      }
+    );
+    expect(absent.refusals).toHaveLength(1);
+    // Une assertion de visibilité garde l'exigence d'unicité : deux graphies
+    // concurrentes restent refusées, sans quoi le run échouerait en ambiguïté.
+    const visibility = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l‘écart" [ref=e3]`,
+      }
+    );
+    expect(visibility.refusals).toHaveLength(1);
   });
   it("refuse une cible role+nom absente de la page de découverte", () => {
     const report = validatePlanEvidence(PlanSchema.parse(observedPlan()), {

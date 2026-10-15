@@ -313,6 +313,33 @@ export async function fixture(
       );
       return;
     }
+    if (path.startsWith("/typographie-texte")) {
+      // Textes et placeholders qui ne diffèrent du plan que par la graphie de
+      // l'apostrophe : le plan recopie U+0027, la page expose U+2019. Le titre
+      // de la page garde le texte des ancêtres différent de chaque graphie,
+      // pour que `getByText` exact ne résolve que le paragraphe visé.
+      const spelled = "Justification de l\u2019\u00e9cart";
+      const shifted = "Justification de l\u2018\u00e9cart";
+      let spellings = [spelled];
+      if (path.endsWith("-double")) {
+        spellings = [spelled, shifted];
+      } else if (path.endsWith("-triple")) {
+        spellings = [spelled, spelled, spelled];
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "x-commit-sha": SHA,
+      });
+      res.end(
+        `<!doctype html><html lang="fr"><body><h1>Écart</h1><main>${spellings
+          .map(
+            (spelling, index) =>
+              `<p id="ligne-${index}">${spelling}</p><input id="champ-${index}" placeholder="${spelling}">`
+          )
+          .join("")}</main></body></html>`
+      );
+      return;
+    }
     if (path === "/version.json") {
       json(res, { sha: options.noSha ? BASE_SHA : SHA });
       return;

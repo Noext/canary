@@ -10,6 +10,7 @@ import {
   compileProbe,
   foldTypography,
   locatorCall,
+  locatorCount,
   locatorExpression,
   typographicCodepoints,
   typographicVariants,
@@ -30,6 +31,7 @@ import { relayModelRetries, runQa } from "../src/runner.js";
 import {
   ActionSchema,
   type Assertion,
+  type Locator,
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
@@ -158,27 +160,44 @@ async function runTypographicAction(exposed: string[]): Promise<{
 }
 
 /**
- * Lecture compilée d'une assertion `visible`, `hidden` ou `count` contre un faux
- * Playwright : la page expose exactement les graphies listées, et chacune est
- * visible. `isVisible()` et `count()` ne lèvent jamais, pas même sur un locator
- * vide : c'est ce silence que le repli doit devancer.
+ * Faux Playwright d'une page qui n'expose que les graphies listées : chaque
+ * famille de locator (rôle, texte, placeholder) est indexée par la chaîne
+ * exacte visée, et `isVisible()`/`count()` ne lèvent jamais, pas même sur un
+ * locator vide — c'est ce silence que le repli doit devancer.
  */
-async function runTypographicRead(
-  kind: "visible" | "hidden" | "count",
-  exposed: string[]
-) {
-  const target = {
-    by: "role" as const,
-    value: "textbox",
-    name: "Justification de l'écart",
+function spellingPage(exposed: string[]) {
+  const locator = (name: string) => ({
+    count: async () => exposed.filter((item) => item === name).length,
+    isVisible: async () => exposed.includes(name),
+  });
+  return {
+    getByRole: (_role: string, options: { name: string }) =>
+      locator(options.name),
+    getByText: (value: string) => locator(value),
+    getByPlaceholder: (value: string) => locator(value),
+    url: () => "https://preview.test/caisse",
+    snapshotForAI: async () => ({ full: "" }),
   };
+}
+
+/**
+ * Lecture compilée d'une assertion `visible`, `hidden` ou `count` contre une
+ * page qui expose les graphies listées. Le verdict (`passed`) est celui que
+ * l'exécuteur applique au `actual` lu, jamais un verdict recopié à la main.
+ */
+async function readSpelling(
+  kind: "visible" | "hidden" | "count",
+  target: Locator,
+  exposed: string[],
+  expected = 1
+) {
   const assertion: Assertion =
     kind === "count"
       ? {
           id: "justification",
           kind: "count",
-          description: "la justification de l'écart compte un élément",
-          expected: 1,
+          description: "la justification de l'écart compte des éléments",
+          expected,
           target,
         }
       : {
@@ -187,18 +206,9 @@ async function runTypographicRead(
           description: "la justification de l'écart est visible",
           target,
         };
-  const locator = (name: string) => ({
-    count: async () => exposed.filter((item) => item === name).length,
-    isVisible: async () => exposed.includes(name),
-  });
   const { failure, observation } = await runCompiledScript(
     compileProbe(assertion, "https://preview.test"),
-    {
-      getByRole: (_role: string, options: { name: string }) =>
-        locator(options.name),
-      url: () => "https://preview.test/caisse",
-      snapshotForAI: async () => ({ full: "" }),
-    }
+    spellingPage(exposed)
   );
   return {
     failure,
@@ -206,6 +216,21 @@ async function runTypographicRead(
     actual: observation?.actual,
     passed: assertionMatches(assertion, observation?.actual),
   };
+}
+
+/** Cible role+nom des lectures qui mesurent, partagée par les tests de graphie. */
+const plannedTarget = {
+  by: "role" as const,
+  value: "textbox",
+  name: "Justification de l'écart",
+};
+
+/** Même lecture, sur la cible role+nom historique. */
+function runTypographicRead(
+  kind: "visible" | "hidden" | "count",
+  exposed: string[]
+) {
+  return readSpelling(kind, plannedTarget, exposed);
 }
 
 describe("validation and deterministic assertions", () => {
@@ -539,16 +564,29 @@ describe("validation and deterministic assertions", () => {
       value: "textbox",
       name: "Justification de l'écart",
     };
-    // `isVisible()` et `count()` rendent false/0 sans lever : la lecture doit
-    // passer par la résolution du nom exposé, quand l'action attend l'échec.
+    // `isVisible()` rend false sans lever et `count()` se lit sur le total des
+    // graphies : la mesure doit passer par la résolution de la graphie exposée,
+    // quand l'action attend l'échec de la graphie exacte.
     expect(locatorCall(target, "isVisible()", "measure")).toContain(
-      "readName("
+      "readSpelling("
     );
-    expect(locatorCall(target, "count()", "measure")).toContain("readName(");
+    expect(locatorCount(target)).toContain("countSpelling(");
     expect(locatorCall(target, "isVisible()")).toContain("resolveName(");
     expect(locatorCall(target, "click({ timeout: 10000 })")).toContain(
       "resolveName("
     );
+    // Un texte et un placeholder exposent la même graphie décalée : leur mesure
+    // résout elle aussi la graphie exposée, sans passer par le nom accessible.
+    expect(
+      locatorCall(
+        { by: "text", value: "Justification de l'écart" },
+        "isVisible()",
+        "measure"
+      )
+    ).toContain("readSpelling(");
+    expect(
+      locatorCount({ by: "placeholder", value: "Justification de l'écart" })
+    ).toContain("countSpelling(");
   });
 
   it("vise la graphie exposée avant de lire visibilité et compte", async () => {
@@ -598,7 +636,7 @@ describe("validation and deterministic assertions", () => {
   });
 
   it("refuse deux graphies concurrentes au lieu de mesurer un locator vide", async () => {
-    for (const kind of ["visible", "hidden", "count"] as const) {
+    for (const kind of ["visible", "hidden"] as const) {
       const read = await runTypographicRead(kind, [
         "Justification de l’écart",
         "Justification de l‘écart",
@@ -616,6 +654,86 @@ describe("validation and deterministic assertions", () => {
       // Aucune lecture n'a eu lieu : rien n'est publié, donc aucun verdict
       // rendu sur un locator vide.
       expect(read.observation, kind).toBeUndefined();
+    }
+  });
+
+  it("vise la graphie exposée d'un texte et d'un placeholder avant toute mesure", async () => {
+    const exposed = "Justification de l’écart";
+    for (const target of [
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      // Sans repli, `isVisible()` rendait false et `count()` 0 sur un locator
+      // vide : « hidden » passait sur un texte pourtant affiché, et « visible »
+      // échouait dessus. Les trois verdicts portent sur la graphie exposée.
+      const visible = await readSpelling("visible", target, [exposed]);
+      expect(visible.failure, target.by).toBeUndefined();
+      expect(visible.actual, target.by).toBe(true);
+      expect(visible.passed, target.by).toBe(true);
+      expect(visible.observation?.targetName, target.by).toBe(exposed);
+      const hidden = await readSpelling("hidden", target, [exposed]);
+      expect(hidden.failure, target.by).toBeUndefined();
+      expect(hidden.actual, target.by).toBe(true);
+      expect(hidden.passed, target.by).toBe(false);
+      expect(hidden.observation?.targetName, target.by).toBe(exposed);
+      const count = await readSpelling("count", target, [exposed], 1);
+      expect(count.failure, target.by).toBeUndefined();
+      expect(count.actual, target.by).toBe(1);
+      expect(count.passed, target.by).toBe(true);
+      expect(count.observation?.targetName, target.by).toBe(exposed);
+      // Un compte qui exige zéro ne passe pas sur un texte affiché.
+      const zero = await readSpelling("count", target, [exposed], 0);
+      expect(zero.actual, target.by).toBe(1);
+      expect(zero.passed, target.by).toBe(false);
+    }
+  });
+
+  it("compte les graphies d'un même signe sans exiger l'unicité", async () => {
+    const shifted = ["Justification de l’écart", "Justification de l’écart"];
+    for (const target of [
+      plannedTarget,
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      // Deux éléments portant la graphie décalée : « count: 2 » est vrai, et
+      // aucune ambiguïté n'est jetée — l'unicité n'a pas de sens pour un compte.
+      const two = await readSpelling("count", target, shifted, 2);
+      expect(two.failure, target.by).toBeUndefined();
+      expect(two.actual, target.by).toBe(2);
+      expect(two.passed, target.by).toBe(true);
+      const three = await readSpelling(
+        "count",
+        target,
+        [...shifted, "Justification de l‘écart"],
+        2
+      );
+      // Un compte faux reste faux : trois éléments pour un compte de deux est
+      // une assertion fausse, jamais une erreur d'ambiguïté.
+      expect(three.failure, target.by).toBeUndefined();
+      expect(three.actual, target.by).toBe(3);
+      expect(three.passed, target.by).toBe(false);
+    }
+  });
+
+  it("refuse deux graphies concurrentes d'un texte et d'un placeholder", async () => {
+    for (const target of [
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      for (const kind of ["visible", "hidden"] as const) {
+        const read = await readSpelling(kind, target, [
+          "Justification de l’écart",
+          "Justification de l‘écart",
+        ]);
+        const failure = read.failure as { message?: string; name?: string };
+        expect(failure?.name, `${target.by} ${kind}`).toBe(
+          "AmbiguousTargetError"
+        );
+        expect(String(failure?.message), `${target.by} ${kind}`).toContain(
+          `Ambiguous ${target.by}`
+        );
+        expect(read.observation, `${target.by} ${kind}`).toBeUndefined();
+      }
     }
   });
 

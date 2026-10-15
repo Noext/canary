@@ -20,6 +20,11 @@ import type { Locator, Plan, Scenario } from "./schema.js";
  * de profondeur et les types de locator css/text/label/placeholder/testId lisent
  * le DOM, pas l'arbre d'accessibilité. Ces cas sont rapportés « non concluant »
  * (jamais un refus) pour ne pas remplacer un contrôle réel par un faux contrôle.
+ *
+ * Une assertion de comptage échappe à l'exigence d'unicité : l'exécution
+ * additionne les graphies du même signe, donc une seule graphie présente suffit
+ * à rendre le plan exécutable, et un total qui ne tombe pas juste reste une
+ * assertion fausse jugée à l'exécution.
  */
 
 /** Seul alias de rôle accepté par getByRole qui diffère du rôle imprimé par l'instantané. */
@@ -256,7 +261,10 @@ function inspectScenario(
         locator,
         pageUnchanged[index] ?? false,
         names,
-        report
+        report,
+        // Une action vise un contrôle à manipuler, jamais un compte : seule une
+        // assertion de comptage accepte plusieurs graphies du même signe.
+        undefined
       );
     }
   }
@@ -280,7 +288,8 @@ function inspectScenario(
       assertion.target,
       pageUnchanged[readIndex] ?? false,
       names,
-      report
+      report,
+      assertion.kind === "count" ? assertion.expected : undefined
     );
   }
 }
@@ -291,7 +300,8 @@ function checkTarget(
   locator: Locator,
   pageUnchanged: boolean,
   names: AriaNames,
-  report: PlanEvidenceReport
+  report: PlanEvidenceReport,
+  counting: number | undefined
 ) {
   if (!pageUnchanged) {
     report.inconclusive.push({
@@ -324,7 +334,13 @@ function checkTarget(
   const folded = names.nodes.filter(
     (node) => node.role === role && variants.includes(node.name)
   );
-  if (folded.length === 1) {
+  // Une assertion de comptage ne choisit pas un élément : l'exécution additionne
+  // les graphies du même signe et compare le total au compte attendu. Dès qu'une
+  // graphie porte la cible, le plan est exécutable et le verdict reste un
+  // comptage honnête ; exiger l'unicité ici remplacerait une assertion juste
+  // (« count: 2 » sur deux éléments) par un refus qui n'a pas de sens pour un
+  // compte.
+  if (counting === undefined ? folded.length === 1 : folded.length > 0) {
     return;
   }
   report.refusals.push({

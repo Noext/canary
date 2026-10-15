@@ -342,22 +342,194 @@ it("targets the exposed spelling in actual Chromium, and nothing when two compet
         )
       )
     ).rejects.toThrow(/Ambiguous accessible name/);
-    await expect(
-      canary.act(
-        id,
-        "ambiguous-count",
-        compileProbe(
+    // Un comptage ne choisit pas un élément : les deux graphies du même signe
+    // s'additionnent, donc « count: 1 » est faux au lieu d'être une ambiguïté.
+    const doubleCount = await canary.act(
+      id,
+      "count-double",
+      compileProbe(
+        {
+          id: "count",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(doubleCount.actual).toBe(2);
+    expect(
+      assertionMatches(
+        {
+          id: "count",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+        },
+        doubleCount.actual
+      )
+    ).toBe(false);
+    const doubleCountTwo = await canary.act(
+      id,
+      "count-double-two",
+      compileProbe(
+        {
+          id: "count",
+          kind: "count",
+          description: "les deux graphies comptent deux éléments",
+          expected: 2,
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    // Le total des deux graphies tombe juste : aucune unicité n'est exigée.
+    expect(doubleCountTwo.actual).toBe(2);
+    expect(
+      assertionMatches(
+        {
+          id: "count",
+          kind: "count",
+          description: "les deux graphies comptent deux éléments",
+          expected: 2,
+        },
+        doubleCountTwo.actual
+      )
+    ).toBe(true);
+  } finally {
+    await canary.abort(id).catch(() => undefined);
+  }
+}, 180_000);
+/**
+ * Le cas F1b : le texte ou le placeholder ne diffère du plan que par la graphie
+ * de l'apostrophe, et `isVisible()`/`count()` ne lèvent jamais sur un locator
+ * vide — sans résolution préalable, « hidden » passait sur un texte pourtant
+ * affiché. Le comptage additionne les graphies du même signe, donc l'unicité n'y
+ * a pas de sens, et deux graphies concurrentes restent un échec explicite.
+ */
+it("measures text and placeholder spellings in actual Chromium", async () => {
+  const f = await fixture();
+  closers.push(f.close);
+  const canary = new Canary(f.config);
+  const id = await canary.start("Typographic text and placeholder");
+  const exposed = "Justification de l\u2019écart";
+  const targets = [
+    { by: "text" as const, value: "Justification de l'écart" },
+    { by: "placeholder" as const, value: "Justification de l'écart" },
+  ];
+  const reading = (
+    target: (typeof targets)[number],
+    kind: "visible" | "hidden" | "count",
+    expected = 1
+  ) =>
+    kind === "count"
+      ? compileProbe(
           {
             id: "count",
             kind: "count",
-            description: "la justification de l'écart compte un élément",
-            expected: 1,
-            target: planned,
+            description: "la justification de l'écart compte des éléments",
+            expected,
+            target,
           },
           f.baseUrl
         )
+      : compileProbe(
+          {
+            id: kind,
+            kind,
+            description: `la justification de l'écart est ${kind === "hidden" ? "cachée" : "affichée"}`,
+            target,
+          },
+          f.baseUrl
+        );
+  try {
+    for (const target of targets) {
+      await canary.act(
+        id,
+        `open-${target.by}`,
+        compileAction({ type: "goto", path: "/typographie-texte" }, f.baseUrl)
+      );
+      const visible = await canary.act(
+        id,
+        `visible-${target.by}`,
+        reading(target, "visible")
+      );
+      expect(visible.actual, target.by).toBe(true);
+      expect(visible.targetName, target.by).toBe(exposed);
+      const hidden = await canary.act(
+        id,
+        `hidden-${target.by}`,
+        reading(target, "hidden")
+      );
+      // Le texte est affiché : « hidden » est faux au lieu de passer sur un
+      // locator vide.
+      expect(hidden.actual, target.by).toBe(true);
+      expect(
+        assertionMatches(
+          {
+            id: "hidden",
+            kind: "hidden",
+            description: "la justification de l'écart est cachée",
+          },
+          hidden.actual
+        ),
+        target.by
+      ).toBe(false);
+      const count = await canary.act(
+        id,
+        `count-${target.by}`,
+        reading(target, "count")
+      );
+      expect(count.actual, target.by).toBe(1);
+      expect(count.targetName, target.by).toBe(exposed);
+    }
+    // Un comptage honnête additionne les graphies décalées : deux éléments pour
+    // un compte de deux est vrai, trois pour deux est faux, sans ambiguïté.
+    await canary.act(
+      id,
+      "open-double",
+      compileAction(
+        { type: "goto", path: "/typographie-texte-double" },
+        f.baseUrl
       )
-    ).rejects.toThrow(/Ambiguous accessible name/);
+    );
+    const doubleText = await canary.act(
+      id,
+      "count-double-text",
+      reading(targets[0]!, "count", 2)
+    );
+    expect(doubleText.actual).toBe(2);
+    await canary.act(
+      id,
+      "open-triple",
+      compileAction(
+        { type: "goto", path: "/typographie-texte-triple" },
+        f.baseUrl
+      )
+    );
+    const triplePlaceholder = await canary.act(
+      id,
+      "count-triple-placeholder",
+      reading(targets[1]!, "count", 2)
+    );
+    expect(triplePlaceholder.actual).toBe(3);
+    // Deux graphies concurrentes : la mesure échoue explicitement au lieu de
+    // rendre un verdict sur un locator vide.
+    await canary.act(
+      id,
+      "open-double-again",
+      compileAction(
+        { type: "goto", path: "/typographie-texte-double" },
+        f.baseUrl
+      )
+    );
+    for (const target of targets) {
+      await expect(
+        canary.act(id, `ambiguous-${target.by}`, reading(target, "hidden")),
+        target.by
+      ).rejects.toThrow(new RegExp(`Ambiguous ${target.by}`));
+    }
   } finally {
     await canary.abort(id).catch(() => undefined);
   }
