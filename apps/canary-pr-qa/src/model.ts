@@ -7,14 +7,17 @@ import { checkBudget, runScope } from "./run-scope.js";
 import { type ChatUsage, emptyChatStream, reduceChatStream } from "./sse.js";
 import { modelCalls, modelLatency, modelTokens, traced } from "./telemetry.js";
 
+/** Compteurs d'usage déclarés par l'endpoint, dans l'une ou l'autre forme de transport. */
+interface ReportedUsage {
+  completion_tokens?: number;
+  prompt_tokens?: number;
+  total_tokens?: number;
+}
+
 /** Réponse de `chat/completions` dans la forme non streamée, quel que soit le mode de transport. */
 interface ModelResponse {
   choices?: { finish_reason?: string; message?: { content?: string } }[];
-  usage?: {
-    completion_tokens?: number;
-    prompt_tokens?: number;
-    total_tokens?: number;
-  };
+  usage?: ReportedUsage;
 }
 
 /**
@@ -163,14 +166,22 @@ export class Model {
       // borne de l'entrée et la sortie maximale autorisée.
       const inputTokens = reportedInput ?? this.inputTokenBound(messages);
       const outputTokens = reportedOutput ?? maxTokens;
-      this.observeInput(reportedInput);
+      // Un total annoncé chiffre l'appel à sa hauteur, même quand l'endpoint
+      // n'expose aucune des deux parts : un endpoint qui annonce 900 000 tokens
+      // ne peut pas être compté comme s'il en avait consommé 745.
+      const counted = this.countedUsage(
+        inputTokens,
+        inputTokens + outputTokens,
+        measuredCount(response.usage?.total_tokens)
+      );
+      this.observeInput(this.declaredInputFloor(response.usage));
       const scope = runScope.getStore();
       if (scope) {
         scope.estimated ||=
           reportedInput === undefined || reportedOutput === undefined;
-        scope.tokens += inputTokens + outputTokens;
+        scope.tokens += counted.tokens;
         scope.calls++;
-        scope.costUsd += this.cost(inputTokens, outputTokens);
+        scope.costUsd += counted.costUsd;
       }
       modelTokens.inc(
         { model: this.config.OPENAI_MODEL, direction: "input" },
@@ -178,7 +189,7 @@ export class Model {
       );
       modelTokens.inc(
         { model: this.config.OPENAI_MODEL, direction: "output" },
-        outputTokens
+        counted.outputTokens
       );
       modelCalls.inc({ model: this.config.OPENAI_MODEL, outcome: "response" });
       checkBudget();
@@ -244,8 +255,9 @@ export class Model {
    * byte-level émet nettement moins d'un token par octet, et 64 tokens par
    * message couvrent les marqueurs de rôle du gabarit de chat. Une écriture plus
    * dense resterait sous-estimée : cet écart ne sert jamais deux fois, car le
-   * plus grand `prompt_tokens` réellement rapporté sur ce run devient le
-   * plancher de la borne suivante (`observedInputTokens`).
+   * plus grand chiffre d'entrée réellement rapporté sur ce run — `prompt_tokens`
+   * ou `total_tokens` — devient le plancher de la borne suivante
+   * (`observedInputTokens`).
    */
   private inputTokenBound(
     messages: { content: string; role: string }[]
@@ -258,9 +270,28 @@ export class Model {
   }
 
   /**
-   * Retient le plus grand `prompt_tokens` que l'endpoint a réellement rapporté
-   * pour ce run : une sous-estimation connue de l'entrée ne décide plus deux
-   * admissions, la borne suivante valant au moins ce poids.
+   * Le plus grand chiffre que l'endpoint a rapporté pour un appel, retenu comme
+   * plancher de la borne d'entrée des admissions suivantes : son
+   * `prompt_tokens`, et son `total_tokens` dès que ce total est plus lourd. Un
+   * total annoncé est une mesure, jamais une estimation à corriger : la prochaine
+   * admission ne peut donc pas être décidée sous ce que l'endpoint a déjà déclaré
+   * pour cet appel.
+   */
+  private declaredInputFloor(
+    usage: ReportedUsage | undefined
+  ): number | undefined {
+    const input = measuredCount(usage?.prompt_tokens);
+    const total = measuredCount(usage?.total_tokens);
+    if (input === undefined) {
+      return total;
+    }
+    return total === undefined ? input : Math.max(input, total);
+  }
+
+  /**
+   * Retient le plus grand chiffre d'entrée que l'endpoint a réellement rapporté
+   * pour ce run (`declaredInputFloor`) : une sous-estimation connue de l'entrée
+   * ne décide plus deux admissions, la borne suivante valant au moins ce poids.
    */
   private observeInput(inputTokens: number | undefined): void {
     const scope = runScope.getStore();
@@ -271,6 +302,28 @@ export class Model {
       scope.observedInputTokens ?? 0,
       inputTokens
     );
+  }
+
+  /**
+   * Volume retenu pour un appel : le plus grand de notre chiffrage et du
+   * `total_tokens` que l'endpoint a déclaré. Un total rapporté est compté à sa
+   * hauteur, jamais absorbé par notre borne, sans quoi la dépense dépasserait
+   * l'enveloppe sans être déclarée. La part au-delà de notre chiffrage d'entrée
+   * est facturée en sortie : l'endpoint n'en donne pas la répartition, et la
+   * surestimer vaut mieux que l'effacer.
+   */
+  private countedUsage(
+    inputTokens: number,
+    ourTokens: number,
+    reportedTotal: number | undefined
+  ): { costUsd: number; outputTokens: number; tokens: number } {
+    const tokens = Math.max(ourTokens, reportedTotal ?? 0);
+    const outputTokens = Math.max(tokens - inputTokens, 0);
+    return {
+      costUsd: this.cost(inputTokens, outputTokens),
+      outputTokens,
+      tokens,
+    };
   }
 
   /** Coût des tokens d'une tentative, aux tarifs configurés. */
@@ -334,6 +387,11 @@ export class Model {
    * le seul chiffre défendable : l'endpoint a pu générer une génération entière
    * que la coupure ne nous rendra jamais. C'est l'angle mort assumé — la réserve
    * minore ce qui a été facturé sans être transmis — documenté dans .env.example.
+   *
+   * Notre chiffrage reste plafonné par le pire cas de la tentative admise, mais
+   * un `total_tokens` déclaré échappe à ce plafond : la réserve le déclare à sa
+   * hauteur, l'admission suivante refuse alors de repartir, et aucune requête de
+   * plus n'est envoyée.
    */
   private credibleReservation(
     messages: { content: string; role: string }[],
@@ -363,27 +421,33 @@ export class Model {
     }
     const inputTokens = reportedInput ?? this.inputTokenBound(messages);
     const outputTokens = reportedOutput ?? Math.ceil(deliveredChars / 3);
-    // Un usage qui n'expose qu'un total reste une mesure : la réserve ne doit
-    // jamais tomber sous ce que l'endpoint a déjà chiffré.
-    const tokens = Math.max(inputTokens + outputTokens, reportedTotal ?? 0);
-    // Une réserve ne peut pas dépasser le pire cas de la tentative qu'elle
-    // remplace : l'enveloppe qui couvrait cet appel couvre donc toujours sa
-    // réserve, et l'exposition engagée reste dans l'enveloppe.
+    // Ce que nous chiffrons reste plafonné par le pire cas de la tentative
+    // admise : l'enveloppe qui couvrait cet appel couvre notre propre borne.
+    const counted = this.countedUsage(
+      inputTokens,
+      Math.min(inputTokens + outputTokens, worst.tokens),
+      reportedTotal
+    );
+    // Un total qui dépasse ce pire cas vient de l'endpoint, pas de nous : il est
+    // déclaré tel quel, tokens et coût compris. C'est cette réserve, et le
+    // plancher qu'elle pose, qui refusent l'admission suivante.
+    if (counted.tokens > worst.tokens) {
+      return { costUsd: counted.costUsd, tokens: counted.tokens };
+    }
     return {
-      costUsd: Math.min(
-        this.cost(inputTokens, tokens - inputTokens),
-        worst.costUsd
-      ),
-      tokens: Math.min(tokens, worst.tokens),
+      costUsd: Math.min(counted.costUsd, worst.costUsd),
+      tokens: counted.tokens,
     };
   }
 
   /**
    * Comptabilise la réserve crédible d'une tentative perdue à part de l'usage
    * rapporté, y compris quand elle est la dernière — reprises épuisées ou
-   * plafond d'appels atteint. Elle reste dans l'enveloppe : c'est l'appel
-   * suivant qui est refusé si le total ne tient plus. Le run passe en estimé :
-   * ce débit n'est pas un usage rapporté par l'endpoint.
+   * plafond d'appels atteint. Elle est jugée avec l'usage consommé par
+   * l'admission suivante : c'est la reprise qui est refusée si le total ne tient
+   * plus, et un total déclaré au-delà de l'enveloppe la refuse dès la première
+   * coupure. Le run passe en estimé : ce débit n'est pas un usage rapporté par
+   * l'endpoint.
    */
   private reserveLost(lost: { costUsd: number; tokens: number }): void {
     const scope = runScope.getStore();
@@ -423,10 +487,11 @@ export class Model {
         this.reserveLost(
           this.credibleReservation(messages, maxTokens, delivered)
         );
-        // La réserve ci-dessus est plafonnée par le pire cas de la tentative qui
-        // a été admise ; l'entrée que l'endpoint vient de rapporter devient, elle,
-        // le plancher des admissions suivantes.
-        this.observeInput(measuredCount(delivered?.usage?.prompt_tokens));
+        // Cette réserve est plafonnée par le pire cas de la tentative admise,
+        // sauf quand l'endpoint y déclare un total plus lourd ; le plus grand
+        // chiffre d'entrée rapporté devient en plus le plancher des admissions
+        // suivantes, sans quoi une sous-estimation connue déciderait deux fois.
+        this.observeInput(this.declaredInputFloor(delivered?.usage));
         if (!mayRetry(attempt, max, used)) {
           throw failedAttempt(error, code, attempt);
         }

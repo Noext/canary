@@ -103,7 +103,7 @@ it("refuses a billable model request before exceeding its configured cost ceilin
   ).rejects.toMatchObject({ code: "RUN_BUDGET_EXCEEDED" });
   expect(request).not.toHaveBeenCalled();
 });
-it("credits a lost attempt with the usage the stream reported, capped by that attempt's worst case", async () => {
+it("credits a lost attempt with the usage the stream reported, capped by that attempt's worst case when no total is declared", async () => {
   const f = await fixture();
   cleanup.push(f.close);
   const config = {
@@ -112,10 +112,12 @@ it("credits a lost attempt with the usage the stream reported, capped by that at
     QA_OUTPUT_COST_PER_MILLION: 2,
     QA_MODEL_RETRIES: 0,
   };
-  // Le flux annonce un usage démesuré (500 000 + 900 000 tokens) puis casse :
-  // la réserve crédible est mesurée, mais elle ne peut pas dépasser le pire cas
-  // de la tentative perdue, sans quoi l'enveloppe qui couvrait cet appel ne
-  // couvrirait plus sa propre réserve.
+  // Le flux annonce un usage démesuré (500 000 + 900 000 tokens) puis casse,
+  // sans total déclaré : la réserve crédible est mesurée, mais elle ne peut pas
+  // dépasser le pire cas de la tentative perdue, sans quoi l'enveloppe qui
+  // couvrait cet appel ne couvrirait plus sa propre réserve. Un total annoncé,
+  // lui, échappe à ce plafond (tests « declares an endpoint's overshoot » et
+  // « refuses the retry of a lost attempt »).
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(
       new ReadableStream({
@@ -164,6 +166,9 @@ it("credits a lost attempt with the usage the stream reported, capped by that at
   expect(scope.reservedTokens).toBeGreaterThanOrEqual(1000);
   expect(scope.reservedTokens).toBeLessThan(5000);
   expect(scope.reservedCostUsd).toBeLessThanOrEqual(0.003);
+  // Jamais négative : une réserve qui plafonne son volume ne crédite pas le
+  // budget du run en facturant une sortie négative.
+  expect(scope.reservedCostUsd).toBeGreaterThan(0);
   expect(scope.reservedTokens).toBeLessThanOrEqual(scope.maxTokens);
 });
 it("credits a measured reserve from a positive usage, and admits the retry it leaves room for", async () => {
@@ -304,7 +309,7 @@ it("refuses before sending a prompt the envelope cannot cover at the prudent inp
   expect(scope.tokens).toBe(0);
   expect(scope.reservedTokens).toBe(0);
 });
-it("floors the next admission on the prompt_tokens the endpoint reported", async () => {
+it("floors the next admission on the input the endpoint reported, total included", async () => {
   const f = await fixture();
   cleanup.push(f.close);
   const config = { ...f.config, QA_MODEL_RETRIES: 1 };
@@ -331,10 +336,13 @@ it("floors the next admission on the prompt_tokens the endpoint reported", async
   ).rejects.toMatchObject({ code: "RUN_BUDGET_EXCEEDED" });
   // Sans plancher, la reprise repartait : 1 000 de sortie plus la borne de
   // l'entrée (1 245) passent sous 10 000. Dès que l'endpoint chiffre l'entrée à
-  // 900 000 tokens, la borne suivante vaut au moins ce poids et l'appel est
-  // refusé avant tout envoi.
-  expect(scope.observedInputTokens).toBe(900_000);
-  expect(scope.reservedTokens).toBe(1245);
+  // 900 000 tokens et le total à 900 003, la borne suivante vaut au moins ce
+  // dernier poids et l'appel est refusé avant tout envoi. Le total rapporté
+  // n'est pas absorbé par le pire cas de la tentative : il est déclaré à sa
+  // hauteur, donc l'admission suivante ne part pas sur une sous-estimation
+  // connue.
+  expect(scope.observedInputTokens).toBe(900_003);
+  expect(scope.reservedTokens).toBe(900_003);
   expect(request).toHaveBeenCalledTimes(1);
 });
 it("declares an endpoint's overshoot above the request's bound instead of hiding it", async () => {
@@ -365,6 +373,76 @@ it("declares an endpoint's overshoot above the request's bound instead of hiding
   // observé interdit d'en décider un sur la borne basse.
   expect(scope.tokens).toBe(900_003);
   expect(scope.tokens).toBeGreaterThan(scope.maxTokens);
+  // Le plancher retient le plus grand des deux chiffres déclarés (entrée et
+  // total) : 900 003, et non la seule entrée.
+  expect(scope.observedInputTokens).toBe(900_003);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it("counts a successful call at the total the endpoint declared, and refuses to continue", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    QA_INPUT_COST_PER_MILLION: 1,
+    QA_OUTPUT_COST_PER_MILLION: 2,
+  };
+  // Sonde C de la vérification du tour 3 : le succès n'expose qu'un total. Sans
+  // lecture de `total_tokens`, l'appel était chiffré à nos bornes (745 tokens)
+  // et le run continuait alors que l'endpoint annonçait 900 000.
+  const request = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    completeStream('{"ok":true}', {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 900_000,
+    })
+  );
+  const scope = budgetScope(5000);
+  await expect(
+    runScope.run(scope, () =>
+      new Model(config).json("You plan", {}, z.object({ ok: z.boolean() }), 500)
+    )
+  ).rejects.toMatchObject({ code: "RUN_BUDGET_EXCEEDED" });
+  // La dépense est déclarée telle quelle — 900 000 tokens, pas 745 — et
+  // l'enveloppe refuse la suite : un appel suivant ne part pas sur la borne
+  // basse, et aucune requête de plus n'est envoyée.
+  expect(scope.tokens).toBe(900_000);
+  expect(scope.tokens).toBeGreaterThan(scope.maxTokens);
+  expect(scope.observedInputTokens).toBe(900_000);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it("refuses the retry of a lost attempt that declared a total above the envelope", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    QA_INPUT_COST_PER_MILLION: 1,
+    QA_MODEL_RETRIES: 3,
+    QA_OUTPUT_COST_PER_MILLION: 2,
+  };
+  // Sonde D de la vérification du tour 3 : chaque coupure rapporte ce total
+  // seul. Plafonnée au pire cas de la tentative (1 245), la réserve laissait
+  // partir les trois reprises — quatre requêtes — sous une enveloppe de
+  // 50 000.
+  const request = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async () =>
+      brokenStream({ content: "{", usage: { total_tokens: 900_000 } })
+    );
+  const scope = budgetScope(50_000);
+  await expect(
+    runScope.run(scope, () =>
+      new Model(config).json(
+        "You plan",
+        {},
+        z.object({ ok: z.boolean() }),
+        1000
+      )
+    )
+  ).rejects.toMatchObject({ code: "RUN_BUDGET_EXCEEDED" });
+  // Le total annoncé est déclaré à sa hauteur, et le plancher qu'il pose refuse
+  // la reprise avant tout envoi : une seule requête part, jamais quatre.
+  expect(scope.reservedTokens).toBe(900_000);
+  expect(scope.reservedCostUsd).toBeGreaterThan(0);
   expect(scope.observedInputTokens).toBe(900_000);
   expect(request).toHaveBeenCalledTimes(1);
 });

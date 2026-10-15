@@ -329,9 +329,10 @@ export interface RunResult {
     /**
      * Cumul des réserves des tentatives perdues, chiffré à part des tokens que
      * l'endpoint a rapportés. Chaque réserve est créditée de ce que le transport
-     * a réellement livré, plafonnée par le pire cas de la tentative perdue, et
-     * elle compte dans l'admission du run : l'exposition engagée (`tokens` +
-     * `reservedTokens`) reste dans l'enveloppe.
+     * a réellement livré, plafonnée par le pire cas de la tentative perdue —
+     * sauf un `total_tokens` déclaré au-delà de ce pire cas, repris tel quel ;
+     * elle compte dans l'admission du run, donc une exposition qui dépasse
+     * l'enveloppe y refuse toute admission suivante.
      */
     reservedTokens?: number;
     reservedCostUsd?: number;
