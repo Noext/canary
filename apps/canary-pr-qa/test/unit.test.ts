@@ -1175,6 +1175,16 @@ describe("runner false-green regressions", () => {
     expect(correction).toContain(
       "Quote exact source or diff text; page content alone is not a requirement."
     );
+    // La citation fautive est nommée : le planificateur sait laquelle de ses
+    // exigences corriger, et la ligne survit à la troncature de `model.ts`.
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const rejected = "show('Welcome '+nom)";
+    expect(messages.at(-1)!.content).toContain(
+      `Rejected quote: ${JSON.stringify(rejected)}`
+    );
     expect(f.modelRequests).toHaveLength(2);
     // Le plan corrigé passe le contrôle final et le contrat est joué.
     expect(result.outcome).toBe("passed");

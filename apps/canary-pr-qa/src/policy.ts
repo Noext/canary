@@ -319,6 +319,20 @@ export function ungroundedRequirements(
 }
 
 /**
+ * Forme courte de la citation fautive : un refus qui ne nomme que le scénario
+ * et le fichier laisse le planificateur deviner laquelle de ses exigences est
+ * fausse. La ligne reste bornée — le préambule fatal et la troncature de
+ * `model.ts` se partagent un budget de correction.
+ */
+const QUOTE_EXCERPT_CHARS = 120;
+function quoteExcerpt(quote: string): string {
+  const compact = normalizeQuoteText(quote);
+  return compact.length <= QUOTE_EXCERPT_CHARS
+    ? compact
+    : `${compact.slice(0, QUOTE_EXCERPT_CHARS - 1)}…`;
+}
+
+/**
  * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
  * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
  * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
@@ -331,7 +345,8 @@ export function ungroundedPlanRefusals(
   return ungroundedRequirements(plan, context).map(
     ({ requirement, scenarioId }) => {
       const error = ungroundedRequirement(scenarioId, requirement);
-      return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
+      const quote = JSON.stringify(quoteExcerpt(requirement.quote));
+      return `${error.message}. Rejected quote: ${quote}. ${error.hint}${witnessHint(requirement.quote, context)}`;
     }
   );
 }

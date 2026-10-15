@@ -212,6 +212,24 @@ it("does not read the patch marker as whitespace", () => {
   expect(ungroundedRequirements(plan, patchOnly)).toHaveLength(1);
 });
 
+it("names the rejected quote in the refusal, bounded to its short form", () => {
+  const plan = cashPlan(REFLOWED_QUOTE.replace("false", "true"));
+  const [refusal] = ungroundedPlanRefusals(plan, reflowedCashContext);
+  expect(refusal).toContain("No source witness for cash: src/cash.ts");
+  expect(refusal).toContain(
+    `Rejected quote: ${JSON.stringify(REFLOWED_QUOTE.replace("false", "true"))}`
+  );
+  const long = `return { ok: false, code: ${"x".repeat(200)} };`;
+  const [longRefusal = ""] = ungroundedPlanRefusals(
+    cashPlan(long),
+    reflowedCashContext
+  );
+  expect(longRefusal).toContain('Rejected quote: "return { ok: false, code: ');
+  expect(longRefusal).not.toContain("x".repeat(200));
+  expect(longRefusal).toContain("…");
+  expect(longRefusal.length).toBeLessThan(400);
+});
+
 /**
  * Cas réel du run 71cb3369 : la citation invente des caractères — `"":"` — que
  * le fichier ne porte pas. La tolérance porte sur les blancs, jamais sur un
@@ -237,6 +255,10 @@ it("still refuses the real quote that invents characters", () => {
   expect(ungroundedRequirements(plan, pageContext)).toHaveLength(1);
   expect(refusalOfPlan(plan, pageContext, policyFor()).code).toBe(
     "REQUIREMENT_UNGROUNDED"
+  );
+  const [refusal] = ungroundedPlanRefusals(plan, pageContext);
+  expect(refusal).toContain(
+    `Rejected quote: ${JSON.stringify('const suffix = count === 1 ? "s":"":"";')}`
   );
   // La même ligne, recopiée sans rien inventer, passe : c'est l'invention qui
   // est refusée, pas le retour à la ligne du fichier.
