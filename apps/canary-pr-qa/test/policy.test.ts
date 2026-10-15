@@ -1413,6 +1413,74 @@ it("proposes no line of the cited file when the quote exists in another file", (
   expect(line).not.toContain("to quote instead");
 });
 
+it("suggests only head-path lines for a file renamed without deletion", () => {
+  // Contenu de tête de l'ANCIEN chemin : c'est lui qui portait la ligne
+  // trompeuse quand l'appariement lisait `previous_filename` à la révision de
+  // tête.
+  const oldHead = [
+    'export const brandNew = countCash({ "500": "3,6" });',
+    "const legacy = 'old head only';",
+  ].join("\n");
+  const newHead = [
+    "const countCash = (cash: string) => cash;",
+    'const normalized = countCash({ "500": "3,5" });',
+  ].join("\n");
+  const newPath = "src/util/new.ts";
+  const renamed: PrContext = {
+    ...context,
+    files: [
+      {
+        filename: newPath,
+        patch:
+          "@@ -1,2 +1,2 @@\n- const countCash = legacy;\n+ const countCash = renamed;",
+        previous_filename: "src/util/old.ts",
+        status: "renamed",
+      },
+    ],
+    context: [
+      { content: oldHead, path: "src/util/old.ts", ref: context.sha },
+      { content: oldHead, path: "src/util/old.ts", ref: context.baseSha },
+      { content: newHead, path: newPath, ref: context.sha },
+    ],
+  };
+  const suggestions = suggestedQuoteLines(
+    { quote: 'countCash({ "500": "3,5" })', sourceFile: newPath },
+    renamed,
+    policyFor()
+  );
+  expect(suggestions).toEqual([
+    { line: 2, text: 'const normalized = countCash({ "500": "3,5" });' },
+  ]);
+  // Chaque candidat est une ligne exacte du fichier cité, avec son numéro :
+  // comparé caractère par caractère au contenu de tête du chemin de tête. La
+  // ligne de l'ancien chemin n'est jamais proposée, même quand elle recouvre la
+  // citation mieux que toute ligne du fichier cité.
+  const headLines = newHead.split("\n");
+  for (const candidate of suggestions) {
+    expect(headLines[candidate.line - 1]).toBe(candidate.text);
+  }
+  expect(suggestions.map((candidate) => candidate.text)).not.toContain(
+    oldHead.split("\n")[0]
+  );
+  // Quand seul l'ancien chemin recouvre la citation, le remède préfère
+  // l'absence de suggestion à une ligne qui n'existe pas dans le fichier cité.
+  const unrelated: PrContext = {
+    ...renamed,
+    context: renamed.context.map((item) =>
+      item.path === newPath
+        ? { ...item, content: "const untouched = 'nothing to quote here';" }
+        : item
+    ),
+  };
+  expect(
+    suggestedQuoteLines(
+      { quote: 'countCash({ "500": "3,5" })', sourceFile: newPath },
+      unrelated,
+      policyFor()
+    )
+  ).toEqual([]);
+});
+
 it("never proposes more than two candidate lines", () => {
   const quote = "const alpha = value + offset;";
   const content = [

@@ -486,8 +486,13 @@ function quoteTokenSet(value: string): Set<string> {
 /**
  * Lignes réelles du fichier cité, avec leur numéro : le contenu après
  * changement reconstruit depuis le patch, et le contenu récupéré à la révision
- * de tête. Le contenu de base n'est lu que pour un fichier que la PR supprime,
- * seule révision où il existe encore.
+ * de tête. Chaque révision est indexée par le chemin qui la porte, comme
+ * `completeSource` (runner.ts) : le contenu de tête est celui du chemin de
+ * tête — `filename`, que la PR renomme éventuellement — et le contenu de base
+ * celui du `previous_filename`, lu seulement quand la PR supprime le fichier,
+ * seule révision où il existe encore. Apparier `previous_filename` à la
+ * révision de tête proposait des lignes du fichier d'avant le renommage, qui
+ * n'existent pas dans le fichier cité.
  */
 function fileContentLines(
   requirement: Pick<Requirement, "sourceFile">,
@@ -497,8 +502,11 @@ function fileContentLines(
     (item) => item.filename === requirement.sourceFile
   );
   const lines = file?.patch ? postChangeHunks(file.patch).flat() : [];
-  const refs = file?.status === "removed" ? [context.baseSha] : [context.sha];
-  const path = file?.previous_filename ?? requirement.sourceFile;
+  const removed = file?.status === "removed";
+  const refs = removed ? [context.baseSha] : [context.sha];
+  const path = removed
+    ? (file?.previous_filename ?? requirement.sourceFile)
+    : requirement.sourceFile;
   for (const item of context.context) {
     if (item.path !== path || !refs.includes(item.ref)) {
       continue;
