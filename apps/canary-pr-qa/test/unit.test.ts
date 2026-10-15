@@ -23,6 +23,8 @@ import {
   PolicySchema,
   quoteExcerpt,
   repairRequirementAttribution,
+  UNGROUNDED_ABSENT_REMEDY,
+  UNGROUNDED_WEAK_REMEDY,
   ungroundedPlanRefusals,
 } from "../src/policy.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
@@ -1220,6 +1222,96 @@ describe("runner false-green regressions", () => {
         .state
     ).toBe("error");
   });
+  /**
+   * Défaut signalé par la revue interne : sur un fichier critique, une citation
+   * exacte mais sans contenu visible bloquait le run en demandant de citer le
+   * texte réel — que le planificateur renvoyait tel quel, gaspillant sa
+   * tentative. La branche « Weak source witness » n'était couverte nulle part :
+   * ce test l'exerce jusqu'à `runQa`, et la partie du message qui survit à la
+   * troncature doit porter le remède juste.
+   */
+  const WEAK_WITNESS_QUOTE = "// ------ --";
+  /**
+   * Le patch de `src/form.ts` porte la citation faible et la citation témoin :
+   * le plan faible est refusé pour la première, le plan corrigé passe avec la
+   * seconde.
+   */
+  const WEAK_WITNESS_PATCH = `+ ${WEAK_WITNESS_QUOTE}\n+ show('Welcome '+name)`;
+  it("returns a weak critical witness to the planner before failing", async () => {
+    const weak = structuredClone(plan);
+    weak.scenarios[0]!.requirements[0]!.quote = WEAK_WITNESS_QUOTE;
+    const f = await setup({
+      plans: [weak, weak],
+      formPatch: WEAK_WITNESS_PATCH,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le contrôle final refuse le plan non corrigé, et aucun scénario ne part.
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("REQUIREMENT_UNGROUNDED");
+    expect(result.scenarios).toEqual([]);
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Le remède juste vit dans le préambule fatal : la ligne dit que la
+    // citation existe et demande une substance, jamais de citer le texte réel.
+    expect(correction).toContain(UNGROUNDED_WEAK_REMEDY);
+    expect(correction).not.toContain(UNGROUNDED_ABSENT_REMEDY);
+    expect(correction).toContain(
+      "Weak source witness for welcome: src/form.ts"
+    );
+    // Et la classe de couverture ne demande plus une citation déjà présente.
+    expect(correction).not.toContain(
+      "Add a requirement whose quote exists verbatim in each listed file."
+    );
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    expect(preludeEnd).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+  }, 60_000);
+  /**
+   * La ligne du préambule est ce qui survivrait seul si les onze classes fatales
+   * saturaient : mêlée aux autres, la classe `REQUIREMENT_UNGROUNDED` doit
+   * encore porter le remède du témoin faible, entier, dans la partie non
+   * tronquée.
+   */
+  it("keeps the weak witness remedy inside the saturated fatal prelude", async () => {
+    const saturated = saturatedFatalCandidate();
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/form.ts");
+    first!.requirements[0] = {
+      behavior: "The weak requirement is reviewed",
+      quote: WEAK_WITNESS_QUOTE,
+      sourceFile: "src/form.ts",
+    };
+    const f = await setup({
+      plans: [saturated, plan],
+      formPatch: WEAK_WITNESS_PATCH,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Le message est tronqué à la fenêtre de `model.ts` : seule la tête survit.
+    expect(correction).toHaveLength(2000);
+    // Le remède du témoin faible, entier, passe avant la troncature.
+    const lineEnd =
+      correction.indexOf(UNGROUNDED_WEAK_REMEDY) +
+      UNGROUNDED_WEAK_REMEDY.length;
+    expect(correction).toContain(UNGROUNDED_WEAK_REMEDY);
+    expect(lineEnd).toBeLessThan(2000);
+  }, 60_000);
   it("returns an unwitnessed source file to the planner before failing", async () => {
     const withoutWitness = structuredClone(plan);
     withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
