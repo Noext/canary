@@ -36,6 +36,10 @@ export const errorMessages: Record<string, string | undefined> = {
     "Le scénario s’est arrêté avant d’avoir joué toutes les étapes prévues.",
   CONTRACT_VIOLATION:
     "Le scénario a été interrompu : une étape ne respectait plus le plan validé.",
+  COVERAGE_REQUIREMENT_SOURCE_MISSING:
+    "Le scénario attribue une exigence à un fichier qu’il ne déclare pas parmi ses sources : cette preuve ne couvre rien.",
+  COVERAGE_WITNESS_MISSING:
+    "Un fichier déclaré par le scénario n’a aucune exigence dont la citation existe mot pour mot dans ce fichier.",
   CRITICAL_COVERAGE_MISSING:
     "Une partie importante des changements de la pull request n’a pas été couverte par les scénarios.",
   EVIDENCE_VIDEO_MISSING:
@@ -54,6 +58,8 @@ export const errorMessages: Record<string, string | undefined> = {
   PR_CHANGED:
     "La pull request a changé pendant le test : ce résultat ne correspond plus au dernier commit.",
   PR_CLOSED: "Cette pull request est fermée.",
+  PLAN_SELECTOR_UNSTABLE:
+    "Le scénario cible un élément avec un sélecteur CSS dérivé d’une classe ou d’une couleur lue dans la source : cette cible ne survit pas au rendu.",
   PREVIEW_NOT_FOUND:
     "Canary ne connaît l’URL d’aucune application de test pour ce commit : aucun modèle d’URL n’est configuré et GitHub n’annonce aucun déploiement pour ce commit.",
   PREVIEW_SHA_MISMATCH:
@@ -71,6 +77,8 @@ export const errorMessages: Record<string, string | undefined> = {
   RUN_NOT_FOUND:
     "Ce test n’existe pas ou a été purgé. Vérifiez son identifiant dans l’historique.",
   RUN_DEADLINE: "Le test a dépassé le temps maximum autorisé pour un run.",
+  REQUIREMENT_UNGROUNDED:
+    "Une exigence cite un texte qui n’existe mot pour mot nulle part dans le fichier qu’elle déclare : elle n’a pas de témoin source.",
   STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
   TRANSITION_NOT_OBSERVED:
     "Transition non observée : la valeur relevée après l’étape est identique à celle d’avant, donc le changement attendu n’a pas eu lieu. Ce n’est pas une régression prouvée de l’élément.",
@@ -662,6 +670,10 @@ export const runAdvice: Record<string, string> = {
     "Relancez le test ; si l’arrêt se répète, ouvrez le rapport pour voir l’étape manquante et ajustez le scénario.",
   CONTRACT_VIOLATION:
     "Un scénario a voulu agir hors du plan validé : ouvrez le rapport, puis corrigez le plan ou les fichiers `.canary` du dépôt.",
+  COVERAGE_REQUIREMENT_SOURCE_MISSING:
+    "Ajoutez ce fichier aux sources du scénario, ou attribuez l’exigence à un fichier qu’il déclare, puis relancez le test.",
+  COVERAGE_WITNESS_MISSING:
+    "Ajoutez une exigence dont la citation existe mot pour mot dans ce fichier, ou retirez-le des sources du scénario et listez-le dans les fichiers ignorés, puis relancez.",
   CRITICAL_COVERAGE_MISSING:
     "Élargissez le plan de test (fichiers `.canary`) pour couvrir ces changements, puis relancez.",
   EVIDENCE_VIDEO_MISSING:
@@ -690,6 +702,8 @@ export const runAdvice: Record<string, string> = {
     "Autorisez l’IP de sortie du VPS chez le fournisseur (Cloudflare), vérifiez la clé, puis relancez.",
   PR_CHANGED: "Relancez un test sur le dernier commit de la pull request.",
   PR_CLOSED: "Cette pull request est fermée : il n’y a rien à tester.",
+  PLAN_SELECTOR_UNSTABLE:
+    "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source — puis relancez.",
   PREVIEW_HOST_NOT_ALLOWED:
     "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
   PREVIEW_NOT_FOUND:
@@ -702,6 +716,8 @@ export const runAdvice: Record<string, string> = {
     "Augmentez `QA_RUN_MAX_TOKENS` après avoir vérifié les tarifs, ou réduisez le périmètre de la PR.",
   RUN_DEADLINE:
     "Vérifiez la phase atteinte dans le rapport, puis augmentez `QA_RUN_TIMEOUT_SECONDS` si le test mérite plus de temps.",
+  REQUIREMENT_UNGROUNDED:
+    "Citez un extrait exact du fichier changé ou de son diff : le contenu de la page ne suffit pas comme exigence. Corrigez la citation puis relancez.",
   STALE_HEAD:
     "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
   TRANSITION_NOT_OBSERVED:
