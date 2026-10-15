@@ -1417,6 +1417,81 @@ describe("runner false-green regressions", () => {
     expect(correction).toContain("COVERAGE_REQUIREMENT_SOURCE_MISSING");
     expect(correction).not.toContain("src/no-witness-27.ts");
   });
+  /**
+   * Chaque classe fatale du canal de correction, saturée : les huit classes
+   * (couverture et forme) portent leurs entrées fautives en même temps, et le
+   * préambule fatal doit tenir dans la troncature à 2000 caractères de
+   * `model.ts` — codes compris — sans perdre la dernière classe.
+   */
+  function saturatedFatalCandidate(): Plan {
+    const saturated = structuredClone(plan);
+    const [first] = saturated.scenarios;
+    first!.sourceFiles = Array.from(
+      { length: 6 },
+      (_, index) => `src/no-witness-${index}.ts`
+    );
+    first!.requirements.push(
+      ...Array.from({ length: 7 }, (_, index) => ({
+        behavior: "The requirement belongs to an undeclared source",
+        quote: "a quote the fixture diff does not carry",
+        sourceFile: `src/undeclared-${index}.ts`,
+      }))
+    );
+    for (let index = 0; index < 22; index++) {
+      first!.steps.push({
+        description: "Observe the page",
+        id: `warmup-${index}`,
+        action: { type: "observe" as const },
+      });
+    }
+    saturated.skipped = Array.from({ length: 7 }, (_, index) => ({
+      reason: "Not reachable from a browser scenario",
+      sourceFile: `src/other-${index}.ts`,
+    }));
+    for (let index = 1; index < 13; index++) {
+      saturated.scenarios.push({
+        ...structuredClone(plan.scenarios[0]!),
+        id: index === 1 ? "_discovery" : `extra-${index}`,
+        requirements: [
+          {
+            behavior: "The requirement belongs to an undeclared source",
+            quote: "a quote the fixture diff does not carry",
+            sourceFile: `src/clone-${index}.ts`,
+          },
+        ],
+        sourceFiles: [`src/clone-${index}.ts`],
+      });
+    }
+    return saturated;
+  }
+  it("bounds the whole fatal prelude inside the truncated correction", async () => {
+    const f = await setup({ plans: [saturatedFatalCandidate(), plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const request = f.modelRequests.at(-1)!;
+    const messages = request.messages as { content: string; role: string }[];
+    const correction = messages.at(-1)!.content;
+    // Huit classes fatales saturées dépassent largement la fenêtre : la
+    // correction est bien tronquée à 2000 caractères.
+    expect(correction).toHaveLength(2000);
+    expect(correction.startsWith("Plan rejected: Fatal refusals")).toBe(true);
+    // L'en-tête nomme d'abord tous les codes fatals : chacun survit à la
+    // troncature, y compris PLAN_SCENARIO_ID_RESERVED et les suivants.
+    expect(correction).toContain(
+      "Fatal refusals (each one blocks the whole run): COVERAGE_WITNESS_MISSING, COVERAGE_REQUIREMENT_SOURCE_MISSING, REQUIREMENT_UNGROUNDED, PLAN_TOO_MANY_SCENARIOS, PLAN_SCENARIO_ID_RESERVED, PLAN_SOURCE_OUTSIDE_DIFF, PLAN_SKIP_OUTSIDE_DIFF, PLAN_CHANGED_FILE_UNCOVERED."
+    );
+    // Et chaque classe reçoit encore sa ligne bornée : l'en-tête ne remplace pas
+    // les remèdes, il les protège. La dernière classe est le témoin du bornage
+    // global — sa ligne n'existait pas sous les bornes par classe.
+    expect(correction).toContain("PLAN_CHANGED_FILE_UNCOVERED: ");
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    expect(preludeEnd).toBeLessThan(1900);
+  }, 60_000);
   it("retries a model call cut by the transport, and counts it", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
     fakeBrowser();

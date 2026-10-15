@@ -142,9 +142,7 @@ interface FatalClass {
   label: string;
 }
 /**
- * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur : la
- * correction est tronquée à 2000 caractères par `model.ts`, et aucune classe
- * fatale ne doit disparaître parce qu'une autre a rempli le message.
+ * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur.
  */
 const FATAL_ENTRIES_LISTED = 6;
 const FATAL_ENTRY_CHARS = 80;
@@ -159,8 +157,13 @@ function boundedEntries(entries: string[]): string {
   const hidden = entries.length - shown.length;
   return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
 }
+/**
+ * Ligne d'une classe fatale : l'en-tête du préambule porte déjà que chaque
+ * classe bloque le run, donc la ligne va droit au code et au remède — c'est le
+ * remède qu'une ligne tronquée doit encore porter au planificateur.
+ */
 function fatalLine(refusal: FatalClass): string {
-  return `${refusal.code} (blocks the whole run): ${boundedEntries(refusal.entries)}. ${refusal.hint}`;
+  return `${refusal.code}: ${refusal.hint} Faulty values: ${boundedEntries(refusal.entries)}`;
 }
 function fatalError(refusal: FatalClass): QaError {
   return new QaError(
@@ -168,6 +171,40 @@ function fatalError(refusal: FatalClass): QaError {
     `${refusal.label}: ${refusal.entries.join(", ")}`,
     refusal.hint
   );
+}
+/**
+ * Plafond du préambule fatal complet, en caractères : la correction est
+ * tronquée à 2000 par `model.ts`. Les bornes par classe ne suffisaient pas —
+ * huit classes saturées (6 entrées × 80 caractères chacune) dépassaient la
+ * troncature, et les dernières, dont `PLAN_SCENARIO_ID_RESERVED`,
+ * disparaissaient du message : le planificateur perdait sa seule tentative de
+ * correction. L'en-tête nomme donc tous les codes fatals avant toute entrée, et
+ * chaque classe reçoit une place égale dans ce plafond global.
+ */
+const FATAL_PRELUDE_CHARS = 1800;
+function boundedText(text: string, limit: number): string {
+  if (limit <= 0) {
+    return "";
+  }
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+function fatalPrelude(classes: FatalClass[]): string[] {
+  const [first] = classes;
+  if (!first) {
+    return [];
+  }
+  const header = `Fatal refusals (each one blocks the whole run): ${classes
+    .map((refusal) => refusal.code)
+    .join(", ")}.`;
+  const slot = Math.floor(
+    (FATAL_PRELUDE_CHARS - header.length) / classes.length
+  );
+  return [
+    header,
+    ...classes
+      .map((refusal) => boundedText(fatalLine(refusal), slot))
+      .filter((line) => line.length > 0),
+  ];
 }
 /**
  * Classes fatales de couverture, agrégées en tête du canal de correction.
@@ -390,11 +427,11 @@ function refusalDiagnostic(
  */
 /**
  * Les refus rendus au planificateur pour un plan candidat. Les classes fatales
- * — celles qui bloquent tout le run — passent en tête, agrégées en une ligne
- * bornée par classe : la correction est tronquée à 2000 caractères par
- * `model.ts`, et un candidat qui accumule les chemins sans témoin ne doit
- * jamais faire disparaître une autre classe fatale. Le détail par entrée et les
- * refus par scénario suivent, ceux-là bloquant leur scénario seul.
+ * — celles qui bloquent tout le run — passent en tête, agrégées dans un
+ * préambule borné : la correction est tronquée à 2000 caractères par `model.ts`,
+ * et aucune classe fatale ne doit disparaître parce qu'une autre a rempli le
+ * message. Le détail par entrée et les refus par scénario suivent, ceux-là
+ * bloquant leur scénario seul.
  */
 function planRefusals(
   candidate: Plan,
@@ -404,7 +441,7 @@ function planRefusals(
 ): string[] {
   const shape = planShapeRefusals(candidate, context, config);
   return [
-    ...[...coverageFatalClasses(candidate, context), ...shape].map(fatalLine),
+    ...fatalPrelude([...coverageFatalClasses(candidate, context), ...shape]),
     ...unwitnessedPlanRefusals(candidate, context, policy),
     ...undeclaredSourcePlanRefusals(candidate, context),
     ...shape.map(
