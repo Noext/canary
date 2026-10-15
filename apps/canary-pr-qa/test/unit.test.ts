@@ -1204,6 +1204,39 @@ describe("runner false-green regressions", () => {
       "verify",
     ]);
   });
+  /**
+   * Le refus d'une citation absente porte, en plus du remède, les lignes réelles
+   * du fichier cité que le planificateur peut citer à la place : au plus deux,
+   * chacune recopiée du fichier avec son numéro. Mesure du budget : la
+   * correction complète, suggestion comprise, tient sous la troncature de
+   * `model.ts` (2000) sur ce cas réel d'une citation absente.
+   */
+  it("returns real lines to quote instead of an absent quote", async () => {
+    const invented = structuredClone(plan);
+    invented.scenarios[0]!.requirements[0]!.quote =
+      "show('Welcome '+nom) and save";
+    const f = await setup({ plans: [invented, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(correction).toContain("No source witness for welcome: src/form.ts");
+    // La ligne 1 du contenu de tête, fragment exact du fichier, est proposée avec
+    // son numéro, et rien d'inventé n'y entre.
+    expect(correction).toContain(
+      `Real lines of src/form.ts to quote instead: 1: ${JSON.stringify("Use the Name textbox and Save button; status displays Welcome <name>")}`
+    );
+    // La correction n'est pas tronquée : le préambule fatal d'une citation
+    // absente laisse la place à la suggestion.
+    expect(correction.length).toBeLessThan(2000);
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
   it("refuses the run when the corrected plan still cites without a witness", async () => {
     const ungrounded = structuredClone(plan);
     ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";

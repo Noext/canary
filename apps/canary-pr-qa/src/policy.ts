@@ -453,13 +453,8 @@ export function repairRequirementAttribution(
  * PR change : déclarer une source hors diff consommerait la tentative de
  * correction pour rien, puisque la validation la refuserait.
  */
-function witnessHint(
-  quote: string,
-  context: PrContext,
-  policy: Policy
-): string {
+function witnessHint(found: string[], context: PrContext): string {
   const changed = context.files.map((file) => file.filename);
-  const found = witnessFiles(quote, context, policy);
   const pr = found.filter((path) => changed.includes(path));
   if (pr.length > 0) {
     return ` The quote appears verbatim in ${pr.join(", ")}; declare that file and attribute the requirement to it.`;
@@ -469,6 +464,136 @@ function witnessHint(
     return "";
   }
   return ` The quote only appears in ${outside.join(", ")}, which this PR does not change; quote the changed file instead.`;
+}
+
+/** Nombre minimal de jetons de la citation qu'une ligne candidate doit reprendre. */
+const SUGGESTED_QUOTE_MIN_SHARED_TOKENS = 3;
+/** Part minimale des jetons de la citation qu'une ligne candidate doit porter. */
+const SUGGESTED_QUOTE_MIN_OVERLAP = 0.5;
+/**
+ * Longueur maximale d'une ligne candidate : le remède reste borné sans qu'aucun
+ * fragment ne soit rogné, donc chaque candidat est recopiable d'un seul tenant.
+ */
+const SUGGESTED_QUOTE_MAX_CHARS = 120;
+/** Nombre maximal de candidats : au-delà, la suggestion noie la correction. */
+const SUGGESTED_QUOTE_LIMIT = 2;
+function quoteTokenSet(value: string): Set<string> {
+  // Découper sur les seuls blancs cachait le recouvrement réel : `expect(countCash({`
+  // ne partage aucun jeton avec `countCash({`. Les jetons sont donc les suites
+  // de lettres, chiffres et soulignés, en minuscules.
+  return new Set(
+    normalizeQuoteText(value)
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}_]+/u)
+      .filter(Boolean)
+  );
+}
+/**
+ * Lignes réelles du fichier cité, avec leur numéro : le contenu après
+ * changement reconstruit depuis le patch, et le contenu récupéré à la révision
+ * de tête. Le contenu de base n'est lu que pour un fichier que la PR supprime,
+ * seule révision où il existe encore.
+ */
+function fileContentLines(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): PostChangeLine[] {
+  const file = context.files.find(
+    (item) => item.filename === requirement.sourceFile
+  );
+  const lines = file?.patch ? postChangeHunks(file.patch).flat() : [];
+  const refs = file?.status === "removed" ? [context.baseSha] : [context.sha];
+  const path = file?.previous_filename ?? requirement.sourceFile;
+  for (const item of context.context) {
+    if (item.path !== path || !refs.includes(item.ref)) {
+      continue;
+    }
+    lines.push(
+      ...item.content
+        .split("\n")
+        .map((text, index) => ({ line: index + 1, text }))
+    );
+  }
+  return lines;
+}
+/**
+ * Lignes réelles du fichier cité à citer à la place d'une citation absente :
+ * celles dont le recouvrement de jetons avec la citation est le plus élevé, au
+ * plus deux, à un seuil qui écarte une ressemblance de hasard. Chaque candidat
+ * est une ligne exacte du fichier avec son numéro, jamais un texte inventé ou
+ * rogné, et le critère est déterministe. Une liste vide — aucune ligne ne
+ * franchit le seuil — préfère l'absence de suggestion à une suggestion
+ * trompeuse.
+ */
+export function suggestedQuoteLines(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): { line: number; text: string }[] {
+  const quote = quoteTokenSet(requirement.quote);
+  if (quote.size < SUGGESTED_QUOTE_MIN_SHARED_TOKENS) {
+    return [];
+  }
+  const critical = isCriticalPath(policy, requirement.sourceFile);
+  const candidates = new Map<
+    string,
+    { line: number; ratio: number; shared: number; text: string }
+  >();
+  for (const { line, text } of fileContentLines(requirement, context)) {
+    // Un candidat qui ne franchirait pas le contrat de citation de ce fichier
+    // serait un remède que le gate refuserait : il n'est jamais proposé.
+    if (
+      text.length > SUGGESTED_QUOTE_MAX_CHARS ||
+      !quoteCarriesContent(text, critical)
+    ) {
+      continue;
+    }
+    const tokens = quoteTokenSet(text);
+    const shared = [...quote].filter((token) => tokens.has(token)).length;
+    const ratio = shared / quote.size;
+    if (
+      shared < SUGGESTED_QUOTE_MIN_SHARED_TOKENS ||
+      ratio < SUGGESTED_QUOTE_MIN_OVERLAP
+    ) {
+      continue;
+    }
+    // La même ligne peut venir de deux révisions : la première occurrence, dans
+    // le nouveau contenu d'abord, garde son numéro.
+    const existing = candidates.get(text);
+    if (!existing || existing.line > line) {
+      candidates.set(text, { line, ratio, shared, text });
+    }
+  }
+  return [...candidates.values()]
+    .sort(
+      (left, right) =>
+        right.ratio - left.ratio ||
+        right.shared - left.shared ||
+        left.line - right.line
+    )
+    .slice(0, SUGGESTED_QUOTE_LIMIT)
+    .map(({ line, text }) => ({ line, text }));
+}
+/**
+ * Remède d'une citation absente : les lignes réelles du fichier cité que le
+ * planificateur peut citer à la place, au plus deux. Jamais proposé quand la
+ * citation existe ailleurs — le remède est alors l'attribution à l'autre
+ * fichier, pas une autre ligne de celui-ci — ni quand aucune ligne ne franchit
+ * le seuil de recouvrement.
+ */
+function quoteSuggestion(
+  requirement: Requirement,
+  context: PrContext,
+  policy: Policy
+): string {
+  const candidates = suggestedQuoteLines(requirement, context, policy);
+  if (candidates.length === 0) {
+    return "";
+  }
+  const listed = candidates
+    .map(({ line, text }) => `${line}: ${JSON.stringify(text)}`)
+    .join(", ");
+  return ` Real lines of ${requirement.sourceFile} to quote instead: ${listed}.`;
 }
 
 /**
@@ -526,7 +651,12 @@ export function ungroundedPlanRefusals(
         policy
       );
       const quote = JSON.stringify(quoteExcerpt(requirement.quote));
-      return `${error.message}. Rejected quote: ${quote}. ${error.hint}${witnessHint(requirement.quote, context, policy)}`;
+      // La citation existe ailleurs : le remède est l'attribution à l'autre
+      // fichier, et proposer aussi une ligne de ce fichier-ci serait du bruit.
+      const found = witnessFiles(requirement.quote, context, policy);
+      const suggestion =
+        found.length === 0 ? quoteSuggestion(requirement, context, policy) : "";
+      return `${error.message}. Rejected quote: ${quote}. ${error.hint}${witnessHint(found, context)}${suggestion}`;
     }
   );
 }

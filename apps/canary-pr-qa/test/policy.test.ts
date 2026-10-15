@@ -9,6 +9,7 @@ import {
   repairRequirementAttribution,
   requirementEvidence,
   requirementHasWitness,
+  suggestedQuoteLines,
   undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
   ungroundedRequirements,
@@ -1263,6 +1264,8 @@ const CASH_SPEC_LINES = [
   "});", // 56
 ];
 const CASH_SPEC_FILE = CASH_SPEC_LINES.join("\n");
+/** Citation recousue du lot F, octet pour octet : 51 caractères, ASCII. */
+const STITCHED_QUOTE = 'expect(countCash({ "500": "3,5" }).ok).toBe(false);';
 const cashSpecContext: PrContext = {
   ...contextWith([
     {
@@ -1289,6 +1292,158 @@ function cashSpecPlan(quote: string): Plan {
     },
   ]);
 }
+
+it("refuses a quote stitched from two real lines and proposes real lines instead", () => {
+  expect(STITCHED_QUOTE).toHaveLength(51);
+  expect(CASH_SPEC_LINES[46]).toBe(
+    '  const result = countCash({ "500": "3,5" });'
+  );
+  expect(CASH_SPEC_LINES[54]).toBe("  expect(result.ok).toBe(false);");
+  expect(CASH_SPEC_FILE).not.toContain(STITCHED_QUOTE);
+  const plan = cashSpecPlan(STITCHED_QUOTE);
+  // Le gate n'est pas touché : la citation recousue n'a aucun témoin.
+  expect(
+    ungroundedRequirements(plan, cashSpecContext, policyFor())
+  ).toHaveLength(1);
+  expect(refusalOfPlan(plan, cashSpecContext, policyFor()).code).toBe(
+    "REQUIREMENT_UNGROUNDED"
+  );
+  const [line = ""] = ungroundedPlanRefusals(
+    plan,
+    cashSpecContext,
+    policyFor()
+  );
+  expect(line).toContain(`Rejected quote: ${JSON.stringify(STITCHED_QUOTE)}`);
+  // Au plus deux candidats, chacun une ligne EXACTE du fichier avec son numéro.
+  const suggestions = suggestedQuoteLines(
+    { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
+    cashSpecContext,
+    policyFor()
+  );
+  expect(suggestions.length).toBeGreaterThan(0);
+  expect(suggestions.length).toBeLessThanOrEqual(2);
+  for (const candidate of suggestions) {
+    expect(CASH_SPEC_LINES[candidate.line - 1]).toBe(candidate.text);
+    expect(CASH_SPEC_FILE).toContain(candidate.text);
+    expect(quoteCarriesContent(candidate.text, true)).toBe(true);
+  }
+  // La ligne 47 reprend quatre des huit mots de la citation ; la ligne 55 en
+  // reprend quatre aussi, mais ne forme qu'un seul jeton au contrat de `quote`
+  // (aucun blanc intérieur) : le remède ne propose jamais un fragment que le
+  // plan refuserait.
+  expect(suggestions).toEqual([
+    { line: 47, text: '  const result = countCash({ "500": "3,5" });' },
+  ]);
+  expect(line).toContain(
+    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify(suggestions[0]!.text)}.`
+  );
+});
+
+it("measures the absent-quote suggestion inside the correction budget", () => {
+  const plan = cashSpecPlan(STITCHED_QUOTE);
+  const [line = ""] = ungroundedPlanRefusals(
+    plan,
+    cashSpecContext,
+    policyFor()
+  );
+  const remedy =
+    "Quote exact source or diff text; page content alone is not a requirement.";
+  const before = line.slice(0, line.indexOf(remedy) + remedy.length);
+  // Mesure du coût réel : 132 caractères ajoutés à la ligne de détail, qui
+  // reste loin du budget restant après le préambule fatal (1860) dans la
+  // correction que `model.ts` tronque à 2000 — le cas intégré est mesuré par
+  // `unit.test.ts` ("returns real lines to quote instead of an absent quote").
+  expect(before).toContain("No source witness for cash");
+  expect(before).toHaveLength(220);
+  expect(line).toHaveLength(352);
+  expect(line.length - before.length).toBe(132);
+});
+
+it("proposes no line when none overlaps the quote", () => {
+  const invented = "let totally unrelated invented statement here;";
+  expect(
+    suggestedQuoteLines(
+      { quote: invented, sourceFile: CASH_SPEC_PATH },
+      cashSpecContext,
+      policyFor()
+    )
+  ).toEqual([]);
+  const [line = ""] = ungroundedPlanRefusals(
+    cashSpecPlan(invented),
+    cashSpecContext,
+    policyFor()
+  );
+  expect(line).not.toContain("to quote instead");
+});
+
+it("proposes no line of the cited file when the quote exists in another file", () => {
+  const variant = 'const result = countCash({ "500": "3,6" });';
+  const elsewhere: PrContext = {
+    ...cashSpecContext,
+    files: [
+      ...cashSpecContext.files,
+      {
+        filename: "src/form.ts",
+        status: "modified",
+        patch: `+ ${variant}`,
+      },
+    ],
+    context: [
+      ...cashSpecContext.context,
+      { content: variant, path: "src/form.ts", ref: context.sha },
+    ],
+  };
+  // La ligne 47 du fichier cité recouvre largement la citation, donc le critère
+  // la proposerait ; mais la citation existe mot pour mot ailleurs, et le remède
+  // est alors l'attribution à l'autre fichier, pas une autre ligne de celui-ci.
+  expect(
+    suggestedQuoteLines(
+      { quote: variant, sourceFile: CASH_SPEC_PATH },
+      elsewhere,
+      policyFor()
+    ).length
+  ).toBeGreaterThan(0);
+  const [line = ""] = ungroundedPlanRefusals(
+    cashSpecPlan(variant),
+    elsewhere,
+    policyFor()
+  );
+  expect(line).toContain("The quote appears verbatim in src/form.ts");
+  expect(line).not.toContain("to quote instead");
+});
+
+it("never proposes more than two candidate lines", () => {
+  const quote = "const alpha = value + offset;";
+  const content = [
+    "const alpha = 1 + offset;",
+    "const alpha = 2 + offset;",
+    "const alpha = 3 + offset;",
+    "const alpha = 4 + offset;",
+  ].join("\n");
+  const ctx: PrContext = {
+    ...contextWith([
+      {
+        filename: "src/logic.ts",
+        patch: [
+          "@@ -1,4 +1,4 @@",
+          " const alpha = 1 + offset;",
+          " const alpha = 2 + offset;",
+          " const alpha = 3 + offset;",
+          " const alpha = 4 + offset;",
+        ].join("\n"),
+      },
+    ]),
+    context: [{ content, path: "src/logic.ts", ref: context.sha }],
+  };
+  // Quatre lignes franchissent le seuil ; deux sont proposées, dans l'ordre
+  // déterministe du critère.
+  expect(
+    suggestedQuoteLines({ quote, sourceFile: "src/logic.ts" }, ctx, policyFor())
+  ).toEqual([
+    { line: 1, text: "const alpha = 1 + offset;" },
+    { line: 2, text: "const alpha = 2 + offset;" },
+  ]);
+});
 
 it("accepts an exact single-line quote from the cited file", () => {
   const plan = cashSpecPlan(CASH_SPEC_LINES[46]!);
