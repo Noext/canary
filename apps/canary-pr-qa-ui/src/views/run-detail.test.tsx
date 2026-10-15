@@ -222,6 +222,47 @@ describe("RunDetail", () => {
     );
   });
 
+  it("flags a report that never reached the pull request, whatever the vocabulary", async () => {
+    // `status` dit l'issue de la publication, et "failed" en est le seul échec :
+    // celui du vocabulaire courant comme celui des rapports écrits avant sa
+    // séparation du commit status ("success"/"failure"/"error").
+    const comment = "https://github.com/fixture/app/pull/1#issuecomment-1";
+    const cases: { failed: boolean; publication: unknown }[] = [
+      { failed: true, publication: { status: "failed" } },
+      {
+        failed: false,
+        publication: { commentUrl: comment, status: "published" },
+      },
+      {
+        failed: false,
+        publication: { commentUrl: comment, status: "success" },
+      },
+      {
+        failed: false,
+        publication: { commentUrl: comment, status: "failure" },
+      },
+      {
+        failed: false,
+        publication: { commentUrl: comment, status: "error" },
+      },
+      { failed: true, publication: { commentUrl: comment, status: "failed" } },
+      { failed: false, publication: undefined },
+    ];
+    for (const item of cases) {
+      mockBlocked({ publication: item.publication });
+      const view = renderDetail();
+
+      await waitFor(() => expect(element("resultSummary")).toBeVisible());
+      expect(
+        (element("resultSummary").textContent ?? "").includes(
+          copy.publicationFailed.trim()
+        ),
+        `publication.status = ${JSON.stringify(item.publication)}`
+      ).toBe(item.failed);
+      view.unmount();
+    }
+  });
+
   it("renders the usage line through the shared copy", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.endsWith("/result.json")) {

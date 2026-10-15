@@ -238,11 +238,33 @@ export type Action = z.infer<typeof ActionSchema>;
 export type Locator = z.infer<typeof locator>;
 export type Outcome = "passed" | "failed" | "blocked" | "skipped" | "stale";
 /**
- * Issue de la publication du rapport, distincte de l'état du commit status
- * posté sur GitHub. Les result.json déjà écrits portent le vocabulaire du commit
- * status ("success"/"error") : les lecteurs restent donc tolérants.
+ * Issue de la publication du rapport : c'est la seule chose que dit
+ * `Publication.status`. L'état du commit status posté sur GitHub est un autre
+ * fait, consigné à part dans `Publication.commitStatus`.
  */
 export type PublicationIssue = "published" | "failed";
+
+/**
+ * Ce que porte `publication` : deux faits distincts qui ne se recopient jamais.
+ * Les result.json écrits avant cette séparation portent l'état du commit status
+ * dans `status` ("success"/"error"/"failure") et aucun `commitStatus` : les
+ * lecteurs restent donc tolérants à l'ancien vocabulaire d'un côté comme à
+ * l'absence de l'autre.
+ */
+export interface Publication {
+  /** URL du commentaire qui porte le rapport, absent si rien n'a été écrit. */
+  commentUrl?: string;
+  /**
+   * Dernier état de commit status effectivement écrit par ce run sur GitHub
+   * ("error" pour le verdict d'un run bloqué). Absent quand l'écriture a échoué.
+   */
+  commitStatus?: string;
+  /**
+   * "published" dès que le commentaire de rapport est sur la PR, "failed"
+   * sinon : l'échec du verdict de statut n'en fait jamais partie.
+   */
+  status: PublicationIssue | "success" | "failure" | "error";
+}
 
 export interface Preview {
   evidence: string;
@@ -292,7 +314,7 @@ export interface RunResult {
   plan?: Plan;
   preview?: Preview;
   prUrl: string;
-  publication?: { commentUrl: string; status: string };
+  publication?: Publication;
   scenarios: ScenarioResult[];
   sha?: string;
   startedAt: string;

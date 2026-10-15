@@ -252,7 +252,11 @@ export const runResultSchema = z
     preview: z.object({ sha: z.string(), url: z.string() }).nullish(),
     prUrl: z.string(),
     publication: z
-      .object({ commentUrl: z.string(), status: z.string() })
+      .object({
+        commentUrl: z.string().nullish(),
+        commitStatus: z.string().nullish(),
+        status: z.string(),
+      })
       .nullish(),
     scenarios: z.array(scenarioSummarySchema),
     sha: z.string().nullish(),

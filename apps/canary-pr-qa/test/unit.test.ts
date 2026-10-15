@@ -736,34 +736,154 @@ describe("runner false-green regressions", () => {
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
   });
-  it("separates the publication issue from the commit status it posts", async () => {
+  /** Ce que le fixture renvoie pour un commentaire réellement écrit. */
+  const commentUrl = `${PR_URL}#issuecomment-1`;
+  /**
+   * Chaque forme de publication observée en production : le champ dit si le
+   * rapport est sur la PR, `commitStatus` dit ce qui a réellement été écrit sur
+   * le commit, et les états reçus par le fixture le confirment séparément. Un
+   * échec du verdict de commit status ne fait donc jamais passer un rapport
+   * publié pour « failed », et aucune forme d'échec ne laisse le champ absent.
+   */
+  const shapes: {
+    /** Refus du fixture : le run se bloque avant de publier son rapport. */
+    blockedFixture?: boolean;
+    /** Écritures de commentaire qui échouent, par tour (1 = premier essai). */
+    commentFails?: number[];
+    /** URL du commentaire publié, absent quand le rapport n'est pas passé. */
+    commentUrl?: string;
+    commitStatus: string;
+    /** Échec réel qui doit rester lisible dans `result.error`. */
+    error?: string;
+    /** Le post échoue après avoir écrit : c'est la réponse perdue. */
+    lostResponse?: boolean;
+    name: string;
+    outcome: "blocked" | "passed";
+    postedStates: string[];
+    status: "published" | "failed";
+    /** Écritures de commit status qui échouent, par état visé. */
+    statusFails?: string[];
+  }[] = [
+    {
+      blockedFixture: true,
+      commitStatus: "error",
+      commentUrl,
+      name: "run bloqué, publication normale",
+      outcome: "blocked",
+      postedStates: ["pending", "error"],
+      status: "published",
+    },
+    {
+      commitStatus: "success",
+      commentUrl,
+      name: "run réussi, publication normale",
+      outcome: "passed",
+      postedStates: ["pending", "success"],
+      status: "published",
+    },
+    {
+      commentFails: [1],
+      commitStatus: "error",
+      commentUrl,
+      lostResponse: true,
+      name: "réponse du commentaire perdue",
+      outcome: "blocked",
+      postedStates: ["pending", "success", "error"],
+      status: "published",
+    },
+    {
+      commitStatus: "error",
+      error: "GitHub publication failed",
+      name: "le post de statut échoue avant tout commentaire",
+      outcome: "blocked",
+      postedStates: ["pending", "error"],
+      status: "failed",
+      statusFails: ["success"],
+    },
+    {
+      commentFails: [1, 2],
+      commitStatus: "error",
+      error: "Blocked comment update failed",
+      name: "les deux posts de commentaire échouent",
+      outcome: "blocked",
+      postedStates: ["pending", "success", "error"],
+      status: "failed",
+    },
+    {
+      commentFails: [1],
+      commitStatus: "success",
+      error: "Blocked status update failed",
+      commentUrl,
+      name: "le statut de reprise échoue, le commentaire est réparé",
+      outcome: "blocked",
+      postedStates: ["pending", "success"],
+      status: "published",
+      statusFails: ["error"],
+    },
+  ];
+  it("records the publication issue apart from the commit status in every shape", async () => {
+    const original = {
+      comment: GitHub.prototype.comment,
+      status: GitHub.prototype.status,
+    };
+    const script = {
+      commentFails: [] as number[],
+      lostResponse: false,
+      statusFails: [] as string[],
+    };
+    let comments = 0;
+    vi.spyOn(GitHub.prototype, "status").mockImplementation(async function (
+      this: GitHub,
+      ...args
+    ) {
+      if (script.statusFails.includes(String(args[1]))) {
+        throw new Error(`Status ${args[1]} unavailable`);
+      }
+      return await original.status.apply(this, args);
+    });
+    vi.spyOn(GitHub.prototype, "comment").mockImplementation(async function (
+      this: GitHub,
+      ...args
+    ) {
+      comments += 1;
+      if (script.commentFails.includes(comments)) {
+        // Une réponse perdue suit une écriture réussie : le commentaire est sur
+        // la PR, seul son accusé de réception manque.
+        if (script.lostResponse) {
+          await original.comment.apply(this, args);
+        }
+        throw new Error("Comment unavailable");
+      }
+      return await original.comment.apply(this, args);
+    });
     fakeBrowser();
-    const blockedFixture = await setup({ missingDiffAndContext: true });
-    const blocked = await runQa(
-      { prUrl: PR_URL, previewUrl: blockedFixture.baseUrl },
-      blockedFixture.config
-    );
-    expect(blocked.outcome).toBe("blocked");
-    // Un run bloqué publie son rapport : le champ dit l'issue de la publication,
-    // tandis que le commit status posté porte le verdict.
-    expect(blocked.publication?.status).toBe("published");
-    expect(blocked.publication?.commentUrl).toBeTruthy();
-    expect(
-      blockedFixture.outgoing.filter((request) => request.payload.state).at(-1)
-        ?.payload.state
-    ).toBe("error");
-    const passingFixture = await setup();
-    const passed = await runQa(
-      { prUrl: PR_URL, previewUrl: passingFixture.baseUrl },
-      passingFixture.config
-    );
-    expect(passed.outcome).toBe("passed");
-    expect(passed.publication?.status).toBe("published");
-    expect(
-      passingFixture.outgoing.filter((request) => request.payload.state).at(-1)
-        ?.payload.state
-    ).toBe("success");
-  }, 40_000);
+    for (const shape of shapes) {
+      script.commentFails = shape.commentFails ?? [];
+      script.lostResponse = shape.lostResponse ?? false;
+      script.statusFails = shape.statusFails ?? [];
+      comments = 0;
+      const f = await setup(
+        shape.blockedFixture ? { missingDiffAndContext: true } : undefined
+      );
+      const result = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        f.config
+      );
+      expect(result.outcome, shape.name).toBe(shape.outcome);
+      expect(result.publication?.status, shape.name).toBe(shape.status);
+      expect(result.publication?.commentUrl, shape.name).toBe(shape.commentUrl);
+      expect(result.publication?.commitStatus, shape.name).toBe(
+        shape.commitStatus
+      );
+      expect(
+        f.outgoing.map((request) => request.payload.state).filter(Boolean),
+        shape.name
+      ).toEqual(shape.postedStates);
+      if (shape.error) {
+        expect(result.error, shape.name).toContain(shape.error);
+      }
+    }
+  }, 120_000);
   it("returns an ungrounded requirement to the planner before failing", async () => {
     const ungrounded = structuredClone(plan);
     ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";

@@ -39,7 +39,7 @@ import {
   type Plan,
   PlanSchema,
   type Preview,
-  type PublicationIssue,
+  type Publication,
   type RunResult,
   type Scenario,
   type ScenarioResult,
@@ -502,32 +502,39 @@ async function publish(
   config: Config,
   reportUrl?: string
 ) {
+  // Le run a tenté de publier : le champ existe dès cet instant, et ne dit que
+  // l'issue de la publication du rapport. L'échec du verdict de commit status
+  // est un autre fait, consigné dans `commitStatus`, jamais recopié dans
+  // `status`.
+  const publication: Publication = { status: "failed" };
+  result.publication = publication;
   let commentAttempted = false;
   try {
     await runScope.getStore()?.verifyOwnership?.();
-    // L'état du commit status suit le verdict ; le champ `publication` ne dit
-    // que si le rapport a été publié.
+    const verdict = statusFor(result.outcome);
     await github.status(
       context,
-      statusFor(result.outcome),
+      verdict,
       `QA ${result.outcome}: ${result.scenarios.filter((s) => s.outcome === "passed").length}/${result.scenarios.length} scenarios`,
       reportUrl
     );
+    publication.commitStatus = verdict;
     await runScope.getStore()?.verifyOwnership?.();
     commentAttempted = true;
     const commentUrl = await github.comment(
       context,
       reportMarkdown(result, reportUrl)
     );
-    result.publication = { commentUrl, status: "published" };
+    publication.commentUrl = commentUrl;
+    publication.status = "published";
   } catch (error) {
     result.diagnostic = diagnose(error, config);
     result.outcome = "blocked";
     result.error =
       `${result.error ?? ""} GitHub publication failed: ${result.diagnostic.message}`.trim();
-    // La publication a échoué : elle ne redevient publiée que si le verdict
-    // bloqué finit écrit sur le commit status.
-    let publicationIssue: PublicationIssue = "failed";
+    // Le verdict bloqué et le commentaire réparé sont deux écritures
+    // indépendantes : le rapport est publié dès que son commentaire aboutit,
+    // même si l'écriture du verdict a échoué.
     await runScope
       .exit(() =>
         github.status(
@@ -538,9 +545,11 @@ async function publish(
         )
       )
       .then(() => {
-        publicationIssue = "published";
+        publication.commitStatus = "error";
       })
-      .catch(() => undefined);
+      .catch((statusError) => {
+        result.error += ` Blocked status update failed: ${diagnose(statusError, config).message}`;
+      });
     // A failed response can follow a successful write: repair the upserted comment too.
     if (commentAttempted) {
       await runScope
@@ -549,7 +558,8 @@ async function publish(
             context,
             reportMarkdown(result, reportUrl)
           );
-          result.publication = { commentUrl, status: publicationIssue };
+          publication.commentUrl = commentUrl;
+          publication.status = "published";
         })
         .catch((repairError) => {
           result.error += ` Blocked comment update failed: ${diagnose(repairError, config).message}`;

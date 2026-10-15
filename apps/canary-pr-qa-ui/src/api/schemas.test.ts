@@ -250,6 +250,22 @@ describe("server payloads", () => {
     expect(scenario?.scenario.steps).toEqual([{ id: "enter" }]);
   });
 
+  it("reads a report whose publication failed without a comment URL", () => {
+    // L'issue de publication est un fait, l'état du commit status un autre : un
+    // rapport jamais publié n'a pas d'URL de commentaire, et le verdict écrit
+    // sur le commit reste lisible à part.
+    const parsed = runResultSchema.parse({
+      id: "55555555-5555-5555-5555-555555555555",
+      outcome: "blocked",
+      prUrl: "https://github.com/o/r/pull/5",
+      publication: { commitStatus: "error", status: "failed" },
+      scenarios: [],
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(parsed.publication?.status).toBe("failed");
+    expect(parsed.publication?.commitStatus).toBe("error");
+  });
+
   it("rejects a response that breaks the contract", () => {
     expect(() =>
       runJobListSchema.parse([{ id: "not-a-run", status: "unknown" }])
