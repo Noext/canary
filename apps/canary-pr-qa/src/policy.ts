@@ -172,11 +172,71 @@ export function writeEvidenceRefusals(
   return refusals;
 }
 /**
- * Segments témoins d'une exigence : le patch du fichier dans la PR, puis chaque
- * contenu contextuel récupéré pour ce chemin. Chaque élément est un témoin à
- * part entière, comparé seul : une citation qui n'existe qu'en recousant la fin
- * d'un segment au début du suivant — jonction patch→contenu, ou contenu de tête
- * → contenu de base — n'a pas de témoin.
+ * Une ligne du contenu après changement : son numéro dans le nouveau fichier et
+ * son texte, sans le préfixe du patch.
+ */
+interface PostChangeLine {
+  line: number;
+  text: string;
+}
+const PATCH_HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+/**
+ * Séparateur entre deux hunks reconstruits. Il porte un NUL, qu'aucun fichier
+ * texte analysé ne contient et que `normalizeQuoteText` ne replie pas : une
+ * citation fabriquée en recousant la fin d'un hunk au début du suivant doit
+ * porter ce caractère pour témoigner, donc aucune copie réelle ne témoigne par
+ * jointure.
+ */
+const PATCH_HUNK_SEPARATOR = "\n\u0000\n";
+/**
+ * Lignes du contenu après changement, hunk par hunk et numérotées dans le
+ * nouveau fichier : les lignes de contexte et les lignes ajoutées, sans leur
+ * préfixe. Les lignes supprimées et le marqueur « no newline at end of file »
+ * n'appartiennent pas à ce contenu.
+ */
+function postChangeHunks(patch: string): PostChangeLine[][] {
+  const hunks: PostChangeLine[][] = [];
+  let line = 0;
+  for (const raw of patch.split("\n")) {
+    const header = PATCH_HUNK_HEADER.exec(raw);
+    if (header) {
+      hunks.push([]);
+      line = Number(header[1]);
+      continue;
+    }
+    const hunk = hunks.at(-1);
+    const prefix = raw.slice(0, 1);
+    if (!hunk || (prefix !== "+" && prefix !== " ")) {
+      continue;
+    }
+    hunk.push({ line, text: raw.slice(1) });
+    line += 1;
+  }
+  return hunks;
+}
+/**
+ * Contenu APRÈS CHANGEMENT reconstruit depuis les hunks du patch : ce que la PR
+ * produit, donc ce qu'une citation du nouveau contenu doit porter. Le patch brut
+ * porte les préfixes `+` et `-`, qu'aucune citation recopiée du fichier n'a, et
+ * le contenu de tête manque dès qu'un fichier dépasse le plafond de contexte.
+ * Absent quand aucun hunk n'apporte de ligne de contexte ou ajoutée — fichier
+ * supprimé, diff binaire, ou patch sans en-tête `@@` où aucun hunk n'est
+ * identifiable — et jamais recousu au contenu récupéré pour le même chemin :
+ * chaque segment reste comparé seul.
+ */
+function postChangeContent(patch: string): string | undefined {
+  const blocks = postChangeHunks(patch)
+    .map((hunk) => hunk.map((item) => item.text).join("\n"))
+    .filter((block) => block.length > 0);
+  return blocks.length > 0 ? blocks.join(PATCH_HUNK_SEPARATOR) : undefined;
+}
+/**
+ * Segments témoins d'une exigence : le patch du fichier dans la PR, le contenu
+ * après changement reconstruit depuis ses hunks, puis chaque contenu contextuel
+ * récupéré pour ce chemin. Chaque élément est un témoin à part entière, comparé
+ * seul : une citation qui n'existe qu'en recousant la fin d'un segment au début
+ * du suivant — jonction patch→contenu, contenu de tête → contenu de base, ou
+ * hunk→hunk — n'a pas de témoin.
  */
 export function requirementEvidence(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -185,8 +245,10 @@ export function requirementEvidence(
   const patch = context.files.find(
     (file) => file.filename === requirement.sourceFile
   )?.patch;
+  const changed = patch === undefined ? undefined : postChangeContent(patch);
   return [
     ...(patch ? [patch] : []),
+    ...(changed ? [changed] : []),
     ...context.context
       .filter((item) => item.path === requirement.sourceFile)
       .map((item) => item.content),

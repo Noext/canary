@@ -1242,3 +1242,155 @@ it.each([
     "Critical changes skipped: apps/web/src/panel.ts"
   );
 });
+
+/**
+ * Lot F, cas réel (runs c7d46e91 et 973cf40f) : le planificateur a recousu deux
+ * lignes réelles de `cash.spec.ts` — sa ligne 47 et sa ligne 55 — en une
+ * assertion qui n'existe dans aucune version du fichier ni dans aucun patch de
+ * la PR. Le refus reste dû ; ce que la PR change, c'est la production de la
+ * citation et l'aide à la réparation.
+ */
+const CASH_SPEC_PATH = "packages/domain/src/__tests__/cash.spec.ts";
+const CASH_SPEC_LINES = [
+  'import { describe, expect, it } from "vitest";', // 1
+  'import { countCash } from "../src/cash";', // 2
+  "", // 3
+  'describe("countCash", () => {', // 4
+  ...Array.from({ length: 42 }, (_, index) => `  // cas ${index + 5}`), // 5..46
+  '  const result = countCash({ "500": "3,5" });', // 47
+  ...Array.from({ length: 7 }, (_, index) => `  // étape ${index + 48}`), // 48..54
+  "  expect(result.ok).toBe(false);", // 55
+  "});", // 56
+];
+const CASH_SPEC_FILE = CASH_SPEC_LINES.join("\n");
+const cashSpecContext: PrContext = {
+  ...contextWith([
+    {
+      filename: CASH_SPEC_PATH,
+      patch: [
+        "@@ -46,3 +46,4 @@",
+        "   // cas 46",
+        '   const result = countCash({ "500": "3,5" });',
+        "+  // commentaire ajouté",
+        "   // étape 48",
+      ].join("\n"),
+    },
+  ]),
+  context: [
+    { content: CASH_SPEC_FILE, path: CASH_SPEC_PATH, ref: context.sha },
+  ],
+};
+function cashSpecPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash",
+      sourceFiles: [CASH_SPEC_PATH],
+      requirements: [{ sourceFile: CASH_SPEC_PATH, quote }],
+    },
+  ]);
+}
+
+it("accepts an exact single-line quote from the cited file", () => {
+  const plan = cashSpecPlan(CASH_SPEC_LINES[46]!);
+  expect(ungroundedRequirements(plan, cashSpecContext, policyFor())).toEqual(
+    []
+  );
+  expect(
+    validateCoverage(plan, cashSpecContext, policyFor(), config).gate
+  ).toBe("complete");
+});
+
+it("accepts a contiguous multi-line quote copied from the cited file", () => {
+  const contiguous = [
+    CASH_SPEC_LINES[46],
+    CASH_SPEC_LINES[47],
+    CASH_SPEC_LINES[48],
+  ].join("\n");
+  const plan = cashSpecPlan(contiguous);
+  expect(
+    validateCoverage(plan, cashSpecContext, policyFor(), config).gate
+  ).toBe("complete");
+  // Recoudre deux lignes NON contiguës du même fichier — 47 et 49, en sautant
+  // 48 — reste refusé : c'est la jointure qui est fausse, jamais la longueur.
+  const skipped = [CASH_SPEC_LINES[46], CASH_SPEC_LINES[48]].join("\n");
+  expect(
+    ungroundedRequirements(cashSpecPlan(skipped), cashSpecContext, policyFor())
+  ).toHaveLength(1);
+});
+
+/**
+ * H1 : pour un fichier modifié au-delà du plafond de contexte, la preuve ne
+ * portait que le patch brut, dont les préfixes `+`/`-` ne sont pas des blancs —
+ * une citation multi-lignes du nouveau contenu n'y avait donc pas de témoin. Le
+ * contenu après changement est reconstruit depuis les hunks du patch ; un
+ * séparateur non citable sépare deux hunks, donc une citation fabriquée par
+ * jointure reste refusée.
+ */
+const RECONSTRUCTED_PATH = "src/cash.ts";
+const RECONSTRUCTED_PATCH = [
+  "@@ -1,3 +1,4 @@",
+  " const before = 1;",
+  '+ const witness = "reconstructed witness value";',
+  " const after = 2;",
+  "@@ -10,3 +11,4 @@",
+  " const tail = 3;",
+  "+ const other = 4;",
+  " };",
+].join("\n");
+/** Contenu de tête absent, comme lorsqu'un fichier dépasse le plafond de contexte. */
+const reconstructedContext: PrContext = contextWith([
+  { filename: RECONSTRUCTED_PATH, patch: RECONSTRUCTED_PATCH },
+]);
+
+it("witnesses a new-content quote from the reconstructed hunks", () => {
+  const quote = [
+    "const before = 1;",
+    'const witness = "reconstructed witness value";',
+  ].join("\n");
+  expect(reconstructedContext.context).toEqual([]);
+  // Le patch brut ne porte pas la citation : le `+` de la ligne ajoutée est un
+  // caractère non blanc que la comparaison ne tolère pas.
+  expect(quoteHasWitness(RECONSTRUCTED_PATCH, quote)).toBe(false);
+  expect(
+    requirementEvidence(
+      { quote, sourceFile: RECONSTRUCTED_PATH },
+      reconstructedContext
+    )
+  ).toHaveLength(2);
+  expect(
+    requirementHasWitness(
+      { quote, sourceFile: RECONSTRUCTED_PATH },
+      reconstructedContext,
+      policyFor()
+    )
+  ).toBe(true);
+  expect(
+    ungroundedRequirements(cashPlan(quote), reconstructedContext, policyFor())
+  ).toEqual([]);
+});
+
+it("refuses a quote stitched across two reconstructed hunks", () => {
+  const stitched = ["const after = 2;", "const tail = 3;"].join("\n");
+  const [, reconstructed] = requirementEvidence(
+    { quote: stitched, sourceFile: RECONSTRUCTED_PATH },
+    reconstructedContext
+  );
+  // Les deux lignes sont réelles, mais elles appartiennent à deux hunks : le
+  // contenu reconstruit ne les joint que par un NUL, que la comparaison ne
+  // replie pas et qu'aucune copie réelle ne porte.
+  expect(reconstructed).toContain("const after = 2;\n\u0000\nconst tail = 3;");
+  expect(
+    requirementHasWitness(
+      { quote: stitched, sourceFile: RECONSTRUCTED_PATH },
+      reconstructedContext,
+      policyFor()
+    )
+  ).toBe(false);
+  expect(
+    ungroundedRequirements(
+      cashPlan(stitched),
+      reconstructedContext,
+      policyFor()
+    )
+  ).toHaveLength(1);
+});
