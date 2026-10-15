@@ -76,6 +76,8 @@ function summaryFor(result: RunResult): string {
   // server error is only the summary when there is nothing else to show, so the
   // two never repeat the same sentence in two languages.
   const error = result.error && !result.diagnostic ? ` ${result.error}` : "";
+  // `publication.status` dit l'issue de la publication : seul "failed" est un
+  // échec, dans le vocabulaire courant comme dans l'ancien ("success"/"error").
   const publication =
     result.publication?.status === "failed" ? copy.publicationFailed : "";
   return `${base}${error}${publication}`;

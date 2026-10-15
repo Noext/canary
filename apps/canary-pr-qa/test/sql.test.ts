@@ -675,7 +675,7 @@ it("invalidates an already published result when cancellation wins the atomic co
     startedAt: "now",
     outcome: "passed",
     scenarios: [],
-    publication: { commentUrl: PR_URL, status: "success" },
+    publication: { commentUrl: PR_URL, status: "published" },
   };
   await q.cancel(job.id, "admin");
   await completeRun(q, job.id, "worker", result, f.config);
@@ -1196,7 +1196,7 @@ it("retains dashboard App credentials through worker completion when cancellatio
       startedAt: "now",
       outcome: "passed",
       scenarios: [],
-      publication: { commentUrl, status: "success" },
+      publication: { commentUrl, status: "published" },
     };
   });
   await startWorker(config, stop);
@@ -1215,7 +1215,9 @@ it("retains dashboard App credentials through worker completion when cancellatio
   const repaired = JSON.parse(
     await readFile(join(f.dataDir, job.id, "result.json"), "utf8")
   );
-  expect(repaired.publication.status).toBe("error");
+  // Le run publié puis invalidé reste publié : le verdict bloqué vit dans le
+  // commit status posté, jamais recopié dans le champ de publication.
+  expect(repaired.publication.status).toBe("published");
   expect(repaired.error).not.toContain("repair failed");
   const invalidations = f.requests.filter(
     (item) => item.path === `/repos/fixture/app/statuses/${SHA}`

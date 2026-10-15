@@ -237,6 +237,12 @@ export type Assertion = z.input<typeof AssertionSchema>;
 export type Action = z.infer<typeof ActionSchema>;
 export type Locator = z.infer<typeof locator>;
 export type Outcome = "passed" | "failed" | "blocked" | "skipped" | "stale";
+/**
+ * Issue de la publication du rapport, distincte de l'état du commit status
+ * posté sur GitHub. Les result.json déjà écrits portent le vocabulaire du commit
+ * status ("success"/"error") : les lecteurs restent donc tolérants.
+ */
+export type PublicationIssue = "published" | "failed";
 
 export interface Preview {
   evidence: string;

@@ -315,6 +315,11 @@ export interface RunResult {
   outcome: Outcome;
   preview?: { sha: string; url: string } | null;
   prUrl: string;
+  /**
+   * `status` porte l'issue de la publication du rapport ("published"/"failed"),
+   * jamais l'état du commit status GitHub ; les résultats antérieurs portent
+   * l'ancien vocabulaire ("success"/"error") et restent lus tels quels.
+   */
   publication?: { commentUrl: string; status: string } | null;
   scenarios: ScenarioSummary[];
   sha?: string | null;

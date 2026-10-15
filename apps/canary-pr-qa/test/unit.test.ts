@@ -549,6 +549,34 @@ describe("runner false-green regressions", () => {
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
   });
+  it("separates the publication issue from the commit status it posts", async () => {
+    fakeBrowser();
+    const blockedFixture = await setup({ missingDiffAndContext: true });
+    const blocked = await runQa(
+      { prUrl: PR_URL, previewUrl: blockedFixture.baseUrl },
+      blockedFixture.config
+    );
+    expect(blocked.outcome).toBe("blocked");
+    // Un run bloqué publie son rapport : le champ dit l'issue de la publication,
+    // tandis que le commit status posté porte le verdict.
+    expect(blocked.publication?.status).toBe("published");
+    expect(blocked.publication?.commentUrl).toBeTruthy();
+    expect(
+      blockedFixture.outgoing.filter((request) => request.payload.state).at(-1)
+        ?.payload.state
+    ).toBe("error");
+    const passingFixture = await setup();
+    const passed = await runQa(
+      { prUrl: PR_URL, previewUrl: passingFixture.baseUrl },
+      passingFixture.config
+    );
+    expect(passed.outcome).toBe("passed");
+    expect(passed.publication?.status).toBe("published");
+    expect(
+      passingFixture.outgoing.filter((request) => request.payload.state).at(-1)
+        ?.payload.state
+    ).toBe("success");
+  }, 40_000);
   it("returns an ungrounded requirement to the planner before failing", async () => {
     const ungrounded = structuredClone(plan);
     ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
@@ -1081,7 +1109,12 @@ it("repairs a passing comment when GitHub wrote it but its response was lost", a
   expect(result.outcome).toBe("blocked");
   const comments = f.outgoing.filter((r) => r.payload.body);
   expect(comments.at(-1)?.payload.body).toContain("Result: BLOCKED");
-  expect(result.publication?.status).toBe("error");
+  // Le rapport bloqué est republié, donc publié, alors que le commit status
+  // posté porte le verdict du run : les deux notions ne se recopient plus.
+  expect(result.publication?.status).toBe("published");
+  expect(
+    f.outgoing.filter((request) => request.payload.state).at(-1)?.payload.state
+  ).toBe("error");
   const remoteComments = (await (
     await fetch(`${f.baseUrl}/repos/fixture/app/issues/1/comments?per_page=100`)
   ).json()) as { body: string }[];

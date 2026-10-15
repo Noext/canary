@@ -39,6 +39,7 @@ import {
   type Plan,
   PlanSchema,
   type Preview,
+  type PublicationIssue,
   type RunResult,
   type Scenario,
   type ScenarioResult,
@@ -504,10 +505,11 @@ async function publish(
   let commentAttempted = false;
   try {
     await runScope.getStore()?.verifyOwnership?.();
-    const status = statusFor(result.outcome);
+    // L'état du commit status suit le verdict ; le champ `publication` ne dit
+    // que si le rapport a été publié.
     await github.status(
       context,
-      status,
+      statusFor(result.outcome),
       `QA ${result.outcome}: ${result.scenarios.filter((s) => s.outcome === "passed").length}/${result.scenarios.length} scenarios`,
       reportUrl
     );
@@ -517,13 +519,15 @@ async function publish(
       context,
       reportMarkdown(result, reportUrl)
     );
-    result.publication = { commentUrl, status };
+    result.publication = { commentUrl, status: "published" };
   } catch (error) {
     result.diagnostic = diagnose(error, config);
     result.outcome = "blocked";
     result.error =
       `${result.error ?? ""} GitHub publication failed: ${result.diagnostic.message}`.trim();
-    let recoveryStatus = "failed";
+    // La publication a échoué : elle ne redevient publiée que si le verdict
+    // bloqué finit écrit sur le commit status.
+    let publicationIssue: PublicationIssue = "failed";
     await runScope
       .exit(() =>
         github.status(
@@ -534,7 +538,7 @@ async function publish(
         )
       )
       .then(() => {
-        recoveryStatus = "error";
+        publicationIssue = "published";
       })
       .catch(() => undefined);
     // A failed response can follow a successful write: repair the upserted comment too.
@@ -545,7 +549,7 @@ async function publish(
             context,
             reportMarkdown(result, reportUrl)
           );
-          result.publication = { commentUrl, status: recoveryStatus };
+          result.publication = { commentUrl, status: publicationIssue };
         })
         .catch((repairError) => {
           result.error += ` Blocked comment update failed: ${diagnose(repairError, config).message}`;
