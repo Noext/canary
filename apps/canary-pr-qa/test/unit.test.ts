@@ -1296,6 +1296,35 @@ describe("runner false-green regressions", () => {
     expect(result.error).toContain("src/other.ts");
     expect(result.scenarios).toEqual([]);
   });
+  it("keeps both fatal refusal classes inside the truncated correction", async () => {
+    const flooded = structuredClone(plan);
+    const [scenario] = flooded.scenarios;
+    for (let index = 0; index < 28; index++) {
+      scenario!.sourceFiles.push(`src/no-witness-${index}.ts`);
+    }
+    scenario!.requirements.push({
+      behavior: "The requirement belongs to an undeclared source",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/undeclared.ts",
+    });
+    const f = await setup({ plans: [flooded, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const request = f.modelRequests.at(-1)!;
+    const messages = request.messages as { content: string; role: string }[];
+    const correction = messages.at(-1)!.content;
+    // Le message de correction est bien tronqué à 2000 caractères...
+    expect(correction).toHaveLength(2000);
+    // ...et les deux classes fatales y survivent, agrégées en tête de message,
+    // même quand les chemins sans témoin remplissent à eux seuls la fin utile.
+    expect(correction).toContain("COVERAGE_WITNESS_MISSING");
+    expect(correction).toContain("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(correction).not.toContain("src/no-witness-27.ts");
+  });
   it("retries a model call cut by the transport, and counts it", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });
     fakeBrowser();

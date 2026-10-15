@@ -264,6 +264,25 @@ function witnessHint(quote: string, context: PrContext): string {
 }
 
 /**
+ * Exigences citées sans témoin textuel, avec le scénario qui les porte : la
+ * classe fatale `REQUIREMENT_UNGROUNDED` en est rendue une par entrée, et le
+ * canal de correction peut aussi l'agréger en une seule ligne.
+ */
+export function ungroundedRequirements(
+  plan: Plan,
+  context: PrContext
+): { requirement: Requirement; scenarioId: string }[] {
+  return plan.scenarios.flatMap((scenario) =>
+    scenario.requirements
+      .filter(
+        (requirement) =>
+          !requirementEvidence(requirement, context).includes(requirement.quote)
+      )
+      .map((requirement) => ({ requirement, scenarioId: scenario.id }))
+  );
+}
+
+/**
  * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
  * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
  * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
@@ -273,16 +292,11 @@ export function ungroundedPlanRefusals(
   plan: Plan,
   context: PrContext
 ): string[] {
-  return plan.scenarios.flatMap((scenario) =>
-    scenario.requirements
-      .filter(
-        (requirement) =>
-          !requirementEvidence(requirement, context).includes(requirement.quote)
-      )
-      .map((requirement) => {
-        const error = ungroundedRequirement(scenario.id, requirement);
-        return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
-      })
+  return ungroundedRequirements(plan, context).map(
+    ({ requirement, scenarioId }) => {
+      const error = ungroundedRequirement(scenarioId, requirement);
+      return `${error.message}. ${error.hint}${witnessHint(requirement.quote, context)}`;
+    }
   );
 }
 
@@ -329,6 +343,27 @@ export function unwitnessedRequirement(
 }
 
 /**
+ * Paires (scénario, fichier) des sources déclarées sans témoin, dans l'ordre du
+ * plan : le couvert est cumulatif, exactement comme `validateCoverage`.
+ */
+export function unwitnessedSources(
+  plan: Plan,
+  context: PrContext
+): { file: string; scenarioId: string }[] {
+  const covered = new Set<string>();
+  const entries: { file: string; scenarioId: string }[] = [];
+  for (const scenario of plan.scenarios) {
+    coverWitnessedSourceFiles(covered, scenario, context);
+    for (const file of scenario.sourceFiles) {
+      if (!covered.has(file)) {
+        entries.push({ file, scenarioId: scenario.id });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
  * Fichiers cités sans témoin, sous forme de refus rendus au planificateur : il
  * apprend la règle ici, dispose d'une tentative de correction, et
  * `validateCoverage` reste le contrôle final qui refuse un plan non corrigé.
@@ -338,18 +373,10 @@ export function unwitnessedPlanRefusals(
   context: PrContext,
   policy: Policy
 ): string[] {
-  const covered = new Set<string>();
-  const refusals: string[] = [];
-  for (const scenario of plan.scenarios) {
-    coverWitnessedSourceFiles(covered, scenario, context);
-    for (const file of scenario.sourceFiles) {
-      if (!covered.has(file)) {
-        const error = unwitnessedRequirement(scenario.id, file, policy);
-        refusals.push(`${error.message}. ${error.hint}`);
-      }
-    }
-  }
-  return refusals;
+  return unwitnessedSources(plan, context).map(({ file, scenarioId }) => {
+    const error = unwitnessedRequirement(scenarioId, file, policy);
+    return `${error.message}. ${error.hint}`;
+  });
 }
 
 /**

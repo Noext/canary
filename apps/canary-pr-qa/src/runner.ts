@@ -27,8 +27,11 @@ import {
   requirementSourceRefusal,
   trustedPolicy,
   undeclaredSourcePlanRefusals,
+  undeclaredSources,
   ungroundedPlanRefusals,
+  ungroundedRequirements,
   unwitnessedPlanRefusals,
+  unwitnessedSources,
   validateCoverage,
   validateProvider,
   writeEvidenceRefusals,
@@ -126,6 +129,75 @@ function validateSourceEvidence(
       "Check GitHub Contents permissions and context budget. Unsupported/binary changes must be explicitly skipped; never infer a tested change from the page alone."
     );
   }
+}
+/**
+ * Une classe de refus fatal au plan : le code, ce qu'elle constate, les valeurs
+ * fautives et le remède. Le canal de correction en agrège une ligne bornée par
+ * classe, et le contrôle final lève le message complet.
+ */
+interface FatalClass {
+  code: string;
+  entries: string[];
+  hint: string;
+}
+/**
+ * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur : la
+ * correction est tronquée à 2000 caractères par `model.ts`, et aucune classe
+ * fatale ne doit disparaître parce qu'une autre a rempli le message.
+ */
+const FATAL_ENTRIES_LISTED = 6;
+const FATAL_ENTRY_CHARS = 80;
+function boundedEntries(entries: string[]): string {
+  const shown = entries
+    .slice(0, FATAL_ENTRIES_LISTED)
+    .map((entry) =>
+      entry.length > FATAL_ENTRY_CHARS
+        ? `${entry.slice(0, FATAL_ENTRY_CHARS - 1)}…`
+        : entry
+    );
+  const hidden = entries.length - shown.length;
+  return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
+}
+function fatalLine(refusal: FatalClass): string {
+  return `${refusal.code} (blocks the whole run): ${boundedEntries(refusal.entries)}. ${refusal.hint}`;
+}
+/**
+ * Classes fatales de couverture, agrégées en tête du canal de correction.
+ * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
+ * refus par scénario qui suivent la même liste.
+ */
+function coverageFatalClasses(
+  candidate: Plan,
+  context: PrContext
+): FatalClass[] {
+  const classes: FatalClass[] = [];
+  const unwitnessed = unwitnessedSources(candidate, context);
+  if (unwitnessed.length > 0) {
+    classes.push({
+      code: "COVERAGE_WITNESS_MISSING",
+      entries: unwitnessed.map((item) => `${item.scenarioId}:${item.file}`),
+      hint: "Add a requirement whose quote exists verbatim in each listed file.",
+    });
+  }
+  const undeclared = undeclaredSources(candidate);
+  if (undeclared.length > 0) {
+    classes.push({
+      code: "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+      entries: undeclared.map((item) => `${item.scenarioId}:${item.file}`),
+      hint: "Attribute each requirement to a file the scenario declares, or declare the cited file when the PR changes it.",
+    });
+  }
+  const ungrounded = ungroundedRequirements(candidate, context);
+  if (ungrounded.length > 0) {
+    classes.push({
+      code: "REQUIREMENT_UNGROUNDED",
+      entries: ungrounded.map(
+        (item) => `${item.scenarioId}:${item.requirement.sourceFile}`
+      ),
+      hint: "Quote exact source or diff text; page content alone is not a requirement.",
+    });
+  }
+  return classes;
 }
 function validatePlan(plan: Plan, context: PrContext, config: Config) {
   if (plan.scenarios.length > config.QA_MAX_SCENARIOS) {
@@ -247,10 +319,12 @@ function refusalDiagnostic(
  * la page de découverte avant toute exécution.
  */
 /**
- * Les refus rendus au planificateur pour un plan candidat : preuve d'écriture,
- * sélecteur construit sur une classe ou une couleur, exigence sans témoin
- * textuel, exigence attribuée à un fichier hors du scénario, cible absente de
- * la page de découverte.
+ * Les refus rendus au planificateur pour un plan candidat. Les classes fatales
+ * — celles qui bloquent tout le run — passent en tête, agrégées en une ligne
+ * bornée par classe : la correction est tronquée à 2000 caractères par
+ * `model.ts`, et un candidat qui accumule les chemins sans témoin ne doit
+ * jamais faire disparaître une autre classe fatale. Le détail par entrée et les
+ * refus par scénario suivent, ceux-là bloquant leur scénario seul.
  */
 function planRefusals(
   candidate: Plan,
@@ -258,13 +332,8 @@ function planRefusals(
   context: PrContext
 ): string[] {
   return [
-    // Un fichier déclaré sans exigence témoignée bloque tout le run via
-    // `validateCoverage` : il passe en tête pour survivre à la troncature de la
-    // requête de correction (2000 caractères dans `model.ts`), contrairement
-    // aux refus par scénario, qui restent rapportés et bloqués individuellement.
+    ...coverageFatalClasses(candidate, context).map(fatalLine),
     ...unwitnessedPlanRefusals(candidate, context, policy),
-    // Une exigence attribuée à un fichier hors du scénario bloque aussi tout le
-    // run, pour la même raison.
     ...undeclaredSourcePlanRefusals(candidate, context),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
