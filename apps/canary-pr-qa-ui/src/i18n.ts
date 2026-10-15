@@ -88,7 +88,7 @@ export const errorMessages: Record<string, string | undefined> = {
     "Ce test n’existe pas ou a été purgé. Vérifiez son identifiant dans l’historique.",
   RUN_DEADLINE: "Le test a dépassé le temps maximum autorisé pour un run.",
   REQUIREMENT_UNGROUNDED:
-    "Une exigence cite un texte qui n’existe mot pour mot nulle part dans le fichier qu’elle déclare : elle n’a pas de témoin source.",
+    "Une exigence n’a pas de témoin source acceptable : la citation n’existe mot pour mot nulle part dans le fichier qu’elle déclare, ou elle n’y porte aucun contenu visible alors qu’elle vise un fichier critique, où un fragment de ponctuation ou d’invisibles recopié en passant ne prouve rien.",
   STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
   TRANSITION_NOT_OBSERVED:
     "Transition non observée : la valeur relevée après l’étape est identique à celle d’avant, donc le changement attendu n’a pas eu lieu. Ce n’est pas une régression prouvée de l’élément.",
@@ -737,7 +737,7 @@ export const runAdvice: Record<string, string> = {
   RUN_DEADLINE:
     "Vérifiez la phase atteinte dans le rapport, puis augmentez `QA_RUN_TIMEOUT_SECONDS` si le test mérite plus de temps.",
   REQUIREMENT_UNGROUNDED:
-    "Citez un extrait exact du fichier changé ou de son diff : le contenu de la page ne suffit pas comme exigence. Corrigez la citation puis relancez.",
+    "Citez un extrait exact et suffisant du fichier changé ou de son diff : le contenu de la page ne suffit pas comme exigence, et un chemin critique demande un fragment qui porte au moins une lettre ou un chiffre, par exemple un identifiant, un mot-clé, un nombre ou un message — jamais de la ponctuation seule. Corrigez la citation puis relancez.",
   STALE_HEAD:
     "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
   TRANSITION_NOT_OBSERVED:
