@@ -917,12 +917,49 @@ describe("runner false-green regressions", () => {
     );
     expect(retried.usage?.retries).toBe(1);
     expect(retried.outcome).toBe("passed");
-    // La tentative perdue est chiffrée au pire cas — au moins la sortie maximale
-    // réservée — à part des tokens rapportés par l'endpoint : la reprise est
-    // admise sur l'usage consommé, jamais sur le cumul des coupures.
+    // La tentative perdue est chiffrée à part des tokens rapportés par
+    // l'endpoint, mais elle reste dans l'enveloppe : la reprise est admise
+    // parce que l'enveloppe du fixture couvre la réserve plus la réservation
+    // de l'appel à venir, pas parce que la réserve serait ignorée.
     expect(retried.usage?.reservedTokens ?? 0).toBeGreaterThanOrEqual(5000);
     expect(retried.usage?.tokens).toBe(baseline.usage?.tokens);
     expect(retried.usage?.estimated).toBe(true);
+  }, 40_000);
+  it("credits a lost attempt with what the transport delivered, and admits the correction", async () => {
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: {
+        QA_MODEL_RETRIES: "1",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "500000",
+      },
+      modelTruncations: 1,
+      plans: [refused, refused, plan],
+    });
+    fakeBrowser();
+    const before = budget.reserves.length;
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const reserved = result.usage?.reservedTokens ?? 0;
+    // Plan coupé (le flux a livré un seul caractère) puis reprise, plan refusé
+    // sur sa preuve, correction : la forme du run 23d0807e. La réserve de
+    // l'essai perdu est créditée de ce que le transport a livré — l'entrée du
+    // prompt et le texte reçu — et non de la sortie maximale.
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(2);
+    expect(budget.reserves.length - before).toBe(3);
+    expect(reserved).toBeGreaterThan(0);
+    expect(reserved).toBeLessThan(50_000);
+    // La première réservation est la borne théorique de ce même appel :
+    // comptée deux fois, elle ne tient pas sous cette enveloppe. C'est la
+    // réserve crédible qui laisse la place à la reprise puis à la correction.
+    expect((budget.reserves[before] ?? 0) * 2).toBeGreaterThan(500_000);
+    expect((result.usage?.tokens ?? 0) + reserved).toBeLessThan(500_000);
+    expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
   }, 40_000);
   it("debits the last attempt too when no retry follows", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "0" }, modelResets: 1 });
@@ -940,7 +977,7 @@ describe("runner false-green regressions", () => {
     expect(result.usage?.reservedTokens ?? 0).toBeGreaterThan(0);
     expect(result.usage?.estimated).toBe(true);
   }, 40_000);
-  it("no longer opposes a lost attempt's reserve to the next correction", async () => {
+  it("counts a lost attempt's bound inside the envelope and still admits the correction", async () => {
     const refused = structuredClone(plan);
     refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
     const f = await setup({
@@ -957,19 +994,26 @@ describe("runner false-green regressions", () => {
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    // Le run 23d0807e : plan coupé, reprise réussie, plan refusé sur sa preuve,
-    // puis correction — refusée à tort parce que la borne de la tentative perdue
-    // s'ajoutait au débit consommé et dépassait l'enveloppe du run.
+    const consumed = result.usage?.tokens ?? 0;
+    const reserved = result.usage?.reservedTokens ?? 0;
+    // Aucun octet n'a été livré avant la coupure : la tentative perdue est
+    // chiffrée à sa borne théorique et cette borne compte dans l'admission.
+    // L'enveloppe la couvre avec la correction qui suit, donc une dépense
+    // réelle reste déclarée sans transformer le run en refus.
     expect(f.modelRequests).toHaveLength(2);
     expect(result.outcome).toBe("passed");
     expect(result.usage?.calls).toBe(2);
     expect(result.usage?.retries).toBe(1);
-    expect(result.usage?.tokens ?? 0).toBeLessThan(200_000);
-    expect(result.usage?.reservedTokens ?? 0).toBeGreaterThanOrEqual(400_000);
+    expect(consumed).toBeLessThan(200_000);
+    expect(reserved).toBeGreaterThanOrEqual(400_000);
+    expect(budget.reserves.at(-1) ?? 0).toBeGreaterThan(400_000);
+    expect(consumed + reserved + (budget.reserves.at(-1) ?? 0)).toBeLessThan(
+      1_000_000
+    );
     expect(result.usage?.estimated).toBe(true);
     expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
   }, 40_000);
-  it("admits the next attempt once the lost bound stops counting as spend", async () => {
+  it("refuses a retry the consumed usage plus the lost bound no longer covers, without sending it", async () => {
     const refused = structuredClone(plan);
     refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
     const f = await setup({
@@ -982,17 +1026,29 @@ describe("runner false-green regressions", () => {
       plans: [refused, plan],
     });
     fakeBrowser();
+    const request = vi.spyOn(globalThis, "fetch");
     const result = await runQa(
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    // Même forme que le run 23d0807e (540 073 + M + R₂ > 1 000 000), ramenée à
-    // l'enveloppe du fixture : en comptant la borne perdue comme une dépense
-    // (403 443 + 403 443 = 806 886 > 700 000), la tentative suivante était
-    // refusée à tort. L'usage consommé seul la couvre (36 + 403 881).
-    expect(result.outcome).toBe("passed");
-    expect(result.usage?.reservedTokens ?? 0).toBeGreaterThan(0);
-    expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
+    const consumed = result.usage?.tokens ?? 0;
+    const reserved = result.usage?.reservedTokens ?? 0;
+    // La socket est détruite avant tout octet : rien n'est observable, la
+    // réserve retombe sur sa borne théorique (403 443 ici). Consommé + réserve
+    // + la réservation de la reprise (806 886) dépasse l'enveloppe : la reprise
+    // est refusée sans être envoyée, et le budget encadre la dépense totale.
+    expect(reserved).toBeGreaterThanOrEqual(400_000);
+    expect(consumed + reserved + (budget.reserves.at(-1) ?? 0)).toBeGreaterThan(
+      700_000
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    expect(f.modelRequests).toHaveLength(0);
+    expect(
+      request.mock.calls.filter(([url]) =>
+        String(url).endsWith("/chat/completions")
+      )
+    ).toHaveLength(1);
   }, 40_000);
   it("refuses the first attempt a run envelope cannot cover, without sending it", async () => {
     const f = await setup({

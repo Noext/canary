@@ -4,7 +4,7 @@ import { QaError, redact } from "./diagnostics.js";
 import { fetchSse, fetchText } from "./http.js";
 import { assertProvider, runModelConfig } from "./model-catalog.js";
 import { checkBudget, runScope } from "./run-scope.js";
-import { emptyChatStream, reduceChatStream } from "./sse.js";
+import { type ChatUsage, emptyChatStream, reduceChatStream } from "./sse.js";
 import { modelCalls, modelLatency, modelTokens, traced } from "./telemetry.js";
 
 /** Réponse de `chat/completions` dans la forme non streamée, quel que soit le mode de transport. */
@@ -15,6 +15,18 @@ interface ModelResponse {
     prompt_tokens?: number;
     total_tokens?: number;
   };
+}
+
+/**
+ * Ce qu'une tentative a réellement livré avant de se perdre : la mesure, et non
+ * la borne, sur laquelle sa réserve est créditée. `usage` est le dernier usage
+ * partiel rapporté par le flux ; les compteurs de caractères disent ce que le
+ * transport a assemblé avant la coupure.
+ */
+interface DeliveredTrial {
+  contentChars: number;
+  reasoningChars: number;
+  usage?: ChatUsage;
 }
 
 /**
@@ -142,10 +154,7 @@ export class Model {
         scope.estimated ||= !response.usage;
         scope.tokens += inputTokens + outputTokens;
         scope.calls++;
-        scope.costUsd +=
-          (inputTokens * this.config.QA_INPUT_COST_PER_MILLION +
-            outputTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
-          1_000_000;
+        scope.costUsd += this.cost(inputTokens, outputTokens);
       }
       modelTokens.inc(
         { model: this.config.OPENAI_MODEL, direction: "input" },
@@ -213,16 +222,33 @@ export class Model {
     );
   }
 
+  /** Entrée estimée au caractère, l'unité déjà employée pour le débit compté. */
+  private estimatedInputTokens(
+    messages: { content: string; role: string }[]
+  ): number {
+    return Math.ceil(JSON.stringify(messages).length / 3);
+  }
+
+  /** Coût des tokens d'une tentative, aux tarifs configurés. */
+  private cost(inputTokens: number, outputTokens: number): number {
+    return (
+      (inputTokens * this.config.QA_INPUT_COST_PER_MILLION +
+        outputTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
+      1_000_000
+    );
+  }
+
   /**
    * Ce qu'une tentative engage au pire cas : l'entrée comptée au caractère et
-   * la sortie maximale. Une connexion coupée a pu consommer ces tokens sans que
-   * l'endpoint ne les rapporte jamais.
+   * la sortie maximale. C'est la borne de repli d'une tentative perdue dont le
+   * transport n'a rien laissé observer, et l'engagement de toute tentative qui
+   * part.
    */
   private reservation(
     messages: { content: string; role: string }[],
     maxTokens: number
   ): { costUsd: number; tokens: number } {
-    const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
+    const reservedInput = this.estimatedInputTokens(messages);
     const inputCostBound =
       Buffer.byteLength(JSON.stringify(messages), "utf8") +
       64 * (messages.length + 1);
@@ -237,9 +263,9 @@ export class Model {
 
   /**
    * Aucune tentative n'est lancée si l'enveloppe du run ne couvre pas son pire
-   * cas en plus de l'usage déjà consommé. Les bornes des tentatives perdues
-   * restent à part : c'est l'appel à venir qui doit être couvert, pas le cumul
-   * des coupures déjà déclarées dans `usage.reservedTokens`.
+   * cas en plus de l'usage déjà consommé ET des réserves des tentatives perdues
+   * (`run-scope.ts:checkBudget`) : l'enveloppe reste une borne dure pour la
+   * dépense totale, la reprise comprise.
    */
   private claim(
     messages: { content: string; role: string }[],
@@ -251,13 +277,59 @@ export class Model {
   }
 
   /**
-   * Comptabilise la borne au pire cas d'une tentative perdue à part de l'usage
+   * Réserve d'une tentative perdue : la part de son pire cas que le transport a
+   * réellement livrée. L'entrée du prompt est toujours due — la requête est
+   * partie — et la sortie se limite à ce qui a été assemblé avant la coupure,
+   * chiffré par l'usage partiel du flux ou par le texte reçu. Sans rien
+   * d'observable (socket détruite avant tout octet, réponse non streamée), la
+   * borne théorique reste le seul chiffre défendable : l'endpoint a pu générer
+   * une génération entière que la coupure ne nous rendra jamais. C'est l'angle
+   * mort assumé — la réserve minore ce qui a été facturé sans être transmis —
+   * documenté dans .env.example.
+   */
+  private credibleReservation(
+    messages: { content: string; role: string }[],
+    maxTokens: number,
+    delivered: DeliveredTrial | undefined
+  ): { costUsd: number; tokens: number } {
+    const worst = this.reservation(messages, maxTokens);
+    if (
+      delivered === undefined ||
+      (delivered.contentChars === 0 &&
+        delivered.reasoningChars === 0 &&
+        delivered.usage === undefined)
+    ) {
+      return worst;
+    }
+    const inputTokens =
+      delivered.usage?.prompt_tokens ?? this.estimatedInputTokens(messages);
+    const outputTokens =
+      delivered.usage?.completion_tokens ??
+      Math.ceil((delivered.contentChars + delivered.reasoningChars) / 3);
+    // Un usage qui n'expose qu'un total reste une mesure : la réserve ne doit
+    // jamais tomber sous ce que l'endpoint a déjà chiffré.
+    const tokens = Math.max(
+      inputTokens + outputTokens,
+      delivered.usage?.total_tokens ?? 0
+    );
+    // Une réserve ne peut pas dépasser le pire cas de la tentative qu'elle
+    // remplace : l'enveloppe qui couvrait cet appel couvre donc toujours sa
+    // réserve, et l'exposition engagée reste dans l'enveloppe.
+    return {
+      costUsd: Math.min(
+        this.cost(inputTokens, tokens - inputTokens),
+        worst.costUsd
+      ),
+      tokens: Math.min(tokens, worst.tokens),
+    };
+  }
+
+  /**
+   * Comptabilise la réserve crédible d'une tentative perdue à part de l'usage
    * rapporté, y compris quand elle est la dernière — reprises épuisées ou
-   * plafond d'appels atteint. Une coupure a pu consommer une génération entière
-   * que l'endpoint ne nous rendra jamais : la borne reste chiffrée sans devenir
-   * un débit consommé, sans quoi chaque coupure refuserait la tentative suivante
-   * d'un run que l'enveloppe couvre. Le run passe en estimé : ce débit n'est pas
-   * un usage rapporté par l'endpoint.
+   * plafond d'appels atteint. Elle reste dans l'enveloppe : c'est l'appel
+   * suivant qui est refusé si le total ne tient plus. Le run passe en estimé :
+   * ce débit n'est pas un usage rapporté par l'endpoint.
    */
   private reserveLost(lost: { costUsd: number; tokens: number }): void {
     const scope = runScope.getStore();
@@ -280,8 +352,13 @@ export class Model {
   ): Promise<ModelResponse> {
     const max = this.config.QA_MODEL_RETRIES;
     for (let attempt = 0; ; attempt++) {
+      // Ce que le transport livre de la tentative en cours : la seule mesure
+      // qui crédite sa réserve si la connexion casse.
+      let delivered: DeliveredTrial | undefined;
       try {
-        return await this.completion(messages, maxTokens);
+        return await this.completion(messages, maxTokens, (snapshot) => {
+          delivered = snapshot;
+        });
       } catch (error) {
         const code = transportCode(error);
         if (!code) {
@@ -289,8 +366,9 @@ export class Model {
         }
         const scope = runScope.getStore();
         const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
-        const lost = this.reservation(messages, maxTokens);
-        this.reserveLost(lost);
+        this.reserveLost(
+          this.credibleReservation(messages, maxTokens, delivered)
+        );
         if (!mayRetry(attempt, max, used)) {
           throw failedAttempt(error, code, attempt);
         }
@@ -335,7 +413,8 @@ export class Model {
    */
   private async completion(
     messages: { content: string; role: string }[],
-    maxTokens: number
+    maxTokens: number,
+    onDelivered?: (delivered: DeliveredTrial) => void
   ): Promise<ModelResponse> {
     const timeout = this.config.QA_MODEL_TIMEOUT_SECONDS * 1000;
     const stream = this.config.OPENAI_STREAM === "true";
@@ -377,6 +456,11 @@ export class Model {
       init,
       (event) => {
         state = reduceChatStream(state, event);
+        onDelivered?.({
+          contentChars: state.content.length,
+          reasoningChars: state.reasoningChars,
+          usage: state.usage,
+        });
         // Inutile de payer la fin du flux une fois qu'un échec ou la fin sont connus.
         return state.error === undefined && !state.done;
       },

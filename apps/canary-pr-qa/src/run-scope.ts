@@ -11,10 +11,13 @@ export interface RunScope {
   onRetry?: (info: { attempt: number; max: number; code: string }) => void;
   previewSha?: string;
   /**
-   * Bornes « au pire cas » des tentatives perdues, cumulées à part de l'usage
-   * rapporté par l'endpoint. Elles restent chiffrées et visibles dans `usage`,
-   * mais n'entrent pas dans l'admission : sinon chaque coupure gonflerait le
-   * débit du run et finirait par refuser une tentative que l'enveloppe couvre.
+   * Bornes des tentatives perdues, cumulées à part de l'usage rapporté par
+   * l'endpoint. Chaque borne est créditée de ce que le transport a réellement
+   * livré (`Model.credibleReservation`), et non plus du pire cas théorique dès
+   * qu'une coupure laisse quelque chose d'observable. Elle reste DANS
+   * l'enveloppe : l'admission d'une tentative couvre l'usage consommé, ces
+   * bornes et la réservation de l'appel qui part, sans quoi le budget
+   * n'encadrerait plus la dépense totale du run.
    */
   reservedCostUsd: number;
   reservedTokens: number;
@@ -30,18 +33,21 @@ export interface RunScope {
 }
 export const runScope = new AsyncLocalStorage<RunScope>();
 /**
- * L'admission juge l'usage consommé (`tokens`, `costUsd`) plus l'engagement de
- * l'appel qui part (`reserveTokens`, `reserveCostUsd`). Les bornes des
- * tentatives perdues en sont exclues : elles sont déclarées dans `usage`, mais
- * un run ne se refuse pas sur une estimation.
+ * L'admission juge l'usage consommé (`tokens`, `costUsd`), les bornes des
+ * tentatives perdues (`reservedTokens`, `reservedCostUsd`) et l'engagement de
+ * l'appel qui part (`reserveTokens`, `reserveCostUsd`) : l'enveloppe est une
+ * borne dure, réserve comprise. Un appel qui ne tient pas dedans n'est jamais
+ * envoyé, et l'exposition engagée du run (`tokens` + `reservedTokens`) reste
+ * dans l'enveloppe.
  */
 export function checkBudget(reserveTokens = 0, reserveCostUsd = 0) {
   const scope = runScope.getStore();
   scope?.signal.throwIfAborted();
   if (
     scope &&
-    (scope.tokens + reserveTokens > scope.maxTokens ||
-      scope.costUsd + reserveCostUsd > scope.maxCostUsd ||
+    (scope.tokens + scope.reservedTokens + reserveTokens > scope.maxTokens ||
+      scope.costUsd + scope.reservedCostUsd + reserveCostUsd >
+        scope.maxCostUsd ||
       scope.costUsd >= scope.maxCostUsd)
   ) {
     throw new QaError(

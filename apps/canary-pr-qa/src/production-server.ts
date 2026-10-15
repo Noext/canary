@@ -48,6 +48,18 @@ import {
 } from "./telemetry.js";
 
 const logger = createLogger({ name: "qa-api" });
+
+/**
+ * Usage durable par modèle, tel que publié par `/metrics` : les tokens et le
+ * coût rapportés par l'endpoint, plus les réserves des tentatives perdues
+ * (`usage.reservedTokens` / `usage.reservedCostUsd`), sans quoi une coupure de
+ * transport ferait sous-déclarer l'exposition réelle. Les jobs écrits avant
+ * l'existence de ces clés comptent pour zéro.
+ */
+export const DURABLE_USAGE_SQL = `SELECT COALESCE(usage->>'model','unknown') AS model,
+COALESCE(sum(COALESCE((usage->>'tokens')::numeric,0)+COALESCE((usage->>'reservedTokens')::numeric,0)),0)::float AS tokens,
+COALESCE(sum(COALESCE((usage->>'costUsd')::numeric,0)+COALESCE((usage->>'reservedCostUsd')::numeric,0)),0)::float AS cost
+FROM qa_jobs GROUP BY usage->>'model'`;
 function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, {
     "Content-Type": "application/json",
@@ -477,9 +489,7 @@ export async function startProductionServer(config: Config) {
     for (const row of counts.rows) {
       durableRuns.set({ status: row.status, outcome: row.outcome }, row.count);
     }
-    const usage = await queue.pool.query(
-      "SELECT COALESCE(usage->>'model','unknown') AS model,COALESCE(sum((usage->>'tokens')::numeric),0)::float AS tokens,COALESCE(sum((usage->>'costUsd')::numeric),0)::float AS cost FROM qa_jobs GROUP BY usage->>'model'"
-    );
+    const usage = await queue.pool.query(DURABLE_USAGE_SQL);
     durableTokens.reset();
     durableCost.reset();
     for (const row of usage.rows) {

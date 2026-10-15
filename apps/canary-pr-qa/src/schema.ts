@@ -300,9 +300,11 @@ export interface RunResult {
     tokens: number;
     costUsd: number;
     /**
-     * Cumul des bornes « au pire cas » des tentatives perdues, chiffré à part
-     * des tokens que l'endpoint a rapportés. Jamais compté dans l'admission du
-     * run : une coupure réseau ne bloque plus la tentative suivante.
+     * Cumul des réserves des tentatives perdues, chiffré à part des tokens que
+     * l'endpoint a rapportés. Chaque réserve est créditée de ce que le transport
+     * a réellement livré, plafonnée par le pire cas de la tentative perdue, et
+     * elle compte dans l'admission du run : l'exposition engagée (`tokens` +
+     * `reservedTokens`) reste dans l'enveloppe.
      */
     reservedTokens?: number;
     reservedCostUsd?: number;
