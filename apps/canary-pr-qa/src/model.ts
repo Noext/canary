@@ -107,6 +107,18 @@ export function transportCode(error: unknown): string | undefined {
     : undefined;
 }
 
+/**
+ * Un compteur d'usage n'est une mesure que s'il est strictement positif. Un zéro
+ * explicite n'est pas une mesure nulle mais une absence de mesure : un endpoint
+ * qui zéro-remplit son `usage` ne peut donc ni créditer une tentative perdue
+ * d'une réserve nulle, ni faire déclarer zéro pour un prompt réellement envoyé.
+ */
+function measuredCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -145,13 +157,17 @@ export class Model {
         { model: this.config.OPENAI_MODEL },
         (Date.now() - started) / 1000
       );
-      const inputTokens =
-        response.usage?.prompt_tokens ??
-        Math.ceil(JSON.stringify(messages).length / 3);
-      const outputTokens = response.usage?.completion_tokens ?? maxTokens;
+      const reportedInput = measuredCount(response.usage?.prompt_tokens);
+      const reportedOutput = measuredCount(response.usage?.completion_tokens);
+      // Sans mesure positive, ce sont nos bornes qui chiffrent l'appel : la
+      // borne de l'entrée et la sortie maximale autorisée.
+      const inputTokens = reportedInput ?? this.inputTokenBound(messages);
+      const outputTokens = reportedOutput ?? maxTokens;
+      this.observeInput(reportedInput);
       const scope = runScope.getStore();
       if (scope) {
-        scope.estimated ||= !response.usage;
+        scope.estimated ||=
+          reportedInput === undefined || reportedOutput === undefined;
         scope.tokens += inputTokens + outputTokens;
         scope.calls++;
         scope.costUsd += this.cost(inputTokens, outputTokens);
@@ -222,11 +238,39 @@ export class Model {
     );
   }
 
-  /** Entrée estimée au caractère, l'unité déjà employée pour le débit compté. */
-  private estimatedInputTokens(
+  /**
+   * Borne haute de l'entrée d'un appel, en tokens. Deux octets par token est la
+   * marge prudente retenue : sur du JSON, du texte et du code, un tokenizer
+   * byte-level émet nettement moins d'un token par octet, et 64 tokens par
+   * message couvrent les marqueurs de rôle du gabarit de chat. Une écriture plus
+   * dense resterait sous-estimée : cet écart ne sert jamais deux fois, car le
+   * plus grand `prompt_tokens` réellement rapporté sur ce run devient le
+   * plancher de la borne suivante (`observedInputTokens`).
+   */
+  private inputTokenBound(
     messages: { content: string; role: string }[]
   ): number {
-    return Math.ceil(JSON.stringify(messages).length / 3);
+    const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
+    return Math.max(
+      Math.ceil(bytes / 2) + 64 * (messages.length + 1),
+      runScope.getStore()?.observedInputTokens ?? 0
+    );
+  }
+
+  /**
+   * Retient le plus grand `prompt_tokens` que l'endpoint a réellement rapporté
+   * pour ce run : une sous-estimation connue de l'entrée ne décide plus deux
+   * admissions, la borne suivante valant au moins ce poids.
+   */
+  private observeInput(inputTokens: number | undefined): void {
+    const scope = runScope.getStore();
+    if (!scope || inputTokens === undefined) {
+      return;
+    }
+    scope.observedInputTokens = Math.max(
+      scope.observedInputTokens ?? 0,
+      inputTokens
+    );
   }
 
   /** Coût des tokens d'une tentative, aux tarifs configurés. */
@@ -239,25 +283,29 @@ export class Model {
   }
 
   /**
-   * Ce qu'une tentative engage au pire cas : l'entrée comptée au caractère et
-   * la sortie maximale. C'est la borne de repli d'une tentative perdue dont le
-   * transport n'a rien laissé observer, et l'engagement de toute tentative qui
-   * part.
+   * Ce qu'une tentative engage au pire cas : la borne de l'entrée et la sortie
+   * maximale. C'est la borne de repli d'une tentative perdue dont le transport
+   * n'a rien laissé observer, et l'engagement de toute tentative qui part. Le
+   * coût garde la borne stricte d'un token par octet — plus stricte que la borne
+   * en tokens, elle ne peut pas sous-réserver l'entrée — et suit lui aussi le
+   * plancher observé, pour qu'une entrée déjà chiffrée plus haut ne soit pas
+   * réservée plus bas.
    */
   private reservation(
     messages: { content: string; role: string }[],
     maxTokens: number
   ): { costUsd: number; tokens: number } {
-    const reservedInput = this.estimatedInputTokens(messages);
-    const inputCostBound =
+    const inputCostBound = Math.max(
       Buffer.byteLength(JSON.stringify(messages), "utf8") +
-      64 * (messages.length + 1);
+        64 * (messages.length + 1),
+      runScope.getStore()?.observedInputTokens ?? 0
+    );
     return {
       costUsd:
         (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
           maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
         1_000_000,
-      tokens: maxTokens + reservedInput,
+      tokens: maxTokens + this.inputTokenBound(messages),
     };
   }
 
@@ -280,12 +328,12 @@ export class Model {
    * Réserve d'une tentative perdue : la part de son pire cas que le transport a
    * réellement livrée. L'entrée du prompt est toujours due — la requête est
    * partie — et la sortie se limite à ce qui a été assemblé avant la coupure,
-   * chiffré par l'usage partiel du flux ou par le texte reçu. Sans rien
-   * d'observable (socket détruite avant tout octet, réponse non streamée), la
-   * borne théorique reste le seul chiffre défendable : l'endpoint a pu générer
-   * une génération entière que la coupure ne nous rendra jamais. C'est l'angle
-   * mort assumé — la réserve minore ce qui a été facturé sans être transmis —
-   * documenté dans .env.example.
+   * chiffré par l'usage partiel du flux ou par le texte reçu. Sans mesure
+   * crédible — coupure avant tout octet, ou usage annoncé dont tous les
+   * compteurs sont nuls, ce qui n'est pas une mesure — la borne théorique reste
+   * le seul chiffre défendable : l'endpoint a pu générer une génération entière
+   * que la coupure ne nous rendra jamais. C'est l'angle mort assumé — la réserve
+   * minore ce qui a été facturé sans être transmis — documenté dans .env.example.
    */
   private credibleReservation(
     messages: { content: string; role: string }[],
@@ -293,25 +341,31 @@ export class Model {
     delivered: DeliveredTrial | undefined
   ): { costUsd: number; tokens: number } {
     const worst = this.reservation(messages, maxTokens);
+    if (delivered === undefined) {
+      return worst;
+    }
+    const usage = delivered.usage;
+    const reportedInput = measuredCount(usage?.prompt_tokens);
+    const reportedOutput = measuredCount(usage?.completion_tokens);
+    const reportedTotal = measuredCount(usage?.total_tokens);
+    const deliveredChars = delivered.contentChars + delivered.reasoningChars;
+    // Rien de crédible à créditer : aucune mesure positive et, soit l'endpoint a
+    // annoncé un usage qui n'en est pas un alors qu'il a produit du contenu — un
+    // zéro annoncé ne prouve pas qu'il n'a rien facturé —, soit le transport n'a
+    // rien livré du tout. La borne théorique est alors retenue.
     if (
-      delivered === undefined ||
-      (delivered.contentChars === 0 &&
-        delivered.reasoningChars === 0 &&
-        delivered.usage === undefined)
+      reportedInput === undefined &&
+      reportedOutput === undefined &&
+      reportedTotal === undefined &&
+      (usage !== undefined || deliveredChars === 0)
     ) {
       return worst;
     }
-    const inputTokens =
-      delivered.usage?.prompt_tokens ?? this.estimatedInputTokens(messages);
-    const outputTokens =
-      delivered.usage?.completion_tokens ??
-      Math.ceil((delivered.contentChars + delivered.reasoningChars) / 3);
+    const inputTokens = reportedInput ?? this.inputTokenBound(messages);
+    const outputTokens = reportedOutput ?? Math.ceil(deliveredChars / 3);
     // Un usage qui n'expose qu'un total reste une mesure : la réserve ne doit
     // jamais tomber sous ce que l'endpoint a déjà chiffré.
-    const tokens = Math.max(
-      inputTokens + outputTokens,
-      delivered.usage?.total_tokens ?? 0
-    );
+    const tokens = Math.max(inputTokens + outputTokens, reportedTotal ?? 0);
     // Une réserve ne peut pas dépasser le pire cas de la tentative qu'elle
     // remplace : l'enveloppe qui couvrait cet appel couvre donc toujours sa
     // réserve, et l'exposition engagée reste dans l'enveloppe.
@@ -369,6 +423,10 @@ export class Model {
         this.reserveLost(
           this.credibleReservation(messages, maxTokens, delivered)
         );
+        // La réserve ci-dessus est plafonnée par le pire cas de la tentative qui
+        // a été admise ; l'entrée que l'endpoint vient de rapporter devient, elle,
+        // le plancher des admissions suivantes.
+        this.observeInput(measuredCount(delivered?.usage?.prompt_tokens));
         if (!mayRetry(attempt, max, used)) {
           throw failedAttempt(error, code, attempt);
         }

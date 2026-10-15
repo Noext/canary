@@ -7,6 +7,14 @@ export interface RunScope {
   id: string;
   maxCostUsd: number;
   maxTokens: number;
+  /**
+   * Plus grand `prompt_tokens` que l'endpoint a réellement rapporté sur ce run
+   * (`Model.observeInput`). Il planche la borne de l'entrée des admissions
+   * suivantes : une estimation qui s'est révélée basse — même très basse face à
+   * un endpoint qui rapporte une entrée plus lourde que le prompt envoyé — ne
+   * décide jamais deux admissions.
+   */
+  observedInputTokens?: number;
   /** Signalé avant chaque attente de reprise, pour que le run reste lisible. */
   onRetry?: (info: { attempt: number; max: number; code: string }) => void;
   previewSha?: string;
