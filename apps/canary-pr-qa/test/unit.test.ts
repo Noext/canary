@@ -998,12 +998,19 @@ describe("runner false-green regressions", () => {
     );
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("CONTEXT_INCOMPLETE");
+    // Le refus nommé atteint le planificateur avec les classes de couverture :
+    // sans diff ni source, c'est lui qui explique l'impasse, et non le remède
+    // inapplicable d'une classe de couverture.
+    expect(JSON.stringify(f.modelRequests.at(-1))).toContain(
+      "CONTEXT_INCOMPLETE"
+    );
+    expect(f.modelRequests).toHaveLength(2);
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
-  });
+  }, 60_000);
   /** Ce que le fixture renvoie pour un commentaire réellement écrit. */
   const commentUrl = `${PR_URL}#issuecomment-1`;
   /**
@@ -1418,10 +1425,10 @@ describe("runner false-green regressions", () => {
     expect(correction).not.toContain("src/no-witness-27.ts");
   });
   /**
-   * Chaque classe fatale du canal de correction, saturée : les huit classes
-   * (couverture et forme) portent leurs entrées fautives en même temps, et le
-   * préambule fatal doit tenir dans la troncature à 2000 caractères de
-   * `model.ts` — codes compris — sans perdre la dernière classe.
+   * Chaque classe fatale du canal de correction, saturée : les onze classes
+   * (couverture, contexte, budget, forme) portent leurs entrées fautives en
+   * même temps, et le préambule fatal doit tenir dans la troncature à 2000
+   * caractères de `model.ts` — codes compris — sans perdre la dernière classe.
    */
   function saturatedFatalCandidate(): Plan {
     const saturated = structuredClone(plan);
@@ -1475,22 +1482,93 @@ describe("runner false-green regressions", () => {
     const request = f.modelRequests.at(-1)!;
     const messages = request.messages as { content: string; role: string }[];
     const correction = messages.at(-1)!.content;
-    // Huit classes fatales saturées dépassent largement la fenêtre : la
+    // Onze classes fatales saturées dépassent largement la fenêtre : la
     // correction est bien tronquée à 2000 caractères.
     expect(correction).toHaveLength(2000);
     expect(correction.startsWith("Plan rejected: Fatal refusals")).toBe(true);
     // L'en-tête nomme d'abord tous les codes fatals : chacun survit à la
     // troncature, y compris PLAN_SCENARIO_ID_RESERVED et les suivants.
     expect(correction).toContain(
-      "Fatal refusals (each one blocks the whole run): COVERAGE_WITNESS_MISSING, COVERAGE_REQUIREMENT_SOURCE_MISSING, REQUIREMENT_UNGROUNDED, PLAN_TOO_MANY_SCENARIOS, PLAN_SCENARIO_ID_RESERVED, PLAN_SOURCE_OUTSIDE_DIFF, PLAN_SKIP_OUTSIDE_DIFF, PLAN_CHANGED_FILE_UNCOVERED."
+      "Fatal refusals (each one blocks the whole run): COVERAGE_WITNESS_MISSING, COVERAGE_REQUIREMENT_SOURCE_MISSING, REQUIREMENT_UNGROUNDED, CRITICAL_COVERAGE_MISSING, CONTEXT_INCOMPLETE, CONTRACT_BUDGET, PLAN_TOO_MANY_SCENARIOS, PLAN_SCENARIO_ID_RESERVED, PLAN_SOURCE_OUTSIDE_DIFF, PLAN_SKIP_OUTSIDE_DIFF, PLAN_CHANGED_FILE_UNCOVERED."
     );
     // Et chaque classe reçoit encore sa ligne bornée : l'en-tête ne remplace pas
     // les remèdes, il les protège. La dernière classe est le témoin du bornage
-    // global — sa ligne n'existait pas sous les bornes par classe.
+    // global — sa ligne n'existerait pas sous les bornes par classe.
     expect(correction).toContain("PLAN_CHANGED_FILE_UNCOVERED: ");
     const preludeEnd = correction.indexOf("Scenario welcome declares");
     expect(preludeEnd).toBeGreaterThan(0);
     expect(preludeEnd).toBeLessThan(1900);
+  }, 60_000);
+  /**
+   * CONTEXT_INCOMPLETE et CONTRACT_BUDGET bloquaient le run sans jamais passer
+   * par le canal réparable : le planificateur épuisait sa tentative sans les
+   * voir, et le refus masquait REQUIREMENT_UNGROUNDED. Nommés dans le préambule
+   * fatal, ils atteignent le planificateur, qui corrige dans la même tentative.
+   */
+  it.each([
+    {
+      candidate: () => {
+        const candidate = structuredClone(plan);
+        candidate.scenarios[0]!.sourceFiles.push("src/outside.ts");
+        return candidate;
+      },
+      code: "CONTEXT_INCOMPLETE",
+      name: "a scenario citing a path without source evidence",
+    },
+    {
+      candidate: () => {
+        const candidate = structuredClone(plan);
+        for (let index = 0; index < 22; index++) {
+          candidate.scenarios[0]!.steps.push({
+            description: "Observe the page",
+            id: `warmup-${index}`,
+            action: { type: "observe" as const },
+          });
+        }
+        return candidate;
+      },
+      code: "CONTRACT_BUDGET",
+      name: "a scenario over the step budget",
+    },
+  ])("returns $code to the planner, then passes the corrected plan ($name)", async ({
+    candidate,
+    code,
+  }) => {
+    const f = await setup({ plans: [candidate(), plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(code);
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
+  it("gives CRITICAL_COVERAGE_MISSING a correction attempt, and names the exception in the prompt", async () => {
+    const skipped = structuredClone(plan);
+    skipped.skipped = [
+      {
+        reason: "Not reachable from a browser scenario",
+        sourceFile: "src/form.ts",
+      },
+    ];
+    const f = await setup({ plans: [skipped, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le plan fautif consomme une tentative de correction au lieu de bloquer le
+    // run directement sur le contrôle final.
+    expect(f.modelRequests).toHaveLength(2);
+    const request = f.modelRequests.at(-1)!;
+    const messages = request.messages as { content: string; role: string }[];
+    expect(messages.at(-1)!.content).toContain("CRITICAL_COVERAGE_MISSING");
+    // Le prompt enseigne l'exception des chemins critiques après la règle du
+    // skip, et non la règle seule.
+    expect(messages[0]!.content).toContain("CRITICAL_COVERAGE_MISSING");
+    expect(result.outcome).toBe("passed");
   }, 60_000);
   it("retries a model call cut by the transport, and counts it", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });

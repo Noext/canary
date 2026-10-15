@@ -486,6 +486,32 @@ export function requirementSourceRefusal(
   }
 }
 
+/**
+ * Un scénario dont les étapes ne tiennent pas dans le budget d'actions : son
+ * contrat ne peut pas être exécuté. Le refus est nommé, remonte au
+ * planificateur comme le refus d'attribution, et le contrôle final lève le
+ * premier de la liste.
+ */
+export function contractBudgetRefusal(
+  scenario: Scenario,
+  config: Config
+): QaError | undefined {
+  return scenario.steps.length + 1 > config.QA_MAX_STEPS
+    ? new QaError(
+        "CONTRACT_BUDGET",
+        `Scenario ${scenario.id} cannot complete within QA_MAX_STEPS`,
+        "Increase the budget or split the scenario before execution."
+      )
+    : undefined;
+}
+
+/** Budgets de scénario refusés, dans l'ordre du plan. */
+export function contractBudgetRefusals(plan: Plan, config: Config): QaError[] {
+  return plan.scenarios
+    .map((scenario) => contractBudgetRefusal(scenario, config))
+    .filter((refusal): refusal is QaError => refusal !== undefined);
+}
+
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -500,12 +526,9 @@ export function validateCoverage(
     throw source;
   }
   for (const scenario of plan.scenarios) {
-    if (scenario.steps.length + 1 > config.QA_MAX_STEPS) {
-      throw new QaError(
-        "CONTRACT_BUDGET",
-        `Scenario ${scenario.id} cannot complete within QA_MAX_STEPS`,
-        "Increase the budget or split the scenario before execution."
-      );
+    const budget = contractBudgetRefusal(scenario, config);
+    if (budget) {
+      throw budget;
     }
     for (const requirement of scenario.requirements) {
       if (

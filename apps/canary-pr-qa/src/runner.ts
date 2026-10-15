@@ -22,6 +22,8 @@ import {
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
+  contractBudgetRefusals,
+  criticalSkipRefused,
   type Policy,
   repairRequirementAttribution,
   requirementSourceRefusal,
@@ -113,22 +115,60 @@ function validateSourceEvidence(
   scenarioId: string,
   path: string
 ) {
+  if (sourceEvidenceAvailable(context, path)) {
+    return;
+  }
+  throw new QaError(
+    "CONTEXT_INCOMPLETE",
+    `Scenario ${scenarioId} cites ${path} without a textual diff or complete head/base source`,
+    CONTEXT_INCOMPLETE_HINT
+  );
+}
+/**
+ * Conseil du refus `CONTEXT_INCOMPLETE`, partagé par le refus nommé du contrôle
+ * final et par la classe fatale du canal de correction : un scénario qui cite
+ * un chemin sans diff textuel ni source complète aux deux révisions ne peut pas
+ * prouver le changement testé depuis la source. Le refus est nommé, et non une
+ * erreur nue : il remonte au planificateur avec le préambule fatal, et le
+ * contrôle final lève le premier — sans masquer les refus de couverture que le
+ * canal réparable apprend à corriger.
+ */
+const CONTEXT_INCOMPLETE_HINT =
+  "Check GitHub Contents permissions and context budget. Unsupported/binary changes must be explicitly skipped; never infer a tested change from the page alone.";
+function sourceEvidenceAvailable(context: PrContext, path: string): boolean {
   const file = context.files.find((item) => item.filename === path);
   if (file?.patch) {
-    return;
+    return true;
   }
   const headAvailable =
     file?.status === "removed" || completeSource(context, path, context.sha);
   const baseAvailable =
     file?.status === "added" ||
     completeSource(context, file?.previous_filename ?? path, context.baseSha);
-  if (!(headAvailable && baseAvailable)) {
-    throw new QaError(
-      "CONTEXT_INCOMPLETE",
-      `Scenario ${scenarioId} cites ${path} without a textual diff or complete head/base source`,
-      "Check GitHub Contents permissions and context budget. Unsupported/binary changes must be explicitly skipped; never infer a tested change from the page alone."
-    );
-  }
+  return headAvailable && baseAvailable;
+}
+/**
+ * Cas du refus `CONTEXT_INCOMPLETE` : une classe fatale du canal de correction,
+ * comme les classes de couverture. Les scénarios qui citent un chemin sans
+ * évidence bloquent le run au contrôle final, donc ils ne peuvent pas attendre
+ * après la tentative de correction du planificateur.
+ */
+function contextFatalClasses(plan: Plan, context: PrContext): FatalClass[] {
+  const missing = plan.scenarios.flatMap((scenario) =>
+    scenario.sourceFiles
+      .filter((path) => !sourceEvidenceAvailable(context, path))
+      .map((path) => `${scenario.id}:${path}`)
+  );
+  return missing.length === 0
+    ? []
+    : [
+        {
+          code: "CONTEXT_INCOMPLETE",
+          entries: missing,
+          hint: CONTEXT_INCOMPLETE_HINT,
+          label: "scenarios citing a path without source evidence",
+        },
+      ];
 }
 /**
  * Une classe de refus fatal au plan : le code, ce qu'elle constate, les valeurs
@@ -207,13 +247,32 @@ function fatalPrelude(classes: FatalClass[]): string[] {
   ];
 }
 /**
+ * Une classe fatale tenue par des refus nommés — contexte incomplet, budget de
+ * scénario : le code du premier nomme la classe, son conseil vaut pour toutes
+ * ses entrées.
+ */
+function namedFatalClass(refusals: QaError[], label: string): FatalClass[] {
+  const [first] = refusals;
+  return first
+    ? [
+        {
+          code: first.code,
+          entries: refusals.map((refusal) => refusal.message),
+          hint: first.hint,
+          label,
+        },
+      ]
+    : [];
+}
+/**
  * Classes fatales de couverture, agrégées en tête du canal de correction.
  * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
  * refus par scénario qui suivent la même liste.
  */
 function coverageFatalClasses(
   candidate: Plan,
-  context: PrContext
+  context: PrContext,
+  policy: Policy
 ): FatalClass[] {
   const classes: FatalClass[] = [];
   const unwitnessed = unwitnessedSources(candidate, context);
@@ -243,6 +302,20 @@ function coverageFatalClasses(
       ),
       hint: "Quote exact source or diff text; page content alone is not a requirement.",
       label: "requirements whose quote has no source witness",
+    });
+  }
+  // Un skip de chemin critique sans approbation bloque le run : le
+  // planificateur doit en disposer comme des autres classes fatales, et non
+  // d'un refus qui n'arrive qu'après sa tentative de correction.
+  const denied = candidate.skipped
+    .filter((skip) => criticalSkipRefused(policy, skip.sourceFile))
+    .map((skip) => skip.sourceFile);
+  if (denied.length > 0) {
+    classes.push({
+      code: "CRITICAL_COVERAGE_MISSING",
+      entries: denied,
+      hint: "Add scenarios, or approve the exact skip with a reason in .canary/qa.json on the trusted base branch. A PR cannot approve its own skip.",
+      label: "critical changes skipped without an approved skip",
     });
   }
   return classes;
@@ -441,7 +514,15 @@ function planRefusals(
 ): string[] {
   const shape = planShapeRefusals(candidate, context, config);
   return [
-    ...fatalPrelude([...coverageFatalClasses(candidate, context), ...shape]),
+    ...fatalPrelude([
+      ...coverageFatalClasses(candidate, context, policy),
+      ...contextFatalClasses(candidate, context),
+      ...namedFatalClass(
+        contractBudgetRefusals(candidate, config),
+        "scenarios that cannot complete within QA_MAX_STEPS"
+      ),
+      ...shape,
+    ]),
     ...unwitnessedPlanRefusals(candidate, context, policy),
     ...undeclaredSourcePlanRefusals(candidate, context),
     ...shape.map(
