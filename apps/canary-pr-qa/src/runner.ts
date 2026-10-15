@@ -24,10 +24,14 @@ import {
 import {
   contractBudgetRefusals,
   criticalSkipRefused,
+  hasWeakWitness,
   type Policy,
+  quoteExcerpt,
   repairRequirementAttribution,
   requirementSourceRefusal,
   trustedPolicy,
+  UNGROUNDED_ABSENT_REMEDY,
+  UNGROUNDED_WEAK_REMEDY,
   undeclaredSourcePlanRefusals,
   undeclaredSources,
   ungroundedPlanRefusals,
@@ -180,6 +184,12 @@ export interface FatalClass {
   entries: string[];
   hint: string;
   label: string;
+  /**
+   * Citations fautives de la classe, dans l'ordre du plan. Leur extrait entier
+   * passe en tête de la ligne, avant le remède et les valeurs fautives : c'est
+   * le détail que le planificateur doit lire pour corriger la bonne exigence.
+   */
+  quotes?: string[];
 }
 /**
  * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur.
@@ -198,12 +208,40 @@ function boundedEntries(entries: string[]): string {
   return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
 }
 /**
- * Ligne d'une classe fatale : l'en-tête du préambule porte déjà que chaque
- * classe bloque le run, donc la ligne va droit au code et au remède — c'est le
- * remède qu'une ligne tronquée doit encore porter au planificateur.
+ * Citations fautives montrées en entier sur une ligne fatale. L'extrait d'une
+ * citation (voir `quoteExcerpt`) est l'information que le planificateur doit
+ * lire et n'est jamais raccourci : une seule tient avec son remède quand les
+ * onze classes sont saturées, donc les suivantes sont annoncées par leur nombre
+ * — jamais perdues en silence derrière la première.
  */
-function fatalLine(refusal: FatalClass): string {
-  return `${refusal.code}: ${refusal.hint} Faulty values: ${boundedEntries(refusal.entries)}`;
+const FATAL_QUOTES_SHOWN = 1;
+function rejectedQuotes(quotes: string[]): string {
+  const shown = quotes
+    .slice(0, FATAL_QUOTES_SHOWN)
+    .map((quote) => JSON.stringify(quoteExcerpt(quote)));
+  const hidden = quotes.length - shown.length;
+  const plural = quotes.length > 1 ? "s" : "";
+  const more = hidden > 0 ? ` (+${hidden} more)` : "";
+  return `Rejected quote${plural}: ${shown.join(", ")}${more}`;
+}
+/**
+ * Tête d'une ligne fatale : le code, la citation fautive entière, puis le
+ * remède. Le remède suit la citation, jamais les valeurs fautives : il ne doit
+ * pas disparaître derrière une entrée rognée.
+ */
+function fatalHead(refusal: FatalClass): string {
+  const quotes = refusal.quotes?.length
+    ? ` ${rejectedQuotes(refusal.quotes)}`
+    : "";
+  return `${refusal.code}:${quotes} ${refusal.hint}`;
+}
+/**
+ * Ligne d'une classe fatale : sa tête intouchée, puis les valeurs fautives dans
+ * la place qui reste. Le préambule borne la tête de chaque classe, pas sa queue.
+ */
+function fatalLine(refusal: FatalClass, valuesLimit: number): string {
+  const values = ` Faulty values: ${boundedEntries(refusal.entries)}`;
+  return `${fatalHead(refusal)}${boundedText(values, valuesLimit)}`;
 }
 function fatalError(refusal: FatalClass): QaError {
   return new QaError(
@@ -215,13 +253,21 @@ function fatalError(refusal: FatalClass): QaError {
 /**
  * Plafond du préambule fatal complet, en caractères : la correction est
  * tronquée à 2000 par `model.ts`. Les bornes par classe ne suffisaient pas —
- * huit classes saturées (6 entrées × 80 caractères chacune) dépassaient la
+ * des classes saturées (6 entrées × 80 caractères chacune) dépassaient la
  * troncature, et les dernières, dont `PLAN_SCENARIO_ID_RESERVED`,
  * disparaissaient du message : le planificateur perdait sa seule tentative de
  * correction. L'en-tête nomme donc tous les codes fatals avant toute entrée, et
- * chaque classe reçoit une place égale dans ce plafond global.
+ * la tête de chaque classe — code, citation fautive entière, remède — passe
+ * avant ses valeurs fautives, qui se partagent la place restante. Onze classes
+ * saturées laissent encore une réserve positive, mesurée par les tests : la
+ * citation de 120 et son remède survivent sans être rognés.
  */
-const FATAL_PRELUDE_CHARS = 1800;
+export const FATAL_PRELUDE_CHARS = 1860;
+/**
+ * En deçà, une queue de valeurs ne dit rien : mieux vaut l'omettre que la
+ * réduire à une ellipse.
+ */
+const FATAL_VALUES_MIN_CHARS = 24;
 function boundedText(text: string, limit: number): string {
   if (limit <= 0) {
     return "";
@@ -236,15 +282,12 @@ function fatalPrelude(classes: FatalClass[]): string[] {
   const header = `Fatal refusals (each one blocks the whole run): ${classes
     .map((refusal) => refusal.code)
     .join(", ")}.`;
-  const slot = Math.floor(
-    (FATAL_PRELUDE_CHARS - header.length) / classes.length
-  );
-  return [
-    header,
-    ...classes
-      .map((refusal) => boundedText(fatalLine(refusal), slot))
-      .filter((line) => line.length > 0),
-  ];
+  const heads = classes.map(fatalHead);
+  const essential =
+    header.length + heads.reduce((total, head) => total + head.length + 1, 0);
+  const room = Math.floor((FATAL_PRELUDE_CHARS - essential) / classes.length);
+  const valuesLimit = room >= FATAL_VALUES_MIN_CHARS ? room : 0;
+  return [header, ...classes.map((refusal) => fatalLine(refusal, valuesLimit))];
 }
 /**
  * Une classe fatale tenue par des refus nommés — contexte incomplet, budget de
@@ -265,6 +308,32 @@ function namedFatalClass(refusals: QaError[], label: string): FatalClass[] {
     : [];
 }
 /**
+ * Remède d'un fichier déclaré sans témoin dont la citation existe pourtant
+ * exactement : la classe fatale `COVERAGE_WITNESS_MISSING` agrège les deux
+ * défauts, et celui-ci ne se répare pas en ajoutant une citation déjà présente.
+ */
+const WEAK_UNWITNESSED_REMEDY =
+  "A requirement already cites a listed file, but its exact quote carries no letter or digit to witness that critical file: quote a substantial fragment, or get its skip approved in .canary/qa.json on the trusted base branch.";
+/**
+ * Remède d'une classe fatale de témoin : elle agrège les citations absentes et
+ * les citations exactes mais trop pauvres, dont les remèdes n'ont rien à voir.
+ * `FATAL_PRELUDE_CHARS` ne garde que cette ligne quand les autres classes
+ * saturent, donc elle doit dire la vérité seule — un message qui demande de
+ * citer le texte réel à une citation déjà présente fait renvoyer la même
+ * citation au planificateur.
+ */
+function witnessRemedy(
+  absent: string,
+  weak: string,
+  hasWeak: boolean,
+  hasAbsent: boolean
+): string {
+  if (hasWeak && hasAbsent) {
+    return `${absent} ${weak}`;
+  }
+  return hasWeak ? weak : absent;
+}
+/**
  * Classes fatales de couverture, agrégées en tête du canal de correction.
  * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
  * refus par scénario qui suivent la même liste.
@@ -275,12 +344,17 @@ function coverageFatalClasses(
   policy: Policy
 ): FatalClass[] {
   const classes: FatalClass[] = [];
-  const unwitnessed = unwitnessedSources(candidate, context);
+  const unwitnessed = unwitnessedSources(candidate, context, policy);
   if (unwitnessed.length > 0) {
     classes.push({
       code: "COVERAGE_WITNESS_MISSING",
       entries: unwitnessed.map((item) => `${item.scenarioId}:${item.file}`),
-      hint: "Add a requirement whose quote exists verbatim in each listed file.",
+      hint: witnessRemedy(
+        "Add a requirement whose quote exists verbatim in each listed file.",
+        WEAK_UNWITNESSED_REMEDY,
+        unwitnessed.some((item) => item.weak),
+        unwitnessed.some((item) => !item.weak)
+      ),
       label: "declared sources with no requirement witness",
     });
   }
@@ -293,15 +367,24 @@ function coverageFatalClasses(
       label: "requirements attributed to a file the scenario does not declare",
     });
   }
-  const ungrounded = ungroundedRequirements(candidate, context);
+  const ungrounded = ungroundedRequirements(candidate, context, policy);
   if (ungrounded.length > 0) {
+    const weak = ungrounded.filter((item) =>
+      hasWeakWitness(item.requirement, context, policy)
+    );
     classes.push({
       code: "REQUIREMENT_UNGROUNDED",
       entries: ungrounded.map(
         (item) => `${item.scenarioId}:${item.requirement.sourceFile}`
       ),
-      hint: "Quote exact source or diff text; page content alone is not a requirement.",
+      hint: witnessRemedy(
+        UNGROUNDED_ABSENT_REMEDY,
+        UNGROUNDED_WEAK_REMEDY,
+        weak.length > 0,
+        weak.length < ungrounded.length
+      ),
       label: "requirements whose quote has no source witness",
+      quotes: [...new Set(ungrounded.map((item) => item.requirement.quote))],
     });
   }
   // Un skip de chemin critique sans approbation bloque le run : le
@@ -528,7 +611,7 @@ function planRefusals(
     ...shape.map(
       (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
     ),
-    ...ungroundedPlanRefusals(candidate, context),
+    ...ungroundedPlanRefusals(candidate, context, policy),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
@@ -549,9 +632,10 @@ function settlePlan(
   plan: Plan,
   context: PrContext,
   config: Config,
-  runId: string
+  runId: string,
+  policy: Policy
 ) {
-  for (const repair of repairRequirementAttribution(plan, context)) {
+  for (const repair of repairRequirementAttribution(plan, context, policy)) {
     logger.info(
       {
         from: repair.from,
@@ -625,7 +709,7 @@ async function executePlan(
   );
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
-  settlePlan(result.plan, context, config, result.id);
+  settlePlan(result.plan, context, config, result.id, policy);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

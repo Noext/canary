@@ -1,7 +1,123 @@
 import { z } from "zod";
 import type { Diagnostic } from "./diagnostics.js";
 
+/**
+ * Normalisation d'une citation avant comparaison au texte témoin. Deux
+ * opérations, chacune portée par un fait réel :
+ *
+ * - une suite de blancs qui contient un saut de ligne est un repli de mise en
+ *   forme — le planificateur recopie sur une ligne le bloc que le fichier
+ *   indente sur quatre. Une suite de blancs SANS saut de ligne garde son nombre
+ *   exact : deux espaces dans un littéral de chaîne sont significatifs, et les
+ *   replier ferait passer pour témoin un texte qui diffère d'une manière qui a
+ *   un sens ;
+ * - les caractères invisibles (U+200B, U+00AD) ne sont rognés qu'aux bornes de
+ *   la chaîne comparée. À l'intérieur, ils restent : un invisible présent dans
+ *   la source ne disparaît jamais en silence, donc une citation qui l'omet là
+ *   où il compte n'a pas de témoin, et une citation qui le porte en a un. En
+ *   bordure, il est du bruit de copie et se retire comme le blanc.
+ */
+export function normalizeQuoteText(value: string): string {
+  return value
+    .replace(/\s+/g, (run) => (/[\r\n]/.test(run) ? " " : run))
+    .replace(/^[\s\u200b\u00ad]+/, "")
+    .replace(/[\s\u200b\u00ad]+$/, "");
+}
+/**
+ * Contenu réel minimal d'une citation crédible. Une citation rembourrée — sept
+ * espaces suivis d'une accolade, ou des caractères invisibles en bordure — se
+ * normalise en un fragment que tout fichier contient : elle couvrirait un
+ * fichier entier sans rien prouver. Le plancher universel écarte donc les
+ * citations de moins de `QUOTE_MIN_TEXT_CHARS` caractères et d'un seul jeton,
+ * qui ne désignent aucun endroit précis.
+ *
+ * Le seuil est gradué par la criticité du fichier cité, parce que les deux
+ * revues qui l'encadrent ne parlent pas du même risque, et que la gradation est
+ * la seule règle qui les satisfait toutes les deux :
+ *
+ * - compter les lettres ou les chiffres PARTOUT refusait des citations exactes
+ *   et légitimes là où la source en offre peu — `if (x) {` dans
+ *   `src/logic.ts`, `{"x": 1}` dans `src/value.json` — donc un plan juste
+ *   bloqué ;
+ * - ne compter que la longueur laissait, sur un fichier critique, un diff
+ *   hostile planter un fragment sans contenu visible — un séparateur de
+ *   ponctuation (`// ------`), huit zéro-largeurs non-joignants — que le gate
+ *   prenait pour un témoin et qui couvrait le fichier sans rien prouver.
+ *
+ * Sur un chemin critique, la citation doit donc porter au moins
+ * `CRITICAL_QUOTE_MIN_WORD_CHARS` lettre ou chiffre — un identifiant, un
+ * mot-clé, un nombre ou un message — c'est-à-dire du contenu visible, jamais de
+ * la ponctuation seule. Une lettre peut elle-même être invisible : les quatre
+ * remplisseurs Hangul (U+115F, U+1160, U+3164, U+FFA0) appartiennent à
+ * `Default_Ignorable_Code_Point`, donc le compteur les retire avant de compter.
+ * Sans ce retrait, un diff hostile fournit un « contenu visible » que la pile
+ * de rendu ne dessine pas — huit remplisseurs et un blanc passent le plancher
+ * universel et satisfont une lettre.
+ *
+ * Le seuil est le plus bas que les deux revues permettent : `if (x) {` porte
+ * trois lettres et `{"x": 1}` deux, donc compter les lettres au-delà de leur
+ * présence rouvrirait le plan juste bloqué.
+ *
+ * La gradation vit ici et non dans le schéma Zod, qui valide une citation sans
+ * savoir de quel fichier elle vient : le schéma applique le plancher universel,
+ * le gate de témoin applique le seuil du fichier cité (voir
+ * `requirementHasWitness` dans policy.ts).
+ */
+export const QUOTE_MIN_TEXT_CHARS = 8;
+export const QUOTE_MIN_TOKENS = 2;
+export const CRITICAL_QUOTE_MIN_WORD_CHARS = 1;
+const WORD_CHARS = /[\p{L}\p{N}]/gu;
+/**
+ * Caractères que la pile de rendu ne dessine pas, quelle que soit leur
+ * catégorie Unicode : U+00AD, U+200B..U+200F, U+2060..U+206F, U+FE00..U+FE0F,
+ * U+FFF0..U+FFF8, U+E0000..U+E0FFF, et les quatre remplisseurs Hangul cités
+ * plus haut. `\p{L}` les couvre sans les distinguer — les remplisseurs Hangul
+ * sont des lettres — donc compter les lettres ne suffit pas : il faut qu'elles
+ * s'affichent.
+ */
+const DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+/**
+ * Lettres et chiffres d'une chaîne qui s'affichent réellement : le compteur de
+ * contenu visible, qui ne retient pas un caractère default-ignorable.
+ */
+function visibleWordChars(value: string): number {
+  return (value.match(WORD_CHARS) ?? []).filter(
+    (char) => !DEFAULT_IGNORABLE.test(char)
+  ).length;
+}
+/**
+ * Jetons d'une citation normalisée : chaque suite de caractères non blancs
+ * compte pour un. Un jeton unique — `};`, une accolade, un mot isolé — ne
+ * désigne aucun endroit précis : il apparaît dans presque tout fichier et
+ * servirait de témoin à n'importe quoi.
+ */
+export function quoteTokens(value: string): number {
+  return normalizeQuoteText(value).split(/\s+/).filter(Boolean).length;
+}
+export function quoteCarriesContent(value: string, critical = false): boolean {
+  const normalized = normalizeQuoteText(value);
+  if (
+    normalized.length < QUOTE_MIN_TEXT_CHARS ||
+    quoteTokens(value) < QUOTE_MIN_TOKENS
+  ) {
+    return false;
+  }
+  return (
+    !critical || visibleWordChars(normalized) >= CRITICAL_QUOTE_MIN_WORD_CHARS
+  );
+}
+
 const text = z.string().trim().min(1).max(2000);
+const quote = z
+  .string()
+  .min(8)
+  .max(1000)
+  .refine(
+    // Le schéma ne connaît pas le fichier cité : il applique le plancher
+    // universel, et le gate de témoin y ajoute le seuil du chemin critique.
+    (value) => quoteCarriesContent(value),
+    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters and ${QUOTE_MIN_TOKENS} tokens once whitespace carrying a line break is folded and edge invisibles are trimmed`
+  );
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),
   z
@@ -103,7 +219,7 @@ export const ScenarioSchema = z
         z
           .object({
             sourceFile: text,
-            quote: z.string().min(8).max(1000),
+            quote,
             behavior: text,
           })
           .strict()

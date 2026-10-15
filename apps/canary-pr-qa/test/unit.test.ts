@@ -20,14 +20,22 @@ import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
 import {
+  PolicySchema,
+  quoteExcerpt,
   repairRequirementAttribution,
+  UNGROUNDED_ABSENT_REMEDY,
+  UNGROUNDED_WEAK_REMEDY,
   ungroundedPlanRefusals,
 } from "../src/policy.js";
 import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
 import type { Progress } from "../src/progress.js";
 import { saveReport } from "../src/report.js";
 import { type RunScope, runScope } from "../src/run-scope.js";
-import { relayModelRetries, runQa } from "../src/runner.js";
+import {
+  FATAL_PRELUDE_CHARS,
+  relayModelRetries,
+  runQa,
+} from "../src/runner.js";
 import {
   ActionSchema,
   type Assertion,
@@ -46,6 +54,8 @@ import {
 } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
+/** Politique par défaut : `src/` est critique, aucun skip n'est approuvé. */
+const policyFor = () => PolicySchema.parse({ version: 1 });
 
 /**
  * Les réservations budgétaires déposées avant chaque tentative modèle : le
@@ -1175,6 +1185,16 @@ describe("runner false-green regressions", () => {
     expect(correction).toContain(
       "Quote exact source or diff text; page content alone is not a requirement."
     );
+    // La citation fautive est nommée : le planificateur sait laquelle de ses
+    // exigences corriger, et la ligne survit à la troncature de `model.ts`.
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const rejected = "show('Welcome '+nom)";
+    expect(messages.at(-1)!.content).toContain(
+      `Rejected quote: ${JSON.stringify(rejected)}`
+    );
     expect(f.modelRequests).toHaveLength(2);
     // Le plan corrigé passe le contrôle final et le contrat est joué.
     expect(result.outcome).toBe("passed");
@@ -1202,6 +1222,96 @@ describe("runner false-green regressions", () => {
         .state
     ).toBe("error");
   });
+  /**
+   * Défaut signalé par la revue interne : sur un fichier critique, une citation
+   * exacte mais sans contenu visible bloquait le run en demandant de citer le
+   * texte réel — que le planificateur renvoyait tel quel, gaspillant sa
+   * tentative. La branche « Weak source witness » n'était couverte nulle part :
+   * ce test l'exerce jusqu'à `runQa`, et la partie du message qui survit à la
+   * troncature doit porter le remède juste.
+   */
+  const WEAK_WITNESS_QUOTE = "// ------ --";
+  /**
+   * Le patch de `src/form.ts` porte la citation faible et la citation témoin :
+   * le plan faible est refusé pour la première, le plan corrigé passe avec la
+   * seconde.
+   */
+  const WEAK_WITNESS_PATCH = `+ ${WEAK_WITNESS_QUOTE}\n+ show('Welcome '+name)`;
+  it("returns a weak critical witness to the planner before failing", async () => {
+    const weak = structuredClone(plan);
+    weak.scenarios[0]!.requirements[0]!.quote = WEAK_WITNESS_QUOTE;
+    const f = await setup({
+      plans: [weak, weak],
+      formPatch: WEAK_WITNESS_PATCH,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le contrôle final refuse le plan non corrigé, et aucun scénario ne part.
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("REQUIREMENT_UNGROUNDED");
+    expect(result.scenarios).toEqual([]);
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Le remède juste vit dans le préambule fatal : la ligne dit que la
+    // citation existe et demande une substance, jamais de citer le texte réel.
+    expect(correction).toContain(UNGROUNDED_WEAK_REMEDY);
+    expect(correction).not.toContain(UNGROUNDED_ABSENT_REMEDY);
+    expect(correction).toContain(
+      "Weak source witness for welcome: src/form.ts"
+    );
+    // Et la classe de couverture ne demande plus une citation déjà présente.
+    expect(correction).not.toContain(
+      "Add a requirement whose quote exists verbatim in each listed file."
+    );
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    expect(preludeEnd).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+  }, 60_000);
+  /**
+   * La ligne du préambule est ce qui survivrait seul si les onze classes fatales
+   * saturaient : mêlée aux autres, la classe `REQUIREMENT_UNGROUNDED` doit
+   * encore porter le remède du témoin faible, entier, dans la partie non
+   * tronquée.
+   */
+  it("keeps the weak witness remedy inside the saturated fatal prelude", async () => {
+    const saturated = saturatedFatalCandidate();
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/form.ts");
+    first!.requirements[0] = {
+      behavior: "The weak requirement is reviewed",
+      quote: WEAK_WITNESS_QUOTE,
+      sourceFile: "src/form.ts",
+    };
+    const f = await setup({
+      plans: [saturated, plan],
+      formPatch: WEAK_WITNESS_PATCH,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Le message est tronqué à la fenêtre de `model.ts` : seule la tête survit.
+    expect(correction).toHaveLength(2000);
+    // Le remède du témoin faible, entier, passe avant la troncature.
+    const lineEnd =
+      correction.indexOf(UNGROUNDED_WEAK_REMEDY) +
+      UNGROUNDED_WEAK_REMEDY.length;
+    expect(correction).toContain(UNGROUNDED_WEAK_REMEDY);
+    expect(lineEnd).toBeLessThan(2000);
+  }, 60_000);
   it("returns an unwitnessed source file to the planner before failing", async () => {
     const withoutWitness = structuredClone(plan);
     withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
@@ -1430,7 +1540,9 @@ describe("runner false-green regressions", () => {
    * même temps, et le préambule fatal doit tenir dans la troncature à 2000
    * caractères de `model.ts` — codes compris — sans perdre la dernière classe.
    */
-  function saturatedFatalCandidate(): Plan {
+  function saturatedFatalCandidate(
+    firstUngroundedQuote = "a quote the fixture diff does not carry"
+  ): Plan {
     const saturated = structuredClone(plan);
     const [first] = saturated.scenarios;
     first!.sourceFiles = Array.from(
@@ -1440,7 +1552,10 @@ describe("runner false-green regressions", () => {
     first!.requirements.push(
       ...Array.from({ length: 7 }, (_, index) => ({
         behavior: "The requirement belongs to an undeclared source",
-        quote: "a quote the fixture diff does not carry",
+        quote:
+          index === 0
+            ? firstUngroundedQuote
+            : "a quote the fixture diff does not carry",
         sourceFile: `src/undeclared-${index}.ts`,
       }))
     );
@@ -1498,6 +1613,160 @@ describe("runner false-green regressions", () => {
     const preludeEnd = correction.indexOf("Scenario welcome declares");
     expect(preludeEnd).toBeGreaterThan(0);
     expect(preludeEnd).toBeLessThan(1900);
+  }, 60_000);
+  /**
+   * La citation fautive est le détail que le planificateur doit lire : elle
+   * passe en tête de la ligne de sa classe, avant le remède et les valeurs
+   * fautives, et le préambule réserve la place de son extrait entier avant de
+   * distribuer les valeurs. La citation survit donc à la troncature à 2000 de
+   * `model.ts` ; onze classes saturées, le maximum constructible, sont testées
+   * juste après.
+   */
+  it("keeps the rejected quote on its fatal line under eight saturated classes", async () => {
+    const invented = `the plan invented ${"x".repeat(100)} tail`;
+    const saturated = structuredClone(plan);
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/no-witness.ts");
+    first!.requirements.push({
+      behavior: "The requirement belongs to an undeclared source",
+      quote: invented,
+      sourceFile: "src/undeclared.ts",
+    });
+    for (let index = 0; index < 22; index++) {
+      first!.steps.push({
+        description: "Observe the page",
+        id: `warmup-${index}`,
+        action: { type: "observe" as const },
+      });
+    }
+    saturated.skipped = [
+      {
+        reason: "Not reachable from a browser scenario",
+        sourceFile: "src/second.ts",
+      },
+    ];
+    for (let index = 1; index < 9; index++) {
+      saturated.scenarios.push({
+        ...structuredClone(saturated.scenarios[0]!),
+        id: `extra-${index}`,
+      });
+    }
+    const corrected = structuredClone(plan);
+    corrected.scenarios[0]!.sourceFiles.push("src/second.ts");
+    corrected.scenarios[0]!.requirements.push({
+      behavior: "The second changed file is reviewed",
+      quote: SECOND_FILE_QUOTE,
+      sourceFile: "src/second.ts",
+    });
+    const f = await setup({
+      plans: [saturated, corrected],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Huit classes fatales saturées : la correction est bien tronquée à 2000.
+    expect(correction).toHaveLength(2000);
+    const header = correction.slice(
+      correction.indexOf("): ") + 3,
+      correction.indexOf(".")
+    );
+    expect(header.split(", ")).toEqual([
+      "COVERAGE_WITNESS_MISSING",
+      "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+      "REQUIREMENT_UNGROUNDED",
+      "CRITICAL_COVERAGE_MISSING",
+      "CONTEXT_INCOMPLETE",
+      "CONTRACT_BUDGET",
+      "PLAN_TOO_MANY_SCENARIOS",
+      "PLAN_SOURCE_OUTSIDE_DIFF",
+    ]);
+    // L'extrait entier, non rogné, précède le remède sur la ligne de sa classe.
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quote: ${JSON.stringify(quoteExcerpt(invented))}`
+    );
+  }, 60_000);
+  /**
+   * Le garant doit tenir jusqu'au maximum réellement constructible : onze
+   * classes fatales saturées (`saturatedFatalCandidate`). La ligne
+   * REQUIREMENT_UNGROUNDED porte son remède ET l'extrait entier de la citation,
+   * guillemet fermant compris, et le préambule garde une réserve mesurée sous
+   * son plafond — une citation longue n'est plus coupée au milieu.
+   */
+  it("keeps the rejected quote and its remedy at eleven saturated fatal classes", async () => {
+    const invented = `the plan invented ${"x".repeat(100)} tail`;
+    const f = await setup({ plans: [saturatedFatalCandidate(invented), plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(correction).toHaveLength(2000);
+    // La citation entière, non rognée, puis le remède, sur la même ligne ; la
+    // seconde citation fautive est annoncée explicitement, jamais perdue.
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt(invented))} (+1 more) Quote exact source or diff text; page content alone is not a requirement.`
+    );
+    // Marge mesurée : le préambule complet tient sous `FATAL_PRELUDE_CHARS`, donc
+    // la citation et le remède finissent avant la troncature de `model.ts`. Les
+    // onze classes saturées laissent 47 caractères de réserve, soit l'extrait de
+    // 120 et son remède entiers.
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    const preludeLength = preludeEnd - "Plan rejected: ".length - 1;
+    expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+    expect(FATAL_PRELUDE_CHARS - preludeLength).toBeGreaterThan(0);
+  }, 60_000);
+  /**
+   * Deux exigences fautives distinctes : la ligne nomme la première citation
+   * entière et annonce explicitement la seconde tronquée — jamais une ligne
+   * partagée qui perd tout après la première.
+   */
+  it("names each faulty quote and announces the ones it does not show", async () => {
+    const first = "the first invented quote witness";
+    const second = "the second invented quote witness";
+    const faulty = structuredClone(plan);
+    faulty.scenarios[0]!.requirements = [
+      {
+        behavior: "The first invented source is changed",
+        quote: first,
+        sourceFile: "src/form.ts",
+      },
+      {
+        behavior: "The second invented source is changed",
+        quote: second,
+        sourceFile: "src/form.ts",
+      },
+    ];
+    const f = await setup({ plans: [faulty, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt(first))} (+1 more)`
+    );
   }, 60_000);
   /**
    * CONTEXT_INCOMPLETE et CONTRACT_BUDGET bloquaient le run sans jamais passer
@@ -1877,17 +2146,21 @@ describe("runner false-green regressions", () => {
     const contract = structuredClone(plan);
     contract.scenarios[0]!.sourceFiles = ["src/form.ts", "src/legacy.tsx"];
     contract.scenarios[0]!.requirements[0]!.sourceFile = "src/legacy.tsx";
-    const repairs = repairRequirementAttribution(contract, {
-      ...context,
-      files: [
-        ...context.files,
-        {
-          filename: "src/legacy.tsx",
-          patch: "- <p>Work in progress</p>",
-          status: "modified",
-        },
-      ],
-    });
+    const repairs = repairRequirementAttribution(
+      contract,
+      {
+        ...context,
+        files: [
+          ...context.files,
+          {
+            filename: "src/legacy.tsx",
+            patch: "- <p>Work in progress</p>",
+            status: "modified",
+          },
+        ],
+      },
+      policyFor()
+    );
     expect(repairs).toEqual([
       {
         from: "src/legacy.tsx",
@@ -1905,31 +2178,39 @@ describe("runner false-green regressions", () => {
     const context = await new GitHub(f.config).context(PR_URL);
     const contract = structuredClone(plan);
     contract.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
-    const inPr = ungroundedPlanRefusals(contract, {
-      ...context,
-      files: [
-        ...context.files,
-        {
-          filename: "src/app.tsx",
-          patch: "+ show('Welcome '+nom)",
-          status: "modified",
-        },
-      ],
-    });
+    const inPr = ungroundedPlanRefusals(
+      contract,
+      {
+        ...context,
+        files: [
+          ...context.files,
+          {
+            filename: "src/app.tsx",
+            patch: "+ show('Welcome '+nom)",
+            status: "modified",
+          },
+        ],
+      },
+      policyFor()
+    );
     expect(inPr[0]).toContain("No source witness for welcome: src/form.ts");
     expect(inPr[0]).toContain("declare that file");
     // Un témoin hors diff ne doit pas être proposé : le planificateur le
     // déclarerait et la validation le refuserait, pour rien.
-    const outside = ungroundedPlanRefusals(contract, {
-      ...context,
-      context: [
-        {
-          content: "show('Welcome '+nom)",
-          path: "README.md",
-          ref: context.sha,
-        },
-      ],
-    });
+    const outside = ungroundedPlanRefusals(
+      contract,
+      {
+        ...context,
+        context: [
+          {
+            content: "show('Welcome '+nom)",
+            path: "README.md",
+            ref: context.sha,
+          },
+        ],
+      },
+      policyFor()
+    );
     expect(outside[0]).toContain("this PR does not change");
     expect(outside[0]).not.toContain("declare that file");
   });

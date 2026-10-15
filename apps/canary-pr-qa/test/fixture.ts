@@ -167,6 +167,8 @@ export async function fixture(
     missingDiffAndContext?: boolean;
     decoy?: boolean;
     plans?: Plan[];
+    /** Patch de `src/form.ts`, pour un témoin exact mais sans contenu visible. */
+    formPatch?: string;
     /** Second fichier changé, pour déclarer une source sans exigence témoignée. */
     secondChangedFile?: string;
     requireWriteEvidence?: boolean;
@@ -367,7 +369,11 @@ export async function fixture(
           status: "modified",
           ...(options.missingDiffAndContext
             ? {}
-            : { patch: "- show('Hello')\n+ show('Welcome '+name)" }),
+            : {
+                patch:
+                  options.formPatch ??
+                  "- show('Hello')\n+ show('Welcome '+name)",
+              }),
         },
         ...(options.secondChangedFile
           ? [
