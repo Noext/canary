@@ -27,19 +27,15 @@ export function normalizeQuoteText(value: string): string {
  * Contenu réel minimal d'une citation crédible. Une citation rembourrée — sept
  * espaces suivis d'une accolade, ou des caractères invisibles en bordure — se
  * normalise en un fragment que tout fichier contient : elle couvrirait un
- * fichier entier sans rien prouver. Après normalisation, la citation doit donc
- * garder au moins `QUOTE_MIN_TEXT_CHARS` caractères dont
- * `QUOTE_MIN_WORD_CHARS` lettres ou chiffres, c'est-à-dire un identifiant, un
- * mot-clé ou un nombre, jamais une accolade isolée ou du blanc.
+ * fichier entier sans rien prouver. Après normalisation, il suffit donc que la
+ * citation garde `QUOTE_MIN_TEXT_CHARS` caractères. Aucun plancher sur les
+ * lettres ou chiffres : un fichier qui offre peu d'alphanumériques (par exemple
+ * `if (x) {`) porte des citations exactes et légitimes, que refuser bloquerait
+ * un plan juste.
  */
 export const QUOTE_MIN_TEXT_CHARS = 8;
-export const QUOTE_MIN_WORD_CHARS = 4;
 export function quoteCarriesContent(value: string): boolean {
-  const normalized = normalizeQuoteText(value);
-  const words = normalized.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
-  return (
-    normalized.length >= QUOTE_MIN_TEXT_CHARS && words >= QUOTE_MIN_WORD_CHARS
-  );
+  return normalizeQuoteText(value).length >= QUOTE_MIN_TEXT_CHARS;
 }
 
 const text = z.string().trim().min(1).max(2000);
@@ -49,7 +45,7 @@ const quote = z
   .max(1000)
   .refine(
     quoteCarriesContent,
-    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters and ${QUOTE_MIN_WORD_CHARS} letters or digits once whitespace carrying a line break is folded and edge invisibles are trimmed`
+    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters once whitespace carrying a line break is folded and edge invisibles are trimmed`
   );
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),

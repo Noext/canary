@@ -17,7 +17,7 @@ import {
   witnessFiles,
 } from "../src/policy.js";
 import { planShapeRefusals } from "../src/runner.js";
-import { type Plan, PlanSchema } from "../src/schema.js";
+import { type Plan, PlanSchema, quoteCarriesContent } from "../src/schema.js";
 
 const context: PrContext = {
   baseSha: "2".repeat(40),
@@ -325,6 +325,46 @@ it("tolerates an invisible at the border of the quote", () => {
   expect(quoteHasWitness(line, `${ZWSP}${line}`)).toBe(true);
   expect(quoteHasWitness(line, `${line}${SOFT_HYPHEN}`)).toBe(true);
   expect(quoteHasWitness(`${ZWSP}${line}${SOFT_HYPHEN}`, line)).toBe(true);
+});
+
+/**
+ * P2 de la revue du tour 3 : exiger quatre lettres ou chiffres refusait des
+ * citations EXACTES et légitimes dans un fichier qui offre peu
+ * d'alphanumériques — un plan juste bloqué. Le plancher de longueur après
+ * normalisation suffit à écarter le rembourrage.
+ */
+const PUNCTUATION_FILE = ["if (x) {", "  run();", "}"].join("\n");
+
+it("accepts an exact short quote in an alphanumeric-poor file", () => {
+  const shortQuote = "if (x) {";
+  // Trois lettres seulement : le compteur d'alphanumériques la refusait.
+  expect(quoteHasWitness(PUNCTUATION_FILE, shortQuote)).toBe(true);
+  expect(quoteCarriesContent(shortQuote)).toBe(true);
+  const poorContext = contextWith([
+    { filename: "src/logic.ts", patch: `+ ${shortQuote}` },
+  ]);
+  const plan = planWithWitnesses([
+    {
+      id: "logic",
+      sourceFiles: ["src/logic.ts"],
+      requirements: [{ sourceFile: "src/logic.ts", quote: shortQuote }],
+    },
+  ]);
+  expect(ungroundedRequirements(plan, poorContext)).toEqual([]);
+  expect(validateCoverage(plan, poorContext, policyFor(), config).gate).toBe(
+    "complete"
+  );
+});
+
+it("still refuses padding once the alphanumeric counter is gone", () => {
+  // Le plancher de longueur fait tout le travail : «        } » se normalise en
+  // « } », et sept zéro-largeurs suivis d'une accolade en « } » aussi. Aucune
+  // citation réduite à une accolade ne passe.
+  expect(quoteCarriesContent("        }")).toBe(false);
+  expect(quoteCarriesContent(`${ZWSP.repeat(7)}}`)).toBe(false);
+  expect(quoteCarriesContent("        ")).toBe(false);
+  expect(quoteHasWitness(CASH_FILE, "        }")).toBe(false);
+  expect(quoteHasWitness(CASH_FILE, `${ZWSP.repeat(7)}}`)).toBe(false);
 });
 
 /**
