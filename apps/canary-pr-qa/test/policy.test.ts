@@ -212,6 +212,27 @@ it("does not read the patch marker as whitespace", () => {
   expect(ungroundedRequirements(plan, patchOnly)).toHaveLength(1);
 });
 
+it("refuses a quote that normalizes to nothing", () => {
+  // Huit espaces se normalisent en chaîne vide, et `includes("")` est toujours
+  // vrai : sans ce refus, le gate accepterait comme témoin une citation qui
+  // n'existe nulle part.
+  expect(quoteHasWitness(CASH_FILE, "")).toBe(false);
+  expect(quoteHasWitness(CASH_FILE, "   \n\t ")).toBe(false);
+  expect(quoteHasWitness(CASH_FILE, "        ")).toBe(false);
+  // Une citation de huit espaces passe le `min(8)` du schéma puis disparaît à la
+  // normalisation : le faux témoin est atteignable depuis un plan réel.
+  const blank = cashPlan("        ");
+  expect(ungroundedRequirements(blank, reflowedCashContext)).toHaveLength(1);
+  expect(refusalOfPlan(blank, reflowedCashContext, policyFor()).code).toBe(
+    "REQUIREMENT_UNGROUNDED"
+  );
+  // Idem pour huit caractères invisibles, que `min(8)` compte comme des
+  // caractères.
+  expect(
+    ungroundedRequirements(cashPlan("\u200b".repeat(8)), reflowedCashContext)
+  ).toHaveLength(1);
+});
+
 it("names the rejected quote in the refusal, bounded to its short form", () => {
   const plan = cashPlan(REFLOWED_QUOTE.replace("false", "true"));
   const [refusal] = ungroundedPlanRefusals(plan, reflowedCashContext);

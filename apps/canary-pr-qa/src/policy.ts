@@ -184,9 +184,18 @@ function normalizeQuoteText(value: string): string {
     .trim();
 }
 
-/** Vrai si la citation apparaît dans le témoin, à l'espacement près. */
+/**
+ * Vrai si la citation apparaît dans le témoin, à l'espacement près.
+ * Une citation qui se normalise en chaîne vide n'a jamais de témoin :
+ * `includes("")` est toujours vrai, et l'accepter ferait passer pour une preuve
+ * une citation qui n'existe nulle part.
+ */
 export function quoteHasWitness(evidence: string, quote: string): boolean {
-  return normalizeQuoteText(evidence).includes(normalizeQuoteText(quote));
+  const normalized = normalizeQuoteText(quote);
+  if (normalized.length === 0) {
+    return false;
+  }
+  return normalizeQuoteText(evidence).includes(normalized);
 }
 
 /**
