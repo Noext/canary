@@ -169,8 +169,30 @@ export function requirementEvidence(
 }
 
 /**
- * Une exigence dont la citation n'apparaît mot pour mot nulle part n'a pas de
- * témoin : le plan est refusé plutôt que testé sur une preuve inventée.
+ * Les blancs ne départagent pas une citation de sa source : le planificateur
+ * recopie sur une ligne le bloc que le fichier indente sur quatre, et un refus
+ * d'espacement ne lui apprend rien. La règle est celle de `normalizeText`
+ * (plan-evidence.ts) : caractères invisibles retirés, toute suite de blancs
+ * ramenée à une espace. Le repli typographique reste réservé aux cibles de
+ * locator, jamais aux citations : un seul caractère non blanc différent doit
+ * continuer de refuser.
+ */
+function normalizeQuoteText(value: string): string {
+  return value
+    .replace(/[\u200b\u00ad]/g, "")
+    .replace(/[\r\n\s\t]+/g, " ")
+    .trim();
+}
+
+/** Vrai si la citation apparaît dans le témoin, à l'espacement près. */
+export function quoteHasWitness(evidence: string, quote: string): boolean {
+  return normalizeQuoteText(evidence).includes(normalizeQuoteText(quote));
+}
+
+/**
+ * Une exigence dont la citation n'apparaît nulle part, même à l'espacement
+ * près, n'a pas de témoin : le plan est refusé plutôt que testé sur une preuve
+ * inventée.
  */
 export function ungroundedRequirement(
   scenarioId: string,
@@ -184,9 +206,10 @@ export function ungroundedRequirement(
 }
 
 /**
- * Fichiers dont le texte témoin contient la citation mot pour mot, dans l'ordre
- * où ils apparaîent : sert à dire au planificateur où la citation existe
- * réellement quand il l'a attribuée au mauvais fichier.
+ * Fichiers dont le texte témoin contient la citation mot pour mot — à
+ * l'espacement près — dans l'ordre où ils apparaîent : sert à dire au
+ * planificateur où la citation existe réellement quand il l'a attribuée au
+ * mauvais fichier.
  */
 export function witnessFiles(quote: string, context: PrContext): string[] {
   const paths = [
@@ -194,16 +217,19 @@ export function witnessFiles(quote: string, context: PrContext): string[] {
     ...context.context.map((item) => item.path),
   ];
   return [...new Set(paths)].filter((path) =>
-    requirementEvidence({ quote, sourceFile: path }, context).includes(quote)
+    quoteHasWitness(
+      requirementEvidence({ quote, sourceFile: path }, context),
+      quote
+    )
   );
 }
 
 /**
- * Répare une attribution fautive quand la citation existe mot pour mot dans un
- * autre fichier déclaré par le même scénario : la preuve reste réelle, seule la
- * mention du fichier était fausse. Un plan qui cite un fichier hors scénario
- * n'est pas réparé ici — le planificateur reçoit le refus et corrige lui-même
- * sa liste de sources.
+ * Répare une attribution fautive quand la citation existe, à l'espacement près,
+ * dans un autre fichier déclaré par le même scénario : la preuve reste réelle,
+ * seule la mention du fichier était fausse. Un plan qui cite un fichier hors
+ * scénario n'est pas réparé ici — le planificateur reçoit le refus et corrige
+ * lui-même sa liste de sources.
  */
 export function repairRequirementAttribution(
   plan: Plan,
@@ -218,15 +244,21 @@ export function repairRequirementAttribution(
   for (const scenario of plan.scenarios) {
     for (const requirement of scenario.requirements) {
       if (
-        requirementEvidence(requirement, context).includes(requirement.quote)
+        quoteHasWitness(
+          requirementEvidence(requirement, context),
+          requirement.quote
+        )
       ) {
         continue;
       }
       const candidates = scenario.sourceFiles.filter((sourceFile) =>
-        requirementEvidence(
-          { quote: requirement.quote, sourceFile },
-          context
-        ).includes(requirement.quote)
+        quoteHasWitness(
+          requirementEvidence(
+            { quote: requirement.quote, sourceFile },
+            context
+          ),
+          requirement.quote
+        )
       );
       const [target] = candidates;
       if (candidates.length !== 1 || !target) {
@@ -264,9 +296,10 @@ function witnessHint(quote: string, context: PrContext): string {
 }
 
 /**
- * Exigences citées sans témoin textuel, avec le scénario qui les porte : la
- * classe fatale `REQUIREMENT_UNGROUNDED` en est rendue une par entrée, et le
- * canal de correction peut aussi l'agréger en une seule ligne.
+ * Exigences citées sans témoin textuel, même à l'espacement près, avec le
+ * scénario qui les porte : la classe fatale `REQUIREMENT_UNGROUNDED` en est
+ * rendue une par entrée, et le canal de correction peut aussi l'agréger en une
+ * seule ligne.
  */
 export function ungroundedRequirements(
   plan: Plan,
@@ -276,7 +309,10 @@ export function ungroundedRequirements(
     scenario.requirements
       .filter(
         (requirement) =>
-          !requirementEvidence(requirement, context).includes(requirement.quote)
+          !quoteHasWitness(
+            requirementEvidence(requirement, context),
+            requirement.quote
+          )
       )
       .map((requirement) => ({ requirement, scenarioId: scenario.id }))
   );
@@ -302,9 +338,10 @@ export function ungroundedPlanRefusals(
 
 /**
  * Marque comme couverts les fichiers témoignés par les exigences d'un scénario,
- * et seulement ceux-là : une exigence dont la citation n'existe pas mot pour mot
- * n'ajoute rien, comme `validateCoverage` l'aurait refusée juste avant. Le
- * couvert est cumulatif sur tout le plan, dans l'ordre des scénarios.
+ * et seulement ceux-là : une exigence dont la citation n'existe pas mot pour
+ * mot, à l'espacement près, n'ajoute rien, comme `validateCoverage` l'aurait
+ * refusée juste avant. Le couvert est cumulatif sur tout le plan, dans l'ordre
+ * des scénarios.
  * `unwitnessedPlanRefusals` et `validateCoverage` partagent ce pas pour que le
  * refus rendu au planificateur nomme exactement le fichier que le gate
  * refuserait ensuite, et jamais un fichier que le gate accepterait.
@@ -315,7 +352,12 @@ function coverWitnessedSourceFiles(
   context: PrContext
 ): void {
   for (const requirement of scenario.requirements) {
-    if (requirementEvidence(requirement, context).includes(requirement.quote)) {
+    if (
+      quoteHasWitness(
+        requirementEvidence(requirement, context),
+        requirement.quote
+      )
+    ) {
       covered.add(requirement.sourceFile);
     }
   }
@@ -532,7 +574,10 @@ export function validateCoverage(
     }
     for (const requirement of scenario.requirements) {
       if (
-        !requirementEvidence(requirement, context).includes(requirement.quote)
+        !quoteHasWitness(
+          requirementEvidence(requirement, context),
+          requirement.quote
+        )
       ) {
         throw ungroundedRequirement(scenario.id, requirement);
       }

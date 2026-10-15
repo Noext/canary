@@ -5,9 +5,14 @@ import { type PrContext, parsePrUrl } from "../src/github.js";
 import {
   isDocumentationPath,
   PolicySchema,
+  quoteHasWitness,
+  repairRequirementAttribution,
   undeclaredSourcePlanRefusals,
+  ungroundedPlanRefusals,
+  ungroundedRequirements,
   unwitnessedPlanRefusals,
   validateCoverage,
+  witnessFiles,
 } from "../src/policy.js";
 import { planShapeRefusals } from "../src/runner.js";
 import { type Plan, PlanSchema } from "../src/schema.js";
@@ -135,6 +140,169 @@ it("accepts a plan whose declared files each carry a witnessed requirement", () 
       witnessContext,
       policyFor()
     )
+  ).toEqual([]);
+});
+
+/**
+ * Cas réel du run 94e86f2b : le planificateur a recopié sur une ligne le bloc
+ * que le fichier indente sur quatre. Un `PrContext` réel porte les deux — le
+ * patch du fichier changé et son contenu à la révision de tête — et c'est le
+ * contenu qui témoigne : les marqueurs `+` du patch sont des caractères non
+ * blancs, que la comparaison ne tolère pas.
+ */
+const CASH_FILE = [
+  "function report(denomination, quantities) {",
+  "  return {",
+  "    ok: false,",
+  '    code: "QUANTITE_INVALIDE",',
+  "  };",
+  "}",
+].join("\n");
+const REFLOWED_QUOTE = 'return { ok: false, code: "QUANTITE_INVALIDE", };';
+const cashPatch = "+ return {\n+   ok: false,\n+ };";
+const reflowedCashContext: PrContext = {
+  ...contextWith([{ filename: "src/cash.ts", patch: cashPatch }]),
+  context: [{ content: CASH_FILE, path: "src/cash.ts", ref: context.sha }],
+};
+function cashPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash",
+      sourceFiles: ["src/cash.ts"],
+      requirements: [{ sourceFile: "src/cash.ts", quote }],
+    },
+  ]);
+}
+
+it("compares a quote to its file up to whitespace", () => {
+  expect(quoteHasWitness(CASH_FILE, REFLOWED_QUOTE)).toBe(true);
+  expect(
+    quoteHasWitness(CASH_FILE, REFLOWED_QUOTE.replace("false", "true"))
+  ).toBe(false);
+});
+
+it("accepts a quote whose only difference from the file is whitespace", () => {
+  const plan = cashPlan(REFLOWED_QUOTE);
+  expect(ungroundedRequirements(plan, reflowedCashContext)).toEqual([]);
+  expect(
+    unwitnessedPlanRefusals(plan, reflowedCashContext, policyFor())
+  ).toEqual([]);
+  expect(
+    validateCoverage(plan, reflowedCashContext, policyFor(), config).gate
+  ).toBe("complete");
+});
+
+it("still refuses a quote with one different character", () => {
+  const plan = cashPlan(REFLOWED_QUOTE.replace("false", "true"));
+  expect(ungroundedRequirements(plan, reflowedCashContext)).toHaveLength(1);
+  expect(refusalOfPlan(plan, reflowedCashContext, policyFor()).code).toBe(
+    "REQUIREMENT_UNGROUNDED"
+  );
+});
+
+it("does not read the patch marker as whitespace", () => {
+  const patchOnly: PrContext = contextWith([
+    { filename: "src/cash.ts", patch: cashPatch },
+  ]);
+  const plan = cashPlan(REFLOWED_QUOTE);
+  // Sans le contenu du fichier, les `+` du patch séparent les lignes que la
+  // citation a recollées : seuls les blancs sont tolérés, jamais un caractère
+  // non blanc — et le contenu accompagne toujours le patch dans un vrai
+  // contexte, donc ce refus ne se produit pas en run.
+  expect(ungroundedRequirements(plan, patchOnly)).toHaveLength(1);
+});
+
+/**
+ * Cas réel du run 71cb3369 : la citation invente des caractères — `"":"` — que
+ * le fichier ne porte pas. La tolérance porte sur les blancs, jamais sur un
+ * caractère de plus : ce refus reste dû.
+ */
+const pagePatch =
+  '@@ -1,3 +1,4 @@\n const suffix = count === 1\n   ? "s" : "";\n+ const doubled = suffix + suffix;';
+const pageContext: PrContext = contextWith([
+  { filename: "src/page.tsx", patch: pagePatch },
+]);
+function pagePlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "page",
+      sourceFiles: ["src/page.tsx"],
+      requirements: [{ sourceFile: "src/page.tsx", quote }],
+    },
+  ]);
+}
+
+it("still refuses the real quote that invents characters", () => {
+  const plan = pagePlan('const suffix = count === 1 ? "s":"":"";');
+  expect(ungroundedRequirements(plan, pageContext)).toHaveLength(1);
+  expect(refusalOfPlan(plan, pageContext, policyFor()).code).toBe(
+    "REQUIREMENT_UNGROUNDED"
+  );
+  // La même ligne, recopiée sans rien inventer, passe : c'est l'invention qui
+  // est refusée, pas le retour à la ligne du fichier.
+  expect(
+    ungroundedRequirements(
+      pagePlan('const suffix = count === 1 ? "s" : "";'),
+      pageContext
+    )
+  ).toEqual([]);
+});
+
+it("names the file whose content carries the reflowed quote", () => {
+  const misattributed: PrContext = {
+    ...reflowedCashContext,
+    files: [
+      ...reflowedCashContext.files,
+      {
+        filename: "src/form.ts",
+        patch: "+ const nothing = 0;",
+        status: "modified",
+      },
+    ],
+  };
+  const plan = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/form.ts"],
+      requirements: [{ sourceFile: "src/form.ts", quote: REFLOWED_QUOTE }],
+    },
+  ]);
+  expect(witnessFiles(REFLOWED_QUOTE, misattributed)).toEqual(["src/cash.ts"]);
+  const [refusal] = ungroundedPlanRefusals(plan, misattributed);
+  expect(refusal).toContain("The quote appears verbatim in src/cash.ts");
+});
+
+it("repairs an attribution only when another declared file witnesses the quote", () => {
+  const misattributed: PrContext = {
+    ...reflowedCashContext,
+    files: [
+      ...reflowedCashContext.files,
+      {
+        filename: "src/empty.ts",
+        patch: "+ const nothing = 0;",
+        status: "modified",
+      },
+    ],
+  };
+  const attributed = planWithWitnesses([
+    {
+      id: "cash",
+      sourceFiles: ["src/empty.ts", "src/cash.ts"],
+      requirements: [{ sourceFile: "src/empty.ts", quote: REFLOWED_QUOTE }],
+    },
+  ]);
+  expect(repairRequirementAttribution(attributed, misattributed)).toEqual([
+    {
+      from: "src/empty.ts",
+      quote: REFLOWED_QUOTE,
+      scenarioId: "cash",
+      to: "src/cash.ts",
+    },
+  ]);
+  // Témoin dans le fichier attribué : rien à réparer, la comparaison tolérant
+  // les blancs reconnaît déjà la citation.
+  expect(
+    repairRequirementAttribution(cashPlan(REFLOWED_QUOTE), reflowedCashContext)
   ).toEqual([]);
 });
 
