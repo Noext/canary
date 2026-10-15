@@ -181,14 +181,6 @@ interface PostChangeLine {
 }
 const PATCH_HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 /**
- * Séparateur entre deux hunks reconstruits. Il porte un NUL, qu'aucun fichier
- * texte analysé ne contient et que `normalizeQuoteText` ne replie pas : une
- * citation fabriquée en recousant la fin d'un hunk au début du suivant doit
- * porter ce caractère pour témoigner, donc aucune copie réelle ne témoigne par
- * jointure.
- */
-const PATCH_HUNK_SEPARATOR = "\n\u0000\n";
-/**
  * Lignes du contenu après changement, hunk par hunk et numérotées dans le
  * nouveau fichier : les lignes de contexte et les lignes ajoutées, sans leur
  * préfixe. Les lignes supprimées et le marqueur « no newline at end of file »
@@ -219,20 +211,24 @@ function postChangeHunks(patch: string): PostChangeLine[][] {
  * produit, donc ce qu'une citation du nouveau contenu doit porter. Le patch brut
  * porte les préfixes `+` et `-`, qu'aucune citation recopiée du fichier n'a, et
  * le contenu de tête manque dès qu'un fichier dépasse le plafond de contexte.
- * Absent quand aucun hunk n'apporte de ligne de contexte ou ajoutée — fichier
- * supprimé, diff binaire, ou patch sans en-tête `@@` où aucun hunk n'est
- * identifiable — et jamais recousu au contenu récupéré pour le même chemin :
- * chaque segment reste comparé seul.
+ *
+ * Un hunk est un segment témoin à part entière, jamais joint au suivant : deux
+ * hunks ne sont pas une portion continue du fichier — les lignes qu'ils sautent
+ * n'y sont pas — donc une citation fabriquée en recousant la fin du premier au
+ * début du second ne doit avoir aucun témoin. Joindre les hunks en une chaîne,
+ * même séparée par un caractère sentinelle, laissait cette garantie reposer sur
+ * le choix du séparateur ; le découpage la rend structurelle. La liste est vide
+ * quand aucun hunk n'apporte de ligne de contexte ou ajoutée : fichier supprimé,
+ * diff binaire, ou patch sans en-tête `@@` où aucun hunk n'est identifiable.
  */
-function postChangeContent(patch: string): string | undefined {
-  const blocks = postChangeHunks(patch)
+function postChangeSegments(patch: string): string[] {
+  return postChangeHunks(patch)
     .map((hunk) => hunk.map((item) => item.text).join("\n"))
     .filter((block) => block.length > 0);
-  return blocks.length > 0 ? blocks.join(PATCH_HUNK_SEPARATOR) : undefined;
 }
 /**
- * Segments témoins d'une exigence : le patch du fichier dans la PR, le contenu
- * après changement reconstruit depuis ses hunks, puis chaque contenu contextuel
+ * Segments témoins d'une exigence : le patch du fichier dans la PR, chaque hunk
+ * du contenu après changement pris séparément, puis chaque contenu contextuel
  * récupéré pour ce chemin. Chaque élément est un témoin à part entière, comparé
  * seul : une citation qui n'existe qu'en recousant la fin d'un segment au début
  * du suivant — jonction patch→contenu, contenu de tête → contenu de base, ou
@@ -245,10 +241,9 @@ export function requirementEvidence(
   const patch = context.files.find(
     (file) => file.filename === requirement.sourceFile
   )?.patch;
-  const changed = patch === undefined ? undefined : postChangeContent(patch);
   return [
     ...(patch ? [patch] : []),
-    ...(changed ? [changed] : []),
+    ...(patch ? postChangeSegments(patch) : []),
     ...context.context
       .filter((item) => item.path === requirement.sourceFile)
       .map((item) => item.content),

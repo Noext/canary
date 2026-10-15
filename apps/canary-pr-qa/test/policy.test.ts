@@ -1478,9 +1478,10 @@ it("accepts a contiguous multi-line quote copied from the cited file", () => {
  * H1 : pour un fichier modifié au-delà du plafond de contexte, la preuve ne
  * portait que le patch brut, dont les préfixes `+`/`-` ne sont pas des blancs —
  * une citation multi-lignes du nouveau contenu n'y avait donc pas de témoin. Le
- * contenu après changement est reconstruit depuis les hunks du patch ; un
- * séparateur non citable sépare deux hunks, donc une citation fabriquée par
- * jointure reste refusée.
+ * contenu après changement est reconstruit depuis les hunks du patch, chaque
+ * hunk restant un segment témoin à part entière : une citation fabriquée en
+ * recousant la fin d'un hunk au début du suivant n'a pas de témoin, sans que
+ * cette garantie repose sur le choix d'un séparateur.
  */
 const RECONSTRUCTED_PATH = "src/cash.ts";
 const RECONSTRUCTED_PATCH = [
@@ -1498,6 +1499,17 @@ const reconstructedContext: PrContext = contextWith([
   { filename: RECONSTRUCTED_PATH, patch: RECONSTRUCTED_PATCH },
 ]);
 
+/** Segments témoins de `RECONSTRUCTED_PATCH` : le patch, puis un par hunk. */
+const RECONSTRUCTED_SEGMENTS = [
+  RECONSTRUCTED_PATCH,
+  [
+    "const before = 1;",
+    ' const witness = "reconstructed witness value";',
+    "const after = 2;",
+  ].join("\n"),
+  ["const tail = 3;", " const other = 4;", "};"].join("\n"),
+];
+
 it("witnesses a new-content quote from the reconstructed hunks", () => {
   const quote = [
     "const before = 1;",
@@ -1507,12 +1519,14 @@ it("witnesses a new-content quote from the reconstructed hunks", () => {
   // Le patch brut ne porte pas la citation : le `+` de la ligne ajoutée est un
   // caractère non blanc que la comparaison ne tolère pas.
   expect(quoteHasWitness(RECONSTRUCTED_PATCH, quote)).toBe(false);
+  // Le patch, puis chaque hunk pris séparément : deux hunks ne se joignent
+  // jamais en une chaîne, même séparée.
   expect(
     requirementEvidence(
       { quote, sourceFile: RECONSTRUCTED_PATH },
       reconstructedContext
     )
-  ).toHaveLength(2);
+  ).toEqual(RECONSTRUCTED_SEGMENTS);
   expect(
     requirementHasWitness(
       { quote, sourceFile: RECONSTRUCTED_PATH },
@@ -1527,14 +1541,12 @@ it("witnesses a new-content quote from the reconstructed hunks", () => {
 
 it("refuses a quote stitched across two reconstructed hunks", () => {
   const stitched = ["const after = 2;", "const tail = 3;"].join("\n");
-  const [, reconstructed] = requirementEvidence(
-    { quote: stitched, sourceFile: RECONSTRUCTED_PATH },
-    reconstructedContext
-  );
-  // Les deux lignes sont réelles, mais elles appartiennent à deux hunks : le
-  // contenu reconstruit ne les joint que par un NUL, que la comparaison ne
-  // replie pas et qu'aucune copie réelle ne porte.
-  expect(reconstructed).toContain("const after = 2;\n\u0000\nconst tail = 3;");
+  // Les deux lignes sont réelles, mais chacune appartient à son propre hunk :
+  // aucune portion réelle du fichier ne les joint, et aucun segment témoin ne
+  // les contient ensemble.
+  for (const segment of RECONSTRUCTED_SEGMENTS) {
+    expect(segment).not.toContain(stitched);
+  }
   expect(
     requirementHasWitness(
       { quote: stitched, sourceFile: RECONSTRUCTED_PATH },
