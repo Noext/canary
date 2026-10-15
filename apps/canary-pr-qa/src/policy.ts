@@ -325,20 +325,28 @@ function coverWitnessedSourceFiles(
  * Un fichier déclaré par un scénario qu'aucune exigence témoignée ne couvre :
  * sans témoin, le plan ne peut pas prouver la couverture qu'il annonce. Le
  * remède de repli — retirer le fichier des sources — n'est proposé que si le
- * gate accepterait ce skip : le suggérer sur un chemin critique ferait tourner
- * la tentative de correction du planificateur pour rien.
+ * gate accepterait le remède qui le complète : un fichier que la PR ne change
+ * pas ne se liste jamais dans `skipped` (`PLAN_SKIP_OUTSIDE_DIFF`), et un chemin
+ * critique du diff demande un skip approuvé (`CRITICAL_COVERAGE_MISSING`).
+ * Proposer un skip que le gate refuse ferait tourner la tentative de correction
+ * du planificateur pour rien.
  */
 export function unwitnessedRequirement(
   scenarioId: string,
   file: string,
-  policy: Policy
+  policy: Policy,
+  inDiff: boolean
 ): QaError {
+  let hint = `Add a requirement whose quote exists verbatim in ${file}, or drop it from sourceFiles and list it in skipped.`;
+  if (!inDiff) {
+    hint = `This PR does not change ${file}, so it cannot be listed in skipped: drop it from sourceFiles and quote a changed file instead.`;
+  } else if (criticalSkipRefused(policy, file)) {
+    hint = `Add a requirement whose quote exists verbatim in ${file}; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch.`;
+  }
   return new QaError(
     "COVERAGE_WITNESS_MISSING",
     `Scenario ${scenarioId} declares ${file} without a source requirement witness`,
-    criticalSkipRefused(policy, file)
-      ? `Add a requirement whose quote exists verbatim in ${file}; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch.`
-      : `Add a requirement whose quote exists verbatim in ${file}, or drop it from sourceFiles and list it in skipped.`
+    hint
   );
 }
 
@@ -373,8 +381,14 @@ export function unwitnessedPlanRefusals(
   context: PrContext,
   policy: Policy
 ): string[] {
+  const changed = new Set(context.files.map((file) => file.filename));
   return unwitnessedSources(plan, context).map(({ file, scenarioId }) => {
-    const error = unwitnessedRequirement(scenarioId, file, policy);
+    const error = unwitnessedRequirement(
+      scenarioId,
+      file,
+      policy,
+      changed.has(file)
+    );
     return `${error.message}. ${error.hint}`;
   });
 }
@@ -479,6 +493,7 @@ export function validateCoverage(
   config: Config
 ) {
   const covered = new Set<string>();
+  const changed = new Set(context.files.map((file) => file.filename));
   validateProvider(policy, config);
   const source = requirementSourceRefusal(plan, context);
   if (source) {
@@ -502,7 +517,12 @@ export function validateCoverage(
     coverWitnessedSourceFiles(covered, scenario, context);
     const unwitnessed = scenario.sourceFiles.find((file) => !covered.has(file));
     if (unwitnessed !== undefined) {
-      throw unwitnessedRequirement(scenario.id, unwitnessed, policy);
+      throw unwitnessedRequirement(
+        scenario.id,
+        unwitnessed,
+        policy,
+        changed.has(unwitnessed)
+      );
     }
   }
   const denied = plan.skipped.filter((skip) =>

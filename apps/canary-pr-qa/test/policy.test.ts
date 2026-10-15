@@ -9,6 +9,7 @@ import {
   unwitnessedPlanRefusals,
   validateCoverage,
 } from "../src/policy.js";
+import { planShapeRefusals } from "../src/runner.js";
 import { type Plan, PlanSchema } from "../src/schema.js";
 
 const context: PrContext = {
@@ -138,8 +139,9 @@ it("accepts a plan whose declared files each carry a witnessed requirement", () 
 });
 
 it("never proposes a skip the coverage gate would refuse", () => {
-  // src/b.ts is a critical path: dropping it from sourceFiles would be refused
-  // by the gate, so the refusal must not propose it.
+  // src/a.ts is changed and witnessed; src/b.ts is a critical path of the diff:
+  // dropping it from sourceFiles would be refused by the gate, so the refusal
+  // must not propose it.
   const critical = unwitnessedPlanRefusals(
     planWithWitnesses([
       {
@@ -154,8 +156,13 @@ it("never proposes a skip the coverage gate would refuse", () => {
   expect(critical).toHaveLength(1);
   expect(critical[0]).not.toContain("list it in skipped");
   expect(critical[0]).toContain("cannot be dropped from sourceFiles");
-  // lib/helper.ts is not critical: the same remedy is accepted by the gate, so
-  // the refusal may propose it, and that promise holds.
+  // lib/helper.ts is changed and not critical: both gates accept the skip, so
+  // the refusal may propose it — and the shape gate is consulted here, which the
+  // earlier version of this test never did while it validated the promise.
+  const skippableContext = contextWith([
+    { filename: "src/a.ts", patch: "+ const alpha = 'Alpha witness text';" },
+    { filename: "lib/helper.ts", patch: "+ export const helper = true;" },
+  ]);
   const skippable = unwitnessedPlanRefusals(
     planWithWitnesses([
       {
@@ -166,21 +173,88 @@ it("never proposes a skip the coverage gate would refuse", () => {
         ],
       },
     ]),
-    witnessContext,
+    skippableContext,
     policyFor()
   );
   expect(skippable).toHaveLength(1);
   expect(skippable[0]).toContain(
     "drop it from sourceFiles and list it in skipped"
   );
-  expect(() =>
-    validateCoverage(
-      planSkipping("lib/helper.ts"),
-      witnessContext,
-      policyFor(),
-      config
-    )
-  ).not.toThrow();
+  // Suivre ce remède passe les deux gates : le scénario couvre le fichier
+  // témoigné du diff, le second est ignoré. C'est la promesse que le refus
+  // affirme, et elle est vérifiée sur la forme du plan comme sur la couverture.
+  const corrected: Plan = {
+    ...planWithWitnesses([
+      {
+        id: "flow",
+        sourceFiles: ["src/a.ts"],
+        requirements: [{ sourceFile: "src/a.ts", quote: "Alpha witness text" }],
+      },
+    ]),
+    skipped: [
+      {
+        reason: "Not reachable from a browser scenario",
+        sourceFile: "lib/helper.ts",
+      },
+    ],
+  };
+  expect(planShapeRefusals(corrected, skippableContext, config)).toEqual([]);
+  expect(
+    validateCoverage(corrected, skippableContext, policyFor(), config).gate
+  ).toBe("complete");
+});
+
+it("proposes only the removal for a declared file outside the diff", () => {
+  const single = contextWith([
+    { filename: "src/a.ts", patch: "+ const alpha = 'Alpha witness text';" },
+  ]);
+  const declared = (file: string) =>
+    planWithWitnesses([
+      {
+        id: "flow",
+        sourceFiles: ["src/a.ts", file],
+        requirements: [{ sourceFile: "src/a.ts", quote: "Alpha witness text" }],
+      },
+    ]);
+  const [outside] = unwitnessedPlanRefusals(
+    declared("lib/extra.ts"),
+    single,
+    policyFor()
+  );
+  expect(outside).toContain("This PR does not change lib/extra.ts");
+  expect(outside).toContain("drop it from sourceFiles");
+  expect(outside).not.toContain("list it in skipped");
+  // Le diff l'emporte sur la criticalité : un chemin critique que la PR ne
+  // change pas se retire seul, sans skip approuvé. L'ancienne promesse
+  // ("cannot be dropped from sourceFiles") était fausse ici.
+  const [outsideCritical] = unwitnessedPlanRefusals(
+    declared("src/extra.ts"),
+    single,
+    policyFor()
+  );
+  expect(outsideCritical).toContain("This PR does not change src/extra.ts");
+  expect(outsideCritical).not.toContain("cannot be dropped from sourceFiles");
+  // Les deux gates refusent le remède skip que le refus ne propose plus, et le
+  // retrait seul que le refus propose passe : le test ne peut plus valider une
+  // promesse que le gate refuse.
+  for (const file of ["lib/extra.ts", "src/extra.ts"]) {
+    expect(
+      planShapeRefusals(planSkipping(file), single, config).map(
+        (refusal) => refusal.code
+      )
+    ).toContain("PLAN_SKIP_OUTSIDE_DIFF");
+  }
+  const removed = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/a.ts"],
+      requirements: [{ sourceFile: "src/a.ts", quote: "Alpha witness text" }],
+    },
+  ]);
+  expect(planShapeRefusals(removed, single, config)).toEqual([]);
+  expect(validateCoverage(removed, single, policyFor(), config).gate).toBe(
+    "complete"
+  );
 });
 
 it("names the scenario and the file it cannot witness", () => {

@@ -683,7 +683,7 @@ export const runAdvice: Record<string, string> = {
   COVERAGE_REQUIREMENT_SOURCE_MISSING:
     "Attribuez l’exigence à un fichier que le scénario déclare, puis relancez le test ; ajouter ce fichier aux sources ne marche que s’il fait partie du diff de la PR.",
   COVERAGE_WITNESS_MISSING:
-    "Ajoutez une exigence dont la citation existe mot pour mot dans ce fichier, puis relancez. Retirer le fichier des sources ne suffit que s’il peut être ignoré : un chemin critique (`src/`, `apps/`, `packages/`…) demande un skip approuvé dans `.canary/qa.json` sur la branche de base.",
+    "Ajoutez une exigence dont la citation existe mot pour mot dans ce fichier, puis relancez. Sinon, retirez le fichier des sources : ne le listez comme ignoré que si la pull request le modifie et qu’il n’est pas critique. Un chemin critique (`src/`, `apps/`, `packages/`…) demande un skip approuvé dans `.canary/qa.json` sur la branche de base, et un fichier que la PR ne modifie pas ne se liste jamais.",
   CRITICAL_COVERAGE_MISSING:
     "Élargissez le plan de test (fichiers `.canary`) pour couvrir ces changements, puis relancez.",
   EVIDENCE_VIDEO_MISSING:

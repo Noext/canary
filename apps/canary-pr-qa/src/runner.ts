@@ -135,7 +135,7 @@ function validateSourceEvidence(
  * fautives et le remède. Le canal de correction en agrège une ligne bornée par
  * classe, et le contrôle final lève le message complet.
  */
-interface FatalClass {
+export interface FatalClass {
   code: string;
   entries: string[];
   hint: string;
@@ -254,7 +254,7 @@ function coverageFatalClasses(
  * dans sa tentative de correction, et le contrôle final lève un `QaError` nommé
  * au lieu d'une `Error` nue qui ne dit rien à personne.
  */
-function planShapeRefusals(
+export function planShapeRefusals(
   plan: Plan,
   context: PrContext,
   config: Config
