@@ -215,25 +215,28 @@ it("does not read the patch marker as whitespace", () => {
   expect(ungroundedRequirements(plan, cashPatchOnly)).toHaveLength(1);
 });
 
-it("refuses a quote that normalizes to nothing", () => {
-  // Huit espaces se normalisent en chaîne vide, et `includes("")` est toujours
-  // vrai : sans ce refus, le gate accepterait comme témoin une citation qui
-  // n'existe nulle part.
+it("refuses a quote that carries no real content", () => {
+  // Le seuil vit dans le schéma de `quote` (PlanSchema) : un plan dont la
+  // citation n'a pas de contenu réel n'est pas valide. Sept espaces suivis
+  // d'une accolade se normalisent en « } », que tout fichier contient, et
+  // couvriraient un fichier entier ; huit caractères invisibles se normalisent
+  // en chaîne vide, que `includes` accepte toujours.
+  expect(() => cashPlan("        ")).toThrow();
+  expect(() => cashPlan(`${"\u200b".repeat(7)}}`)).toThrow();
+  expect(() => cashPlan("        }")).toThrow();
+  // Le gate de témoin refuse la même citation, y compris forgée après le schéma :
+  // la comparaison reste la dernière barrière si un plan contourne le contrat.
   expect(quoteHasWitness(CASH_FILE, "")).toBe(false);
   expect(quoteHasWitness(CASH_FILE, "   \n\t ")).toBe(false);
   expect(quoteHasWitness(CASH_FILE, "        ")).toBe(false);
-  // Une citation de huit espaces passe le `min(8)` du schéma puis disparaît à la
-  // normalisation : le faux témoin est atteignable depuis un plan réel.
-  const blank = cashPlan("        ");
-  expect(ungroundedRequirements(blank, reflowedCashContext)).toHaveLength(1);
-  expect(refusalOfPlan(blank, reflowedCashContext, policyFor()).code).toBe(
+  expect(quoteHasWitness(CASH_FILE, "        }")).toBe(false);
+  expect(quoteHasWitness(CASH_FILE, `${"\u200b".repeat(7)}}`)).toBe(false);
+  const forged = cashPlan(REFLOWED_QUOTE);
+  forged.scenarios[0]!.requirements[0]!.quote = "        }";
+  expect(ungroundedRequirements(forged, reflowedCashContext)).toHaveLength(1);
+  expect(refusalOfPlan(forged, reflowedCashContext, policyFor()).code).toBe(
     "REQUIREMENT_UNGROUNDED"
   );
-  // Idem pour huit caractères invisibles, que `min(8)` compte comme des
-  // caractères.
-  expect(
-    ungroundedRequirements(cashPlan("\u200b".repeat(8)), reflowedCashContext)
-  ).toHaveLength(1);
 });
 
 /**

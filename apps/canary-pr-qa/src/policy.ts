@@ -2,7 +2,12 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
-import { normalizeQuoteText, type Plan, type Scenario } from "./schema.js";
+import {
+  normalizeQuoteText,
+  type Plan,
+  quoteCarriesContent,
+  type Scenario,
+} from "./schema.js";
 
 type Requirement = Scenario["requirements"][number];
 
@@ -178,20 +183,19 @@ export function requirementEvidence(
  * en forme près. Un repli de mise en forme ne départage pas une citation de sa
  * source — le planificateur recopie sur une ligne le bloc que le fichier indente
  * sur quatre — donc seule une suite de blancs qui contient un saut de ligne se
- * replie. Un blanc sans saut de ligne est resté significatif : deux espaces dans
- * un littéral de chaîne sont deux espaces, et les replier accepterait comme
- * citation un texte qui n'existe nulle part.
- * Une citation qui ne porte aucun caractère — chaîne vide, blancs seuls — n'a
- * jamais de témoin : `includes("")` est toujours vrai, et l'accepter ferait
- * passer pour une preuve une citation qui n'existe nulle part. La règle de repli
- * vit dans `normalizeQuoteText` (schema.ts), avec le contrat de `quote`.
+ * replie. Un blanc sans saut de ligne est significatif : deux espaces dans un
+ * littéral de chaîne restent deux espaces.
+ * Une citation qui ne porte pas de contenu réel — chaîne vide, blanc, caractères
+ * invisibles, accolade isolée — n'a jamais de témoin : `includes` d'un fragment
+ * que tout fichier contient ferait passer pour preuve une citation qui ne prouve
+ * rien. La règle de repli et le seuil de contenu vivent dans `normalizeQuoteText`
+ * et `quoteCarriesContent` (schema.ts), avec le contrat de `quote`.
  */
 export function quoteHasWitness(evidence: string, quote: string): boolean {
-  const normalized = normalizeQuoteText(quote);
-  if (normalized.length === 0) {
+  if (!quoteCarriesContent(quote)) {
     return false;
   }
-  return normalizeQuoteText(evidence).includes(normalized);
+  return normalizeQuoteText(evidence).includes(normalizeQuoteText(quote));
 }
 
 /**
