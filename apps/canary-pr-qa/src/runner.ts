@@ -315,7 +315,7 @@ function coverageFatalClasses(
   policy: Policy
 ): FatalClass[] {
   const classes: FatalClass[] = [];
-  const unwitnessed = unwitnessedSources(candidate, context);
+  const unwitnessed = unwitnessedSources(candidate, context, policy);
   if (unwitnessed.length > 0) {
     classes.push({
       code: "COVERAGE_WITNESS_MISSING",
@@ -333,7 +333,7 @@ function coverageFatalClasses(
       label: "requirements attributed to a file the scenario does not declare",
     });
   }
-  const ungrounded = ungroundedRequirements(candidate, context);
+  const ungrounded = ungroundedRequirements(candidate, context, policy);
   if (ungrounded.length > 0) {
     classes.push({
       code: "REQUIREMENT_UNGROUNDED",
@@ -569,7 +569,7 @@ function planRefusals(
     ...shape.map(
       (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
     ),
-    ...ungroundedPlanRefusals(candidate, context),
+    ...ungroundedPlanRefusals(candidate, context, policy),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
@@ -590,9 +590,10 @@ function settlePlan(
   plan: Plan,
   context: PrContext,
   config: Config,
-  runId: string
+  runId: string,
+  policy: Policy
 ) {
-  for (const repair of repairRequirementAttribution(plan, context)) {
+  for (const repair of repairRequirementAttribution(plan, context, policy)) {
     logger.info(
       {
         from: repair.from,
@@ -666,7 +667,7 @@ async function executePlan(
   );
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
-  settlePlan(result.plan, context, config, result.id);
+  settlePlan(result.plan, context, config, result.id, policy);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

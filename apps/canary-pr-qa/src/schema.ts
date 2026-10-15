@@ -27,15 +27,60 @@ export function normalizeQuoteText(value: string): string {
  * Contenu réel minimal d'une citation crédible. Une citation rembourrée — sept
  * espaces suivis d'une accolade, ou des caractères invisibles en bordure — se
  * normalise en un fragment que tout fichier contient : elle couvrirait un
- * fichier entier sans rien prouver. Après normalisation, il suffit donc que la
- * citation garde `QUOTE_MIN_TEXT_CHARS` caractères. Aucun plancher sur les
- * lettres ou chiffres : un fichier qui offre peu d'alphanumériques (par exemple
- * `if (x) {`) porte des citations exactes et légitimes, que refuser bloquerait
- * un plan juste.
+ * fichier entier sans rien prouver. Le plancher universel écarte donc les
+ * citations de moins de `QUOTE_MIN_TEXT_CHARS` caractères et d'un seul jeton,
+ * qui ne désignent aucun endroit précis.
+ *
+ * Le seuil est gradué par la criticité du fichier cité, parce que les deux
+ * revues qui l'encadrent ne parlent pas du même risque, et que la gradation est
+ * la seule règle qui les satisfait toutes les deux :
+ *
+ * - compter les lettres ou les chiffres PARTOUT refusait des citations exactes
+ *   et légitimes là où la source en offre peu — `if (x) {` dans
+ *   `src/logic.ts`, `{"x": 1}` dans `src/value.json` — donc un plan juste
+ *   bloqué ;
+ * - ne compter que la longueur laissait, sur un fichier critique, un diff
+ *   hostile planter un fragment sans contenu visible — un séparateur de
+ *   ponctuation (`// ------`), huit zéro-largeurs non-joignants — que le gate
+ *   prenait pour un témoin et qui couvrait le fichier sans rien prouver.
+ *
+ * Sur un chemin critique, la citation doit donc porter au moins
+ * `CRITICAL_QUOTE_MIN_WORD_CHARS` lettre ou chiffre — un identifiant, un
+ * mot-clé, un nombre ou un message — c'est-à-dire du contenu visible, jamais de
+ * la ponctuation seule. Le seuil est le plus bas que les deux revues
+ * permettent : `if (x) {` porte trois lettres et `{"x": 1}` deux, donc
+ * compter les lettres au-delà de leur présence rouvrirait le plan juste bloqué.
+ *
+ * La gradation vit ici et non dans le schéma Zod, qui valide une citation sans
+ * savoir de quel fichier elle vient : le schéma applique le plancher universel,
+ * le gate de témoin applique le seuil du fichier cité (voir
+ * `requirementHasWitness` dans policy.ts).
  */
 export const QUOTE_MIN_TEXT_CHARS = 8;
-export function quoteCarriesContent(value: string): boolean {
-  return normalizeQuoteText(value).length >= QUOTE_MIN_TEXT_CHARS;
+export const QUOTE_MIN_TOKENS = 2;
+export const CRITICAL_QUOTE_MIN_WORD_CHARS = 1;
+const WORD_CHARS = /[\p{L}\p{N}]/gu;
+/**
+ * Jetons d'une citation normalisée : chaque suite de caractères non blancs
+ * compte pour un. Un jeton unique — `};`, une accolade, un mot isolé — ne
+ * désigne aucun endroit précis : il apparaît dans presque tout fichier et
+ * servirait de témoin à n'importe quoi.
+ */
+export function quoteTokens(value: string): number {
+  return normalizeQuoteText(value).split(/\s+/).filter(Boolean).length;
+}
+export function quoteCarriesContent(value: string, critical = false): boolean {
+  const normalized = normalizeQuoteText(value);
+  if (
+    normalized.length < QUOTE_MIN_TEXT_CHARS ||
+    quoteTokens(value) < QUOTE_MIN_TOKENS
+  ) {
+    return false;
+  }
+  return (
+    !critical ||
+    (normalized.match(WORD_CHARS)?.length ?? 0) >= CRITICAL_QUOTE_MIN_WORD_CHARS
+  );
 }
 
 const text = z.string().trim().min(1).max(2000);
@@ -44,8 +89,10 @@ const quote = z
   .min(8)
   .max(1000)
   .refine(
-    quoteCarriesContent,
-    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters once whitespace carrying a line break is folded and edge invisibles are trimmed`
+    // Le schéma ne connaît pas le fichier cité : il applique le plancher
+    // universel, et le gate de témoin y ajoute le seuil du chemin critique.
+    (value) => quoteCarriesContent(value),
+    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters and ${QUOTE_MIN_TOKENS} tokens once whitespace carrying a line break is folded and edge invisibles are trimmed`
   );
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),

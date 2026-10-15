@@ -20,6 +20,7 @@ import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, parsePrUrl } from "../src/github.js";
 import { mayRetry, transportCode } from "../src/model.js";
 import {
+  PolicySchema,
   quoteExcerpt,
   repairRequirementAttribution,
   ungroundedPlanRefusals,
@@ -51,6 +52,8 @@ import {
 } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
+/** Politique par défaut : `src/` est critique, aucun skip n'est approuvé. */
+const policyFor = () => PolicySchema.parse({ version: 1 });
 
 /**
  * Les réservations budgétaires déposées avant chaque tentative modèle : le
@@ -2051,17 +2054,21 @@ describe("runner false-green regressions", () => {
     const contract = structuredClone(plan);
     contract.scenarios[0]!.sourceFiles = ["src/form.ts", "src/legacy.tsx"];
     contract.scenarios[0]!.requirements[0]!.sourceFile = "src/legacy.tsx";
-    const repairs = repairRequirementAttribution(contract, {
-      ...context,
-      files: [
-        ...context.files,
-        {
-          filename: "src/legacy.tsx",
-          patch: "- <p>Work in progress</p>",
-          status: "modified",
-        },
-      ],
-    });
+    const repairs = repairRequirementAttribution(
+      contract,
+      {
+        ...context,
+        files: [
+          ...context.files,
+          {
+            filename: "src/legacy.tsx",
+            patch: "- <p>Work in progress</p>",
+            status: "modified",
+          },
+        ],
+      },
+      policyFor()
+    );
     expect(repairs).toEqual([
       {
         from: "src/legacy.tsx",
@@ -2079,31 +2086,39 @@ describe("runner false-green regressions", () => {
     const context = await new GitHub(f.config).context(PR_URL);
     const contract = structuredClone(plan);
     contract.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
-    const inPr = ungroundedPlanRefusals(contract, {
-      ...context,
-      files: [
-        ...context.files,
-        {
-          filename: "src/app.tsx",
-          patch: "+ show('Welcome '+nom)",
-          status: "modified",
-        },
-      ],
-    });
+    const inPr = ungroundedPlanRefusals(
+      contract,
+      {
+        ...context,
+        files: [
+          ...context.files,
+          {
+            filename: "src/app.tsx",
+            patch: "+ show('Welcome '+nom)",
+            status: "modified",
+          },
+        ],
+      },
+      policyFor()
+    );
     expect(inPr[0]).toContain("No source witness for welcome: src/form.ts");
     expect(inPr[0]).toContain("declare that file");
     // Un témoin hors diff ne doit pas être proposé : le planificateur le
     // déclarerait et la validation le refuserait, pour rien.
-    const outside = ungroundedPlanRefusals(contract, {
-      ...context,
-      context: [
-        {
-          content: "show('Welcome '+nom)",
-          path: "README.md",
-          ref: context.sha,
-        },
-      ],
-    });
+    const outside = ungroundedPlanRefusals(
+      contract,
+      {
+        ...context,
+        context: [
+          {
+            content: "show('Welcome '+nom)",
+            path: "README.md",
+            ref: context.sha,
+          },
+        ],
+      },
+      policyFor()
+    );
     expect(outside[0]).toContain("this PR does not change");
     expect(outside[0]).not.toContain("declare that file");
   });
