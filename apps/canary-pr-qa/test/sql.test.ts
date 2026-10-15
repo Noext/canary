@@ -675,7 +675,7 @@ it("invalidates an already published result when cancellation wins the atomic co
     startedAt: "now",
     outcome: "passed",
     scenarios: [],
-    publication: { commentUrl: PR_URL, status: "success" },
+    publication: { commentUrl: PR_URL, status: "published" },
   };
   await q.cancel(job.id, "admin");
   await completeRun(q, job.id, "worker", result, f.config);
@@ -1196,7 +1196,7 @@ it("retains dashboard App credentials through worker completion when cancellatio
       startedAt: "now",
       outcome: "passed",
       scenarios: [],
-      publication: { commentUrl, status: "success" },
+      publication: { commentUrl, status: "published" },
     };
   });
   await startWorker(config, stop);
@@ -1215,7 +1215,10 @@ it("retains dashboard App credentials through worker completion when cancellatio
   const repaired = JSON.parse(
     await readFile(join(f.dataDir, job.id, "result.json"), "utf8")
   );
-  expect(repaired.publication.status).toBe("error");
+  // Le run publié puis invalidé reste publié : le verdict bloqué vit dans le
+  // commit status posté, jamais recopié dans le champ de publication.
+  expect(repaired.publication.status).toBe("published");
+  expect(repaired.publication.commitStatus).toBe("error");
   expect(repaired.error).not.toContain("repair failed");
   const invalidations = f.requests.filter(
     (item) => item.path === `/repos/fixture/app/statuses/${SHA}`
@@ -1226,6 +1229,79 @@ it("retains dashboard App credentials through worker completion when cancellatio
       (item) => item.auth === "Bearer fixture-installation-token-42001"
     )
   ).toBe(true);
+}, 30_000);
+
+it("keeps an invalidated report failed when its comment cannot be rewritten", async () => {
+  const q = await sqlDatabase();
+  const f = await githubSetupFixture();
+  cleanup.push(f.close);
+  const config = { ...f.config, DATABASE_URL: "postgres://fixture" };
+  const setup = new GitHubSetup(q.pool, config);
+  await setup.convert(
+    "admin",
+    await setup.state("admin", "manifest"),
+    "fixture-manifest-code"
+  );
+  await setup.select(["fixture/app"]);
+  const job = await q.enqueue(
+    "fixture/app",
+    1,
+    SHA,
+    "admin",
+    { prUrl: PR_URL },
+    "app-invalidate-without-comment"
+  );
+  const stop = new AbortController();
+  const runner = await import("../src/runner.js");
+  vi.spyOn(runner, "runQa").mockImplementation(async (_input, effective) => {
+    const github = new GitHub(effective);
+    const context = await github.context(PR_URL);
+    await github.status(
+      context,
+      "success",
+      "Fixture published before cancellation"
+    );
+    const commentUrl = await github.comment(
+      context,
+      "Fixture published success"
+    );
+    await q.cancel(job.id, "admin");
+    stop.abort();
+    return {
+      id: job.id,
+      prUrl: PR_URL,
+      sha: SHA,
+      startedAt: "now",
+      outcome: "passed",
+      scenarios: [],
+      publication: { commentUrl, status: "published" },
+    };
+  });
+  // La réécriture du rapport invalidé échoue, le verdict bloqué est bien écrit :
+  // ce dernier ne rachète pas le commentaire manquant.
+  const comment = GitHub.prototype.comment;
+  let comments = 0;
+  vi.spyOn(GitHub.prototype, "comment").mockImplementation(async function (
+    this: GitHub,
+    ...args
+  ) {
+    comments += 1;
+    if (comments > 1) {
+      throw new Error("Comment API unavailable");
+    }
+    return await comment.apply(this, args);
+  });
+  await startWorker(config, stop);
+  const repaired = JSON.parse(
+    await readFile(join(f.dataDir, job.id, "result.json"), "utf8")
+  );
+  expect(repaired.publication.status).toBe("failed");
+  expect(repaired.publication.commitStatus).toBe("error");
+  expect(repaired.error).toContain("Publication repair failed");
+  expect(f.outgoing.map((item) => item.payload.state).filter(Boolean)).toEqual([
+    "success",
+    "error",
+  ]);
 }, 30_000);
 
 it("reads an uninstalled public fork anonymously while keeping base writes installation-scoped and private forks unavailable", async () => {

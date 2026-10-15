@@ -4,17 +4,32 @@ import { QaError, redact } from "./diagnostics.js";
 import { fetchSse, fetchText } from "./http.js";
 import { assertProvider, runModelConfig } from "./model-catalog.js";
 import { checkBudget, runScope } from "./run-scope.js";
-import { emptyChatStream, reduceChatStream } from "./sse.js";
+import { type ChatUsage, emptyChatStream, reduceChatStream } from "./sse.js";
 import { modelCalls, modelLatency, modelTokens, traced } from "./telemetry.js";
+
+/** Compteurs d'usage déclarés par l'endpoint, dans l'une ou l'autre forme de transport. */
+interface ReportedUsage {
+  completion_tokens?: number;
+  prompt_tokens?: number;
+  total_tokens?: number;
+}
 
 /** Réponse de `chat/completions` dans la forme non streamée, quel que soit le mode de transport. */
 interface ModelResponse {
   choices?: { finish_reason?: string; message?: { content?: string } }[];
-  usage?: {
-    completion_tokens?: number;
-    prompt_tokens?: number;
-    total_tokens?: number;
-  };
+  usage?: ReportedUsage;
+}
+
+/**
+ * Ce qu'une tentative a réellement livré avant de se perdre : la mesure, et non
+ * la borne, sur laquelle sa réserve est créditée. `usage` est le dernier usage
+ * partiel rapporté par le flux ; les compteurs de caractères disent ce que le
+ * transport a assemblé avant la coupure.
+ */
+interface DeliveredTrial {
+  contentChars: number;
+  reasoningChars: number;
+  usage?: ChatUsage;
 }
 
 /**
@@ -95,6 +110,18 @@ export function transportCode(error: unknown): string | undefined {
     : undefined;
 }
 
+/**
+ * Un compteur d'usage n'est une mesure que s'il est strictement positif. Un zéro
+ * explicite n'est pas une mesure nulle mais une absence de mesure : un endpoint
+ * qui zéro-remplit son `usage` ne peut donc ni créditer une tentative perdue
+ * d'une réserve nulle, ni faire déclarer zéro pour un prompt réellement envoyé.
+ */
+function measuredCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -133,19 +160,28 @@ export class Model {
         { model: this.config.OPENAI_MODEL },
         (Date.now() - started) / 1000
       );
-      const inputTokens =
-        response.usage?.prompt_tokens ??
-        Math.ceil(JSON.stringify(messages).length / 3);
-      const outputTokens = response.usage?.completion_tokens ?? maxTokens;
+      const reportedInput = measuredCount(response.usage?.prompt_tokens);
+      const reportedOutput = measuredCount(response.usage?.completion_tokens);
+      // Sans mesure positive, ce sont nos bornes qui chiffrent l'appel : la
+      // borne de l'entrée et la sortie maximale autorisée.
+      const inputTokens = reportedInput ?? this.inputTokenBound(messages);
+      const outputTokens = reportedOutput ?? maxTokens;
+      // Un total annoncé chiffre l'appel à sa hauteur, même quand l'endpoint
+      // n'expose aucune des deux parts : un endpoint qui annonce 900 000 tokens
+      // ne peut pas être compté comme s'il en avait consommé 745.
+      const counted = this.countedUsage(
+        inputTokens,
+        inputTokens + outputTokens,
+        measuredCount(response.usage?.total_tokens)
+      );
+      this.observeInput(this.declaredInputFloor(response.usage));
       const scope = runScope.getStore();
       if (scope) {
-        scope.estimated ||= !response.usage;
-        scope.tokens += inputTokens + outputTokens;
+        scope.estimated ||=
+          reportedInput === undefined || reportedOutput === undefined;
+        scope.tokens += counted.tokens;
         scope.calls++;
-        scope.costUsd +=
-          (inputTokens * this.config.QA_INPUT_COST_PER_MILLION +
-            outputTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
-          1_000_000;
+        scope.costUsd += counted.costUsd;
       }
       modelTokens.inc(
         { model: this.config.OPENAI_MODEL, direction: "input" },
@@ -153,7 +189,7 @@ export class Model {
       );
       modelTokens.inc(
         { model: this.config.OPENAI_MODEL, direction: "output" },
-        outputTokens
+        counted.outputTokens
       );
       modelCalls.inc({ model: this.config.OPENAI_MODEL, outcome: "response" });
       checkBudget();
@@ -214,30 +250,123 @@ export class Model {
   }
 
   /**
-   * Ce qu'une tentative engage au pire cas : l'entrée comptée au caractère et
-   * la sortie maximale. Une connexion coupée a pu consommer ces tokens sans que
-   * l'endpoint ne les rapporte jamais.
+   * Borne haute de l'entrée d'un appel, en tokens. Deux octets par token est la
+   * marge prudente retenue : sur du JSON, du texte et du code, un tokenizer
+   * byte-level émet nettement moins d'un token par octet, et 64 tokens par
+   * message couvrent les marqueurs de rôle du gabarit de chat. Une écriture plus
+   * dense resterait sous-estimée : cet écart ne sert jamais deux fois, car le
+   * plus grand chiffre d'entrée réellement rapporté sur ce run — `prompt_tokens`
+   * ou `total_tokens` — devient le plancher de la borne suivante
+   * (`observedInputTokens`).
+   */
+  private inputTokenBound(
+    messages: { content: string; role: string }[]
+  ): number {
+    const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
+    return Math.max(
+      Math.ceil(bytes / 2) + 64 * (messages.length + 1),
+      runScope.getStore()?.observedInputTokens ?? 0
+    );
+  }
+
+  /**
+   * Le plus grand chiffre que l'endpoint a rapporté pour un appel, retenu comme
+   * plancher de la borne d'entrée des admissions suivantes : son
+   * `prompt_tokens`, et son `total_tokens` dès que ce total est plus lourd. Un
+   * total annoncé est une mesure, jamais une estimation à corriger : la prochaine
+   * admission ne peut donc pas être décidée sous ce que l'endpoint a déjà déclaré
+   * pour cet appel.
+   */
+  private declaredInputFloor(
+    usage: ReportedUsage | undefined
+  ): number | undefined {
+    const input = measuredCount(usage?.prompt_tokens);
+    const total = measuredCount(usage?.total_tokens);
+    if (input === undefined) {
+      return total;
+    }
+    return total === undefined ? input : Math.max(input, total);
+  }
+
+  /**
+   * Retient le plus grand chiffre d'entrée que l'endpoint a réellement rapporté
+   * pour ce run (`declaredInputFloor`) : une sous-estimation connue de l'entrée
+   * ne décide plus deux admissions, la borne suivante valant au moins ce poids.
+   */
+  private observeInput(inputTokens: number | undefined): void {
+    const scope = runScope.getStore();
+    if (!scope || inputTokens === undefined) {
+      return;
+    }
+    scope.observedInputTokens = Math.max(
+      scope.observedInputTokens ?? 0,
+      inputTokens
+    );
+  }
+
+  /**
+   * Volume retenu pour un appel : le plus grand de notre chiffrage et du
+   * `total_tokens` que l'endpoint a déclaré. Un total rapporté est compté à sa
+   * hauteur, jamais absorbé par notre borne, sans quoi la dépense dépasserait
+   * l'enveloppe sans être déclarée. La part au-delà de notre chiffrage d'entrée
+   * est facturée en sortie : l'endpoint n'en donne pas la répartition, et la
+   * surestimer vaut mieux que l'effacer.
+   */
+  private countedUsage(
+    inputTokens: number,
+    ourTokens: number,
+    reportedTotal: number | undefined
+  ): { costUsd: number; outputTokens: number; tokens: number } {
+    const tokens = Math.max(ourTokens, reportedTotal ?? 0);
+    const outputTokens = Math.max(tokens - inputTokens, 0);
+    return {
+      costUsd: this.cost(inputTokens, outputTokens),
+      outputTokens,
+      tokens,
+    };
+  }
+
+  /** Coût des tokens d'une tentative, aux tarifs configurés. */
+  private cost(inputTokens: number, outputTokens: number): number {
+    return (
+      (inputTokens * this.config.QA_INPUT_COST_PER_MILLION +
+        outputTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
+      1_000_000
+    );
+  }
+
+  /**
+   * Ce qu'une tentative engage au pire cas : la borne de l'entrée et la sortie
+   * maximale. C'est la borne de repli d'une tentative perdue dont le transport
+   * n'a rien laissé observer, et l'engagement de toute tentative qui part. Le
+   * coût garde la borne stricte d'un token par octet — plus stricte que la borne
+   * en tokens, elle ne peut pas sous-réserver l'entrée — et suit lui aussi le
+   * plancher observé, pour qu'une entrée déjà chiffrée plus haut ne soit pas
+   * réservée plus bas.
    */
   private reservation(
     messages: { content: string; role: string }[],
     maxTokens: number
   ): { costUsd: number; tokens: number } {
-    const reservedInput = Math.ceil(JSON.stringify(messages).length / 3);
-    const inputCostBound =
+    const inputCostBound = Math.max(
       Buffer.byteLength(JSON.stringify(messages), "utf8") +
-      64 * (messages.length + 1);
+        64 * (messages.length + 1),
+      runScope.getStore()?.observedInputTokens ?? 0
+    );
     return {
       costUsd:
         (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
           maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
         1_000_000,
-      tokens: maxTokens + reservedInput,
+      tokens: maxTokens + this.inputTokenBound(messages),
     };
   }
 
   /**
    * Aucune tentative n'est lancée si l'enveloppe du run ne couvre pas son pire
-   * cas — y compris après le débit des tentatives perdues.
+   * cas en plus de l'usage déjà consommé ET des réserves des tentatives perdues
+   * (`run-scope.ts:checkBudget`) : l'enveloppe reste une borne dure pour la
+   * dépense totale, la reprise comprise.
    */
   private claim(
     messages: { content: string; role: string }[],
@@ -246,6 +375,88 @@ export class Model {
     const reservation = this.reservation(messages, maxTokens);
     checkBudget(reservation.tokens, reservation.costUsd);
     return reservation;
+  }
+
+  /**
+   * Réserve d'une tentative perdue : la part de son pire cas que le transport a
+   * réellement livrée. L'entrée du prompt est toujours due — la requête est
+   * partie — et la sortie se limite à ce qui a été assemblé avant la coupure,
+   * chiffré par l'usage partiel du flux ou par le texte reçu. Sans mesure
+   * crédible — coupure avant tout octet, ou usage annoncé dont tous les
+   * compteurs sont nuls, ce qui n'est pas une mesure — la borne théorique reste
+   * le seul chiffre défendable : l'endpoint a pu générer une génération entière
+   * que la coupure ne nous rendra jamais. C'est l'angle mort assumé — la réserve
+   * minore ce qui a été facturé sans être transmis — documenté dans .env.example.
+   *
+   * Notre chiffrage reste plafonné par le pire cas de la tentative admise, mais
+   * un `total_tokens` déclaré échappe à ce plafond : la réserve le déclare à sa
+   * hauteur, l'admission suivante refuse alors de repartir, et aucune requête de
+   * plus n'est envoyée.
+   */
+  private credibleReservation(
+    messages: { content: string; role: string }[],
+    maxTokens: number,
+    delivered: DeliveredTrial | undefined
+  ): { costUsd: number; tokens: number } {
+    const worst = this.reservation(messages, maxTokens);
+    if (delivered === undefined) {
+      return worst;
+    }
+    const usage = delivered.usage;
+    const reportedInput = measuredCount(usage?.prompt_tokens);
+    const reportedOutput = measuredCount(usage?.completion_tokens);
+    const reportedTotal = measuredCount(usage?.total_tokens);
+    const deliveredChars = delivered.contentChars + delivered.reasoningChars;
+    // Rien de crédible à créditer : aucune mesure positive et, soit l'endpoint a
+    // annoncé un usage qui n'en est pas un alors qu'il a produit du contenu — un
+    // zéro annoncé ne prouve pas qu'il n'a rien facturé —, soit le transport n'a
+    // rien livré du tout. La borne théorique est alors retenue.
+    if (
+      reportedInput === undefined &&
+      reportedOutput === undefined &&
+      reportedTotal === undefined &&
+      (usage !== undefined || deliveredChars === 0)
+    ) {
+      return worst;
+    }
+    const inputTokens = reportedInput ?? this.inputTokenBound(messages);
+    const outputTokens = reportedOutput ?? Math.ceil(deliveredChars / 3);
+    // Ce que nous chiffrons reste plafonné par le pire cas de la tentative
+    // admise : l'enveloppe qui couvrait cet appel couvre notre propre borne.
+    const counted = this.countedUsage(
+      inputTokens,
+      Math.min(inputTokens + outputTokens, worst.tokens),
+      reportedTotal
+    );
+    // Un total qui dépasse ce pire cas vient de l'endpoint, pas de nous : il est
+    // déclaré tel quel, tokens et coût compris. C'est cette réserve, et le
+    // plancher qu'elle pose, qui refusent l'admission suivante.
+    if (counted.tokens > worst.tokens) {
+      return { costUsd: counted.costUsd, tokens: counted.tokens };
+    }
+    return {
+      costUsd: Math.min(counted.costUsd, worst.costUsd),
+      tokens: counted.tokens,
+    };
+  }
+
+  /**
+   * Comptabilise la réserve crédible d'une tentative perdue à part de l'usage
+   * rapporté, y compris quand elle est la dernière — reprises épuisées ou
+   * plafond d'appels atteint. Elle est jugée avec l'usage consommé par
+   * l'admission suivante : c'est la reprise qui est refusée si le total ne tient
+   * plus, et un total déclaré au-delà de l'enveloppe la refuse dès la première
+   * coupure. Le run passe en estimé : ce débit n'est pas un usage rapporté par
+   * l'endpoint.
+   */
+  private reserveLost(lost: { costUsd: number; tokens: number }): void {
+    const scope = runScope.getStore();
+    if (!scope) {
+      return;
+    }
+    scope.reservedTokens += lost.tokens;
+    scope.reservedCostUsd += lost.costUsd;
+    scope.estimated = true;
   }
 
   /**
@@ -259,8 +470,13 @@ export class Model {
   ): Promise<ModelResponse> {
     const max = this.config.QA_MODEL_RETRIES;
     for (let attempt = 0; ; attempt++) {
+      // Ce que le transport livre de la tentative en cours : la seule mesure
+      // qui crédite sa réserve si la connexion casse.
+      let delivered: DeliveredTrial | undefined;
       try {
-        return await this.completion(messages, maxTokens);
+        return await this.completion(messages, maxTokens, (snapshot) => {
+          delivered = snapshot;
+        });
       } catch (error) {
         const code = transportCode(error);
         if (!code) {
@@ -268,17 +484,14 @@ export class Model {
         }
         const scope = runScope.getStore();
         const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
-        // Une connexion coupée a pu consommer des tokens que l'endpoint ne nous
-        // rendra jamais : la tentative est débitée au pire cas, y compris
-        // quand elle est la dernière — reprises épuisées ou plafond d'appels
-        // atteint. Le run passe en estimé : ce débit n'est pas un usage
-        // rapporté par l'endpoint.
-        const lost = this.reservation(messages, maxTokens);
-        if (scope) {
-          scope.tokens += lost.tokens;
-          scope.costUsd += lost.costUsd;
-          scope.estimated = true;
-        }
+        this.reserveLost(
+          this.credibleReservation(messages, maxTokens, delivered)
+        );
+        // Cette réserve est plafonnée par le pire cas de la tentative admise,
+        // sauf quand l'endpoint y déclare un total plus lourd ; le plus grand
+        // chiffre d'entrée rapporté devient en plus le plancher des admissions
+        // suivantes, sans quoi une sous-estimation connue déciderait deux fois.
+        this.observeInput(this.declaredInputFloor(delivered?.usage));
         if (!mayRetry(attempt, max, used)) {
           throw failedAttempt(error, code, attempt);
         }
@@ -323,7 +536,8 @@ export class Model {
    */
   private async completion(
     messages: { content: string; role: string }[],
-    maxTokens: number
+    maxTokens: number,
+    onDelivered?: (delivered: DeliveredTrial) => void
   ): Promise<ModelResponse> {
     const timeout = this.config.QA_MODEL_TIMEOUT_SECONDS * 1000;
     const stream = this.config.OPENAI_STREAM === "true";
@@ -365,6 +579,11 @@ export class Model {
       init,
       (event) => {
         state = reduceChatStream(state, event);
+        onDelivered?.({
+          contentChars: state.content.length,
+          reasoningChars: state.reasoningChars,
+          usage: state.usage,
+        });
         // Inutile de payer la fin du flux une fois qu'un échec ou la fin sont connus.
         return state.error === undefined && !state.done;
       },
@@ -414,5 +633,5 @@ Omit expected for visible/hidden; count expected is an integer, others are strin
 Steps are an ordered executable contract, with unique ids and typed actions listed in this message: observe, goto(path), click(locator), fill(locator,value), press(locator,key), select(locator,value), check(locator,checked), assert(assertionId). Every assertion must be executed by exactly one assert step after its afterStep. Assertion targets are frozen in assertions; assert actions contain only assertionId. Read the three verifications from the assertion's point of view: state means the value must match expected at this step and no change is required; transition means the value must differ from the value probed before the step (the proof that the change happened), so an invariant element fails it by construction; persisted means the value must survive the reload and differ from the baseline. Use transition for changed outputs after writes, persisted when surviving reload is the requirement, and state for static/read-only requirements. To assert an invariance after an interaction (the element is still there after clicking X, its text did not change), use state with afterStep set to the interaction step; reserve transition for values that must change. An interaction is not proof by itself: a scenario whose steps include click, fill, press, select or check must also carry at least one transition (or persisted) assertion on the output that actually changes, with an expected value derived from the diff, because a plan that interacts without that evidence is refused before execution and loses its coverage. A state assertion on the interacted element never replaces it: when the only goal is to re-verify an element that stays static, do not interact at all; keep the initial goto and verify it with state assertions. Cite exact source quotes in requirements; do not cite text from the page as source evidence. sourceFiles and quote requirements must cover the changed behavior. Missing locators or credentials means no executable scenario: explicitly explain it, never invent placeholders. Never target an element that is absent from the discovery snapshot: to prove that something is gone, assert kind "hidden" or a count of 0 on a selector the page still carries, never by reading text from the element the PR removed.
 For visual assertions, expected is a trusted visual baseline name supplied in the fixture catalog and target is the frozen screenshot locator. Never create or bless a baseline from the page under test. For download assertions, expected is the exact filename and the corresponding step action is download(locator,assertionId). For popup assertions, expected is the exact popup URL and the corresponding step action is popup(locator,assertionId). These two actions both trigger and verify the event; each replaces the usual assert step. Visual/download/popup verification must be state. Popup URLs must stay on the preview origin. Use only available trusted capabilities; do not claim email, SMS, PDF contents or external payment verification.
 Use ONLY filenames in pr.files for sourceFiles, requirements.sourceFile and skipped.sourceFile. pr.context contains unchanged helper files and both revisions: it is evidence, never the list of changed files. Never add unchanged context files to skipped. Use skipped:[] when every changed file is covered. Use actual changed paths in sourceFiles. Every changed file must be covered by a scenario or explicitly skipped. Don't invent a UI for backend-only or documentation changes: list them as skipped. Identify happy paths, meaningful edge cases, and nearby regressions when applicable. Preconditions must be executable fixture:name or role:name from the supplied trusted catalog; any other precondition blocks execution. Do not expose or ask for secrets. Respect maxScenarios. Assertions must describe the product requirement, with concrete expected values derived from the diff, not whatever the page happens to display. Do not weaken them to pass. Prefer observable saved state or output over mere visibility of a button.
-Locator role.name is the accessible name quoted in the snapshot, never the role type or current text content. For a line like "status [ref=e8]: Welcome Ada", the role is status and name is "", not "status" or "Welcome Ada". Use a grounded CSS target such as #saved if supplied by source. Use the preview's initial snapshot to discover the real UI. Never modify application source code. If the change cannot be tested in Chromium, say why in skipped. Empty scenarios means skipped, never passed.
+Locator role.name is the accessible name quoted in the snapshot, never the role type or current text content. For a line like "status [ref=e8]: Welcome Ada", the role is status and name is "", not "status" or "Welcome Ada". Use a grounded CSS target such as #saved if supplied by source. Use the preview's initial snapshot to discover the real UI. When the control you need is not in the discovery snapshot, copy its accessible name character by character from the cited source (aria-label, label text) and never retype its punctuation: ’ (U+2019) is not ' (U+0027), and a no-break space is not a space. Never modify application source code. If the change cannot be tested in Chromium, say why in skipped. Empty scenarios means skipped, never passed.
 Never build a selector out of a class name or a color read in the source: a plan that used p[class*="text-[#b42318]"] matched nothing, so target what the discovery snapshot shows instead, a role with its accessible name, an id, or an attribute the source defines stably. A value the scenario never modifies does not "change": assert it with verification "state" and its expected value, never "transition", because a line subtotal identical before and after the step (1 000,00 €) fails a transition assertion by construction. An element that exists only after an interaction cannot be read before it exists: assert its presence (kind "visible") at the step where it must exist, or read a selector that is always present, rather than reading the text of a state-dependent selector such as [data-cash-state="cloture"] before the closing step.`;

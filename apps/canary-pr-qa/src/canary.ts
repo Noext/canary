@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { cp, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
+import { createLogger } from "@usecanary/logger";
 import type { BrowserAuth } from "@usecanary/protocol";
 import { z } from "zod";
 import type { Config } from "./config.js";
@@ -11,8 +12,11 @@ import { verifyPreviewUrl } from "./preview.js";
 import { checkBudget, runScope } from "./run-scope.js";
 import type { Action, Assertion, Locator } from "./schema.js";
 
+const logger = createLogger({ name: "pr-qa-browser" });
+
 /** Budget d'instantané transmis au modèle : la planification et l'exécution gardent cette taille. */
 export const MODEL_SNAPSHOT_CHARS = 14_000;
+
 /**
  * Plafond de l'instantané conservé comme évidence de validation du plan. Au
  * plafond, l'instantané est coupé : le contrôle d'évidence est « non concluant »
@@ -27,8 +31,140 @@ const observationSchema = z.object({
   actual: z.unknown().optional(),
   evidence: z.string().optional(),
   provenanceUrls: z.array(z.string().url()).max(5).optional(),
+  /** Nom accessible réellement visé, renseigné seulement après un repli typographique. */
+  targetName: z.string().optional(),
 });
 export type Observation = z.infer<typeof observationSchema>;
+
+/**
+ * Nom accessible retenu par le repli typographique, relu depuis une observation
+ * enregistrée (`StepResult.observation`) : la substitution est une preuve du run,
+ * donc rendue aux surfaces que l'opérateur lit, pas seulement au log du daemon.
+ */
+export function resolvedTargetName(observation: string): string | undefined {
+  try {
+    const parsed = observationSchema.safeParse(JSON.parse(observation));
+    return parsed.success ? parsed.data.targetName : undefined;
+  } catch {
+    return;
+  }
+}
+
+/**
+ * Graphies équivalentes d'un même signe : le premier membre est le
+ * représentant vers lequel le repli ramène les autres. Un lecteur ne distingue
+ * pas « Justification de l’écart » de « Justification de l'écart » ; Playwright,
+ * avec `exact: true`, compare le nom accessible caractère par caractère et ne
+ * résout jamais l'autre graphie.
+ */
+const TYPOGRAPHIC_CLASSES: readonly (readonly string[])[] = [
+  ["'", "\u2018", "\u2019"],
+  ['"', "\u00ab", "\u00bb"],
+  [" ", "\u00a0", "\u202f"],
+];
+
+/** Repli de chaque graphie vers le représentant de sa classe, sa propre graphie comprise. */
+const TYPOGRAPHIC_FOLD = new Map<string, string>(
+  TYPOGRAPHIC_CLASSES.flatMap((members) =>
+    members.map((member): [string, string] => [member, members[0] ?? member])
+  )
+);
+
+/**
+ * Plafond des graphies énumérées pour un libellé : chaque signe repliable
+ * multiplie les candidats, et les essayer tous est le seul repli exact. Un
+ * libellé réel en compte peu ; au-delà du plafond, le repli n'est plus
+ * énumérable et devient un cas explicite (`overflow`), jamais une lecture de la
+ * graphie brute qui croirait avoir mesuré.
+ */
+const MAX_TYPOGRAPHIC_VARIANTS = 256;
+
+/** Nom ramené aux graphies représentatives de ses signes. */
+export function foldTypography(value: string): string {
+  return [...value].map((char) => TYPOGRAPHIC_FOLD.get(char) ?? char).join("");
+}
+
+/**
+ * Codepoints des signes par lesquels deux noms repliables diffèrent, dans
+ * l'ordre d'apparition : deux noms que `foldTypography` confond ont la même
+ * longueur, donc l'écart se lit position par position. C'est ce qui rend la
+ * différence nommable sans ambiguïté (`U+0027` contre `U+2019`).
+ */
+export function typographicCodepoints(value: string, other: string): string {
+  const points = new Set<string>();
+  const compared = [...other];
+  for (const [index, char] of [...value].entries()) {
+    if (char !== compared[index] && TYPOGRAPHIC_FOLD.has(char)) {
+      const code = (char.codePointAt(0) ?? 0).toString(16).toUpperCase();
+      points.add(`U+${code.padStart(4, "0")}`);
+    }
+  }
+  return [...points].join(" ");
+}
+
+/**
+ * Graphies que ce signe peut prendre : toute sa classe. L'espace ordinaire
+ * n'en sort pas, parce que `typographicVariants` ne le replie jamais.
+ */
+function typographicEquivalents(char: string): string[] {
+  const members = TYPOGRAPHIC_CLASSES.find((klass) => klass.includes(char));
+  return !members || char === " " ? [char] : [...members];
+}
+
+/**
+ * Graphies que la même cible peut viser par repli. `names` est vide seulement
+ * quand le libellé ne porte aucun signe repliable : une liste vide ne dit donc
+ * jamais « le repli a échoué ». Le produit des graphies croît avec chaque signe
+ * repliable ; au plafond, l'énumération s'arrête et `overflow` le déclare, pour
+ * que l'appelant en fasse un cas explicite au lieu de mesurer la graphie brute.
+ */
+export interface TypographicVariants {
+  /** Graphies de rechange à essayer, sans la graphie du plan. */
+  names: string[];
+  /** Signes repliables du libellé et graphies qu'ils produisent, au-delà du plafond. */
+  overflow?: { signs: number; variants: number; ceiling: number };
+  /** Graphie littérale que le plan vise, telle quelle. */
+  planned: string;
+}
+
+/**
+ * Graphies d'un libellé pour le même locator. L'espace ordinaire ne se replie
+ * pas position par position : un nom en compte plusieurs, et le produit
+ * dépasserait le plafond pour la plupart des noms. Le repli couvre donc
+ * l'apostrophe et le guillemet (la cause observée) ainsi que l'espace insécable
+ * ramené à l'espace ordinaire ; l'écart inverse reste nommé par le diagnostic,
+ * jamais cliqué.
+ */
+export function typographicVariants(name: string): TypographicVariants {
+  let variants = [""];
+  let signs = 0;
+  let product = 1;
+  for (const char of name) {
+    const equivalents = typographicEquivalents(char);
+    if (equivalents.length > 1) {
+      signs += 1;
+    }
+    // Le produit sature : un libellé saturé de signes repliables en compterait
+    // plus que ce que le diagnostic a besoin de nommer.
+    product = Math.min(product * equivalents.length, 1_000_000);
+    if (product <= MAX_TYPOGRAPHIC_VARIANTS) {
+      variants = variants.flatMap((prefix) =>
+        equivalents.map((equivalent) => prefix + equivalent)
+      );
+    }
+  }
+  if (product > MAX_TYPOGRAPHIC_VARIANTS) {
+    return {
+      planned: name,
+      names: [],
+      overflow: { signs, variants: product, ceiling: MAX_TYPOGRAPHIC_VARIANTS },
+    };
+  }
+  return {
+    planned: name,
+    names: variants.filter((variant) => variant !== name),
+  };
+}
 
 /**
  * `getByLabel` compare le texte du libellé associé, pas le nom accessible du
@@ -81,17 +217,249 @@ const RESOLVE_LABEL_HELPER = `async function resolveLabel(strict, fallback, act)
 }`;
 
 /**
+ * Émis dans le script compilé par `locatorCall` : rejoue le même appel sur les
+ * graphies équivalentes du nom accessible, uniquement après l'échec du nom
+ * exact et uniquement si ces graphies atteignent exactement un élément au
+ * total. Une cible absente de la page ne peut donc pas devenir un clic sur un
+ * homonyme, et deux graphies concurrentes gardent l'échec d'origine. Le nom
+ * réellement visé est publié dans l'observation, jamais tu. Une énumération
+ * refusée par le plafond remonte comme erreur explicite : sans graphies, il n'y
+ * a aucun repli à essayer.
+ */
+const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, spelling, act) {
+  try {
+    return await act(exact);
+  } catch (error) {
+    if (!/Timeout \\d+ms exceeded|strict mode violation/.test(String(error))) throw error;
+    if (await exact.count()) throw error;
+    if (spelling.overflow) throw spellingLimit(spelling);
+    const names = spelling.names;
+    let used;
+    let matched = 0;
+    for (const name of names) {
+      const candidate = page.getByRole(role, { name, exact: true });
+      const count = await candidate.count();
+      matched += count;
+      if (count === 1) used = { candidate, name };
+    }
+    if (!(used && matched === 1)) throw error;
+    targetName = used.name;
+    return await act(used.candidate);
+  }
+}`;
+
+/**
+ * Émis dans le script compilé : le plafond de graphies atteint interdit d'énumérer
+ * le repli. La lecture ne peut alors pas se rabattre sur la graphie brute en
+ * croyant avoir mesuré : elle lève une erreur nommée qui dit le plafond et ce
+ * qu'il reste à faire. Jetée sous forme d'objet, comme l'ambiguïté : un `Error`
+ * créé dans QuickJS perd son message en traversant la frontière.
+ */
+const SPELLING_LIMIT_HELPER = `function spellingLimit(spelling) {
+  const overflow = spelling.overflow;
+  return {
+    name: "SpellingLimitError",
+    message: "Unfoldable spelling " + JSON.stringify(spelling.planned) + ": its " + overflow.signs + " foldable signs produce " + overflow.variants + " competing spellings, above the ceiling of " + overflow.ceiling + ", so no spelling can be enumerated; retarget the assertion on the exact spelling the page exposes",
+  };
+}`;
+
+/**
+ * Émis dans le script compilé par `locatorCall` pour les lectures qui mesurent
+ * un locator vide sans lever (`isVisible`) : elles rendent false au lieu du
+ * délai qui déclencherait le repli après échec, donc le repli n'aurait jamais
+ * lieu. La graphie réellement exposée est ici résolue avant la lecture, `build`
+ * reconstruisant le locator de la même famille — nom accessible d'un rôle,
+ * texte, placeholder — et deux graphies concurrentes lèvent un échec explicite
+ * au lieu d'être départagées au hasard. Une cible réellement absente garde la
+ * lecture honnête de la graphie exacte (false), sans laquelle `hidden` ne serait
+ * plus exprimable.
+ *
+ * L'ambiguïté est jetée sous forme d'objet `{ name, message }`, pas d'un
+ * `new Error` : un `Error` créé dans le bac à sable QuickJS perd son message en
+ * traversant la frontière (seule la pile remonte jusqu'au CLI), donc l'opérateur
+ * ne lirait pas la cause. Un objet dont `message` est propre la porte jusqu'au
+ * rapport.
+ */
+const RESOLVE_SPELLING_READ_HELPER = `async function readSpelling(exact, build, label, spelling, read) {
+  if (await exact.count()) return await read(exact);
+  if (spelling.overflow) throw spellingLimit(spelling);
+  let used;
+  let matched = 0;
+  const exposed = [];
+  for (const name of spelling.names) {
+    const candidate = build(name);
+    const count = await candidate.count();
+    matched += count;
+    if (count) exposed.push(JSON.stringify(name) + " (" + count + ")");
+    if (count === 1) used = { candidate, name };
+  }
+  if (matched === 0) return await read(exact);
+  if (!(used && matched === 1)) {
+    throw { name: "AmbiguousTargetError", message: "Ambiguous " + label + " " + JSON.stringify(spelling.planned) + ": the page exposes " + exposed.join(" and ") + ", so no spelling is chosen; retarget the assertion on one unambiguous spelling" };
+  }
+  targetName = used.name;
+  return await read(used.candidate);
+}`;
+
+/**
+ * Émis dans le script compilé par `locatorCount` : une assertion de comptage ne
+ * choisit pas un élément, elle compte le signe visé sous toutes ses graphies. Le
+ * total additionne la graphie exacte et ses variantes — deux graphies exactes ne
+ * peuvent pas désigner le même élément — donc le verdict porte sur le nombre
+ * réel d'éléments, jamais sur celui d'une graphie choisie au hasard. Aucune
+ * unicité n'est exigée ici : un compte faux reste un compte faux au lieu de
+ * devenir une erreur d'ambiguïté. La substitution n'est publiée que lorsqu'une
+ * graphie unique remplace la graphie exacte absente. Un repli non énumérable
+ * (plafond) interdit de prétendre à un total : c'est une erreur explicite, pas
+ * un compte tronqué qui aurait l'air mesuré.
+ */
+const RESOLVE_SPELLING_COUNT_HELPER = `async function countSpelling(exact, build, spelling) {
+  if (spelling.overflow) throw spellingLimit(spelling);
+  const count = await exact.count();
+  const exposed = [];
+  let total = count;
+  for (const name of spelling.names) {
+    const found = await build(name).count();
+    if (found) exposed.push(name);
+    total += found;
+  }
+  if (count === 0 && exposed.length === 1) targetName = exposed[0];
+  return total;
+}`;
+
+/**
+ * Même règle pour un locator `by:"label"` : `resolveLabel` ne rejoue le repli
+ * par nom accessible qu'après le délai d'un libellé introuvable, délai qu'une
+ * lecture qui mesure ne produit jamais. Quand le libellé exact ne résout rien,
+ * la lecture suit donc l'union par nom accessible au lieu de mesurer un locator
+ * vide.
+ */
+const RESOLVE_LABEL_READ_HELPER = `async function readLabel(strict, fallback, read) {
+  return (await strict.count()) ? await read(strict) : await read(fallback);
+}`;
+
+/**
+ * Graphie littérale visée par un locator dont la graphie d'un signe peut
+ * différer de celle de la page : nom accessible d'un rôle, texte, placeholder.
+ * `css` et `testId` ne portent aucun texte, `label` a son propre repli.
+ */
+function spellingValue(locator: Locator): string | undefined {
+  if (locator.by === "role") {
+    return locator.name;
+  }
+  if (locator.by === "text" || locator.by === "placeholder") {
+    return locator.value;
+  }
+  return;
+}
+
+/** Repli repliable de la graphie visée, jamais calculé pour un autre type. */
+function spellingVariants(locator: Locator): TypographicVariants | undefined {
+  const value = spellingValue(locator);
+  return value === undefined ? undefined : typographicVariants(value);
+}
+
+/**
+ * L'énumération porte-t-elle quelque chose à essayer ? Faux seulement quand le
+ * libellé ne porte aucun signe repliable : un plafond dépassé reste un cas à
+ * traiter (erreur explicite), jamais un repli silencieux sur la graphie brute.
+ */
+function spellingFoldable(variants: TypographicVariants): boolean {
+  return variants.names.length > 0 || variants.overflow !== undefined;
+}
+
+/** Construction du locator pour une graphie de la même famille que le locator visé. */
+function spellingBuilder(locator: Locator): string {
+  switch (locator.by) {
+    case "role":
+      return `(name) => page.getByRole(${JSON.stringify(locator.value)}, { name: name, exact: true })`;
+    case "text":
+      return "(name) => page.getByText(name, { exact: true })";
+    case "placeholder":
+      return "(name) => page.getByPlaceholder(name, { exact: true })";
+    default:
+      throw new Error("Unsupported locator");
+  }
+}
+
+/** Famille nommée dans l'échec d'ambiguïté, pour que la cause soit lisible sans le script. */
+function spellingLabel(locator: Locator): string {
+  switch (locator.by) {
+    case "role":
+      return `accessible name (role ${JSON.stringify(locator.value)})`;
+    case "text":
+    case "placeholder":
+      return locator.by;
+    default:
+      throw new Error("Unsupported locator");
+  }
+}
+
+/**
  * Appel Playwright sur le contrôle visé, `call` étant un suffixe de méthode
  * (`click({ timeout: 10000 })`). Un locator `by:"label"` reçoit le repli par nom
- * accessible ; les autres sont appelés directement.
+ * accessible, un locator `by:"role"` le repli par graphie du nom `name`, les
+ * autres sont appelés directement.
+ *
+ * `mode` dit ce que l'appel fait d'un locator vide : une action ou une lecture
+ * qui lève (`click`, `innerText`) est rejouée sur le repli après l'échec de la
+ * graphie exacte, alors qu'une lecture qui mesure (`isVisible`) doit résoudre la
+ * graphie exposée d'abord — un locator vide y rend false sans jamais lever. Une
+ * énumération refusée par le plafond de graphies lève une erreur nommée au lieu
+ * de rendre un verdict : la lecture ne mesure jamais la graphie brute sans
+ * l'avoir résolue.
  */
-export function locatorCall(locator: Locator, call: string): string {
-  const target = locatorExpression(locator);
-  if (locator.by !== "label") {
-    return `${target}.${call}`;
+export function locatorCall(
+  locator: Locator,
+  call: string,
+  mode: "act" | "measure" = "act"
+): string {
+  if (locator.by === "label") {
+    const { strict, fallback } = labelTargets(locator.value);
+    const read = `(locator) => locator.${call}`;
+    return mode === "measure"
+      ? `readLabel(${strict}, ${fallback}, ${read})`
+      : `resolveLabel(${strict}, ${fallback}, ${read})`;
   }
-  const { strict, fallback } = labelTargets(locator.value);
-  return `resolveLabel(${strict}, ${fallback}, (locator) => locator.${call})`;
+  const read = `(locator) => locator.${call}`;
+  const spelling = spellingVariants(locator);
+  if (mode === "measure" && spelling && spellingFoldable(spelling)) {
+    // La lecture reçoit aussi la graphie du plan et sa famille : c'est ce que
+    // l'échec d'ambiguïté nomme, faute de pouvoir désigner une seule graphie.
+    return `readSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(spellingLabel(locator))}, ${JSON.stringify(spelling)}, ${read})`;
+  }
+  return nameFallback(locator, read) ?? `${locatorExpression(locator)}.${call}`;
+}
+
+/**
+ * Lecture d'une assertion `count` : la multiplicité est le sujet, donc aucune
+ * unicité n'est exigée. Le total additionne les graphies du même signe, et un
+ * compte qui ne tombe pas juste reste une assertion fausse, pas une ambiguïté.
+ * Un repli non énumérable (plafond) lève : un total tronqué aurait l'air mesuré.
+ */
+export function locatorCount(locator: Locator): string {
+  if (locator.by === "label") {
+    const { strict, fallback } = labelTargets(locator.value);
+    return `readLabel(${strict}, ${fallback}, (locator) => locator.count())`;
+  }
+  const spelling = spellingVariants(locator);
+  return spelling && spellingFoldable(spelling)
+    ? `countSpelling(${locatorExpression(locator)}, ${spellingBuilder(locator)}, ${JSON.stringify(spelling)})`
+    : `${locatorExpression(locator)}.count()`;
+}
+
+/**
+ * Repli typographique d'un locator role+nom : `undefined` quand le nom ne porte
+ * aucun signe repliable, ou quand le plan vise une autre famille de locator.
+ */
+function nameFallback(locator: Locator, act: string): string | undefined {
+  if (locator.by !== "role") {
+    return;
+  }
+  const spelling = typographicVariants(locator.name);
+  return spellingFoldable(spelling)
+    ? `resolveName(${locatorExpression(locator)}, ${JSON.stringify(locator.value)}, ${JSON.stringify(spelling)}, ${act})`
+    : undefined;
 }
 
 /**
@@ -99,12 +467,14 @@ export function locatorCall(locator: Locator, call: string): string {
  * locator reçu sous le nom `locator`.
  */
 function locatorRun(locator: Locator, body: string): string {
-  const target = locatorExpression(locator);
-  if (locator.by !== "label") {
-    return `(async (locator) => { ${body} })( ${target} )`;
+  if (locator.by === "label") {
+    const { strict, fallback } = labelTargets(locator.value);
+    return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
   }
-  const { strict, fallback } = labelTargets(locator.value);
-  return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
+  return (
+    nameFallback(locator, `async (locator) => { ${body} }`) ??
+    `(async (locator) => { ${body} })( ${locatorExpression(locator)} )`
+  );
 }
 
 export function locatorExpression(locator: Locator): string {
@@ -168,9 +538,9 @@ function readAssertion(assertion: Assertion, locator?: Locator): string {
     case "value":
       return `await ${locatorCall(locator, "inputValue({ timeout: 5000 })")}`;
     case "count":
-      return `await ${locatorCall(locator, "count()")}`;
+      return `await ${locatorCount(locator)}`;
     default:
-      return `await ${locatorCall(locator, "isVisible()")}`;
+      return `await ${locatorCall(locator, "isVisible()", "measure")}`;
   }
 }
 function compileAssertion(
@@ -279,14 +649,20 @@ await popup.close();`
     ? `, evidence: ariaSnapshot.slice(0, ${options.evidenceSnapshotChars})`
     : "";
   return `const page = await browser.getPage("qa");
+let targetName;
 let actual;
 const provenanceUrls = [];
 ${RESOLVE_LABEL_HELPER}
+${RESOLVE_LABEL_READ_HELPER}
+${SPELLING_LIMIT_HELPER}
+${RESOLVE_NAME_HELPER}
+${RESOLVE_SPELLING_READ_HELPER}
+${RESOLVE_SPELLING_COUNT_HELPER}
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
 const ariaSnapshot = (await page.snapshotForAI({ depth: 12 })).full;
-console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS})${evidence}, actual, provenanceUrls }));`;
+console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS})${evidence}, actual, targetName, provenanceUrls }));`;
 }
 
 export class Canary {
@@ -441,6 +817,18 @@ export class Canary {
     const observation = observationSchema.parse(
       JSON.parse(line.slice(MARKER.length))
     );
+    if (observation.targetName) {
+      // Le plan vise un nom, la page en expose un autre : la substitution est
+      // une preuve du run, elle ne peut pas rester tacite.
+      logger.info(
+        {
+          runId: runScope.getStore()?.id,
+          step: label,
+          name: observation.targetName,
+        },
+        "Nom accessible résolu par repli typographique"
+      );
+    }
     const sha = runScope.getStore()?.previewSha;
     if (sha) {
       for (const url of new Set([

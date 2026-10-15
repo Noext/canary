@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Canary, compileAction } from "../src/canary.js";
+import {
+  assertionMatches,
+  Canary,
+  compileAction,
+  compileProbe,
+} from "../src/canary.js";
 import { doctor } from "../src/doctor.js";
 import { executeScenario } from "../src/executor.js";
 import { GitHubSetup } from "../src/github-setup.js";
@@ -195,6 +200,392 @@ it("rejects static matching output as transition evidence in actual Chromium", a
     actual: "Welcome Ada",
     passed: false,
   });
+}, 180_000);
+/**
+ * Le cas réel f0f24722 : le plan recopie la ponctuation de sa source (U+0027),
+ * l'application expose l'apostrophe typographique (U+2019), et Playwright
+ * compare le nom accessible caractère par caractère avec `exact: true`. Le repli
+ * ne vise l'autre graphie que si elle atteint exactement un élément, et le nom
+ * réellement visé est publié avec l'observation.
+ */
+it("targets the exposed spelling in actual Chromium, and nothing when two compete", async () => {
+  const f = await fixture();
+  closers.push(f.close);
+  const canary = new Canary(f.config);
+  const id = await canary.start("Typographic accessible name");
+  const planned = {
+    by: "role" as const,
+    value: "textbox",
+    name: "Justification de l'écart",
+  };
+  try {
+    await canary.act(
+      id,
+      "open",
+      compileAction({ type: "goto", path: "/typographie" }, f.baseUrl)
+    );
+    const filled = await canary.act(
+      id,
+      "fill",
+      compileAction(
+        { type: "fill", locator: planned, value: "Écart constaté" },
+        f.baseUrl
+      )
+    );
+    expect(filled.targetName).toBe("Justification de l\u2019écart");
+    const read = await canary.act(
+      id,
+      "read",
+      compileProbe(
+        {
+          id: "justification",
+          kind: "value",
+          description: "la justification saisie est relue",
+          expected: "Écart constaté",
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(read.actual).toBe("Écart constaté");
+    // `isVisible()` et `count()` ne lèvent jamais, même sur un locator vide :
+    // sans résolution préalable du nom exposé, « hidden » passait sur une cible
+    // visible et « visible »/« count » échouaient dessus. Les trois verdicts
+    // doivent être justes, sur la graphie que la page expose.
+    const visible = await canary.act(
+      id,
+      "visible",
+      compileProbe(
+        {
+          id: "visible",
+          kind: "visible",
+          description: "la justification de l'écart est visible",
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(visible.actual).toBe(true);
+    expect(visible.targetName).toBe("Justification de l\u2019écart");
+    const hidden = await canary.act(
+      id,
+      "hidden",
+      compileProbe(
+        {
+          id: "hidden",
+          kind: "hidden",
+          description: "la justification de l'écart est cachée",
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(hidden.actual).toBe(true);
+    expect(hidden.targetName).toBe("Justification de l\u2019écart");
+    expect(
+      assertionMatches(
+        {
+          id: "hidden",
+          kind: "hidden",
+          description: "la justification de l'écart est cachée",
+        },
+        hidden.actual
+      )
+    ).toBe(false);
+    const count = await canary.act(
+      id,
+      "count",
+      compileProbe(
+        {
+          id: "count",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(count.actual).toBe(1);
+    expect(count.targetName).toBe("Justification de l\u2019écart");
+    // Deux graphies concurrentes : la cible du plan ne résout toujours rien, et
+    // l'échec d'origine remonte au lieu d'un contrôle choisi au hasard.
+    await canary.act(
+      id,
+      "open-double",
+      compileAction({ type: "goto", path: "/typographie-double" }, f.baseUrl)
+    );
+    await expect(
+      canary.act(
+        id,
+        "ambiguous-fill",
+        compileAction(
+          { type: "fill", locator: planned, value: "Écart constaté" },
+          f.baseUrl
+        )
+      )
+    ).rejects.toThrow(/Timeout \d+ms exceeded/);
+    // Une lecture qui mesure ne rend ni false ni 0 : elle nomme l'ambiguïté au
+    // lieu de laisser « hidden » passer sur un locator vide.
+    await expect(
+      canary.act(
+        id,
+        "ambiguous-hidden",
+        compileProbe(
+          {
+            id: "hidden",
+            kind: "hidden",
+            description: "la justification de l'écart est cachée",
+            target: planned,
+          },
+          f.baseUrl
+        )
+      )
+    ).rejects.toThrow(/Ambiguous accessible name/);
+    // Un comptage ne choisit pas un élément : les deux graphies du même signe
+    // s'additionnent, donc « count: 1 » est faux au lieu d'être une ambiguïté.
+    const doubleCount = await canary.act(
+      id,
+      "count-double",
+      compileProbe(
+        {
+          id: "count",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(doubleCount.actual).toBe(2);
+    expect(
+      assertionMatches(
+        {
+          id: "count",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+        },
+        doubleCount.actual
+      )
+    ).toBe(false);
+    const doubleCountTwo = await canary.act(
+      id,
+      "count-double-two",
+      compileProbe(
+        {
+          id: "count",
+          kind: "count",
+          description: "les deux graphies comptent deux éléments",
+          expected: 2,
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    // Le total des deux graphies tombe juste : aucune unicité n'est exigée.
+    expect(doubleCountTwo.actual).toBe(2);
+    expect(
+      assertionMatches(
+        {
+          id: "count",
+          kind: "count",
+          description: "les deux graphies comptent deux éléments",
+          expected: 2,
+        },
+        doubleCountTwo.actual
+      )
+    ).toBe(true);
+  } finally {
+    await canary.abort(id).catch(() => undefined);
+  }
+}, 180_000);
+/**
+ * Le cas F1b : le texte ou le placeholder ne diffère du plan que par la graphie
+ * de l'apostrophe, et `isVisible()`/`count()` ne lèvent jamais sur un locator
+ * vide — sans résolution préalable, « hidden » passait sur un texte pourtant
+ * affiché. Le comptage additionne les graphies du même signe, donc l'unicité n'y
+ * a pas de sens, et deux graphies concurrentes restent un échec explicite.
+ */
+it("measures text and placeholder spellings in actual Chromium", async () => {
+  const f = await fixture();
+  closers.push(f.close);
+  const canary = new Canary(f.config);
+  const id = await canary.start("Typographic text and placeholder");
+  const exposed = "Justification de l\u2019écart";
+  const targets = [
+    { by: "text" as const, value: "Justification de l'écart" },
+    { by: "placeholder" as const, value: "Justification de l'écart" },
+  ];
+  const reading = (
+    target: (typeof targets)[number],
+    kind: "visible" | "hidden" | "count",
+    expected = 1
+  ) =>
+    kind === "count"
+      ? compileProbe(
+          {
+            id: "count",
+            kind: "count",
+            description: "la justification de l'écart compte des éléments",
+            expected,
+            target,
+          },
+          f.baseUrl
+        )
+      : compileProbe(
+          {
+            id: kind,
+            kind,
+            description: `la justification de l'écart est ${kind === "hidden" ? "cachée" : "affichée"}`,
+            target,
+          },
+          f.baseUrl
+        );
+  try {
+    for (const target of targets) {
+      await canary.act(
+        id,
+        `open-${target.by}`,
+        compileAction({ type: "goto", path: "/typographie-texte" }, f.baseUrl)
+      );
+      const visible = await canary.act(
+        id,
+        `visible-${target.by}`,
+        reading(target, "visible")
+      );
+      expect(visible.actual, target.by).toBe(true);
+      expect(visible.targetName, target.by).toBe(exposed);
+      const hidden = await canary.act(
+        id,
+        `hidden-${target.by}`,
+        reading(target, "hidden")
+      );
+      // Le texte est affiché : « hidden » est faux au lieu de passer sur un
+      // locator vide.
+      expect(hidden.actual, target.by).toBe(true);
+      expect(
+        assertionMatches(
+          {
+            id: "hidden",
+            kind: "hidden",
+            description: "la justification de l'écart est cachée",
+          },
+          hidden.actual
+        ),
+        target.by
+      ).toBe(false);
+      const count = await canary.act(
+        id,
+        `count-${target.by}`,
+        reading(target, "count")
+      );
+      expect(count.actual, target.by).toBe(1);
+      expect(count.targetName, target.by).toBe(exposed);
+    }
+    // Libellés français à trois puis quatre signes repliables (27 et 81
+    // graphies) : au plafond historique de 16 la lecture retombait sur la
+    // graphie brute, donc « hidden » passait sur un texte pourtant affiché. Les
+    // verdicts doivent porter sur la graphie que Chromium expose.
+    for (const [route, label] of [
+      ["/typographie-texte-long", "l'écart d'espèces n'est pas justifié"],
+      [
+        "/typographie-texte-long-four",
+        "l'écart d'espèces n'est pas justifié par l'opérateur",
+      ],
+    ] as const) {
+      const longExposed = label.replace(/'/g, "\u2019");
+      await canary.act(
+        id,
+        `open-${route}`,
+        compileAction({ type: "goto", path: route }, f.baseUrl)
+      );
+      for (const target of [
+        { by: "text" as const, value: label },
+        { by: "placeholder" as const, value: label },
+      ]) {
+        const visible = await canary.act(
+          id,
+          `visible-${route}-${target.by}`,
+          reading(target, "visible")
+        );
+        expect(visible.actual, `${route} ${target.by}`).toBe(true);
+        expect(visible.targetName, `${route} ${target.by}`).toBe(longExposed);
+        const hidden = await canary.act(
+          id,
+          `hidden-${route}-${target.by}`,
+          reading(target, "hidden")
+        );
+        expect(hidden.actual, `${route} ${target.by}`).toBe(true);
+        expect(
+          assertionMatches(
+            {
+              id: "hidden",
+              kind: "hidden",
+              description: "l'écart d'espèces n'est pas justifié",
+            },
+            hidden.actual
+          ),
+          `${route} ${target.by}`
+        ).toBe(false);
+        const count = await canary.act(
+          id,
+          `count-${route}-${target.by}`,
+          reading(target, "count")
+        );
+        expect(count.actual, `${route} ${target.by}`).toBe(1);
+      }
+    }
+    // Un comptage honnête additionne les graphies décalées : deux éléments pour
+    // un compte de deux est vrai, trois pour deux est faux, sans ambiguïté.
+    await canary.act(
+      id,
+      "open-double",
+      compileAction(
+        { type: "goto", path: "/typographie-texte-double" },
+        f.baseUrl
+      )
+    );
+    const doubleText = await canary.act(
+      id,
+      "count-double-text",
+      reading(targets[0]!, "count", 2)
+    );
+    expect(doubleText.actual).toBe(2);
+    await canary.act(
+      id,
+      "open-triple",
+      compileAction(
+        { type: "goto", path: "/typographie-texte-triple" },
+        f.baseUrl
+      )
+    );
+    const triplePlaceholder = await canary.act(
+      id,
+      "count-triple-placeholder",
+      reading(targets[1]!, "count", 2)
+    );
+    expect(triplePlaceholder.actual).toBe(3);
+    // Deux graphies concurrentes : la mesure échoue explicitement au lieu de
+    // rendre un verdict sur un locator vide.
+    await canary.act(
+      id,
+      "open-double-again",
+      compileAction(
+        { type: "goto", path: "/typographie-texte-double" },
+        f.baseUrl
+      )
+    );
+    for (const target of targets) {
+      await expect(
+        canary.act(id, `ambiguous-${target.by}`, reading(target, "hidden")),
+        target.by
+      ).rejects.toThrow(new RegExp(`Ambiguous ${target.by}`));
+    }
+  } finally {
+    await canary.abort(id).catch(() => undefined);
+  }
 }, 180_000);
 it("checks persistence after real reload and fails a missing storage write", async () => {
   for (const broken of [false, true]) {

@@ -222,6 +222,69 @@ describe("RunDetail", () => {
     );
   });
 
+  it("flags a report that never reached the pull request, whatever the vocabulary", async () => {
+    // `status` dit l'issue de la publication, dans le vocabulaire courant comme
+    // dans l'ancien, où il recopiait l'état du commit status. "failed" y
+    // accompagnait alors un commentaire pourtant écrit, quand seule l'écriture du
+    // verdict avait échoué : l'URL de commentaire est ce qui tranche.
+    const comment = "https://github.com/fixture/app/pull/1#issuecomment-1";
+    const cases: { failed: boolean; name: string; publication: unknown }[] = [
+      {
+        failed: true,
+        name: "rapport jamais écrit",
+        publication: { commitStatus: "error", status: "failed" },
+      },
+      {
+        failed: true,
+        name: "rapport jamais écrit, URL nulle",
+        publication: { commentUrl: null, status: "failed" },
+      },
+      {
+        failed: false,
+        name: "rapport publié",
+        publication: { commentUrl: comment, status: "published" },
+      },
+      {
+        failed: false,
+        name: "commentaire écrit, verdict de commit status raté",
+        publication: { commentUrl: comment, status: "failed" },
+      },
+      {
+        failed: false,
+        name: "ancien vocabulaire success",
+        publication: { commentUrl: comment, status: "success" },
+      },
+      {
+        failed: false,
+        name: "ancien vocabulaire failure",
+        publication: { commentUrl: comment, status: "failure" },
+      },
+      {
+        failed: false,
+        name: "ancien vocabulaire error",
+        publication: { commentUrl: comment, status: "error" },
+      },
+      {
+        failed: false,
+        name: "rapport antérieur au champ publication",
+        publication: undefined,
+      },
+    ];
+    for (const item of cases) {
+      mockBlocked({ publication: item.publication });
+      const view = renderDetail();
+
+      await waitFor(() => expect(element("resultSummary")).toBeVisible());
+      expect(
+        (element("resultSummary").textContent ?? "").includes(
+          copy.publicationFailed.trim()
+        ),
+        `${item.name} : publication = ${JSON.stringify(item.publication)}`
+      ).toBe(item.failed);
+      view.unmount();
+    }
+  });
+
   it("renders the usage line through the shared copy", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.endsWith("/result.json")) {
@@ -241,6 +304,35 @@ describe("RunDetail", () => {
     await waitFor(() =>
       expect(
         screen.getByText("1200 tokens · coût estimé $0.5000")
+      ).toBeVisible()
+    );
+  });
+
+  it("keeps the worst-case reserve of a lost attempt visible, apart from the spend", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/result.json")) {
+        return Promise.resolve({
+          ...result,
+          usage: {
+            calls: 2,
+            costUsd: 0.5,
+            estimated: true,
+            pricingConfigured: true,
+            reservedCostUsd: 0.0012,
+            reservedTokens: 403_443,
+            retries: 1,
+            tokens: 36,
+          },
+        });
+      }
+      return Promise.resolve(job());
+    });
+    renderDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "36 tokens · coût estimé $0.5000 · 1 reprise · jusqu'à 403443 tokens et $0.0012 d'un essai perdu"
+        )
       ).toBeVisible()
     );
   });

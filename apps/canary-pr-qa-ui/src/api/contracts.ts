@@ -315,7 +315,22 @@ export interface RunResult {
   outcome: Outcome;
   preview?: { sha: string; url: string } | null;
   prUrl: string;
-  publication?: { commentUrl: string; status: string } | null;
+  /**
+   * `status` dit l'issue de la publication du rapport ("published" quand le
+   * commentaire de rapport est sur la PR, "failed" sinon), et l'ancien
+   * vocabulaire des rapports écrits avant sa séparation du commit status
+   * ("success"/"failure"/"error", mais aussi "failed" alors que le
+   * commentaire était écrit) reste lu tel quel.
+   *
+   * Ces deux faits sont les seuls que le dashboard rend : le reste de
+   * `publication` (dont le dernier état de commit status réellement écrit) n'est
+   * ni typé ici ni validé, et traverse jusqu'au diagnostic technique, qui imprime
+   * le résultat brut (voir `schemas.ts`).
+   */
+  publication?: {
+    commentUrl?: string | null;
+    status: string;
+  } | null;
   scenarios: ScenarioSummary[];
   sha?: string | null;
   startedAt: string;
@@ -325,6 +340,9 @@ export interface RunResult {
     estimated?: boolean | null;
     model?: string | null;
     pricingConfigured?: boolean | null;
+    /** Cumul des bornes « au pire cas » des tentatives perdues. */
+    reservedCostUsd?: number | null;
+    reservedTokens?: number | null;
     retries?: number | null;
     tokens: number;
   } | null;

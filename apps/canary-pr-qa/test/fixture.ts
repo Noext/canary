@@ -290,6 +290,68 @@ export async function fixture(
       res.end("<!doctype html><h1>Popup evidence</h1>");
       return;
     }
+    if (path === "/typographie" || path === "/typographie-double") {
+      // Noms accessibles qui ne diffèrent du plan que par la graphie de
+      // l'apostrophe : le cas réel où le plan recopie U+0027 et la page expose
+      // U+2019. La seconde page en expose deux, pour prouver qu'aucune n'est
+      // choisie quand elles se concurrencent.
+      const labels =
+        path === "/typographie"
+          ? [
+              '<label for="justification">Justification de l\u2019écart</label><textarea id="justification"></textarea>',
+            ]
+          : [
+              '<label for="droite">Justification de l\u2019écart</label><textarea id="droite"></textarea>',
+              '<label for="gauche">Justification de l\u2018écart</label><textarea id="gauche"></textarea>',
+            ];
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "x-commit-sha": SHA,
+      });
+      res.end(
+        `<!doctype html><html lang="fr"><body>${labels.join("")}</body></html>`
+      );
+      return;
+    }
+    if (path.startsWith("/typographie-texte")) {
+      // Textes et placeholders qui ne diffèrent du plan que par la graphie de
+      // l'apostrophe : le plan recopie U+0027, la page expose U+2019. Le titre
+      // de la page garde le texte des ancêtres différent de chaque graphie,
+      // pour que `getByText` exact ne résolve que le paragraphe visé. Les deux
+      // libellés longs portent trois puis quatre signes repliables (27 et 81
+      // graphies), au-delà du plafond historique de 16 : la mesure y retombait
+      // sur la graphie brute. Les suffixes `-double` et `-triple` font
+      // concurrencer les graphies ou en répètent une seule.
+      const suffix = ["-double", "-triple"].find((item) => path.endsWith(item));
+      const route = path.slice(0, path.length - (suffix?.length ?? 0));
+      let label = "Justification de l'écart";
+      if (route.endsWith("-long-four")) {
+        label = "l'écart d'espèces n'est pas justifié par l'opérateur";
+      } else if (route.endsWith("-long")) {
+        label = "l'écart d'espèces n'est pas justifié";
+      }
+      const spelled = label.replace(/'/g, "\u2019");
+      const shifted = label.replace(/'/g, "\u2018");
+      let spellings = [spelled];
+      if (suffix === "-double") {
+        spellings = [spelled, shifted];
+      } else if (suffix === "-triple") {
+        spellings = [spelled, spelled, spelled];
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "x-commit-sha": SHA,
+      });
+      res.end(
+        `<!doctype html><html lang="fr"><body><h1>Écart</h1><main>${spellings
+          .map(
+            (spelling, index) =>
+              `<p id="ligne-${index}">${spelling}</p><input id="champ-${index}" placeholder="${spelling}">`
+          )
+          .join("")}</main></body></html>`
+      );
+      return;
+    }
     if (path === "/version.json") {
       json(res, { sha: options.noSha ? BASE_SHA : SHA });
       return;

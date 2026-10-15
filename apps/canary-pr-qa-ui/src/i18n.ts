@@ -488,12 +488,27 @@ export const runs = {
   assertionsEmpty: "Aucune assertion exécutée",
   /**
    * La ligne d'usage ne parle des reprises que lorsqu'il y en a eu : un run
-   * normal ne doit pas afficher « 0 reprise ».
+   * normal ne doit pas afficher « 0 reprise ». La réserve « au pire cas » d'un
+   * essai perdu n'apparaît que lorsqu'elle existe, et son coût seulement avec
+   * un tarif configuré : elle reste annoncée comme une borne non mesurée.
    */
-  usage: (tokens: number, costUsd: number, configured: boolean, retries = 0) =>
+  usage: (
+    tokens: number,
+    costUsd: number,
+    configured: boolean,
+    retries = 0,
+    reservedTokens = 0,
+    reservedCostUsd = 0
+  ) =>
     `${tokens} tokens · ${
       configured ? `coût estimé $${costUsd.toFixed(4)}` : "coût non configuré"
-    }${retries > 0 ? ` · ${retries} reprise${retries > 1 ? "s" : ""}` : ""}`,
+    }${retries > 0 ? ` · ${retries} reprise${retries > 1 ? "s" : ""}` : ""}${
+      reservedTokens > 0
+        ? ` · jusqu'à ${reservedTokens} tokens${
+            configured ? ` et $${reservedCostUsd.toFixed(4)}` : ""
+          } d'un essai perdu`
+        : ""
+    }`,
   videoLabel: (title: string) => `Vidéo du scénario ${title}`,
   sessionReport: "Rapport de session",
 } as const;

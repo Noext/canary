@@ -112,6 +112,42 @@ describe("server payloads", () => {
     expect(result.scenarios[0]?.artifacts).toEqual(["video.webm"]);
   });
 
+  it("keeps the worst-case reserve of a lost attempt in the result usage", () => {
+    const result = runResultSchema.parse({
+      endedAt: "2026-01-01T00:05:00.000Z",
+      error: null,
+      id: "44444444-4444-4444-4444-444444444444",
+      outcome: "passed",
+      preview: null,
+      prUrl: "https://github.com/o/r/pull/4",
+      publication: null,
+      scenarios: [
+        {
+          artifacts: ["video.webm"],
+          error: null,
+          outcome: "passed",
+          scenario: { id: "welcome", title: "Welcome" },
+        },
+      ],
+      sha: "4".repeat(40),
+      startedAt: "2026-01-01T00:00:00.000Z",
+      usage: {
+        calls: 2,
+        costUsd: 0.5,
+        estimated: true,
+        pricingConfigured: true,
+        reservedCostUsd: 0.0012,
+        reservedTokens: 403_443,
+        retries: 1,
+        tokens: 36,
+      },
+    });
+    // Sans les champs dans le schéma, Zod les retirerait et la borne d'un essai
+    // perdu resterait invisible dans le dashboard.
+    expect(result.usage?.reservedTokens).toBe(403_443);
+    expect(result.usage?.reservedCostUsd).toBe(0.0012);
+  });
+
   it("accepts a setup status without the admin-only preview fields", () => {
     const status = setupStatusSchema.parse({
       ai: { defaultModel: "model-x", endpoint: "ai.example.com" },
@@ -212,6 +248,23 @@ describe("server payloads", () => {
     });
     expect(scenario?.steps).toEqual([{ index: 0, ok: true, reason: "filled" }]);
     expect(scenario?.scenario.steps).toEqual([{ id: "enter" }]);
+  });
+
+  it("reads a report whose publication failed without a comment URL", () => {
+    // L'issue de publication est un fait, l'écriture du commit status un autre :
+    // un rapport jamais publié n'a pas d'URL de commentaire, et ce que le run a
+    // réellement écrit sur le commit traverse jusqu'au résultat brut que le
+    // diagnostic technique imprime.
+    const parsed = runResultSchema.parse({
+      id: "55555555-5555-5555-5555-555555555555",
+      outcome: "blocked",
+      prUrl: "https://github.com/o/r/pull/5",
+      publication: { commitStatus: "error", status: "failed" },
+      scenarios: [],
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(parsed.publication?.status).toBe("failed");
+    expect(parsed.publication?.commitStatus).toBe("error");
   });
 
   it("rejects a response that breaks the contract", () => {

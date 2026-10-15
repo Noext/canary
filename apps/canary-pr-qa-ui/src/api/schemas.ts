@@ -252,7 +252,16 @@ export const runResultSchema = z
     preview: z.object({ sha: z.string(), url: z.string() }).nullish(),
     prUrl: z.string(),
     publication: z
-      .object({ commentUrl: z.string(), status: z.string() })
+      .object({
+        commentUrl: z.string().nullish(),
+        status: z.string(),
+      })
+      // Passthrough comme pour les scénarios : le dashboard rend l'issue de la
+      // publication et l'URL du commentaire, mais le diagnostic technique imprime
+      // le résultat entier. Le dernier état de commit status réellement écrit
+      // ("success"/"failure"/"error") fait partie de ce que le run a fait, et
+      // disparaîtrait du diagnostic s'il était retiré ici.
+      .passthrough()
       .nullish(),
     scenarios: z.array(scenarioSummarySchema),
     sha: z.string().nullish(),
@@ -264,6 +273,8 @@ export const runResultSchema = z
         estimated: z.boolean().nullish(),
         model: z.string().nullish(),
         pricingConfigured: z.boolean().nullish(),
+        reservedCostUsd: z.number().nullish(),
+        reservedTokens: z.number().nullish(),
         retries: z.number().nullish(),
         tokens: z.number(),
       })

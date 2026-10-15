@@ -8,8 +8,12 @@ import {
   Canary,
   compileAction,
   compileProbe,
+  foldTypography,
   locatorCall,
+  locatorCount,
   locatorExpression,
+  typographicCodepoints,
+  typographicVariants,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { diagnose, QaError } from "../src/diagnostics.js";
@@ -26,6 +30,8 @@ import { type RunScope, runScope } from "../src/run-scope.js";
 import { relayModelRetries, runQa } from "../src/runner.js";
 import {
   ActionSchema,
+  type Assertion,
+  type Locator,
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
@@ -70,6 +76,174 @@ function fakeBrowser() {
     "video.webm",
     "trace.zip",
   ]);
+}
+
+/**
+ * Exécute un script compilé contre un faux Playwright, comme le fait le daemon :
+ * l'observation publiée par le script est relue depuis sa sortie, et son échec
+ * éventuel remonte tel quel.
+ */
+async function runCompiledScript(
+  script: string,
+  page: Record<string, unknown>
+): Promise<{
+  failure: unknown;
+  observation: { actual?: unknown; targetName?: string } | undefined;
+}> {
+  const logs: string[] = [];
+  const context = {
+    browser: { getPage: async () => page },
+    console: { log: (line: string) => logs.push(line) },
+  };
+  let failure: unknown;
+  try {
+    await new Script(`(async () => { ${script} })()`, {
+      filename: "compiled.js",
+    }).runInNewContext(context);
+  } catch (error) {
+    failure = error;
+  }
+  const marker = logs.find((line) =>
+    line.startsWith("CANARY_PR_QA_OBSERVATION:")
+  );
+  return {
+    failure,
+    observation: marker
+      ? JSON.parse(marker.slice("CANARY_PR_QA_OBSERVATION:".length))
+      : undefined,
+  };
+}
+
+/**
+ * Exécute le script compilé contre un faux Playwright, comme le fait le daemon :
+ * seules les graphies listées existent, et leur méthode d'action échoue avec le
+ * délai d'une cible introuvable, jamais avec un autre message.
+ */
+async function runTypographicAction(exposed: string[]): Promise<{
+  acted: string[];
+  failure: unknown;
+  observation: { targetName?: string } | undefined;
+}> {
+  const acted: string[] = [];
+  const locator = (name: string) => ({
+    count: async () => (exposed.includes(name) ? 1 : 0),
+    fill: async () => {
+      if (!exposed.includes(name)) {
+        throw new Error(
+          `Timeout 10000ms exceeded.\n  - waiting for getByRole("textbox", { name: ${JSON.stringify(name)} })`
+        );
+      }
+      acted.push(name);
+    },
+  });
+  const { failure, observation } = await runCompiledScript(
+    compileAction(
+      {
+        type: "fill",
+        locator: {
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        },
+        value: "Écart constaté",
+      },
+      "https://preview.test"
+    ),
+    {
+      getByRole: (_role: string, options: { name: string }) =>
+        locator(options.name),
+      url: () => "https://preview.test/caisse",
+      snapshotForAI: async () => ({ full: "" }),
+    }
+  );
+  return { acted, failure, observation };
+}
+
+/**
+ * Faux Playwright d'une page qui n'expose que les graphies listées : chaque
+ * famille de locator (rôle, texte, placeholder) est indexée par la chaîne
+ * exacte visée, et `isVisible()`/`count()` ne lèvent jamais, pas même sur un
+ * locator vide — c'est ce silence que le repli doit devancer.
+ */
+function spellingPage(exposed: string[]) {
+  const locator = (name: string) => ({
+    count: async () => exposed.filter((item) => item === name).length,
+    isVisible: async () => exposed.includes(name),
+  });
+  return {
+    getByRole: (_role: string, options: { name: string }) =>
+      locator(options.name),
+    getByText: (value: string) => locator(value),
+    getByPlaceholder: (value: string) => locator(value),
+    url: () => "https://preview.test/caisse",
+    snapshotForAI: async () => ({ full: "" }),
+  };
+}
+
+/**
+ * Lecture compilée d'une assertion `visible`, `hidden` ou `count` contre une
+ * page qui expose les graphies listées. Le verdict (`passed`) est celui que
+ * l'exécuteur applique au `actual` lu, jamais un verdict recopié à la main.
+ */
+async function readSpelling(
+  kind: "visible" | "hidden" | "count",
+  target: Locator,
+  exposed: string[],
+  expected = 1
+) {
+  const assertion: Assertion =
+    kind === "count"
+      ? {
+          id: "justification",
+          kind: "count",
+          description: "la justification de l'écart compte des éléments",
+          expected,
+          target,
+        }
+      : {
+          id: "justification",
+          kind,
+          description: "la justification de l'écart est visible",
+          target,
+        };
+  const { failure, observation } = await runCompiledScript(
+    compileProbe(assertion, "https://preview.test"),
+    spellingPage(exposed)
+  );
+  return {
+    failure,
+    observation,
+    actual: observation?.actual,
+    passed: assertionMatches(assertion, observation?.actual),
+  };
+}
+
+/** Cible role+nom des lectures qui mesurent, partagée par les tests de graphie. */
+const plannedTarget = {
+  by: "role" as const,
+  value: "textbox",
+  name: "Justification de l'écart",
+};
+
+/**
+ * Libellés français réels à trois puis quatre signes repliables : leur produit
+ * (27 puis 81 graphies) dépassait l'ancien plafond de 16, donc la lecture
+ * retombait sur la graphie brute en croyant mesurer.
+ */
+const THREE_SIGN_LABEL = "l'écart d'espèces n'est pas justifié";
+const FOUR_SIGN_LABEL = "l'écart d'espèces n'est pas justifié par l'opérateur";
+
+/** Même libellé écrit avec la graphie d'apostrophe indiquée (`’` par défaut). */
+function spelled(label: string, apostrophe = "\u2019"): string {
+  return label.replace(/'/g, apostrophe);
+}
+
+/** Même lecture, sur la cible role+nom historique. */
+function runTypographicRead(
+  kind: "visible" | "hidden" | "count",
+  exposed: string[]
+) {
+  return readSpelling(kind, plannedTarget, exposed);
 }
 
 describe("validation and deterministic assertions", () => {
@@ -243,12 +417,20 @@ describe("validation and deterministic assertions", () => {
   it("compiles every action into a syntactically valid script", () => {
     const label = { by: "label" as const, value: "Pharmacie active" };
     const css = { by: "css" as const, value: "#caisse" };
+    // Un nom accessible avec apostrophe compile le repli typographique : sa
+    // syntaxe est validée avec celle de toutes les autres actions.
+    const named = {
+      by: "role" as const,
+      value: "textbox",
+      name: "Justification de l'écart",
+    };
     const assertion = plan.scenarios[0]!.assertions[0]!;
     const actions: Parameters<typeof compileAction>[0][] = [
       { type: "goto", path: "/" },
       { type: "observe" },
       { type: "click", locator: label, description: "cliquer" },
       { type: "click", locator: css, description: "cliquer" },
+      { type: "click", locator: named, description: "cliquer" },
       { type: "fill", locator: label, value: "2", description: "saisir" },
       { type: "press", locator: label, key: "Enter", description: "valider" },
       {
@@ -260,8 +442,10 @@ describe("validation and deterministic assertions", () => {
       { type: "check", locator: css, checked: true, description: "cocher" },
       { type: "download", locator: label, description: "télécharger" },
       { type: "popup", locator: label, description: "ouvrir" },
+      { type: "popup", locator: named, description: "ouvrir" },
       { type: "assert", assertionId: assertion.id, locator: label },
       { type: "assert", assertionId: assertion.id, locator: css },
+      { type: "assert", assertionId: assertion.id, locator: named },
     ] as Parameters<typeof compileAction>[0][];
     for (const action of actions) {
       const command = compileAction(action, "https://preview.test", assertion);
@@ -316,6 +500,417 @@ describe("validation and deterministic assertions", () => {
     // temporelle, contrairement à une déclaration `const` du helper.
     expect(reads).toBe(1);
     expect(snapshots).toBe(1);
+  });
+
+  it("replie les graphies d'un signe, jamais le sens du nom", () => {
+    const planned = "Justification de l'écart";
+    expect(foldTypography("Justification de l’écart")).toBe(
+      foldTypography(planned)
+    );
+    expect(foldTypography("Montant d’espèces\u00a0attendu")).toBe(
+      foldTypography("Montant d'espèces attendu")
+    );
+    expect(typographicVariants(planned)).toEqual({
+      planned,
+      names: ["Justification de l‘écart", "Justification de l’écart"],
+    });
+    expect(typographicCodepoints(planned, "Justification de l’écart")).toBe(
+      "U+0027"
+    );
+    expect(typographicCodepoints("Justification de l’écart", planned)).toBe(
+      "U+2019"
+    );
+    expect(
+      typographicCodepoints(
+        "Montant d'espèces attendu",
+        "Montant d'espèces\u00a0attendu"
+      )
+    ).toBe("U+0020");
+    // Un nom sans signe repliable garde son appel direct : la liste vide dit
+    // « rien à replier », jamais « le repli a échoué ».
+    expect(typographicVariants("Save")).toEqual({
+      planned: "Save",
+      names: [],
+    });
+  });
+
+  it("borne le repli : espace ordinaire intact, plafond déclaré au lieu d'une liste vide", () => {
+    // L'espace insécable revient à l'espace ordinaire, l'inverse n'est pas
+    // énuméré : un nom compte plusieurs espaces et le produit exploserait.
+    const variants = typographicVariants(
+      "Montant d'espèces\u00a0attendu"
+    ).names;
+    expect(variants).toContain("Montant d'espèces attendu");
+    expect(variants).toContain("Montant d’espèces attendu");
+    expect(variants).not.toContain("Montant\u00a0d’espèces attendu");
+    expect(typographicVariants("l'l'").names).toHaveLength(8);
+    // Trois signes repliables tiennent désormais dans le plafond : un libellé
+    // français ordinaire n'est plus replié en silence.
+    expect(typographicVariants("l'l'l'").names).toHaveLength(26);
+    // Au-delà, l'énumération s'arrête et le déclare : une liste vide ne peut plus
+    // se confondre avec « aucun signe repliable ».
+    const saturated = typographicVariants("l'l'l'l'l'l'");
+    expect(saturated.names).toEqual([]);
+    expect(saturated.overflow).toEqual({
+      signs: 6,
+      variants: 729,
+      ceiling: 256,
+    });
+  });
+
+  it("vise l'élément réel quand la page n'expose qu'une autre graphie", async () => {
+    const { acted, failure, observation } = await runTypographicAction([
+      "Justification de l’écart",
+    ]);
+    // Le nom exact n'a rien résolu : le repli vise ce que la page expose, et le
+    // nom réellement utilisé reste dans l'observation.
+    expect(failure).toBeUndefined();
+    expect(acted).toEqual(["Justification de l’écart"]);
+    expect(observation?.targetName).toBe("Justification de l’écart");
+  });
+
+  it("ne vise rien quand deux graphies concurrentes existent", async () => {
+    const { acted, failure, observation } = await runTypographicAction([
+      "Justification de l’écart",
+      "Justification de l‘écart",
+    ]);
+    expect(String(failure)).toContain("Timeout 10000ms exceeded");
+    expect(acted).toEqual([]);
+    expect(observation).toBeUndefined();
+  });
+
+  it("n'essaie aucun repli quand le nom exact existe", async () => {
+    const { acted, failure, observation } = await runTypographicAction([
+      "Justification de l'écart",
+    ]);
+    expect(failure).toBeUndefined();
+    expect(acted).toEqual(["Justification de l'écart"]);
+    expect(observation?.targetName).toBeUndefined();
+  });
+
+  it("compile la lecture qui mesure sur la résolution du nom, jamais sur l'appel direct", () => {
+    const target = {
+      by: "role" as const,
+      value: "textbox",
+      name: "Justification de l'écart",
+    };
+    // `isVisible()` rend false sans lever et `count()` se lit sur le total des
+    // graphies : la mesure doit passer par la résolution de la graphie exposée,
+    // quand l'action attend l'échec de la graphie exacte.
+    expect(locatorCall(target, "isVisible()", "measure")).toContain(
+      "readSpelling("
+    );
+    expect(locatorCount(target)).toContain("countSpelling(");
+    expect(locatorCall(target, "isVisible()")).toContain("resolveName(");
+    expect(locatorCall(target, "click({ timeout: 10000 })")).toContain(
+      "resolveName("
+    );
+    // Un texte et un placeholder exposent la même graphie décalée : leur mesure
+    // résout elle aussi la graphie exposée, sans passer par le nom accessible.
+    expect(
+      locatorCall(
+        { by: "text", value: "Justification de l'écart" },
+        "isVisible()",
+        "measure"
+      )
+    ).toContain("readSpelling(");
+    expect(
+      locatorCount({ by: "placeholder", value: "Justification de l'écart" })
+    ).toContain("countSpelling(");
+  });
+
+  it("vise la graphie exposée avant de lire visibilité et compte", async () => {
+    const exposed = ["Justification de l’écart"];
+    const visible = await runTypographicRead("visible", exposed);
+    expect(visible.failure).toBeUndefined();
+    expect(visible.actual).toBe(true);
+    expect(visible.passed).toBe(true);
+    expect(visible.observation?.targetName).toBe(exposed[0]);
+    const hidden = await runTypographicRead("hidden", exposed);
+    // `actual` est la visibilité lue, `passed` le verdict de l'assertion :
+    // l'élément est visible, donc « hidden » est faux au lieu de passer sur un
+    // locator vide.
+    expect(hidden.actual).toBe(true);
+    expect(hidden.passed).toBe(false);
+    expect(hidden.observation?.targetName).toBe(exposed[0]);
+    const count = await runTypographicRead("count", exposed);
+    expect(count.actual).toBe(1);
+    expect(count.passed).toBe(true);
+  });
+
+  it("garde la lecture du nom exact quand il existe, sans repli", async () => {
+    const exact = ["Justification de l'écart"];
+    const visible = await runTypographicRead("visible", exact);
+    expect(visible.actual).toBe(true);
+    expect(visible.observation?.targetName).toBeUndefined();
+    const hidden = await runTypographicRead("hidden", exact);
+    expect(hidden.actual).toBe(true);
+    expect(hidden.observation?.targetName).toBeUndefined();
+    const count = await runTypographicRead("count", exact);
+    expect(count.actual).toBe(1);
+    expect(count.observation?.targetName).toBeUndefined();
+  });
+
+  it("garde la lecture honnête d'une cible réellement absente", async () => {
+    // `hidden` et `count: 0` restent exprimables : sans repli possible, la
+    // lecture du nom exact (0/false) est le verdict, pas une approximation.
+    const visible = await runTypographicRead("visible", []);
+    expect(visible.actual).toBe(false);
+    expect(visible.passed).toBe(false);
+    const hidden = await runTypographicRead("hidden", []);
+    expect(hidden.actual).toBe(false);
+    expect(hidden.passed).toBe(true);
+    const count = await runTypographicRead("count", []);
+    expect(count.actual).toBe(0);
+    expect(count.passed).toBe(false);
+  });
+
+  it("refuse deux graphies concurrentes au lieu de mesurer un locator vide", async () => {
+    for (const kind of ["visible", "hidden"] as const) {
+      const read = await runTypographicRead(kind, [
+        "Justification de l’écart",
+        "Justification de l‘écart",
+      ]);
+      // L'ambiguïté est jetée sous forme d'objet : le bac à sable QuickJS perd
+      // le message d'un `Error`, et le daemon lit `.message` sur ce qui remonte.
+      const failure = read.failure as { message?: string; name?: string };
+      expect(failure?.name, kind).toBe("AmbiguousTargetError");
+      expect(String(failure?.message), kind).toContain(
+        "Ambiguous accessible name"
+      );
+      expect(String(failure?.message), kind).toContain(
+        '"Justification de l‘écart" (1) and "Justification de l’écart" (1)'
+      );
+      // Aucune lecture n'a eu lieu : rien n'est publié, donc aucun verdict
+      // rendu sur un locator vide.
+      expect(read.observation, kind).toBeUndefined();
+    }
+  });
+
+  it("vise la graphie exposée d'un texte et d'un placeholder avant toute mesure", async () => {
+    const exposed = "Justification de l’écart";
+    for (const target of [
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      // Sans repli, `isVisible()` rendait false et `count()` 0 sur un locator
+      // vide : « hidden » passait sur un texte pourtant affiché, et « visible »
+      // échouait dessus. Les trois verdicts portent sur la graphie exposée.
+      const visible = await readSpelling("visible", target, [exposed]);
+      expect(visible.failure, target.by).toBeUndefined();
+      expect(visible.actual, target.by).toBe(true);
+      expect(visible.passed, target.by).toBe(true);
+      expect(visible.observation?.targetName, target.by).toBe(exposed);
+      const hidden = await readSpelling("hidden", target, [exposed]);
+      expect(hidden.failure, target.by).toBeUndefined();
+      expect(hidden.actual, target.by).toBe(true);
+      expect(hidden.passed, target.by).toBe(false);
+      expect(hidden.observation?.targetName, target.by).toBe(exposed);
+      const count = await readSpelling("count", target, [exposed], 1);
+      expect(count.failure, target.by).toBeUndefined();
+      expect(count.actual, target.by).toBe(1);
+      expect(count.passed, target.by).toBe(true);
+      expect(count.observation?.targetName, target.by).toBe(exposed);
+      // Un compte qui exige zéro ne passe pas sur un texte affiché.
+      const zero = await readSpelling("count", target, [exposed], 0);
+      expect(zero.actual, target.by).toBe(1);
+      expect(zero.passed, target.by).toBe(false);
+    }
+  });
+
+  it("compte les graphies d'un même signe sans exiger l'unicité", async () => {
+    const shifted = ["Justification de l’écart", "Justification de l’écart"];
+    for (const target of [
+      plannedTarget,
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      // Deux éléments portant la graphie décalée : « count: 2 » est vrai, et
+      // aucune ambiguïté n'est jetée — l'unicité n'a pas de sens pour un compte.
+      const two = await readSpelling("count", target, shifted, 2);
+      expect(two.failure, target.by).toBeUndefined();
+      expect(two.actual, target.by).toBe(2);
+      expect(two.passed, target.by).toBe(true);
+      const three = await readSpelling(
+        "count",
+        target,
+        [...shifted, "Justification de l‘écart"],
+        2
+      );
+      // Un compte faux reste faux : trois éléments pour un compte de deux est
+      // une assertion fausse, jamais une erreur d'ambiguïté.
+      expect(three.failure, target.by).toBeUndefined();
+      expect(three.actual, target.by).toBe(3);
+      expect(three.passed, target.by).toBe(false);
+    }
+  });
+
+  it("refuse deux graphies concurrentes d'un texte et d'un placeholder", async () => {
+    for (const target of [
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      for (const kind of ["visible", "hidden"] as const) {
+        const read = await readSpelling(kind, target, [
+          "Justification de l’écart",
+          "Justification de l‘écart",
+        ]);
+        const failure = read.failure as { message?: string; name?: string };
+        expect(failure?.name, `${target.by} ${kind}`).toBe(
+          "AmbiguousTargetError"
+        );
+        expect(String(failure?.message), `${target.by} ${kind}`).toContain(
+          `Ambiguous ${target.by}`
+        );
+        expect(read.observation, `${target.by} ${kind}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("mesure un libellé à deux, trois et quatre signes repliables sur la graphie exposée", async () => {
+    // Le défaut mesuré : au-delà de deux apostrophes, le produit des graphies
+    // dépassait l'ancien plafond de 16, `typographicVariants` rendait une liste
+    // vide, et la lecture retombait sur la graphie brute — « hidden » passait
+    // sur un texte affiché, « visible » et « count » échouaient dessus. Les trois
+    // verdicts doivent porter sur la graphie que la page expose, pour chacun des
+    // libellés ci-dessous.
+    for (const label of [
+      "l'écart d'espèces",
+      THREE_SIGN_LABEL,
+      FOUR_SIGN_LABEL,
+    ]) {
+      const exposed = spelled(label, "\u2019");
+      for (const target of [
+        { by: "role" as const, value: "textbox", name: label },
+        { by: "text" as const, value: label },
+        { by: "placeholder" as const, value: label },
+      ]) {
+        // La mesure passe bien par la résolution de la graphie, pas par l'appel
+        // direct qui aurait rendu le verdict de la graphie brute.
+        expect(locatorCall(target, "isVisible()", "measure"), label).toContain(
+          "readSpelling("
+        );
+        expect(locatorCount(target), label).toContain("countSpelling(");
+        const visible = await readSpelling("visible", target, [exposed]);
+        expect(visible.failure, `${label} ${target.by}`).toBeUndefined();
+        expect(visible.actual, `${label} ${target.by}`).toBe(true);
+        expect(visible.passed, `${label} ${target.by}`).toBe(true);
+        expect(visible.observation?.targetName, `${label} ${target.by}`).toBe(
+          exposed
+        );
+        const hidden = await readSpelling("hidden", target, [exposed]);
+        // Le texte est affiché : « hidden » est faux, jamais vrai sur un locator
+        // vide.
+        expect(hidden.actual, `${label} ${target.by}`).toBe(true);
+        expect(hidden.passed, `${label} ${target.by}`).toBe(false);
+        const count = await readSpelling("count", target, [exposed], 1);
+        expect(count.actual, `${label} ${target.by}`).toBe(1);
+        expect(count.passed, `${label} ${target.by}`).toBe(true);
+      }
+    }
+  });
+
+  it("refuse deux graphies concurrentes d'un libellé à trois signes, sans lire", async () => {
+    // Deux graphies concurrentes : l'échec est explicite et aucune observation
+    // n'est publiée, donc aucun verdict rendu sur un locator vide. La cible
+    // role+nom suit la même règle.
+    const targets = [
+      { by: "role" as const, value: "textbox", name: THREE_SIGN_LABEL },
+      { by: "text" as const, value: THREE_SIGN_LABEL },
+      { by: "placeholder" as const, value: THREE_SIGN_LABEL },
+    ];
+    for (const target of targets) {
+      const read = await readSpelling("hidden", target, [
+        spelled(THREE_SIGN_LABEL, "\u2019"),
+        spelled(THREE_SIGN_LABEL, "\u2018"),
+      ]);
+      const failure = read.failure as { message?: string; name?: string };
+      expect(failure?.name, target.by).toBe("AmbiguousTargetError");
+      expect(String(failure?.message), target.by).toContain("Ambiguous");
+      expect(read.observation, target.by).toBeUndefined();
+    }
+  });
+
+  it("lève au plafond de graphies au lieu de mesurer la graphie brute", async () => {
+    // Six signes repliables dépassent le plafond : les graphies ne sont pas
+    // énumérables, et la lecture le dit au lieu de rendre le verdict de la
+    // graphie brute (qui aurait fait passer « hidden » sur la cible exposée).
+    const saturated = "l'l'l'l'l'l'";
+    const exposed = spelled(saturated, "\u2019");
+    for (const kind of ["visible", "hidden"] as const) {
+      for (const target of [
+        { by: "text" as const, value: saturated },
+        { by: "role" as const, value: "textbox", name: saturated },
+      ]) {
+        const read = await readSpelling(kind, target, [exposed]);
+        const failure = read.failure as { message?: string; name?: string };
+        expect(failure?.name, `${target.by} ${kind}`).toBe(
+          "SpellingLimitError"
+        );
+        expect(String(failure?.message), `${target.by} ${kind}`).toContain(
+          "6 foldable signs produce 729 competing spellings"
+        );
+        expect(String(failure?.message), `${target.by} ${kind}`).toContain(
+          "ceiling of 256"
+        );
+        expect(read.observation, `${target.by} ${kind}`).toBeUndefined();
+      }
+    }
+    // La graphie exacte reste lisible sans repli : le plafond ne condamne pas un
+    // plan qui vise la graphie réellement exposée.
+    const exact = await readSpelling(
+      "visible",
+      { by: "text", value: saturated },
+      [saturated]
+    );
+    expect(exact.failure).toBeUndefined();
+    expect(exact.actual).toBe(true);
+    expect(exact.passed).toBe(true);
+    // Un comptage ne peut pas prétendre à un total sans énumérer toutes les
+    // graphies : il lève, au lieu d'un total tronqué qui aurait l'air mesuré.
+    const count = await readSpelling(
+      "count",
+      { by: "text", value: saturated },
+      [saturated],
+      1
+    );
+    expect((count.failure as { name?: string })?.name).toBe(
+      "SpellingLimitError"
+    );
+  });
+
+  it("suit l'union du libellé avant de lire, au lieu d'un libellé exact vide", async () => {
+    const union = {
+      count: async () => 1,
+      isVisible: async () => true,
+      or() {
+        return union;
+      },
+    };
+    const strict = {
+      count: async () => 0,
+      isVisible: async () => false,
+      or: () => union,
+    };
+    const { failure, observation } = await runCompiledScript(
+      compileProbe(
+        {
+          id: "pharmacie",
+          kind: "visible",
+          description: "la pharmacie active est visible",
+          target: { by: "label", value: "Pharmacie active" },
+        },
+        "https://preview.test"
+      ),
+      {
+        getByLabel: () => strict,
+        getByRole: () => union,
+        url: () => "https://preview.test/caisse",
+        snapshotForAI: async () => ({ full: "" }),
+      }
+    );
+    expect(failure).toBeUndefined();
+    expect(observation?.actual).toBe(true);
   });
   it("checks values, visibility, counts and text without model judgement", () => {
     expect(
@@ -401,6 +996,154 @@ describe("runner false-green regressions", () => {
     ).toBe("error");
     expect(result.scenarios).toEqual([]);
   });
+  /** Ce que le fixture renvoie pour un commentaire réellement écrit. */
+  const commentUrl = `${PR_URL}#issuecomment-1`;
+  /**
+   * Chaque forme de publication observée en production : le champ dit si le
+   * rapport est sur la PR, `commitStatus` dit ce qui a réellement été écrit sur
+   * le commit, et les états reçus par le fixture le confirment séparément. Un
+   * échec du verdict de commit status ne fait donc jamais passer un rapport
+   * publié pour « failed », et aucune forme d'échec ne laisse le champ absent.
+   */
+  const shapes: {
+    /** Refus du fixture : le run se bloque avant de publier son rapport. */
+    blockedFixture?: boolean;
+    /** Écritures de commentaire qui échouent, par tour (1 = premier essai). */
+    commentFails?: number[];
+    /** URL du commentaire publié, absent quand le rapport n'est pas passé. */
+    commentUrl?: string;
+    commitStatus: string;
+    /** Échec réel qui doit rester lisible dans `result.error`. */
+    error?: string;
+    /** Le post échoue après avoir écrit : c'est la réponse perdue. */
+    lostResponse?: boolean;
+    name: string;
+    outcome: "blocked" | "passed";
+    postedStates: string[];
+    status: "published" | "failed";
+    /** Écritures de commit status qui échouent, par état visé. */
+    statusFails?: string[];
+  }[] = [
+    {
+      blockedFixture: true,
+      commitStatus: "error",
+      commentUrl,
+      name: "run bloqué, publication normale",
+      outcome: "blocked",
+      postedStates: ["pending", "error"],
+      status: "published",
+    },
+    {
+      commitStatus: "success",
+      commentUrl,
+      name: "run réussi, publication normale",
+      outcome: "passed",
+      postedStates: ["pending", "success"],
+      status: "published",
+    },
+    {
+      commentFails: [1],
+      commitStatus: "error",
+      commentUrl,
+      lostResponse: true,
+      name: "réponse du commentaire perdue",
+      outcome: "blocked",
+      postedStates: ["pending", "success", "error"],
+      status: "published",
+    },
+    {
+      commitStatus: "error",
+      error: "GitHub publication failed",
+      name: "le post de statut échoue avant tout commentaire",
+      outcome: "blocked",
+      postedStates: ["pending", "error"],
+      status: "failed",
+      statusFails: ["success"],
+    },
+    {
+      commentFails: [1, 2],
+      commitStatus: "error",
+      error: "Blocked comment update failed",
+      name: "les deux posts de commentaire échouent",
+      outcome: "blocked",
+      postedStates: ["pending", "success", "error"],
+      status: "failed",
+    },
+    {
+      commentFails: [1],
+      commitStatus: "success",
+      error: "Blocked status update failed",
+      commentUrl,
+      name: "le statut de reprise échoue, le commentaire est réparé",
+      outcome: "blocked",
+      postedStates: ["pending", "success"],
+      status: "published",
+      statusFails: ["error"],
+    },
+  ];
+  it("records the publication issue apart from the commit status in every shape", async () => {
+    const original = {
+      comment: GitHub.prototype.comment,
+      status: GitHub.prototype.status,
+    };
+    const script = {
+      commentFails: [] as number[],
+      lostResponse: false,
+      statusFails: [] as string[],
+    };
+    let comments = 0;
+    vi.spyOn(GitHub.prototype, "status").mockImplementation(async function (
+      this: GitHub,
+      ...args
+    ) {
+      if (script.statusFails.includes(String(args[1]))) {
+        throw new Error(`Status ${args[1]} unavailable`);
+      }
+      return await original.status.apply(this, args);
+    });
+    vi.spyOn(GitHub.prototype, "comment").mockImplementation(async function (
+      this: GitHub,
+      ...args
+    ) {
+      comments += 1;
+      if (script.commentFails.includes(comments)) {
+        // Une réponse perdue suit une écriture réussie : le commentaire est sur
+        // la PR, seul son accusé de réception manque.
+        if (script.lostResponse) {
+          await original.comment.apply(this, args);
+        }
+        throw new Error("Comment unavailable");
+      }
+      return await original.comment.apply(this, args);
+    });
+    fakeBrowser();
+    for (const shape of shapes) {
+      script.commentFails = shape.commentFails ?? [];
+      script.lostResponse = shape.lostResponse ?? false;
+      script.statusFails = shape.statusFails ?? [];
+      comments = 0;
+      const f = await setup(
+        shape.blockedFixture ? { missingDiffAndContext: true } : undefined
+      );
+      const result = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        f.config
+      );
+      expect(result.outcome, shape.name).toBe(shape.outcome);
+      expect(result.publication?.status, shape.name).toBe(shape.status);
+      expect(result.publication?.commentUrl, shape.name).toBe(shape.commentUrl);
+      expect(result.publication?.commitStatus, shape.name).toBe(
+        shape.commitStatus
+      );
+      expect(
+        f.outgoing.map((request) => request.payload.state).filter(Boolean),
+        shape.name
+      ).toEqual(shape.postedStates);
+      if (shape.error) {
+        expect(result.error, shape.name).toContain(shape.error);
+      }
+    }
+  }, 120_000);
   it("returns an ungrounded requirement to the planner before failing", async () => {
     const ungrounded = structuredClone(plan);
     ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
@@ -538,7 +1281,7 @@ describe("runner false-green regressions", () => {
     expect(mayRetry(0, 5, 9)).toBe(false);
     expect(mayRetry(5, 5, 0)).toBe(false);
   });
-  it("debits the lost attempt before allowing its retry", async () => {
+  it("debits the lost attempt apart from the consumed budget", async () => {
     const env = { QA_MODEL_RETRIES: "1", QA_PLAN_MAX_TOKENS: "5000" };
     const reference = await setup({ env: { QA_PLAN_MAX_TOKENS: "5000" } });
     fakeBrowser();
@@ -554,10 +1297,49 @@ describe("runner false-green regressions", () => {
     );
     expect(retried.usage?.retries).toBe(1);
     expect(retried.outcome).toBe("passed");
-    // La tentative perdue est débitée au pire cas — au moins la sortie maximale
-    // réservée — avant que la reprise ne réserve son propre engagement.
-    const delta = (retried.usage?.tokens ?? 0) - (baseline.usage?.tokens ?? 0);
-    expect(delta).toBeGreaterThanOrEqual(5000);
+    // La tentative perdue est chiffrée à part des tokens rapportés par
+    // l'endpoint, mais elle reste dans l'enveloppe : la reprise est admise
+    // parce que l'enveloppe du fixture couvre la réserve plus la réservation
+    // de l'appel à venir, pas parce que la réserve serait ignorée.
+    expect(retried.usage?.reservedTokens ?? 0).toBeGreaterThanOrEqual(5000);
+    expect(retried.usage?.tokens).toBe(baseline.usage?.tokens);
+    expect(retried.usage?.estimated).toBe(true);
+  }, 40_000);
+  it("credits a lost attempt with what the transport delivered, and admits the correction", async () => {
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: {
+        QA_MODEL_RETRIES: "1",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "500000",
+      },
+      modelTruncations: 1,
+      plans: [refused, refused, plan],
+    });
+    fakeBrowser();
+    const before = budget.reserves.length;
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const reserved = result.usage?.reservedTokens ?? 0;
+    // Plan coupé (le flux a livré un seul caractère) puis reprise, plan refusé
+    // sur sa preuve, correction : la forme du run 23d0807e. La réserve de
+    // l'essai perdu est créditée de ce que le transport a livré — l'entrée du
+    // prompt et le texte reçu — et non de la sortie maximale.
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(2);
+    expect(budget.reserves.length - before).toBe(3);
+    expect(reserved).toBeGreaterThan(0);
+    expect(reserved).toBeLessThan(50_000);
+    // La première réservation est la borne théorique de ce même appel :
+    // comptée deux fois, elle ne tient pas sous cette enveloppe. C'est la
+    // réserve crédible qui laisse la place à la reprise puis à la correction.
+    expect((budget.reserves[before] ?? 0) * 2).toBeGreaterThan(500_000);
+    expect((result.usage?.tokens ?? 0) + reserved).toBeLessThan(500_000);
+    expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
   }, 40_000);
   it("debits the last attempt too when no retry follows", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "0" }, modelResets: 1 });
@@ -569,10 +1351,107 @@ describe("runner false-green regressions", () => {
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toMatch(/ECONNRESET|UND_ERR_SOCKET/);
     expect(result.usage?.retries).toBe(0);
-    // Aucune reprise ne suit, mais la tentative perdue est quand même débitée :
-    // elle a pu consommer une génération entière.
-    expect(result.usage?.tokens ?? 0).toBeGreaterThan(0);
+    // Aucune reprise ne suit et rien n'a été rapporté : la tentative perdue
+    // reste chiffrée, au pire cas, sans devenir un token consommé.
+    expect(result.usage?.tokens).toBe(0);
+    expect(result.usage?.reservedTokens ?? 0).toBeGreaterThan(0);
     expect(result.usage?.estimated).toBe(true);
+  }, 40_000);
+  it("counts a lost attempt's bound inside the envelope and still admits the correction", async () => {
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: {
+        QA_MODEL_RETRIES: "1",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "1000000",
+      },
+      modelResets: 1,
+      plans: [refused, plan],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const consumed = result.usage?.tokens ?? 0;
+    const reserved = result.usage?.reservedTokens ?? 0;
+    // Aucun octet n'a été livré avant la coupure : la tentative perdue est
+    // chiffrée à sa borne théorique et cette borne compte dans l'admission.
+    // L'enveloppe la couvre avec la correction qui suit, donc une dépense
+    // réelle reste déclarée sans transformer le run en refus.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.calls).toBe(2);
+    expect(result.usage?.retries).toBe(1);
+    expect(consumed).toBeLessThan(200_000);
+    expect(reserved).toBeGreaterThanOrEqual(400_000);
+    expect(budget.reserves.at(-1) ?? 0).toBeGreaterThan(400_000);
+    expect(consumed + reserved + (budget.reserves.at(-1) ?? 0)).toBeLessThan(
+      1_000_000
+    );
+    expect(result.usage?.estimated).toBe(true);
+    expect(result.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
+  }, 40_000);
+  it("refuses a retry the consumed usage plus the lost bound no longer covers, without sending it", async () => {
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({
+      env: {
+        QA_MODEL_RETRIES: "1",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "700000",
+      },
+      modelResets: 1,
+      plans: [refused, plan],
+    });
+    fakeBrowser();
+    const request = vi.spyOn(globalThis, "fetch");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const consumed = result.usage?.tokens ?? 0;
+    const reserved = result.usage?.reservedTokens ?? 0;
+    // La socket est détruite avant tout octet : rien n'est observable, la
+    // réserve retombe sur sa borne théorique (403 443 ici). Consommé + réserve
+    // + la réservation de la reprise (806 886) dépasse l'enveloppe : la reprise
+    // est refusée sans être envoyée, et le budget encadre la dépense totale.
+    expect(reserved).toBeGreaterThanOrEqual(400_000);
+    expect(consumed + reserved + (budget.reserves.at(-1) ?? 0)).toBeGreaterThan(
+      700_000
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    expect(f.modelRequests).toHaveLength(0);
+    expect(
+      request.mock.calls.filter(([url]) =>
+        String(url).endsWith("/chat/completions")
+      )
+    ).toHaveLength(1);
+  }, 40_000);
+  it("refuses the first attempt a run envelope cannot cover, without sending it", async () => {
+    const f = await setup({
+      env: { QA_PLAN_MAX_TOKENS: "400000", QA_RUN_MAX_TOKENS: "100000" },
+    });
+    fakeBrowser();
+    const request = vi.spyOn(globalThis, "fetch");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le garde-fou reste réel : une enveloppe inférieure à la première
+    // réservation refuse l'appel avant tout envoi, donc sans dépense.
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    expect(f.modelRequests).toHaveLength(0);
+    expect(
+      request.mock.calls.some(([url]) =>
+        String(url).endsWith("/chat/completions")
+      )
+    ).toBe(false);
+    expect(result.usage?.tokens).toBe(0);
+    expect(result.usage?.reservedTokens).toBe(0);
   }, 40_000);
   it("never lets a retry progress write take the worker down", async () => {
     const rejections: unknown[] = [];
@@ -584,6 +1463,8 @@ describe("runner false-green regressions", () => {
       id: "retry-progress",
       maxCostUsd: 1,
       maxTokens: 1000,
+      reservedTokens: 0,
+      reservedCostUsd: 0,
       signal: AbortSignal.timeout(1000),
       tokens: 0,
     };
@@ -784,6 +1665,8 @@ it("closes an interrupted pinned GitHub check without publishing success", async
       tokens: 0,
       calls: 0,
       costUsd: 0,
+      reservedTokens: 0,
+      reservedCostUsd: 0,
       maxTokens: 100_000,
       maxCostUsd: 10,
     },
@@ -849,7 +1732,12 @@ it("repairs a passing comment when GitHub wrote it but its response was lost", a
   expect(result.outcome).toBe("blocked");
   const comments = f.outgoing.filter((r) => r.payload.body);
   expect(comments.at(-1)?.payload.body).toContain("Result: BLOCKED");
-  expect(result.publication?.status).toBe("error");
+  // Le rapport bloqué est republié, donc publié, alors que le commit status
+  // posté porte le verdict du run : les deux notions ne se recopient plus.
+  expect(result.publication?.status).toBe("published");
+  expect(
+    f.outgoing.filter((request) => request.payload.state).at(-1)?.payload.state
+  ).toBe("error");
   const remoteComments = (await (
     await fetch(`${f.baseUrl}/repos/fixture/app/issues/1/comments?per_page=100`)
   ).json()) as { body: string }[];
@@ -867,6 +1755,8 @@ it("rejects publication when worker ownership cannot be verified, even after pas
       tokens: 0,
       calls: 0,
       costUsd: 0,
+      reservedTokens: 0,
+      reservedCostUsd: 0,
       maxTokens: 100_000,
       maxCostUsd: 10,
       verifyOwnership: async () => {

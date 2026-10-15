@@ -9,13 +9,16 @@ import {
 } from "../src/canary.js";
 import { Model } from "../src/model.js";
 import {
+  ariaLiteralSpellings,
+  ariaRoleNameNodes,
   ariaRoleNames,
   planEvidenceDiagnostic,
+  typographicTargetNote,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
 import { runQa } from "../src/runner.js";
-import { type Plan, PlanSchema } from "../src/schema.js";
+import { type Locator, type Plan, PlanSchema } from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
@@ -144,6 +147,21 @@ function readOnlyPlan(
   };
 }
 
+/** Scénario sans interaction qui compte les éléments portant la cible visée. */
+function countPlan(target: Locator, expected: number): Plan {
+  const contract = readOnlyPlan(target);
+  contract.scenarios[0]!.assertions[0] = {
+    id: "heading",
+    description: "Le titre de l'en-tête apparaît le nombre de fois attendu",
+    kind: "count",
+    expected,
+    target,
+    afterStep: "load",
+    verification: "state",
+  };
+  return contract;
+}
+
 function scriptPlan(plan: Plan) {
   vi.spyOn(Model.prototype, "json").mockImplementationOnce(
     (async () => plan) as unknown as Model["json"]
@@ -188,9 +206,289 @@ describe("inventaire des noms accessibles", () => {
     expect(roles.get("text")).toBeUndefined();
     expect(roles.has("/url")).toBe(false);
   });
+  it("lit les textes littéraux et les placeholders, jamais les noms", () => {
+    const spellings = ariaLiteralSpellings(
+      `- main [ref=e1]:
+  - paragraph: Justification de l’écart
+  - text: "Prix: 12 €"
+  - button "Justification de l’écart" [ref=e2]
+  - textbox "Champ" [ref=e3]:
+    - /placeholder: Justification de l’écart`
+    );
+    // Le nom accessible d'un contrôle n'est pas du texte pour `getByText`, et un
+    // nom entre guillemets n'est pas un contenu : seuls les contenus texte et les
+    // valeurs de `placeholder` instruisent une cible littérale.
+    expect(spellings.texts).toEqual(["Justification de l’écart", "Prix: 12 €"]);
+    expect(spellings.placeholders).toEqual(["Justification de l’écart"]);
+  });
+});
+
+describe("explication d'une cible typographiquement voisine", () => {
+  const nodes = ariaRoleNameNodes(
+    `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`
+  );
+
+  it("nomme les deux graphies et leurs codepoints", () => {
+    expect(
+      typographicTargetNote("Justification de l'écart", "textbox", nodes)
+    ).toBe(
+      "le plan vise Justification de l'écart (U+0027) ; la page expose Justification de l’écart (U+2019)"
+    );
+  });
+
+  it("nomme l'espace insécable, que le repli d'exécution n'essaie pas", () => {
+    const spaced = ariaRoleNameNodes(
+      `- textbox "Montant d’espèces\u00a0attendu" [ref=e1]`
+    );
+    expect(
+      typographicTargetNote("Montant d'espèces attendu", "textbox", spaced)
+    ).toContain("(U+2019 U+00A0)");
+  });
+
+  it("reste muet pour un nom identique, un nom différent, un autre rôle ou deux candidats", () => {
+    // Le nom exact ne demande aucune explication, et une cible réellement
+    // différente n'a pas de voisin typographique à nommer.
+    expect(
+      typographicTargetNote("Justification de l’écart", "textbox", nodes)
+    ).toBeUndefined();
+    expect(
+      typographicTargetNote("Justification du montant", "textbox", nodes)
+    ).toBeUndefined();
+    expect(
+      typographicTargetNote("Justification de l'écart", "button", nodes)
+    ).toBeUndefined();
+    // Deux graphies concurrentes : le message reste générique, comme le repli
+    // ne vise aucune des deux.
+    const ambiguous = ariaRoleNameNodes(
+      `- textbox "Justification de l’écart" [ref=e1]\n  - textbox "Justification de l‘écart" [ref=e2]`
+    );
+    expect(
+      typographicTargetNote("Justification de l'écart", "textbox", ambiguous)
+    ).toBeUndefined();
+  });
 });
 
 describe("validation du plan contre l'instantané de découverte", () => {
+  it("accepte un nom accessible que le repli d'exécution saura viser", () => {
+    const aria = `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`;
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        })
+      ),
+      { url: "https://preview.test/", aria }
+    );
+    // Le refus porterait sur un élément que la page expose réellement : la même
+    // relation que le repli décide de l'acceptation.
+    expect(report).toEqual({ refusals: [], inconclusive: [] });
+  });
+  it("refuse une cible portée par plusieurs graphies, que le run ne saurait pas trancher", () => {
+    const planned = readOnlyPlan({
+      by: "role",
+      value: "textbox",
+      name: "Justification de l'écart",
+    });
+    // Deux graphies concurrentes : le repli d'exécution n'en retient aucune et
+    // lève sur l'ambiguïté, donc le plan est refusé avant toute dépense.
+    const competing = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l‘écart" [ref=e3]`,
+    });
+    expect(competing.incomplete).toBeUndefined();
+    expect(competing.refusals).toEqual([
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-heading",
+        target: 'role=textbox name="Justification de l\'écart"',
+      },
+    ]);
+    // Une seule graphie portée par deux éléments n'est pas plus unique : le run
+    // ne saurait pas lequel viser.
+    const duplicated = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]`,
+    });
+    expect(duplicated.refusals).toHaveLength(1);
+  });
+  it("refuse un texte ou un placeholder porté par plusieurs graphies, comme role+nom", () => {
+    // Le défaut aggravant : role+nom refusait déjà une cible que deux graphies
+    // concurrentes rendent inexécutable, alors que text et placeholder laissaient
+    // partir le run vers un échec d'ambiguïté. L'instantané porte le paragraphe et
+    // le placeholder, donc la même exigence s'applique.
+    const planned = "l'écart d'espèces n'est pas justifié";
+    const spelled = {
+      right: "l’écart d’espèces n’est pas justifié",
+      left: "l‘écart d’espèces n’est pas justifié",
+    };
+    const aria = `- main [ref=e1]:
+  - paragraph: ${spelled.right}
+  - paragraph: ${spelled.left}
+  - textbox "${spelled.right}" [ref=e2]
+  - textbox "${spelled.left}" [ref=e3]`;
+    for (const target of [
+      { by: "text" as const, value: planned },
+      { by: "placeholder" as const, value: planned },
+    ]) {
+      const report = validatePlanEvidence(
+        PlanSchema.parse(readOnlyPlan(target)),
+        {
+          url: "https://preview.test/",
+          aria,
+        }
+      );
+      expect(report.incomplete, target.by).toBeUndefined();
+      expect(report.refusals, target.by).toEqual([
+        {
+          scenarioId: "heading-visible",
+          stepId: "check-heading",
+          target: `${target.by}=${JSON.stringify(planned)}`,
+        },
+      ]);
+      expect(report.inconclusive, target.by).toEqual([]);
+    }
+    // Une seule graphie concurrente reste exécutable : le repli la résout, donc
+    // le plan passe sans dépense inutile.
+    const single = validatePlanEvidence(
+      PlanSchema.parse(readOnlyPlan({ by: "placeholder", value: planned })),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "${spelled.right}" [ref=e2]`,
+      }
+    );
+    expect(single).toEqual({ refusals: [], inconclusive: [] });
+  });
+  it("refuse un texte ou un placeholder que le repli ne saurait pas énumérer", () => {
+    // Six signes repliables dépassent le plafond : l'exécution lève au lieu de
+    // mesurer dès que la page n'expose pas la graphie du plan. Un jumeau
+    // typographique exposé prouve ce cas, donc le plan est refusé avant dépense,
+    // comme pour un nom.
+    const saturated = "l'l'l'l'l'l'";
+    const twin = saturated.replace(/'/g, "\u2019");
+    const aria = `- main [ref=e1]:\n  - paragraph: ${twin}\n  - textbox "${twin}" [ref=e2]`;
+    for (const target of [
+      { by: "text" as const, value: saturated },
+      { by: "placeholder" as const, value: saturated },
+    ]) {
+      const report = validatePlanEvidence(
+        PlanSchema.parse(readOnlyPlan(target)),
+        {
+          url: "https://preview.test/",
+          aria,
+        }
+      );
+      expect(
+        report.refusals.map((item) => item.target),
+        target.by
+      ).toEqual([`${target.by}=${JSON.stringify(saturated)}`]);
+    }
+    // Sans jumeau exposé, la graphie du plan peut être celle de la page : la
+    // preuve manque et le plan n'est pas refusé sur une simple absence.
+    const silent = validatePlanEvidence(
+      PlanSchema.parse(readOnlyPlan({ by: "text", value: saturated })),
+      {
+        url: "https://preview.test/",
+        aria: "- main [ref=e1]:\n  - paragraph: Justification du montant",
+      }
+    );
+    expect(silent.refusals).toEqual([]);
+    expect(silent.inconclusive[0]?.reason).toBe(
+      "graphies de la cible non énumérables au plafond du repli, et aucune n'est exposée"
+    );
+  });
+  it("déclare non concluant un texte ou un placeholder absent de l'instantané", () => {
+    // L'instantané ne porte pas tous les textes ni tous les placeholders : leur
+    // absence reste une preuve insuffisante, jamais un refus.
+    for (const target of [
+      { by: "text" as const, value: "Justification de l'écart" },
+      { by: "placeholder" as const, value: "Justification de l'écart" },
+    ]) {
+      const report = validatePlanEvidence(
+        PlanSchema.parse(readOnlyPlan(target)),
+        {
+          url: "https://preview.test/",
+          aria: ARIA,
+        }
+      );
+      expect(report.refusals, target.by).toEqual([]);
+      expect(report.inconclusive, target.by).toEqual([
+        {
+          scenarioId: "heading-visible",
+          stepId: "check-heading",
+          target: `${target.by}=${JSON.stringify(target.value)}`,
+          reason: "aucune graphie de la cible dans l'instantané de découverte",
+        },
+      ]);
+    }
+  });
+  it("refuse encore un nom que le repli ne saurait pas viser", () => {
+    const aria = `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`;
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l’écart du jour",
+        })
+      ),
+      { url: "https://preview.test/", aria }
+    );
+    expect(report.refusals).toHaveLength(1);
+  });
+  it("accepte un comptage porté par la seule graphie décalée, sans exiger l'unicité", () => {
+    const target = {
+      by: "role" as const,
+      value: "textbox",
+      name: "Justification de l'écart",
+    };
+    // Deux éléments portent la graphie exposée : « count: 2 » est vrai, mais
+    // deux nœuds ne sont pas un candidat unique. Une assertion de comptage ne
+    // choisit pas un élément, donc l'unicité n'a pas de sens ici.
+    const twice = validatePlanEvidence(PlanSchema.parse(countPlan(target, 2)), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]`,
+    });
+    expect(twice).toEqual({ refusals: [], inconclusive: [] });
+    // Un total qui ne tombe pas juste reste un comptage honnête : la cible est
+    // présente, donc le plan est exécutable et le verdict appartient à
+    // l'exécution, jamais à un refus d'unicité.
+    const mismatched = validatePlanEvidence(
+      PlanSchema.parse(countPlan(target, 2)),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]\n  - textbox "Justification de l’écart" [ref=e4]`,
+      }
+    );
+    expect(mismatched).toEqual({ refusals: [], inconclusive: [] });
+    // En revanche une cible que rien ne porte reste refusée : un comptage ne
+    // peut pas s'appuyer sur une graphie absente de la page.
+    const absent = validatePlanEvidence(
+      PlanSchema.parse(countPlan(target, 2)),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "Justification du montant" [ref=e2]`,
+      }
+    );
+    expect(absent.refusals).toHaveLength(1);
+    // Une assertion de visibilité garde l'exigence d'unicité : deux graphies
+    // concurrentes restent refusées, sans quoi le run échouerait en ambiguïté.
+    const visibility = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l‘écart" [ref=e3]`,
+      }
+    );
+    expect(visibility.refusals).toHaveLength(1);
+  });
   it("refuse une cible role+nom absente de la page de découverte", () => {
     const report = validatePlanEvidence(PlanSchema.parse(observedPlan()), {
       url: "https://preview.test/",
@@ -308,7 +606,7 @@ describe("validation du plan contre l'instantané de découverte", () => {
     expect(message).toContain("go-pnl");
     expect(message).toContain('role=heading name="P&L"');
     expect(hint).toContain("12 niveaux");
-    expect(hint).toContain("css/text/label/placeholder/testId");
+    expect(hint).toContain("css/label/testId");
     expect(hint).toContain("2 autre(s) cible(s)");
   });
 });

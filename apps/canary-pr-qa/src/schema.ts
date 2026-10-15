@@ -237,6 +237,39 @@ export type Assertion = z.input<typeof AssertionSchema>;
 export type Action = z.infer<typeof ActionSchema>;
 export type Locator = z.infer<typeof locator>;
 export type Outcome = "passed" | "failed" | "blocked" | "skipped" | "stale";
+/**
+ * Issue de la publication du rapport : c'est la seule chose que dit
+ * `Publication.status`. L'état du commit status posté sur GitHub est un autre
+ * fait, consigné à part dans `Publication.commitStatus`.
+ */
+export type PublicationIssue = "published" | "failed";
+
+/**
+ * Ce que porte `publication` : deux faits distincts qui ne se recopient jamais.
+ * Les result.json écrits avant cette séparation portent l'état du commit status
+ * dans `status` ("success"/"error"/"failure") et aucun `commitStatus` : les
+ * lecteurs restent donc tolérants à l'ancien vocabulaire d'un côté comme à
+ * l'absence de l'autre.
+ */
+export interface Publication {
+  /** URL du commentaire qui porte le rapport, absent si rien n'a été écrit. */
+  commentUrl?: string;
+  /**
+   * Dernier état de commit status réellement écrit sur le commit par ce run
+   * ("success"/"failure"/"error") : c'est le verdict du dernier post réussi,
+   * qui peut donc précéder la fin du run — un run bloqué dont l'écriture du
+   * verdict "error" a échoué garde le verdict écrit avant lui
+   * (`runner.ts:publish`). Absent quand aucune écriture de commit status n'a
+   * abouti, même si le rapport est publié : les deux écritures sont indépendantes
+   * et ne s'attestent pas l'une l'autre.
+   */
+  commitStatus?: string;
+  /**
+   * "published" dès que le commentaire de rapport est sur la PR, "failed"
+   * sinon : l'échec du verdict de statut n'en fait jamais partie.
+   */
+  status: PublicationIssue | "success" | "failure" | "error";
+}
 
 export interface Preview {
   evidence: string;
@@ -286,13 +319,23 @@ export interface RunResult {
   plan?: Plan;
   preview?: Preview;
   prUrl: string;
-  publication?: { commentUrl: string; status: string };
+  publication?: Publication;
   scenarios: ScenarioResult[];
   sha?: string;
   startedAt: string;
   usage?: {
     tokens: number;
     costUsd: number;
+    /**
+     * Cumul des réserves des tentatives perdues, chiffré à part des tokens que
+     * l'endpoint a rapportés. Chaque réserve est créditée de ce que le transport
+     * a réellement livré, plafonnée par le pire cas de la tentative perdue —
+     * sauf un `total_tokens` déclaré au-delà de ce pire cas, repris tel quel ;
+     * elle compte dans l'admission du run, donc une exposition qui dépasse
+     * l'enveloppe y refuse toute admission suivante.
+     */
+    reservedTokens?: number;
+    reservedCostUsd?: number;
     calls: number;
     model?: string;
     estimated?: boolean;

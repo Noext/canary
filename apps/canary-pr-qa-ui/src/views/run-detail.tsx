@@ -70,14 +70,34 @@ function phaseClass(
   return index < phase ? phaseDone : "";
 }
 
+/**
+ * Le rapport a-t-il manqué la PR ?
+ *
+ * `publication.status` dit l'issue de la publication du rapport, dans le
+ * vocabulaire courant ("published"/"failed") comme dans celui des rapports
+ * écrits avant sa séparation du commit status, où le champ recopiait ce dernier
+ * ("success"/"failure"/"error") et valait "failed" dès que l'écriture du
+ * verdict avait échoué, commentaire publié ou non (`runner.ts:publish`). Une URL
+ * de commentaire exploitable est la seule preuve que le rapport est sur la PR :
+ * sans elle, l'échec reste annoncé, et un commit status raté ne suffit jamais à
+ * le déclarer.
+ */
+function publicationFailed(publication: RunResult["publication"]): boolean {
+  return (
+    publication?.status === "failed" &&
+    !githubCommentUrl(publication.commentUrl)
+  );
+}
+
 function summaryFor(result: RunResult): string {
   const base = resultSummaries[result.outcome] ?? copy.resultFallback;
   // A structured diagnostic is rendered in French by the block below; the raw
   // server error is only the summary when there is nothing else to show, so the
   // two never repeat the same sentence in two languages.
   const error = result.error && !result.diagnostic ? ` ${result.error}` : "";
-  const publication =
-    result.publication?.status === "failed" ? copy.publicationFailed : "";
+  const publication = publicationFailed(result.publication)
+    ? copy.publicationFailed
+    : "";
   return `${base}${error}${publication}`;
 }
 
@@ -103,7 +123,9 @@ function usageLine(usage: RunResult["usage"]): string {
     // before the field existed, or any result that omits it, carry no proof
     // that a tariff was configured.
     usage.pricingConfigured === true,
-    usage.retries ?? 0
+    usage.retries ?? 0,
+    usage.reservedTokens ?? 0,
+    usage.reservedCostUsd ?? 0
   );
 }
 

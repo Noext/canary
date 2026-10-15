@@ -45,8 +45,15 @@ async function repair(result: RunResult, config: Config) {
       ),
       github.comment(context, reportMarkdown(result, url)),
     ]);
+    // Le rapport invalidé redevient publié dès que son commentaire est réécrit ;
+    // le verdict bloqué du commit status suit sa propre écriture, consignée à
+    // part. L'un n'atteste jamais l'autre.
+    const [verdict, comment] = repaired;
     result.publication.status =
-      repaired[0]?.status === "fulfilled" ? "error" : "failed";
+      comment?.status === "fulfilled" ? "published" : "failed";
+    if (verdict?.status === "fulfilled") {
+      result.publication.commitStatus = "error";
+    }
     for (const item of repaired) {
       if (item.status === "rejected") {
         result.error += ` Publication repair failed: ${diagnose(item.reason, config).message}`;
