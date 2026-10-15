@@ -316,15 +316,15 @@ function checkTarget(
   if (names.roles.get(role)?.has(normalizeText(locator.name))) {
     return;
   }
-  // Le repli d'exécution vise ces mêmes variantes (`canary.ts` les compile) :
-  // refuser ici un nom que le run saurait résoudre remplacerait un contrôle réel
-  // par un faux refus.
+  // Le repli d'exécution vise ces mêmes variantes (`canary.ts` les compile), mais
+  // il n'en retient une que si elle atteint exactement un élément. Une page qui
+  // expose deux graphies du même nom n'est donc pas exécutable : l'accepter ici
+  // échangerait un refus propre contre un run perdu sans explication.
   const variants = typographicVariants(locator.name);
-  if (
-    names.nodes.some(
-      (node) => node.role === role && variants.includes(node.name)
-    )
-  ) {
+  const folded = names.nodes.filter(
+    (node) => node.role === role && variants.includes(node.name)
+  );
+  if (folded.length === 1) {
     return;
   }
   report.refusals.push({

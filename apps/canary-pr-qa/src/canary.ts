@@ -37,6 +37,20 @@ const observationSchema = z.object({
 export type Observation = z.infer<typeof observationSchema>;
 
 /**
+ * Nom accessible retenu par le repli typographique, relu depuis une observation
+ * enregistrée (`StepResult.observation`) : la substitution est une preuve du run,
+ * donc rendue aux surfaces que l'opérateur lit, pas seulement au log du daemon.
+ */
+export function resolvedTargetName(observation: string): string | undefined {
+  try {
+    const parsed = observationSchema.safeParse(JSON.parse(observation));
+    return parsed.success ? parsed.data.targetName : undefined;
+  } catch {
+    return;
+  }
+}
+
+/**
  * Graphies équivalentes d'un même signe : le premier membre est le
  * représentant vers lequel le repli ramène les autres. Un lecteur ne distingue
  * pas « Justification de l’écart » de « Justification de l'écart » ; Playwright,
@@ -195,18 +209,78 @@ const RESOLVE_NAME_HELPER = `async function resolveName(exact, role, names, act)
 }`;
 
 /**
+ * Émis dans le script compilé par `locatorCall` pour les lectures qui mesurent
+ * un locator vide sans lever (`isVisible`, `count`) : elles rendent false/0 au
+ * lieu du délai qui déclencherait le repli de `resolveName`, donc le repli
+ * n'aurait jamais lieu. Le nom réellement exposé est ici résolu avant la
+ * lecture, sur le compte des variantes lu par `getByRole` — donc dans l'arbre
+ * d'accessibilité, comme le nom lui-même — et deux graphies concurrentes lèvent
+ * un échec explicite au lieu d'être départagées au hasard. Une cible réellement
+ * absente garde la lecture honnête du nom exact (0/false), sans laquelle
+ * `hidden` et `count: 0` ne seraient plus exprimables.
+ *
+ * L'ambiguïté est jetée sous forme d'objet `{ name, message }`, pas d'un
+ * `new Error` : un `Error` créé dans le bac à sable QuickJS perd son message en
+ * traversant la frontière (seule la pile remonte jusqu'au CLI), donc l'opérateur
+ * ne lirait pas la cause. Un objet dont `message` est propre la porte jusqu'au
+ * rapport.
+ */
+const RESOLVE_NAME_READ_HELPER = `async function readName(exact, role, names, planned, read) {
+  if (await exact.count()) return await read(exact);
+  let used;
+  let matched = 0;
+  const exposed = [];
+  for (const name of names) {
+    const candidate = page.getByRole(role, { name, exact: true });
+    const count = await candidate.count();
+    matched += count;
+    if (count) exposed.push(JSON.stringify(name) + " (" + count + ")");
+    if (count === 1) used = { candidate, name };
+  }
+  if (matched === 0) return await read(exact);
+  if (!(used && matched === 1)) {
+    throw { name: "AmbiguousTargetError", message: "Ambiguous accessible name " + JSON.stringify(planned) + " (role " + role + "): the page exposes " + exposed.join(" and ") + ", so no spelling is chosen; retarget the assertion on one unambiguous name" };
+  }
+  targetName = used.name;
+  return await read(used.candidate);
+}`;
+
+/**
+ * Même règle pour un locator `by:"label"` : `resolveLabel` ne rejoue le repli
+ * par nom accessible qu'après le délai d'un libellé introuvable, délai qu'une
+ * lecture qui mesure ne produit jamais. Quand le libellé exact ne résout rien,
+ * la lecture suit donc l'union par nom accessible au lieu de mesurer un locator
+ * vide.
+ */
+const RESOLVE_LABEL_READ_HELPER = `async function readLabel(strict, fallback, read) {
+  return (await strict.count()) ? await read(strict) : await read(fallback);
+}`;
+
+/**
  * Appel Playwright sur le contrôle visé, `call` étant un suffixe de méthode
  * (`click({ timeout: 10000 })`). Un locator `by:"label"` reçoit le repli par nom
  * accessible, un locator `by:"role"` le repli par graphie du nom `name`, les
  * autres sont appelés directement.
+ *
+ * `mode` dit ce que l'appel fait d'un locator vide : une action ou une lecture
+ * qui lève (`click`, `innerText`) est rejouée sur le repli après l'échec du nom
+ * exact, alors qu'une lecture qui mesure (`isVisible`, `count`) doit résoudre le
+ * nom d'abord — un locator vide y rend false/0 sans jamais lever.
  */
-export function locatorCall(locator: Locator, call: string): string {
+export function locatorCall(
+  locator: Locator,
+  call: string,
+  mode: "act" | "measure" = "act"
+): string {
   if (locator.by === "label") {
     const { strict, fallback } = labelTargets(locator.value);
-    return `resolveLabel(${strict}, ${fallback}, (locator) => locator.${call})`;
+    const read = `(locator) => locator.${call}`;
+    return mode === "measure"
+      ? `readLabel(${strict}, ${fallback}, ${read})`
+      : `resolveLabel(${strict}, ${fallback}, ${read})`;
   }
   return (
-    nameFallback(locator, `(locator) => locator.${call}`) ??
+    nameFallback(locator, `(locator) => locator.${call}`, mode) ??
     `${locatorExpression(locator)}.${call}`
   );
 }
@@ -215,14 +289,25 @@ export function locatorCall(locator: Locator, call: string): string {
  * Repli typographique d'un locator role+nom : `undefined` quand le nom ne porte
  * aucun signe repliable, ou quand ses variantes dépassent le plafond.
  */
-function nameFallback(locator: Locator, act: string): string | undefined {
+function nameFallback(
+  locator: Locator,
+  act: string,
+  mode: "act" | "measure"
+): string | undefined {
   if (locator.by !== "role") {
     return;
   }
   const names = typographicVariants(locator.name);
-  return names.length === 0
-    ? undefined
-    : `resolveName(${locatorExpression(locator)}, ${JSON.stringify(locator.value)}, ${JSON.stringify(names)}, ${act})`;
+  if (names.length === 0) {
+    return;
+  }
+  const exact = locatorExpression(locator);
+  const role = JSON.stringify(locator.value);
+  // En mode `measure`, la lecture reçoit aussi le nom du plan : c'est lui que
+  // l'échec d'ambiguïté nomme, faute de pouvoir désigner une seule graphie.
+  return mode === "measure"
+    ? `readName(${exact}, ${role}, ${JSON.stringify(names)}, ${JSON.stringify(locator.name)}, ${act})`
+    : `resolveName(${exact}, ${role}, ${JSON.stringify(names)}, ${act})`;
 }
 
 /**
@@ -235,7 +320,7 @@ function locatorRun(locator: Locator, body: string): string {
     return `resolveLabel(${strict}, ${fallback}, async (locator) => { ${body} })`;
   }
   return (
-    nameFallback(locator, `async (locator) => { ${body} }`) ??
+    nameFallback(locator, `async (locator) => { ${body} }`, "act") ??
     `(async (locator) => { ${body} })( ${locatorExpression(locator)} )`
   );
 }
@@ -301,9 +386,9 @@ function readAssertion(assertion: Assertion, locator?: Locator): string {
     case "value":
       return `await ${locatorCall(locator, "inputValue({ timeout: 5000 })")}`;
     case "count":
-      return `await ${locatorCall(locator, "count()")}`;
+      return `await ${locatorCall(locator, "count()", "measure")}`;
     default:
-      return `await ${locatorCall(locator, "isVisible()")}`;
+      return `await ${locatorCall(locator, "isVisible()", "measure")}`;
   }
 }
 function compileAssertion(
@@ -416,7 +501,9 @@ let targetName;
 let actual;
 const provenanceUrls = [];
 ${RESOLVE_LABEL_HELPER}
+${RESOLVE_LABEL_READ_HELPER}
 ${RESOLVE_NAME_HELPER}
+${RESOLVE_NAME_READ_HELPER}
 ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");

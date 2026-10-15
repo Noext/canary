@@ -254,6 +254,34 @@ describe("validation du plan contre l'instantané de découverte", () => {
     // relation que le repli décide de l'acceptation.
     expect(report).toEqual({ refusals: [], inconclusive: [] });
   });
+  it("refuse une cible portée par plusieurs graphies, que le run ne saurait pas trancher", () => {
+    const planned = readOnlyPlan({
+      by: "role",
+      value: "textbox",
+      name: "Justification de l'écart",
+    });
+    // Deux graphies concurrentes : le repli d'exécution n'en retient aucune et
+    // lève sur l'ambiguïté, donc le plan est refusé avant toute dépense.
+    const competing = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l‘écart" [ref=e3]`,
+    });
+    expect(competing.incomplete).toBeUndefined();
+    expect(competing.refusals).toEqual([
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-heading",
+        target: 'role=textbox name="Justification de l\'écart"',
+      },
+    ]);
+    // Une seule graphie portée par deux éléments n'est pas plus unique : le run
+    // ne saurait pas lequel viser.
+    const duplicated = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]`,
+    });
+    expect(duplicated.refusals).toHaveLength(1);
+  });
   it("refuse encore un nom que le repli ne saurait pas viser", () => {
     const aria = `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]`;
     const report = validatePlanEvidence(

@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolvedTargetName } from "./canary.js";
 import type { Config } from "./config.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { redact } from "./diagnostics.js";
@@ -22,6 +23,19 @@ function escapeHtml(input: unknown) {
 export function reportMarkdown(result: RunResult, reportUrl?: string): string {
   const clean = (value: string) =>
     value.replace(/[\r\n|<>]/g, " ").replace(/`/g, "'");
+  // Un nom accessible visé par le repli typographique n'est pas celui que le plan
+  // a écrit : la substitution est publiée avec l'étape qui l'a jouée, plutôt que
+  // de rester invisible hors de `result.json`.
+  const substitutions = result.scenarios.flatMap((item) =>
+    item.steps.flatMap((step) => {
+      const name = resolvedTargetName(step.observation);
+      return name
+        ? [
+            `- ${clean(item.scenario.title)}: step \`${clean(step.stepId ?? String(step.index))}\` targeted the accessible name \`${clean(name)}\` (typographic fallback)`,
+          ]
+        : [];
+    })
+  );
   return [
     "<!-- canary-pr-qa -->",
     "## Canary autonomous PR QA",
@@ -42,6 +56,7 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
       .map(
         (item) => `- ${clean(item.scenario.title)}: ${clean(item.error ?? "")}`
       ),
+    ...substitutions,
     ...(result.plan?.skipped.map(
       (item) =>
         `- Not browser-tested: \`${clean(item.sourceFile)}\` — ${clean(item.reason)}`

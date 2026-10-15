@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Canary, compileAction, compileProbe } from "../src/canary.js";
+import {
+  assertionMatches,
+  Canary,
+  compileAction,
+  compileProbe,
+} from "../src/canary.js";
 import { doctor } from "../src/doctor.js";
 import { executeScenario } from "../src/executor.js";
 import { GitHubSetup } from "../src/github-setup.js";
@@ -243,6 +248,66 @@ it("targets the exposed spelling in actual Chromium, and nothing when two compet
       )
     );
     expect(read.actual).toBe("Écart constaté");
+    // `isVisible()` et `count()` ne lèvent jamais, même sur un locator vide :
+    // sans résolution préalable du nom exposé, « hidden » passait sur une cible
+    // visible et « visible »/« count » échouaient dessus. Les trois verdicts
+    // doivent être justes, sur la graphie que la page expose.
+    const visible = await canary.act(
+      id,
+      "visible",
+      compileProbe(
+        {
+          id: "visible",
+          kind: "visible",
+          description: "la justification de l'écart est visible",
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(visible.actual).toBe(true);
+    expect(visible.targetName).toBe("Justification de l\u2019écart");
+    const hidden = await canary.act(
+      id,
+      "hidden",
+      compileProbe(
+        {
+          id: "hidden",
+          kind: "hidden",
+          description: "la justification de l'écart est cachée",
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(hidden.actual).toBe(true);
+    expect(hidden.targetName).toBe("Justification de l\u2019écart");
+    expect(
+      assertionMatches(
+        {
+          id: "hidden",
+          kind: "hidden",
+          description: "la justification de l'écart est cachée",
+        },
+        hidden.actual
+      )
+    ).toBe(false);
+    const count = await canary.act(
+      id,
+      "count",
+      compileProbe(
+        {
+          id: "count",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+          target: planned,
+        },
+        f.baseUrl
+      )
+    );
+    expect(count.actual).toBe(1);
+    expect(count.targetName).toBe("Justification de l\u2019écart");
     // Deux graphies concurrentes : la cible du plan ne résout toujours rien, et
     // l'échec d'origine remonte au lieu d'un contrôle choisi au hasard.
     await canary.act(
@@ -260,6 +325,39 @@ it("targets the exposed spelling in actual Chromium, and nothing when two compet
         )
       )
     ).rejects.toThrow(/Timeout \d+ms exceeded/);
+    // Une lecture qui mesure ne rend ni false ni 0 : elle nomme l'ambiguïté au
+    // lieu de laisser « hidden » passer sur un locator vide.
+    await expect(
+      canary.act(
+        id,
+        "ambiguous-hidden",
+        compileProbe(
+          {
+            id: "hidden",
+            kind: "hidden",
+            description: "la justification de l'écart est cachée",
+            target: planned,
+          },
+          f.baseUrl
+        )
+      )
+    ).rejects.toThrow(/Ambiguous accessible name/);
+    await expect(
+      canary.act(
+        id,
+        "ambiguous-count",
+        compileProbe(
+          {
+            id: "count",
+            kind: "count",
+            description: "la justification de l'écart compte un élément",
+            expected: 1,
+            target: planned,
+          },
+          f.baseUrl
+        )
+      )
+    ).rejects.toThrow(/Ambiguous accessible name/);
   } finally {
     await canary.abort(id).catch(() => undefined);
   }

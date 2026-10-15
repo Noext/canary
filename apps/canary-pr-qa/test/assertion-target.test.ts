@@ -260,3 +260,39 @@ it("keeps a click whose target never resolves blocked", async () => {
   // Un clic n'affirme rien : aucune assertion n'est évaluée ni enregistrée.
   expect(scenario?.assertions).toEqual([]);
 });
+
+/**
+ * Une lecture qui a retenu une autre graphie l'a écrit dans son observation :
+ * l'opérateur doit pouvoir le lire sur le rapport et dans le commentaire publié,
+ * pas seulement dans `result.json`.
+ */
+it("rend le nom réellement visé sur le rapport et le commentaire publié", async () => {
+  const f = await fixture();
+  cleanups.push(f.close);
+  vi.spyOn(Canary.prototype, "start").mockResolvedValue("typographic-read");
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_session, label) => ({
+      url: "http://fixture/",
+      snapshot: "textbox Name, button Save",
+      actual: label.startsWith("baseline-") ? "Welcome" : "Welcome Ada",
+      ...(label.endsWith("-assert") ? { targetName: EXPOSED_NAME } : {}),
+    })
+  );
+  vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  expect(result.outcome).toBe("passed");
+  const report = await readFile(
+    join(f.dataDir, result.id, "report.md"),
+    "utf8"
+  );
+  expect(report).toContain(
+    `step \`verify\` targeted the accessible name \`${EXPOSED_NAME}\` (typographic fallback)`
+  );
+  const published = f.outgoing.find((request) =>
+    request.path.endsWith("/comments")
+  )?.payload.body;
+  expect(String(published)).toContain(EXPOSED_NAME);
+});

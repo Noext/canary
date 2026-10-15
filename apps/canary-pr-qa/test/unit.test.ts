@@ -29,6 +29,7 @@ import { type RunScope, runScope } from "../src/run-scope.js";
 import { relayModelRetries, runQa } from "../src/runner.js";
 import {
   ActionSchema,
+  type Assertion,
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
@@ -76,6 +77,42 @@ function fakeBrowser() {
 }
 
 /**
+ * Exécute un script compilé contre un faux Playwright, comme le fait le daemon :
+ * l'observation publiée par le script est relue depuis sa sortie, et son échec
+ * éventuel remonte tel quel.
+ */
+async function runCompiledScript(
+  script: string,
+  page: Record<string, unknown>
+): Promise<{
+  failure: unknown;
+  observation: { actual?: unknown; targetName?: string } | undefined;
+}> {
+  const logs: string[] = [];
+  const context = {
+    browser: { getPage: async () => page },
+    console: { log: (line: string) => logs.push(line) },
+  };
+  let failure: unknown;
+  try {
+    await new Script(`(async () => { ${script} })()`, {
+      filename: "compiled.js",
+    }).runInNewContext(context);
+  } catch (error) {
+    failure = error;
+  }
+  const marker = logs.find((line) =>
+    line.startsWith("CANARY_PR_QA_OBSERVATION:")
+  );
+  return {
+    failure,
+    observation: marker
+      ? JSON.parse(marker.slice("CANARY_PR_QA_OBSERVATION:".length))
+      : undefined,
+  };
+}
+
+/**
  * Exécute le script compilé contre un faux Playwright, comme le fait le daemon :
  * seules les graphies listées existent, et leur méthode d'action échoue avec le
  * délai d'une cible introuvable, jamais avec un autre message.
@@ -97,47 +134,77 @@ async function runTypographicAction(exposed: string[]): Promise<{
       acted.push(name);
     },
   });
-  const logs: string[] = [];
-  const context = {
-    browser: {
-      getPage: async () => ({
-        getByRole: (_role: string, options: { name: string }) =>
-          locator(options.name),
-        url: () => "https://preview.test/caisse",
-        snapshotForAI: async () => ({ full: "" }),
-      }),
-    },
-    console: { log: (line: string) => logs.push(line) },
-  };
-  const script = compileAction(
-    {
-      type: "fill",
-      locator: {
-        by: "role",
-        value: "textbox",
-        name: "Justification de l'écart",
+  const { failure, observation } = await runCompiledScript(
+    compileAction(
+      {
+        type: "fill",
+        locator: {
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        },
+        value: "Écart constaté",
       },
-      value: "Écart constaté",
-    },
-    "https://preview.test"
+      "https://preview.test"
+    ),
+    {
+      getByRole: (_role: string, options: { name: string }) =>
+        locator(options.name),
+      url: () => "https://preview.test/caisse",
+      snapshotForAI: async () => ({ full: "" }),
+    }
   );
-  let failure: unknown;
-  try {
-    await new Script(`(async () => { ${script} })()`, {
-      filename: "action.js",
-    }).runInNewContext(context);
-  } catch (error) {
-    failure = error;
-  }
-  const marker = logs.find((line) =>
-    line.startsWith("CANARY_PR_QA_OBSERVATION:")
+  return { acted, failure, observation };
+}
+
+/**
+ * Lecture compilée d'une assertion `visible`, `hidden` ou `count` contre un faux
+ * Playwright : la page expose exactement les graphies listées, et chacune est
+ * visible. `isVisible()` et `count()` ne lèvent jamais, pas même sur un locator
+ * vide : c'est ce silence que le repli doit devancer.
+ */
+async function runTypographicRead(
+  kind: "visible" | "hidden" | "count",
+  exposed: string[]
+) {
+  const target = {
+    by: "role" as const,
+    value: "textbox",
+    name: "Justification de l'écart",
+  };
+  const assertion: Assertion =
+    kind === "count"
+      ? {
+          id: "justification",
+          kind: "count",
+          description: "la justification de l'écart compte un élément",
+          expected: 1,
+          target,
+        }
+      : {
+          id: "justification",
+          kind,
+          description: "la justification de l'écart est visible",
+          target,
+        };
+  const locator = (name: string) => ({
+    count: async () => exposed.filter((item) => item === name).length,
+    isVisible: async () => exposed.includes(name),
+  });
+  const { failure, observation } = await runCompiledScript(
+    compileProbe(assertion, "https://preview.test"),
+    {
+      getByRole: (_role: string, options: { name: string }) =>
+        locator(options.name),
+      url: () => "https://preview.test/caisse",
+      snapshotForAI: async () => ({ full: "" }),
+    }
   );
   return {
-    acted,
     failure,
-    observation: marker
-      ? JSON.parse(marker.slice("CANARY_PR_QA_OBSERVATION:".length))
-      : undefined,
+    observation,
+    actual: observation?.actual,
+    passed: assertionMatches(assertion, observation?.actual),
   };
 }
 
@@ -464,6 +531,126 @@ describe("validation and deterministic assertions", () => {
     expect(failure).toBeUndefined();
     expect(acted).toEqual(["Justification de l'écart"]);
     expect(observation?.targetName).toBeUndefined();
+  });
+
+  it("compile la lecture qui mesure sur la résolution du nom, jamais sur l'appel direct", () => {
+    const target = {
+      by: "role" as const,
+      value: "textbox",
+      name: "Justification de l'écart",
+    };
+    // `isVisible()` et `count()` rendent false/0 sans lever : la lecture doit
+    // passer par la résolution du nom exposé, quand l'action attend l'échec.
+    expect(locatorCall(target, "isVisible()", "measure")).toContain(
+      "readName("
+    );
+    expect(locatorCall(target, "count()", "measure")).toContain("readName(");
+    expect(locatorCall(target, "isVisible()")).toContain("resolveName(");
+    expect(locatorCall(target, "click({ timeout: 10000 })")).toContain(
+      "resolveName("
+    );
+  });
+
+  it("vise la graphie exposée avant de lire visibilité et compte", async () => {
+    const exposed = ["Justification de l’écart"];
+    const visible = await runTypographicRead("visible", exposed);
+    expect(visible.failure).toBeUndefined();
+    expect(visible.actual).toBe(true);
+    expect(visible.passed).toBe(true);
+    expect(visible.observation?.targetName).toBe(exposed[0]);
+    const hidden = await runTypographicRead("hidden", exposed);
+    // `actual` est la visibilité lue, `passed` le verdict de l'assertion :
+    // l'élément est visible, donc « hidden » est faux au lieu de passer sur un
+    // locator vide.
+    expect(hidden.actual).toBe(true);
+    expect(hidden.passed).toBe(false);
+    expect(hidden.observation?.targetName).toBe(exposed[0]);
+    const count = await runTypographicRead("count", exposed);
+    expect(count.actual).toBe(1);
+    expect(count.passed).toBe(true);
+  });
+
+  it("garde la lecture du nom exact quand il existe, sans repli", async () => {
+    const exact = ["Justification de l'écart"];
+    const visible = await runTypographicRead("visible", exact);
+    expect(visible.actual).toBe(true);
+    expect(visible.observation?.targetName).toBeUndefined();
+    const hidden = await runTypographicRead("hidden", exact);
+    expect(hidden.actual).toBe(true);
+    expect(hidden.observation?.targetName).toBeUndefined();
+    const count = await runTypographicRead("count", exact);
+    expect(count.actual).toBe(1);
+    expect(count.observation?.targetName).toBeUndefined();
+  });
+
+  it("garde la lecture honnête d'une cible réellement absente", async () => {
+    // `hidden` et `count: 0` restent exprimables : sans repli possible, la
+    // lecture du nom exact (0/false) est le verdict, pas une approximation.
+    const visible = await runTypographicRead("visible", []);
+    expect(visible.actual).toBe(false);
+    expect(visible.passed).toBe(false);
+    const hidden = await runTypographicRead("hidden", []);
+    expect(hidden.actual).toBe(false);
+    expect(hidden.passed).toBe(true);
+    const count = await runTypographicRead("count", []);
+    expect(count.actual).toBe(0);
+    expect(count.passed).toBe(false);
+  });
+
+  it("refuse deux graphies concurrentes au lieu de mesurer un locator vide", async () => {
+    for (const kind of ["visible", "hidden", "count"] as const) {
+      const read = await runTypographicRead(kind, [
+        "Justification de l’écart",
+        "Justification de l‘écart",
+      ]);
+      // L'ambiguïté est jetée sous forme d'objet : le bac à sable QuickJS perd
+      // le message d'un `Error`, et le daemon lit `.message` sur ce qui remonte.
+      const failure = read.failure as { message?: string; name?: string };
+      expect(failure?.name, kind).toBe("AmbiguousTargetError");
+      expect(String(failure?.message), kind).toContain(
+        "Ambiguous accessible name"
+      );
+      expect(String(failure?.message), kind).toContain(
+        '"Justification de l‘écart" (1) and "Justification de l’écart" (1)'
+      );
+      // Aucune lecture n'a eu lieu : rien n'est publié, donc aucun verdict
+      // rendu sur un locator vide.
+      expect(read.observation, kind).toBeUndefined();
+    }
+  });
+
+  it("suit l'union du libellé avant de lire, au lieu d'un libellé exact vide", async () => {
+    const union = {
+      count: async () => 1,
+      isVisible: async () => true,
+      or() {
+        return union;
+      },
+    };
+    const strict = {
+      count: async () => 0,
+      isVisible: async () => false,
+      or: () => union,
+    };
+    const { failure, observation } = await runCompiledScript(
+      compileProbe(
+        {
+          id: "pharmacie",
+          kind: "visible",
+          description: "la pharmacie active est visible",
+          target: { by: "label", value: "Pharmacie active" },
+        },
+        "https://preview.test"
+      ),
+      {
+        getByLabel: () => strict,
+        getByRole: () => union,
+        url: () => "https://preview.test/caisse",
+        snapshotForAI: async () => ({ full: "" }),
+      }
+    );
+    expect(failure).toBeUndefined();
+    expect(observation?.actual).toBe(true);
   });
   it("checks values, visibility, counts and text without model judgement", () => {
     expect(
