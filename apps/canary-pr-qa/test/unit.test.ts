@@ -35,7 +35,14 @@ import {
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
-import { BASE_SHA, fixture, PR_URL, plan, SHA } from "./fixture.js";
+import {
+  BASE_SHA,
+  fixture,
+  PR_URL,
+  plan,
+  SECOND_FILE_QUOTE,
+  SHA,
+} from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
 
@@ -1186,6 +1193,56 @@ describe("runner false-green regressions", () => {
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
     ).toBe("error");
+  });
+  it("returns an unwitnessed source file to the planner before failing", async () => {
+    const withoutWitness = structuredClone(plan);
+    withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
+    const corrected = structuredClone(plan);
+    corrected.scenarios[0]!.sourceFiles.push("src/second.ts");
+    corrected.scenarios[0]!.requirements.push({
+      behavior: "The second changed file is reviewed",
+      quote: SECOND_FILE_QUOTE,
+      sourceFile: "src/second.ts",
+    });
+    const f = await setup({
+      plans: [withoutWitness, corrected],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus nomme le scénario et le fichier au planificateur, qui corrige
+    // dans la même tentative au lieu de laisser le gate final bloquer le run.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(
+      "Scenario welcome declares src/second.ts without a source requirement witness"
+    );
+    expect(correction).toContain(
+      "Add a requirement whose quote exists verbatim in src/second.ts, or drop it from sourceFiles and list it in skipped."
+    );
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  });
+  it("blocks the run when the corrected plan still declares an unwitnessed file", async () => {
+    const withoutWitness = structuredClone(plan);
+    withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
+    const f = await setup({
+      plans: [withoutWitness, withoutWitness],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("COVERAGE_WITNESS_MISSING");
+    expect(result.error).toBe(
+      "Scenario welcome declares src/second.ts without a source requirement witness"
+    );
+    expect(result.scenarios).toEqual([]);
   });
   it("retries a model call cut by the transport, and counts it", async () => {
     const f = await setup({ env: { QA_MODEL_RETRIES: "1" }, modelResets: 1 });

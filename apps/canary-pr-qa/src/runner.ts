@@ -26,6 +26,7 @@ import {
   repairRequirementAttribution,
   trustedPolicy,
   ungroundedPlanRefusals,
+  unwitnessedPlanRefusals,
   validateCoverage,
   validateProvider,
   writeEvidenceRefusals,
@@ -254,6 +255,11 @@ function planRefusals(
   context: PrContext
 ): string[] {
   return [
+    // Un fichier déclaré sans exigence témoignée bloque tout le run via
+    // `validateCoverage` : il passe en tête pour survivre à la troncature de la
+    // requête de correction (2000 caractères dans `model.ts`), contrairement
+    // aux refus par scénario, qui restent rapportés et bloqués individuellement.
+    ...unwitnessedPlanRefusals(candidate, context),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),

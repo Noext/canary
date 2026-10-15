@@ -272,6 +272,65 @@ export function ungroundedPlanRefusals(
   );
 }
 
+/**
+ * Marque comme couverts les fichiers témoignés par les exigences d'un scénario,
+ * et seulement ceux-là : une exigence dont la citation n'existe pas mot pour mot
+ * n'ajoute rien, comme `validateCoverage` l'aurait refusée juste avant. Le
+ * couvert est cumulatif sur tout le plan, dans l'ordre des scénarios.
+ * `unwitnessedPlanRefusals` et `validateCoverage` partagent ce pas pour que le
+ * refus rendu au planificateur nomme exactement le fichier que le gate
+ * refuserait ensuite, et jamais un fichier que le gate accepterait.
+ */
+function coverWitnessedSourceFiles(
+  covered: Set<string>,
+  scenario: Scenario,
+  context: PrContext
+): void {
+  for (const requirement of scenario.requirements) {
+    if (requirementEvidence(requirement, context).includes(requirement.quote)) {
+      covered.add(requirement.sourceFile);
+    }
+  }
+}
+
+/**
+ * Un fichier déclaré par un scénario qu'aucune exigence témoignée ne couvre :
+ * sans témoin, le plan ne peut pas prouver la couverture qu'il annonce.
+ */
+export function unwitnessedRequirement(
+  scenarioId: string,
+  file: string
+): QaError {
+  return new QaError(
+    "COVERAGE_WITNESS_MISSING",
+    `Scenario ${scenarioId} declares ${file} without a source requirement witness`,
+    `Add a requirement whose quote exists verbatim in ${file}, or drop it from sourceFiles and list it in skipped.`
+  );
+}
+
+/**
+ * Fichiers cités sans témoin, sous forme de refus rendus au planificateur : il
+ * apprend la règle ici, dispose d'une tentative de correction, et
+ * `validateCoverage` reste le contrôle final qui refuse un plan non corrigé.
+ */
+export function unwitnessedPlanRefusals(
+  plan: Plan,
+  context: PrContext
+): string[] {
+  const covered = new Set<string>();
+  const refusals: string[] = [];
+  for (const scenario of plan.scenarios) {
+    coverWitnessedSourceFiles(covered, scenario, context);
+    for (const file of scenario.sourceFiles) {
+      if (!covered.has(file)) {
+        const error = unwitnessedRequirement(scenario.id, file);
+        refusals.push(`${error.message}. ${error.hint}`);
+      }
+    }
+  }
+  return refusals;
+}
+
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -297,12 +356,11 @@ export function validateCoverage(
       ) {
         throw ungroundedRequirement(scenario.id, requirement);
       }
-      covered.add(requirement.sourceFile);
     }
-    if (scenario.sourceFiles.some((f) => !covered.has(f))) {
-      throw new Error(
-        "Every cited changed file needs a source requirement witness"
-      );
+    coverWitnessedSourceFiles(covered, scenario, context);
+    const unwitnessed = scenario.sourceFiles.find((file) => !covered.has(file));
+    if (unwitnessed !== undefined) {
+      throw unwitnessedRequirement(scenario.id, unwitnessed);
     }
   }
   const denied = plan.skipped.filter(

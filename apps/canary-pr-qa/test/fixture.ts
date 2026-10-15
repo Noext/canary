@@ -16,6 +16,8 @@ import type { Plan } from "../src/schema.js";
 export const SHA = "1".repeat(40);
 export const BASE_SHA = "2".repeat(40);
 export const PR_URL = "https://github.com/fixture/app/pull/1";
+/** Citation témoin du second fichier changé, servie dans son patch. */
+export const SECOND_FILE_QUOTE = "second changed file witness value";
 export const plan: Plan = {
   summary: "Verify the changed welcome form behavior",
   scenarios: [
@@ -165,6 +167,8 @@ export async function fixture(
     missingDiffAndContext?: boolean;
     decoy?: boolean;
     plans?: Plan[];
+    /** Second fichier changé, pour déclarer une source sans exigence témoignée. */
+    secondChangedFile?: string;
     requireWriteEvidence?: boolean;
     unchangedState?: boolean;
     persistent?: boolean;
@@ -365,6 +369,19 @@ export async function fixture(
             ? {}
             : { patch: "- show('Hello')\n+ show('Welcome '+name)" }),
         },
+        ...(options.secondChangedFile
+          ? [
+              {
+                filename: options.secondChangedFile,
+                status: "modified",
+                ...(options.missingDiffAndContext
+                  ? {}
+                  : {
+                      patch: `+ const witness = "${SECOND_FILE_QUOTE}";`,
+                    }),
+              },
+            ]
+          : []),
       ]);
       return;
     }
@@ -374,7 +391,7 @@ export async function fixture(
         title: "Welcome users by name",
         body: "Save the name via the form",
         state: "open",
-        changed_files: 1,
+        changed_files: options.secondChangedFile ? 2 : 1,
         head: {
           sha: options.updatedSha && prReads >= 3 ? BASE_SHA : SHA,
           repo: { full_name: "fixture/app" },
