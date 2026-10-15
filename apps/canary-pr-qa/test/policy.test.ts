@@ -237,6 +237,35 @@ it("refuses a quote that normalizes to nothing", () => {
 });
 
 /**
+ * P1 de la revue : replier TOUS les blancs acceptait comme témoin une citation
+ * dont le texte réel diffère d'une manière qui a un sens. Seul un blanc qui
+ * porte un saut de ligne se replie — un objet écrit sur plusieurs lignes puis
+ * recopié sur une ligne, cas réel du run 94e86f2b — tandis qu'une suite de
+ * blancs sans saut de ligne garde son nombre exact. Deux espaces dans un
+ * littéral de chaîne sont significatifs.
+ */
+const SPACED_LITERAL_FILE = [
+  'const label = "a  b";',
+  'const other = "a b";',
+].join("\n");
+
+it("does not accept a quote whose double space is a single space", () => {
+  // Espace unique face au littéral qui en porte deux : ce n'est pas la même
+  // chaîne, ce n'est pas un témoin.
+  expect(quoteHasWitness(SPACED_LITERAL_FILE, 'label = "a b"')).toBe(false);
+  // Les deux espaces exacts au bon endroit : témoin.
+  expect(quoteHasWitness(SPACED_LITERAL_FILE, 'label = "a  b"')).toBe(true);
+  // Le raisonnement vaut dans les deux sens, selon ce que porte le fichier.
+  expect(quoteHasWitness(SPACED_LITERAL_FILE, 'other = "a b"')).toBe(true);
+  expect(quoteHasWitness(SPACED_LITERAL_FILE, 'other = "a  b"')).toBe(false);
+});
+
+it("folds only whitespace runs that carry a line break", () => {
+  expect(quoteHasWitness("alpha\n\n   beta", "alpha beta")).toBe(true);
+  expect(quoteHasWitness("alpha\t\tbeta", "alpha beta")).toBe(false);
+});
+
+/**
  * Deux segments témoins ne se recousent pas : une citation n'est un témoin que
  * si un seul segment la porte entière. Replier les blancs après avoir joint les
  * segments acceptait une citation assemblée de deux morceaux différents.

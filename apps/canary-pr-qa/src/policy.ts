@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
-import type { Plan, Scenario } from "./schema.js";
+import { normalizeQuoteText, type Plan, type Scenario } from "./schema.js";
 
 type Requirement = Scenario["requirements"][number];
 
@@ -174,26 +174,17 @@ export function requirementEvidence(
 }
 
 /**
- * Les blancs ne départagent pas une citation de sa source : le planificateur
- * recopie sur une ligne le bloc que le fichier indente sur quatre, et un refus
- * d'espacement ne lui apprend rien. La règle est celle de `normalizeText`
- * (plan-evidence.ts) : caractères invisibles retirés, toute suite de blancs
- * ramenée à une espace. Le repli typographique reste réservé aux cibles de
- * locator, jamais aux citations : un seul caractère non blanc différent doit
- * continuer de refuser.
- */
-function normalizeQuoteText(value: string): string {
-  return value
-    .replace(/[\u200b\u00ad]/g, "")
-    .replace(/[\r\n\s\t]+/g, " ")
-    .trim();
-}
-
-/**
- * Vrai si la citation apparaît dans ce segment témoin, à l'espacement près.
- * Une citation qui se normalise en chaîne vide n'a jamais de témoin :
- * `includes("")` est toujours vrai, et l'accepter ferait passer pour une preuve
- * une citation qui n'existe nulle part.
+ * Vrai si la citation apparaît dans ce segment témoin, à l'espacement de mise
+ * en forme près. Un repli de mise en forme ne départage pas une citation de sa
+ * source — le planificateur recopie sur une ligne le bloc que le fichier indente
+ * sur quatre — donc seule une suite de blancs qui contient un saut de ligne se
+ * replie. Un blanc sans saut de ligne est resté significatif : deux espaces dans
+ * un littéral de chaîne sont deux espaces, et les replier accepterait comme
+ * citation un texte qui n'existe nulle part.
+ * Une citation qui ne porte aucun caractère — chaîne vide, blancs seuls — n'a
+ * jamais de témoin : `includes("")` est toujours vrai, et l'accepter ferait
+ * passer pour une preuve une citation qui n'existe nulle part. La règle de repli
+ * vit dans `normalizeQuoteText` (schema.ts), avec le contrat de `quote`.
  */
 export function quoteHasWitness(evidence: string, quote: string): boolean {
   const normalized = normalizeQuoteText(quote);

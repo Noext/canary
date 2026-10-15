@@ -1,6 +1,22 @@
 import { z } from "zod";
 import type { Diagnostic } from "./diagnostics.js";
 
+/**
+ * Normalisation d'une citation avant comparaison au texte témoin. Les
+ * caractères invisibles sont retirés, les bornes rognées, et une suite de
+ * blancs qui contient un saut de ligne est un repli de mise en forme — le
+ * planificateur recopie sur une ligne le bloc que le fichier indente sur
+ * quatre. Une suite de blancs SANS saut de ligne garde son nombre exact : deux
+ * espaces dans un littéral de chaîne sont significatifs, et les replier ferait
+ * passer pour témoin un texte qui diffère d'une manière qui a un sens.
+ */
+export function normalizeQuoteText(value: string): string {
+  return value
+    .replace(/[\u200b\u00ad]/g, "")
+    .replace(/\s+/g, (run) => (/[\r\n]/.test(run) ? " " : run))
+    .trim();
+}
+
 const text = z.string().trim().min(1).max(2000);
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),
