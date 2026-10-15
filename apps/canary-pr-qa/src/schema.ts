@@ -2,28 +2,35 @@ import { z } from "zod";
 import type { Diagnostic } from "./diagnostics.js";
 
 /**
- * Normalisation d'une citation avant comparaison au texte témoin. Les
- * caractères invisibles sont retirés, les bornes rognées, et une suite de
- * blancs qui contient un saut de ligne est un repli de mise en forme — le
- * planificateur recopie sur une ligne le bloc que le fichier indente sur
- * quatre. Une suite de blancs SANS saut de ligne garde son nombre exact : deux
- * espaces dans un littéral de chaîne sont significatifs, et les replier ferait
- * passer pour témoin un texte qui diffère d'une manière qui a un sens.
+ * Normalisation d'une citation avant comparaison au texte témoin. Deux
+ * opérations, chacune portée par un fait réel :
+ *
+ * - une suite de blancs qui contient un saut de ligne est un repli de mise en
+ *   forme — le planificateur recopie sur une ligne le bloc que le fichier
+ *   indente sur quatre. Une suite de blancs SANS saut de ligne garde son nombre
+ *   exact : deux espaces dans un littéral de chaîne sont significatifs, et les
+ *   replier ferait passer pour témoin un texte qui diffère d'une manière qui a
+ *   un sens ;
+ * - les caractères invisibles (U+200B, U+00AD) ne sont rognés qu'aux bornes de
+ *   la chaîne comparée. À l'intérieur, ils restent : un invisible présent dans
+ *   la source ne disparaît jamais en silence, donc une citation qui l'omet là
+ *   où il compte n'a pas de témoin, et une citation qui le porte en a un. En
+ *   bordure, il est du bruit de copie et se retire comme le blanc.
  */
 export function normalizeQuoteText(value: string): string {
   return value
-    .replace(/[\u200b\u00ad]/g, "")
     .replace(/\s+/g, (run) => (/[\r\n]/.test(run) ? " " : run))
-    .trim();
+    .replace(/^[\s\u200b\u00ad]+/, "")
+    .replace(/[\s\u200b\u00ad]+$/, "");
 }
 /**
  * Contenu réel minimal d'une citation crédible. Une citation rembourrée — sept
- * espaces suivis d'une accolade, ou des caractères invisibles — se normalise en
- * un fragment que tout fichier contient : elle couvrirait un fichier entier
- * sans rien prouver. Après normalisation, la citation doit donc garder au moins
- * `QUOTE_MIN_TEXT_CHARS` caractères dont `QUOTE_MIN_WORD_CHARS` lettres ou
- * chiffres, c'est-à-dire un identifiant, un mot-clé ou un nombre, jamais une
- * accolade isolée ou du blanc.
+ * espaces suivis d'une accolade, ou des caractères invisibles en bordure — se
+ * normalise en un fragment que tout fichier contient : elle couvrirait un
+ * fichier entier sans rien prouver. Après normalisation, la citation doit donc
+ * garder au moins `QUOTE_MIN_TEXT_CHARS` caractères dont
+ * `QUOTE_MIN_WORD_CHARS` lettres ou chiffres, c'est-à-dire un identifiant, un
+ * mot-clé ou un nombre, jamais une accolade isolée ou du blanc.
  */
 export const QUOTE_MIN_TEXT_CHARS = 8;
 export const QUOTE_MIN_WORD_CHARS = 4;
@@ -42,7 +49,7 @@ const quote = z
   .max(1000)
   .refine(
     quoteCarriesContent,
-    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters and ${QUOTE_MIN_WORD_CHARS} letters or digits once whitespace carrying a line break is folded`
+    `quote must keep at least ${QUOTE_MIN_TEXT_CHARS} characters and ${QUOTE_MIN_WORD_CHARS} letters or digits once whitespace carrying a line break is folded and edge invisibles are trimmed`
   );
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),

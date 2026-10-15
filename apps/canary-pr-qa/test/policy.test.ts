@@ -269,6 +269,65 @@ it("folds only whitespace runs that carry a line break", () => {
 });
 
 /**
+ * P1 de la revue du tour 3 : retirer U+200B et U+00AD des deux côtés effaçait
+ * une différence qui a un sens. Ils ne se rognent plus qu'aux bornes de la
+ * chaîne comparée : à l'intérieur, ils restent significatifs et doivent donc
+ * être présents des deux côtés. Règle appliquée : un invisible de bordure est
+ * du bruit de copie, un invisible interne est un caractère comme un autre.
+ */
+const ZWSP = "\u200b";
+const SOFT_HYPHEN = "\u00ad";
+const INVISIBLE_ID_FILE = [
+  `const zone = 'no${ZWSP}ru';`,
+  `const code = 'SU${SOFT_HYPHEN}90';`,
+].join("\n");
+const invisibleIdPatch = `+ const zone = 'no${ZWSP}ru';`;
+const invisibleIdContext = contextWith([
+  { filename: "src/i18n.ts", patch: invisibleIdPatch },
+]);
+
+it("refuses a quote that omits an invisible inside an identifier", () => {
+  // Recopier l'identifiant SANS l'invisible qu'il porte change son contenu : ce
+  // n'est pas le texte de la source, donc pas un témoin.
+  expect(quoteHasWitness(INVISIBLE_ID_FILE, "const zone = 'noru';")).toBe(
+    false
+  );
+  expect(quoteHasWitness(INVISIBLE_ID_FILE, "const code = 'SU90';")).toBe(
+    false
+  );
+  expect(
+    ungroundedRequirements(
+      planWithWitnesses([
+        {
+          id: "i18n",
+          sourceFiles: ["src/i18n.ts"],
+          requirements: [
+            { sourceFile: "src/i18n.ts", quote: "const zone = 'noru';" },
+          ],
+        },
+      ]),
+      invisibleIdContext
+    )
+  ).toHaveLength(1);
+  // Recopié AVEC l'invisible à la bonne place : témoin.
+  expect(
+    quoteHasWitness(INVISIBLE_ID_FILE, `const zone = 'no${ZWSP}ru';`)
+  ).toBe(true);
+  expect(
+    quoteHasWitness(INVISIBLE_ID_FILE, `const code = 'SU${SOFT_HYPHEN}90';`)
+  ).toBe(true);
+});
+
+it("tolerates an invisible at the border of the quote", () => {
+  const line = "const total = grandTotal;";
+  // L'invisible en bordure est du bruit de copie, comme le blanc : il se rogne
+  // des deux côtés, donc la citation reste témoin du contenu sans lui.
+  expect(quoteHasWitness(line, `${ZWSP}${line}`)).toBe(true);
+  expect(quoteHasWitness(line, `${line}${SOFT_HYPHEN}`)).toBe(true);
+  expect(quoteHasWitness(`${ZWSP}${line}${SOFT_HYPHEN}`, line)).toBe(true);
+});
+
+/**
  * Deux segments témoins ne se recousent pas : une citation n'est un témoin que
  * si un seul segment la porte entière. Replier les blancs après avoir joint les
  * segments acceptait une citation assemblée de deux morceaux différents.

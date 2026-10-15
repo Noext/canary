@@ -184,12 +184,16 @@ export function requirementEvidence(
  * source — le planificateur recopie sur une ligne le bloc que le fichier indente
  * sur quatre — donc seule une suite de blancs qui contient un saut de ligne se
  * replie. Un blanc sans saut de ligne est significatif : deux espaces dans un
- * littéral de chaîne restent deux espaces.
+ * littéral de chaîne restent deux espaces. Un caractère invisible à l'intérieur
+ * de la citation est significatif lui aussi : il n'est rogné qu'aux bornes de
+ * la chaîne comparée, donc une citation qui omet un invisible présent dans la
+ * source n'a pas de témoin.
  * Une citation qui ne porte pas de contenu réel — chaîne vide, blanc, caractères
- * invisibles, accolade isolée — n'a jamais de témoin : `includes` d'un fragment
- * que tout fichier contient ferait passer pour preuve une citation qui ne prouve
- * rien. La règle de repli et le seuil de contenu vivent dans `normalizeQuoteText`
- * et `quoteCarriesContent` (schema.ts), avec le contrat de `quote`.
+ * invisibles en bordure, accolade isolée — n'a jamais de témoin : `includes`
+ * d'un fragment que tout fichier contient ferait passer pour preuve une citation
+ * qui ne prouve rien. La règle de repli et le seuil de contenu vivent dans
+ * `normalizeQuoteText` et `quoteCarriesContent` (schema.ts), avec le contrat de
+ * `quote`.
  */
 export function quoteHasWitness(evidence: string, quote: string): boolean {
   if (!quoteCarriesContent(quote)) {
