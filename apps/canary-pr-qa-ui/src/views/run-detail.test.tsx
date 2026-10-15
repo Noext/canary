@@ -521,7 +521,12 @@ describe("RunDetail diagnostic", () => {
   it.each([
     "COVERAGE_WITNESS_MISSING",
     "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+    "PLAN_CHANGED_FILE_UNCOVERED",
+    "PLAN_SCENARIO_ID_RESERVED",
     "PLAN_SELECTOR_UNSTABLE",
+    "PLAN_SKIP_OUTSIDE_DIFF",
+    "PLAN_SOURCE_OUTSIDE_DIFF",
+    "PLAN_TOO_MANY_SCENARIOS",
     "REQUIREMENT_UNGROUNDED",
   ])("explains the plan refusal %s in French", async (code) => {
     const french = errorMessages[code];

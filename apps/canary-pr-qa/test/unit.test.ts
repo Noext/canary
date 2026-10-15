@@ -32,6 +32,7 @@ import {
   ActionSchema,
   type Assertion,
   type Locator,
+  type Plan,
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
@@ -1295,6 +1296,97 @@ describe("runner false-green regressions", () => {
     expect(result.error).toContain("welcome");
     expect(result.error).toContain("src/other.ts");
     expect(result.scenarios).toEqual([]);
+  });
+  /**
+   * Un candidat fautif par refus de forme du plan : le planificateur reçoit le
+   * code nommé dans sa tentative de correction, et le plan corrigé passe.
+   */
+  function shapeRefusalCandidates(): { candidate: Plan; code: string }[] {
+    const tooMany = structuredClone(plan);
+    for (let index = tooMany.scenarios.length; index < 9; index++) {
+      tooMany.scenarios.push({
+        ...structuredClone(plan.scenarios[0]!),
+        id: `extra-${index}`,
+      });
+    }
+    const reserved = structuredClone(plan);
+    reserved.scenarios[0]!.id = "_discovery";
+    const cited = structuredClone(plan);
+    cited.scenarios[0]!.sourceFiles.push("docs/outside.md");
+    const skipped = structuredClone(plan);
+    skipped.skipped = [
+      {
+        sourceFile: "lib/outside.ts",
+        reason: "Not reachable from a browser scenario",
+      },
+    ];
+    const uncovered = structuredClone(plan);
+    uncovered.scenarios = [];
+    return [
+      { candidate: tooMany, code: "PLAN_TOO_MANY_SCENARIOS" },
+      { candidate: reserved, code: "PLAN_SCENARIO_ID_RESERVED" },
+      { candidate: cited, code: "PLAN_SOURCE_OUTSIDE_DIFF" },
+      { candidate: skipped, code: "PLAN_SKIP_OUTSIDE_DIFF" },
+      { candidate: uncovered, code: "PLAN_CHANGED_FILE_UNCOVERED" },
+    ];
+  }
+  it.each(
+    shapeRefusalCandidates()
+  )("returns the named refusal $code to the planner, then passes the corrected plan", async ({
+    candidate,
+    code,
+  }) => {
+    const f = await setup({ plans: [candidate, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain(code);
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
+  it.each(
+    shapeRefusalCandidates()
+  )("blocks an uncorrected plan with the named refusal $code, without executing a scenario", async ({
+    candidate,
+    code,
+  }) => {
+    const f = await setup({ plans: [candidate, candidate] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe(code);
+    expect(result.scenarios).toEqual([]);
+  }, 60_000);
+  it("names the coverage refusal when a plan also cites a file outside the diff", async () => {
+    const cumulative = structuredClone(plan);
+    cumulative.scenarios[0]!.sourceFiles.push("docs/outside.md");
+    cumulative.scenarios[0]!.requirements.push({
+      behavior: "The requirement belongs to an undeclared source",
+      quote: "a quote the declared sources do not carry",
+      sourceFile: "src/undeclared.ts",
+    });
+    const f = await setup({ plans: [cumulative, cumulative] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus nommé et réparable du canal de couverture n'est plus masqué par
+    // la forme du plan : le cumul ne finit plus en QA_ERROR anonyme.
+    expect(result.diagnostic?.code).toBe("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(result.outcome).toBe("blocked");
+    expect(result.scenarios).toEqual([]);
+    // Les deux classes fatales ont été montrées au planificateur dans la même
+    // tentative de correction.
+    const correction = JSON.stringify(f.modelRequests.at(-1));
+    expect(correction).toContain("COVERAGE_REQUIREMENT_SOURCE_MISSING");
+    expect(correction).toContain("PLAN_SOURCE_OUTSIDE_DIFF");
   });
   it("keeps both fatal refusal classes inside the truncated correction", async () => {
     const flooded = structuredClone(plan);

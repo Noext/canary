@@ -58,8 +58,18 @@ export const errorMessages: Record<string, string | undefined> = {
   PR_CHANGED:
     "La pull request a changé pendant le test : ce résultat ne correspond plus au dernier commit.",
   PR_CLOSED: "Cette pull request est fermée.",
+  PLAN_CHANGED_FILE_UNCOVERED:
+    "Un fichier modifié par la pull request n’est couvert par aucun scénario et n’est pas listé comme ignoré.",
+  PLAN_SCENARIO_ID_RESERVED:
+    "Le plan réutilise l’identifiant réservé à la découverte : ce scénario ne peut pas être exécuté.",
   PLAN_SELECTOR_UNSTABLE:
     "Le scénario cible un élément avec un sélecteur CSS dérivé d’une classe ou d’une couleur lue dans la source : cette cible ne survit pas au rendu.",
+  PLAN_SKIP_OUTSIDE_DIFF:
+    "Le plan ignore un fichier que cette pull request ne modifie pas.",
+  PLAN_SOURCE_OUTSIDE_DIFF:
+    "Le plan cite un fichier que cette pull request ne modifie pas.",
+  PLAN_TOO_MANY_SCENARIOS:
+    "Le plan du modèle dépasse le nombre de scénarios autorisé pour un test.",
   PREVIEW_NOT_FOUND:
     "Canary ne connaît l’URL d’aucune application de test pour ce commit : aucun modèle d’URL n’est configuré et GitHub n’annonce aucun déploiement pour ce commit.",
   PREVIEW_SHA_MISMATCH:
@@ -671,9 +681,9 @@ export const runAdvice: Record<string, string> = {
   CONTRACT_VIOLATION:
     "Un scénario a voulu agir hors du plan validé : ouvrez le rapport, puis corrigez le plan ou les fichiers `.canary` du dépôt.",
   COVERAGE_REQUIREMENT_SOURCE_MISSING:
-    "Ajoutez ce fichier aux sources du scénario, ou attribuez l’exigence à un fichier qu’il déclare, puis relancez le test.",
+    "Attribuez l’exigence à un fichier que le scénario déclare, puis relancez le test ; ajouter ce fichier aux sources ne marche que s’il fait partie du diff de la PR.",
   COVERAGE_WITNESS_MISSING:
-    "Ajoutez une exigence dont la citation existe mot pour mot dans ce fichier, ou retirez-le des sources du scénario et listez-le dans les fichiers ignorés, puis relancez.",
+    "Ajoutez une exigence dont la citation existe mot pour mot dans ce fichier, puis relancez. Retirer le fichier des sources ne suffit que s’il peut être ignoré : un chemin critique (`src/`, `apps/`, `packages/`…) demande un skip approuvé dans `.canary/qa.json` sur la branche de base.",
   CRITICAL_COVERAGE_MISSING:
     "Élargissez le plan de test (fichiers `.canary`) pour couvrir ces changements, puis relancez.",
   EVIDENCE_VIDEO_MISSING:
@@ -702,8 +712,18 @@ export const runAdvice: Record<string, string> = {
     "Autorisez l’IP de sortie du VPS chez le fournisseur (Cloudflare), vérifiez la clé, puis relancez.",
   PR_CHANGED: "Relancez un test sur le dernier commit de la pull request.",
   PR_CLOSED: "Cette pull request est fermée : il n’y a rien à tester.",
+  PLAN_CHANGED_FILE_UNCOVERED:
+    "Relancez le test pour obtenir un plan qui couvre tous les fichiers modifiés de la PR ; un chemin critique ne peut être ignoré que par un skip approuvé dans `.canary/qa.json`.",
+  PLAN_SCENARIO_ID_RESERVED:
+    "Relancez le test : l’identifiant `_discovery` est réservé au relevé de découverte et ne peut pas nommer un scénario.",
   PLAN_SELECTOR_UNSTABLE:
     "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source — puis relancez.",
+  PLAN_SKIP_OUTSIDE_DIFF:
+    "Relancez le test : le planificateur ne peut ignorer qu’un fichier modifié par la PR, jamais un fichier de contexte inchangé.",
+  PLAN_SOURCE_OUTSIDE_DIFF:
+    "Relancez le test : le planificateur ne doit citer que les fichiers modifiés par la PR (`pr.files`), jamais un fichier de contexte.",
+  PLAN_TOO_MANY_SCENARIOS:
+    "Réduisez le périmètre de la PR ou relancez : le plan doit rester sous `QA_MAX_SCENARIOS` scénarios tout en couvrant les fichiers modifiés.",
   PREVIEW_HOST_NOT_ALLOWED:
     "Ajoutez l’hôte de cette application de test dans Réglages → l’application à tester, puis relancez un test.",
   PREVIEW_NOT_FOUND:
