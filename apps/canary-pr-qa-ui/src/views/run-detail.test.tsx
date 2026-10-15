@@ -223,30 +223,52 @@ describe("RunDetail", () => {
   });
 
   it("flags a report that never reached the pull request, whatever the vocabulary", async () => {
-    // `status` dit l'issue de la publication, et "failed" en est le seul échec :
-    // celui du vocabulaire courant comme celui des rapports écrits avant sa
-    // séparation du commit status ("success"/"failure"/"error").
+    // `status` dit l'issue de la publication, dans le vocabulaire courant comme
+    // dans l'ancien, où il recopiait l'état du commit status. "failed" y
+    // accompagnait alors un commentaire pourtant écrit, quand seule l'écriture du
+    // verdict avait échoué : l'URL de commentaire est ce qui tranche.
     const comment = "https://github.com/fixture/app/pull/1#issuecomment-1";
-    const cases: { failed: boolean; publication: unknown }[] = [
-      { failed: true, publication: { status: "failed" } },
+    const cases: { failed: boolean; name: string; publication: unknown }[] = [
+      {
+        failed: true,
+        name: "rapport jamais écrit",
+        publication: { commitStatus: "error", status: "failed" },
+      },
+      {
+        failed: true,
+        name: "rapport jamais écrit, URL nulle",
+        publication: { commentUrl: null, status: "failed" },
+      },
       {
         failed: false,
+        name: "rapport publié",
         publication: { commentUrl: comment, status: "published" },
       },
       {
         failed: false,
+        name: "commentaire écrit, verdict de commit status raté",
+        publication: { commentUrl: comment, status: "failed" },
+      },
+      {
+        failed: false,
+        name: "ancien vocabulaire success",
         publication: { commentUrl: comment, status: "success" },
       },
       {
         failed: false,
+        name: "ancien vocabulaire failure",
         publication: { commentUrl: comment, status: "failure" },
       },
       {
         failed: false,
+        name: "ancien vocabulaire error",
         publication: { commentUrl: comment, status: "error" },
       },
-      { failed: true, publication: { commentUrl: comment, status: "failed" } },
-      { failed: false, publication: undefined },
+      {
+        failed: false,
+        name: "rapport antérieur au champ publication",
+        publication: undefined,
+      },
     ];
     for (const item of cases) {
       mockBlocked({ publication: item.publication });
@@ -257,7 +279,7 @@ describe("RunDetail", () => {
         (element("resultSummary").textContent ?? "").includes(
           copy.publicationFailed.trim()
         ),
-        `publication.status = ${JSON.stringify(item.publication)}`
+        `${item.name} : publication = ${JSON.stringify(item.publication)}`
       ).toBe(item.failed);
       view.unmount();
     }

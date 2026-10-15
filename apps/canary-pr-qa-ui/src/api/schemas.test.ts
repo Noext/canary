@@ -251,9 +251,10 @@ describe("server payloads", () => {
   });
 
   it("reads a report whose publication failed without a comment URL", () => {
-    // L'issue de publication est un fait, l'état du commit status un autre : un
-    // rapport jamais publié n'a pas d'URL de commentaire, et le verdict écrit
-    // sur le commit reste lisible à part.
+    // L'issue de publication est un fait, l'écriture du commit status un autre :
+    // un rapport jamais publié n'a pas d'URL de commentaire, et ce que le run a
+    // réellement écrit sur le commit traverse jusqu'au résultat brut que le
+    // diagnostic technique imprime.
     const parsed = runResultSchema.parse({
       id: "55555555-5555-5555-5555-555555555555",
       outcome: "blocked",

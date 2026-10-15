@@ -317,14 +317,18 @@ export interface RunResult {
   prUrl: string;
   /**
    * `status` dit l'issue de la publication du rapport ("published" quand le
-   * commentaire de rapport est sur la PR, "failed" sinon) ; l'état du commit
-   * status GitHub vit dans `commitStatus`. Les résultats écrits avant la
-   * séparation portent l'ancien vocabulaire du commit status ("success"/"error")
-   * et restent lus tels quels, avec l'absence possible de `commitStatus`.
+   * commentaire de rapport est sur la PR, "failed" sinon), et l'ancien
+   * vocabulaire des rapports écrits avant sa séparation du commit status
+   * ("success"/"failure"/"error", mais aussi "failed" alors que le
+   * commentaire était écrit) reste lu tel quel.
+   *
+   * Ces deux faits sont les seuls que le dashboard rend : le reste de
+   * `publication` (dont le dernier état de commit status réellement écrit) n'est
+   * ni typé ici ni validé, et traverse jusqu'au diagnostic technique, qui imprime
+   * le résultat brut (voir `schemas.ts`).
    */
   publication?: {
     commentUrl?: string | null;
-    commitStatus?: string | null;
     status: string;
   } | null;
   scenarios: ScenarioSummary[];

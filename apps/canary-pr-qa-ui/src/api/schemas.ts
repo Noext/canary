@@ -254,9 +254,14 @@ export const runResultSchema = z
     publication: z
       .object({
         commentUrl: z.string().nullish(),
-        commitStatus: z.string().nullish(),
         status: z.string(),
       })
+      // Passthrough comme pour les scénarios : le dashboard rend l'issue de la
+      // publication et l'URL du commentaire, mais le diagnostic technique imprime
+      // le résultat entier. Le dernier état de commit status réellement écrit
+      // ("success"/"failure"/"error") fait partie de ce que le run a fait, et
+      // disparaîtrait du diagnostic s'il était retiré ici.
+      .passthrough()
       .nullish(),
     scenarios: z.array(scenarioSummarySchema),
     sha: z.string().nullish(),

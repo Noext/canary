@@ -255,8 +255,13 @@ export interface Publication {
   /** URL du commentaire qui porte le rapport, absent si rien n'a été écrit. */
   commentUrl?: string;
   /**
-   * Dernier état de commit status effectivement écrit par ce run sur GitHub
-   * ("error" pour le verdict d'un run bloqué). Absent quand l'écriture a échoué.
+   * Dernier état de commit status réellement écrit sur le commit par ce run
+   * ("success"/"failure"/"error") : c'est le verdict du dernier post réussi,
+   * qui peut donc précéder la fin du run — un run bloqué dont l'écriture du
+   * verdict "error" a échoué garde le verdict écrit avant lui
+   * (`runner.ts:publish`). Absent quand aucune écriture de commit status n'a
+   * abouti, même si le rapport est publié : les deux écritures sont indépendantes
+   * et ne s'attestent pas l'une l'autre.
    */
   commitStatus?: string;
   /**
