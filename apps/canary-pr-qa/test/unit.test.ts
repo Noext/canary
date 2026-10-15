@@ -1220,8 +1220,11 @@ describe("runner false-green regressions", () => {
       "Scenario welcome declares src/second.ts without a source requirement witness"
     );
     expect(correction).toContain(
-      "Add a requirement whose quote exists verbatim in src/second.ts, or drop it from sourceFiles and list it in skipped."
+      "Add a requirement whose quote exists verbatim in src/second.ts; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch."
     );
+    // Un chemin critique ne se voit jamais proposer le remède skip, que le
+    // gate refuserait.
+    expect(correction).not.toContain("list it in skipped");
     expect(f.modelRequests).toHaveLength(2);
     expect(result.outcome).toBe("passed");
   });
@@ -1266,8 +1269,11 @@ describe("runner false-green regressions", () => {
       "Scenario welcome attributes a requirement to src/other.ts, which it does not declare in sourceFiles"
     );
     expect(correction).toContain(
-      "Declare src/other.ts in this scenario's sourceFiles, or attribute the requirement to one of the files the scenario declares (src/form.ts)."
+      "This PR does not change src/other.ts, so it cannot be declared: attribute the requirement to one of the files the scenario declares (src/form.ts)."
     );
+    // Le remède refusé par la forme du plan n'est ni proposé au planificateur
+    // ni montré à l'opérateur.
+    expect(correction).not.toContain("Declare src/other.ts");
     expect(f.modelRequests).toHaveLength(2);
     expect(result.outcome).toBe("passed");
   });

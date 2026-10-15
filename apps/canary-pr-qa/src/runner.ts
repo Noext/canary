@@ -24,6 +24,7 @@ import {
 import {
   type Policy,
   repairRequirementAttribution,
+  requirementSourceRefusal,
   trustedPolicy,
   undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
@@ -261,10 +262,10 @@ function planRefusals(
     // `validateCoverage` : il passe en tête pour survivre à la troncature de la
     // requête de correction (2000 caractères dans `model.ts`), contrairement
     // aux refus par scénario, qui restent rapportés et bloqués individuellement.
-    ...unwitnessedPlanRefusals(candidate, context),
+    ...unwitnessedPlanRefusals(candidate, context, policy),
     // Une exigence attribuée à un fichier hors du scénario bloque aussi tout le
     // run, pour la même raison.
-    ...undeclaredSourcePlanRefusals(candidate),
+    ...undeclaredSourcePlanRefusals(candidate, context),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
@@ -278,7 +279,9 @@ function planRefusals(
  * Après la planification : une citation réelle attribuée au mauvais fichier est
  * réparée — la preuve ne change pas, seule la mention du fichier était fausse —
  * le contrat est validé, et un plan qui lit une cible absente de la page de
- * découverte est refusé avant d'exécuter quoi que ce soit.
+ * découverte est refusé avant d'exécuter quoi que ce soit. Le refus d'attribution
+ * nommé passe avant les refus de forme : un fichier hors diff ne doit jamais
+ * masquer le refus que le planificateur est en train d'apprendre à corriger.
  */
 function settlePlan(
   plan: Plan,
@@ -296,6 +299,10 @@ function settlePlan(
       },
       "Requirement attribution repaired"
     );
+  }
+  const source = requirementSourceRefusal(plan, context);
+  if (source) {
+    throw source;
   }
   validatePlan(plan, context, config);
 }

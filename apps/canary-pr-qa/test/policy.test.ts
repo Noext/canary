@@ -131,9 +131,56 @@ it("accepts a plan whose declared files each carry a witnessed requirement", () 
           ],
         },
       ]),
-      witnessContext
+      witnessContext,
+      policyFor()
     )
   ).toEqual([]);
+});
+
+it("never proposes a skip the coverage gate would refuse", () => {
+  // src/b.ts is a critical path: dropping it from sourceFiles would be refused
+  // by the gate, so the refusal must not propose it.
+  const critical = unwitnessedPlanRefusals(
+    planWithWitnesses([
+      {
+        id: "flow",
+        sourceFiles: ["src/b.ts"],
+        requirements: [{ sourceFile: "src/b.ts", quote: "Alpha witness text" }],
+      },
+    ]),
+    witnessContext,
+    policyFor()
+  );
+  expect(critical).toHaveLength(1);
+  expect(critical[0]).not.toContain("list it in skipped");
+  expect(critical[0]).toContain("cannot be dropped from sourceFiles");
+  // lib/helper.ts is not critical: the same remedy is accepted by the gate, so
+  // the refusal may propose it, and that promise holds.
+  const skippable = unwitnessedPlanRefusals(
+    planWithWitnesses([
+      {
+        id: "flow",
+        sourceFiles: ["lib/helper.ts"],
+        requirements: [
+          { sourceFile: "lib/helper.ts", quote: "Alpha witness text" },
+        ],
+      },
+    ]),
+    witnessContext,
+    policyFor()
+  );
+  expect(skippable).toHaveLength(1);
+  expect(skippable[0]).toContain(
+    "drop it from sourceFiles and list it in skipped"
+  );
+  expect(() =>
+    validateCoverage(
+      planSkipping("lib/helper.ts"),
+      witnessContext,
+      policyFor(),
+      config
+    )
+  ).not.toThrow();
 });
 
 it("names the scenario and the file it cannot witness", () => {
@@ -145,7 +192,8 @@ it("names the scenario and the file it cannot witness", () => {
         requirements: [{ sourceFile: "src/a.ts", quote: "Alpha witness text" }],
       },
     ]),
-    witnessContext
+    witnessContext,
+    policyFor()
   );
   expect(refusals).toHaveLength(1);
   expect(refusals[0]).toContain("Scenario flow");
@@ -168,7 +216,8 @@ it("accumulates witnesses across scenarios exactly like the coverage gate", () =
   // planificateur le nomme, comme `validateCoverage`.
   const refused = unwitnessedPlanRefusals(
     planWithWitnesses([declaring, witnessing]),
-    witnessContext
+    witnessContext,
+    policyFor()
   );
   expect(refused).toHaveLength(1);
   expect(refused[0]).toContain("Scenario declaring");
@@ -186,7 +235,8 @@ it("accumulates witnesses across scenarios exactly like the coverage gate", () =
   expect(
     unwitnessedPlanRefusals(
       planWithWitnesses([witnessing, declaring]),
-      witnessContext
+      witnessContext,
+      policyFor()
     )
   ).toEqual([]);
   expect(
@@ -210,13 +260,13 @@ it("names the scenario and the undeclared source file of a requirement", () => {
       ],
     },
   ]);
-  const refusals = undeclaredSourcePlanRefusals(plan);
+  const refusals = undeclaredSourcePlanRefusals(plan, witnessContext);
   expect(refusals).toHaveLength(1);
   expect(refusals[0]).toContain(
     "Scenario flow attributes a requirement to src/decoy.ts, which it does not declare in sourceFiles"
   );
   expect(refusals[0]).toContain(
-    "Declare src/decoy.ts in this scenario's sourceFiles, or attribute the requirement to one of the files the scenario declares (src/a.ts)."
+    "This PR does not change src/decoy.ts, so it cannot be declared: attribute the requirement to one of the files the scenario declares (src/a.ts)."
   );
   const refusal = refusalOfPlan(plan, witnessContext, policyFor());
   expect(refusal.code).toBe("COVERAGE_REQUIREMENT_SOURCE_MISSING");
@@ -224,8 +274,55 @@ it("names the scenario and the undeclared source file of a requirement", () => {
     "Scenario flow attributes a requirement to src/decoy.ts, which it does not declare in sourceFiles"
   );
   expect(refusal.hint).toBe(
-    "Declare src/decoy.ts in this scenario's sourceFiles, or attribute the requirement to one of the files the scenario declares (src/a.ts)."
+    "This PR does not change src/decoy.ts, so it cannot be declared: attribute the requirement to one of the files the scenario declares (src/a.ts)."
   );
+});
+
+it("never proposes declaring a file outside the PR diff", () => {
+  const outside = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/a.ts"],
+      requirements: [
+        { sourceFile: "src/decoy.ts", quote: "Alpha witness text" },
+      ],
+    },
+  ]);
+  const [outsideRefusal] = undeclaredSourcePlanRefusals(
+    outside,
+    witnessContext
+  );
+  expect(outsideRefusal).not.toContain("Declare src/decoy.ts");
+  expect(outsideRefusal).toContain("This PR does not change src/decoy.ts");
+  // Une exigence attribuée à un fichier du diff peut, elle, être déclarée : le
+  // remède est alors proposé et le gate l'accepte.
+  const inside = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/b.ts"],
+      requirements: [
+        { sourceFile: "src/b.ts", quote: "Beta witness text" },
+        { sourceFile: "src/a.ts", quote: "Alpha witness text" },
+      ],
+    },
+  ]);
+  const [insideRefusal] = undeclaredSourcePlanRefusals(inside, witnessContext);
+  expect(insideRefusal).toContain(
+    "Declare src/a.ts in this scenario's sourceFiles"
+  );
+  const declared = planWithWitnesses([
+    {
+      id: "flow",
+      sourceFiles: ["src/a.ts", "src/b.ts"],
+      requirements: [
+        { sourceFile: "src/b.ts", quote: "Beta witness text" },
+        { sourceFile: "src/a.ts", quote: "Alpha witness text" },
+      ],
+    },
+  ]);
+  expect(
+    validateCoverage(declared, witnessContext, policyFor(), config).gate
+  ).toBe("complete");
 });
 
 it("never treats a skipped documentation file under a critical prefix as critical", () => {
