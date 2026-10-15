@@ -28,7 +28,11 @@ import { resolvePreview, verifyPreviewUrl } from "../src/preview.js";
 import type { Progress } from "../src/progress.js";
 import { saveReport } from "../src/report.js";
 import { type RunScope, runScope } from "../src/run-scope.js";
-import { relayModelRetries, runQa } from "../src/runner.js";
+import {
+  FATAL_PRELUDE_CHARS,
+  relayModelRetries,
+  runQa,
+} from "../src/runner.js";
 import {
   ActionSchema,
   type Assertion,
@@ -1441,7 +1445,9 @@ describe("runner false-green regressions", () => {
    * même temps, et le préambule fatal doit tenir dans la troncature à 2000
    * caractères de `model.ts` — codes compris — sans perdre la dernière classe.
    */
-  function saturatedFatalCandidate(): Plan {
+  function saturatedFatalCandidate(
+    firstUngroundedQuote = "a quote the fixture diff does not carry"
+  ): Plan {
     const saturated = structuredClone(plan);
     const [first] = saturated.scenarios;
     first!.sourceFiles = Array.from(
@@ -1451,7 +1457,10 @@ describe("runner false-green regressions", () => {
     first!.requirements.push(
       ...Array.from({ length: 7 }, (_, index) => ({
         behavior: "The requirement belongs to an undeclared source",
-        quote: "a quote the fixture diff does not carry",
+        quote:
+          index === 0
+            ? firstUngroundedQuote
+            : "a quote the fixture diff does not carry",
         sourceFile: `src/undeclared-${index}.ts`,
       }))
     );
@@ -1513,9 +1522,10 @@ describe("runner false-green regressions", () => {
   /**
    * La citation fautive est le détail que le planificateur doit lire : elle
    * passe en tête de la ligne de sa classe, avant le remède et les valeurs
-   * fautives, donc une ligne rognée la garde. Huit classes fatales saturées
-   * laissent 193 caractères par ligne — de quoi porter l'extrait de 120 et son
-   * libellé — et la citation survit donc à la troncature à 2000 de `model.ts`.
+   * fautives, et le préambule réserve la place de son extrait entier avant de
+   * distribuer les valeurs. La citation survit donc à la troncature à 2000 de
+   * `model.ts` ; onze classes saturées, le maximum constructible, sont testées
+   * juste après.
    */
   it("keeps the rejected quote on its fatal line under eight saturated classes", async () => {
     const invented = `the plan invented ${"x".repeat(100)} tail`;
@@ -1587,6 +1597,80 @@ describe("runner false-green regressions", () => {
     // L'extrait entier, non rogné, précède le remède sur la ligne de sa classe.
     expect(correction).toContain(
       `REQUIREMENT_UNGROUNDED: Rejected quote: ${JSON.stringify(quoteExcerpt(invented))}`
+    );
+  }, 60_000);
+  /**
+   * Le garant doit tenir jusqu'au maximum réellement constructible : onze
+   * classes fatales saturées (`saturatedFatalCandidate`). La ligne
+   * REQUIREMENT_UNGROUNDED porte son remède ET l'extrait entier de la citation,
+   * guillemet fermant compris, et le préambule garde une réserve mesurée sous
+   * son plafond — une citation longue n'est plus coupée au milieu.
+   */
+  it("keeps the rejected quote and its remedy at eleven saturated fatal classes", async () => {
+    const invented = `the plan invented ${"x".repeat(100)} tail`;
+    const f = await setup({ plans: [saturatedFatalCandidate(invented), plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(correction).toHaveLength(2000);
+    // La citation entière, non rognée, puis le remède, sur la même ligne ; la
+    // seconde citation fautive est annoncée explicitement, jamais perdue.
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt(invented))} (+1 more) Quote exact source or diff text; page content alone is not a requirement.`
+    );
+    // Marge mesurée : le préambule complet tient sous `FATAL_PRELUDE_CHARS`, donc
+    // la citation et le remède finissent avant la troncature de `model.ts`. Les
+    // onze classes saturées laissent 47 caractères de réserve, soit l'extrait de
+    // 120 et son remède entiers.
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    const preludeLength = preludeEnd - "Plan rejected: ".length - 1;
+    expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+    expect(FATAL_PRELUDE_CHARS - preludeLength).toBeGreaterThan(0);
+  }, 60_000);
+  /**
+   * Deux exigences fautives distinctes : la ligne nomme la première citation
+   * entière et annonce explicitement la seconde tronquée — jamais une ligne
+   * partagée qui perd tout après la première.
+   */
+  it("names each faulty quote and announces the ones it does not show", async () => {
+    const first = "the first invented quote witness";
+    const second = "the second invented quote witness";
+    const faulty = structuredClone(plan);
+    faulty.scenarios[0]!.requirements = [
+      {
+        behavior: "The first invented source is changed",
+        quote: first,
+        sourceFile: "src/form.ts",
+      },
+      {
+        behavior: "The second invented source is changed",
+        quote: second,
+        sourceFile: "src/form.ts",
+      },
+    ];
+    const f = await setup({ plans: [faulty, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt(first))} (+1 more)`
     );
   }, 60_000);
   /**

@@ -182,11 +182,11 @@ export interface FatalClass {
   hint: string;
   label: string;
   /**
-   * Détail placé avant le remède et les valeurs fautives sur la ligne agrégée,
-   * pour qu'une ligne rognée le garde : la citation fautive que le planificateur
-   * doit lire survit à la troncature, pas le remède qui la suit.
+   * Citations fautives de la classe, dans l'ordre du plan. Leur extrait entier
+   * passe en tête de la ligne, avant le remède et les valeurs fautives : c'est
+   * le détail que le planificateur doit lire pour corriger la bonne exigence.
    */
-  lead?: string;
+  quotes?: string[];
 }
 /**
  * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur.
@@ -205,15 +205,40 @@ function boundedEntries(entries: string[]): string {
   return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
 }
 /**
- * Ligne d'une classe fatale : l'en-tête du préambule porte déjà que chaque
- * classe bloque le run, donc la ligne va droit au code, puis au détail qui doit
- * survivre à la troncature — l'extrait de la citation fautive — puis au remède
- * et aux valeurs fautives.
+ * Citations fautives montrées en entier sur une ligne fatale. L'extrait d'une
+ * citation (voir `quoteExcerpt`) est l'information que le planificateur doit
+ * lire et n'est jamais raccourci : une seule tient avec son remède quand les
+ * onze classes sont saturées, donc les suivantes sont annoncées par leur nombre
+ * — jamais perdues en silence derrière la première.
  */
-function fatalLine(refusal: FatalClass): string {
-  const lead = refusal.lead ? `${refusal.lead} ` : "";
-  const values = boundedEntries(refusal.entries);
-  return `${refusal.code}: ${lead}${refusal.hint} Faulty values: ${values}`;
+const FATAL_QUOTES_SHOWN = 1;
+function rejectedQuotes(quotes: string[]): string {
+  const shown = quotes
+    .slice(0, FATAL_QUOTES_SHOWN)
+    .map((quote) => JSON.stringify(quoteExcerpt(quote)));
+  const hidden = quotes.length - shown.length;
+  const plural = quotes.length > 1 ? "s" : "";
+  const more = hidden > 0 ? ` (+${hidden} more)` : "";
+  return `Rejected quote${plural}: ${shown.join(", ")}${more}`;
+}
+/**
+ * Tête d'une ligne fatale : le code, la citation fautive entière, puis le
+ * remède. Le remède suit la citation, jamais les valeurs fautives : il ne doit
+ * pas disparaître derrière une entrée rognée.
+ */
+function fatalHead(refusal: FatalClass): string {
+  const quotes = refusal.quotes?.length
+    ? ` ${rejectedQuotes(refusal.quotes)}`
+    : "";
+  return `${refusal.code}:${quotes} ${refusal.hint}`;
+}
+/**
+ * Ligne d'une classe fatale : sa tête intouchée, puis les valeurs fautives dans
+ * la place qui reste. Le préambule borne la tête de chaque classe, pas sa queue.
+ */
+function fatalLine(refusal: FatalClass, valuesLimit: number): string {
+  const values = ` Faulty values: ${boundedEntries(refusal.entries)}`;
+  return `${fatalHead(refusal)}${boundedText(values, valuesLimit)}`;
 }
 function fatalError(refusal: FatalClass): QaError {
   return new QaError(
@@ -225,16 +250,21 @@ function fatalError(refusal: FatalClass): QaError {
 /**
  * Plafond du préambule fatal complet, en caractères : la correction est
  * tronquée à 2000 par `model.ts`. Les bornes par classe ne suffisaient pas —
- * huit classes saturées (6 entrées × 80 caractères chacune) dépassaient la
+ * des classes saturées (6 entrées × 80 caractères chacune) dépassaient la
  * troncature, et les dernières, dont `PLAN_SCENARIO_ID_RESERVED`,
  * disparaissaient du message : le planificateur perdait sa seule tentative de
  * correction. L'en-tête nomme donc tous les codes fatals avant toute entrée, et
- * chaque classe reçoit une place égale dans ce plafond global. La place d'une
- * ligne doit aussi porter le détail placé en tête — huit classes saturées
- * laissent 193 caractères, de quoi garder l'extrait de citation de 120 et son
- * libellé, que la troncature coupe avant le remède.
+ * la tête de chaque classe — code, citation fautive entière, remède — passe
+ * avant ses valeurs fautives, qui se partagent la place restante. Onze classes
+ * saturées laissent encore une réserve positive, mesurée par les tests : la
+ * citation de 120 et son remède survivent sans être rognés.
  */
-const FATAL_PRELUDE_CHARS = 1800;
+export const FATAL_PRELUDE_CHARS = 1860;
+/**
+ * En deçà, une queue de valeurs ne dit rien : mieux vaut l'omettre que la
+ * réduire à une ellipse.
+ */
+const FATAL_VALUES_MIN_CHARS = 24;
 function boundedText(text: string, limit: number): string {
   if (limit <= 0) {
     return "";
@@ -249,15 +279,12 @@ function fatalPrelude(classes: FatalClass[]): string[] {
   const header = `Fatal refusals (each one blocks the whole run): ${classes
     .map((refusal) => refusal.code)
     .join(", ")}.`;
-  const slot = Math.floor(
-    (FATAL_PRELUDE_CHARS - header.length) / classes.length
-  );
-  return [
-    header,
-    ...classes
-      .map((refusal) => boundedText(fatalLine(refusal), slot))
-      .filter((line) => line.length > 0),
-  ];
+  const heads = classes.map(fatalHead);
+  const essential =
+    header.length + heads.reduce((total, head) => total + head.length + 1, 0);
+  const room = Math.floor((FATAL_PRELUDE_CHARS - essential) / classes.length);
+  const valuesLimit = room >= FATAL_VALUES_MIN_CHARS ? room : 0;
+  return [header, ...classes.map((refusal) => fatalLine(refusal, valuesLimit))];
 }
 /**
  * Une classe fatale tenue par des refus nommés — contexte incomplet, budget de
@@ -315,13 +342,7 @@ function coverageFatalClasses(
       ),
       hint: "Quote exact source or diff text; page content alone is not a requirement.",
       label: "requirements whose quote has no source witness",
-      lead: `Rejected quote: ${[
-        ...new Set(
-          ungrounded.map((item) =>
-            JSON.stringify(quoteExcerpt(item.requirement.quote))
-          )
-        ),
-      ].join(", ")}`,
+      quotes: [...new Set(ungrounded.map((item) => item.requirement.quote))],
     });
   }
   // Un skip de chemin critique sans approbation bloque le run : le
