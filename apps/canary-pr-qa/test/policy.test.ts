@@ -11,7 +11,10 @@ import {
   repairRequirementAttribution,
   requirementEvidence,
   requirementHasWitness,
+  stitchedQuoteFragments,
+  stitchedQuoteRemedy,
   suggestedQuoteLines,
+  UNGROUNDED_ABSENT_REMEDY,
   undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
   ungroundedRequirements,
@@ -1455,6 +1458,360 @@ it("proposes a real line of the cited file when the quote exists nowhere", () =>
 });
 
 /**
+ * Lot G, cas réel (run 925abf20, PR pharmania/arpilabe-pilotage#17, fusion
+ * 1342929) : le planificateur a recollé deux attributs d'une même expression JSX
+ * en supprimant `aria-label="Montant d'espèces attendu"` et tout ce qui les
+ * séparait. La citation — 61 caractères, mesurée — n'existe nulle part dans le
+ * fichier ni dans le patch ; ses deux fragments, eux, existent chacun sur une
+ * ligne réelle DIFFÉRENTE. Les deux lignes du cas réel dépassent la borne d'une
+ * suggestion de ligne (120), donc le recouvrement de jetons ne proposait rien et
+ * le planificateur ne recevait que le conseil générique, qu'il a reproduit.
+ */
+const PAGE_TSX_PATH = "apps/web/app/page.tsx";
+/** Fragment A, recopié du fichier : l'attribut de saisie décimale. */
+const STITCH_FRAGMENT_A = 'inputMode="decimal"';
+/** Fragment B, recopié du fichier : l'attribut d'invalidité de l'autre champ. */
+const STITCH_FRAGMENT_B = "aria-invalid={expected.ok?undefined:true}";
+/** Citation recousue du lot G, octet pour octet : 61 caractères, ASCII. */
+const STITCHED_JSX_QUOTE = `${STITCH_FRAGMENT_A} ${STITCH_FRAGMENT_B}`;
+const PAGE_TSX_LINE_61 = `        <input value={e=>onChange({expected:e.target.value})} disabled={closed} inputMode="decimal" aria-label="Montant d'espèces attendu" />`;
+const PAGE_TSX_LINE_63 = `        <input value={expected.input} inputMode="numeric" aria-label="Total attendu" aria-invalid={expected.ok?undefined:true} />`;
+const PAGE_TSX_FILE = [
+  ...Array.from({ length: 60 }, (_, index) => `  // ligne ${index + 1}`),
+  PAGE_TSX_LINE_61,
+  "  // ligne 62",
+  PAGE_TSX_LINE_63,
+].join("\n");
+const pageTsxContext: PrContext = {
+  ...contextWith([
+    {
+      filename: PAGE_TSX_PATH,
+      patch: [
+        "@@ -61,2 +61,3 @@",
+        ` ${PAGE_TSX_LINE_61}`,
+        "   // ligne 62",
+        `+${PAGE_TSX_LINE_63}`,
+      ].join("\n"),
+    },
+  ]),
+  context: [{ content: PAGE_TSX_FILE, path: PAGE_TSX_PATH, ref: context.sha }],
+};
+function pageTsxPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash-input",
+      sourceFiles: [PAGE_TSX_PATH],
+      requirements: [{ sourceFile: PAGE_TSX_PATH, quote }],
+    },
+  ]);
+}
+
+it("names the two fragments of a stitched quote and their two real lines", () => {
+  // Le cas mesuré : la citation n'existe nulle part, ses moitiés existent chacune
+  // sur une ligne différente, et ces lignes sont trop longues pour être
+  // proposées entières par le recouvrement de jetons.
+  expect(STITCHED_JSX_QUOTE).toHaveLength(61);
+  expect(PAGE_TSX_FILE).not.toContain(STITCHED_JSX_QUOTE);
+  expect(PAGE_TSX_LINE_61.length).toBeGreaterThan(120);
+  expect(PAGE_TSX_LINE_63.length).toBeGreaterThan(120);
+  expect(
+    suggestedQuoteLines(
+      { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
+      pageTsxContext,
+      policyFor()
+    )
+  ).toEqual([]);
+  const fragments = stitchedQuoteFragments(
+    { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
+    pageTsxContext,
+    policyFor()
+  );
+  // Exactement deux fragments, chacun recopié de la citation et retrouvé tel
+  // quel sur sa ligne réelle : le premier sur la ligne 61, le second sur la 63.
+  expect(fragments.map((item) => item.fragment)).toEqual([
+    STITCH_FRAGMENT_A,
+    STITCH_FRAGMENT_B,
+  ]);
+  expect(fragments.map((item) => item.line)).toEqual([61, 63]);
+  const lines = PAGE_TSX_FILE.split("\n");
+  for (const item of fragments) {
+    expect(STITCHED_JSX_QUOTE).toContain(item.fragment);
+    expect(lines[item.line - 1]).toContain(item.fragment);
+    // Le candidat est une portion EXACTE de la ligne réelle, jamais un texte
+    // inventé ni un jeton rogné, et il passe le contrat de citation du fichier
+    // critique : le gate accepterait le plan qui le cite.
+    expect(PAGE_TSX_FILE).toContain(item.candidate);
+    expect(lines[item.line - 1]).toContain(item.candidate);
+    expect(item.candidate).toContain(item.fragment);
+    expect(item.candidate.length).toBeLessThanOrEqual(120);
+    expect(quoteCarriesContent(item.candidate, true)).toBe(true);
+    expect(
+      validateCoverage(
+        pageTsxPlan(item.candidate),
+        pageTsxContext,
+        policyFor(),
+        config
+      ).gate
+    ).toBe("complete");
+  }
+  expect(fragments).toEqual([
+    {
+      candidate:
+        'disabled={closed} inputMode="decimal" aria-label="Montant d\'espèces attendu" />',
+      fragment: STITCH_FRAGMENT_A,
+      line: 61,
+    },
+    {
+      candidate:
+        'value={expected.input} inputMode="numeric" aria-label="Total attendu" aria-invalid={expected.ok?undefined:true} />',
+      fragment: STITCH_FRAGMENT_B,
+      line: 63,
+    },
+  ]);
+  // Le gate n'est pas touché : la citation recousue n'a toujours aucun témoin.
+  expect(
+    ungroundedRequirements(
+      pageTsxPlan(STITCHED_JSX_QUOTE),
+      pageTsxContext,
+      policyFor()
+    )
+  ).toHaveLength(1);
+  expect(
+    refusalOfPlan(pageTsxPlan(STITCHED_JSX_QUOTE), pageTsxContext, policyFor())
+      .code
+  ).toBe("REQUIREMENT_UNGROUNDED");
+});
+
+it("puts the stitch diagnosis before the generic advice in the refusal", () => {
+  const [line = ""] = ungroundedPlanRefusals(
+    pageTsxPlan(STITCHED_JSX_QUOTE),
+    pageTsxContext,
+    policyFor()
+  );
+  const remedy = stitchedQuoteRemedy(
+    { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
+    pageTsxContext,
+    policyFor()
+  );
+  expect(remedy).toBe(
+    `Your quote assembles fragments from different lines: ${JSON.stringify(STITCH_FRAGMENT_A)} is line 61, ${JSON.stringify(STITCH_FRAGMENT_B)} is line 63. Quote one of these real fragments of ${PAGE_TSX_PATH} instead: 61: ${JSON.stringify('disabled={closed} inputMode="decimal" aria-label="Montant d\'espèces attendu" />')}, 63: ${JSON.stringify('value={expected.input} inputMode="numeric" aria-label="Total attendu" aria-invalid={expected.ok?undefined:true} />')}.`
+  );
+  // Le diagnostic de recousure passe avant le conseil générique, et il porte à
+  // lui seul les lignes réelles à citer : une seule suggestion par citation.
+  expect(line).toContain("No source witness for cash-input");
+  expect(line).toContain(remedy);
+  expect(line.indexOf(remedy)).toBeLessThan(
+    line.indexOf(UNGROUNDED_ABSENT_REMEDY)
+  );
+  expect(line.indexOf(remedy)).toBeGreaterThan(
+    line.indexOf("Rejected quote: ")
+  );
+  expect(line).not.toContain("Real lines of");
+  // Le remède partagé avec la classe fatale agrégée est le même texte : le
+  // préambule fatal protège donc ce diagnostic de la troncature.
+  expect(
+    absentRequirementRemedy(
+      { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
+      pageTsxContext,
+      policyFor()
+    )
+  ).toBe(remedy);
+});
+
+it("falls back when only one fragment of a stitched quote exists", () => {
+  // Un seul fragment existe : le fichier ne porte nulle part le second, donc
+  // annoncer une recousure nommerait une ligne fausse. Le repli reste le
+  // remède d'aujourd'hui — conseil générique, sans candidat ici : les deux
+  // lignes du fichier dépassent la borne de `suggestedQuoteLines`.
+  const partial = `${STITCH_FRAGMENT_A} aria-invalid={absent.ok?undefined:true}`;
+  expect(
+    stitchedQuoteFragments(
+      { quote: partial, sourceFile: PAGE_TSX_PATH },
+      pageTsxContext,
+      policyFor()
+    )
+  ).toEqual([]);
+  expect(
+    stitchedQuoteRemedy(
+      { quote: partial, sourceFile: PAGE_TSX_PATH },
+      pageTsxContext,
+      policyFor()
+    )
+  ).toBe("");
+  const [line = ""] = ungroundedPlanRefusals(
+    pageTsxPlan(partial),
+    pageTsxContext,
+    policyFor()
+  );
+  expect(line).toContain("No source witness for cash-input");
+  expect(line).not.toContain("assembles fragments");
+  expect(line).not.toContain("to quote instead");
+  expect(line).toContain(UNGROUNDED_ABSENT_REMEDY);
+});
+
+/**
+ * Déterministe : quand plusieurs découpages se vérifient, c'est le plus
+ * équilibré qui est rendu — celui dont le plus court fragment est le plus long —
+ * jamais le premier venu, et jamais plus de deux fragments.
+ */
+const SPLIT_PATH = "src/split.ts";
+const SPLIT_LINES = [
+  "alphaone betatwoo gammathr",
+  "betatwoo gammathr deltfour",
+];
+const splitContext: PrContext = {
+  ...contextWith([
+    {
+      filename: SPLIT_PATH,
+      patch: [
+        "@@ -1,2 +1,2 @@",
+        ` ${SPLIT_LINES[0]}`,
+        ` ${SPLIT_LINES[1]}`,
+      ].join("\n"),
+    },
+  ]),
+  context: [
+    { content: SPLIT_LINES.join("\n"), path: SPLIT_PATH, ref: context.sha },
+  ],
+};
+it("chooses the most balanced verified split", () => {
+  const quote = "alphaone betatwoo gammathr deltfour";
+  // Aucune ligne ne porte la citation entière : seuls ses découpages existent,
+  // et trois d'entre eux se vérifient (un fragment seul d'un côté, la suite de
+  // l'autre). Le plus équilibré gagne — deux fragments de 17 caractères — et la
+  // ligne entière est proposée pour chacun, puisqu'elle tient dans la borne.
+  expect(SPLIT_LINES.join("\n")).not.toContain(quote);
+  expect(
+    stitchedQuoteFragments(
+      { quote, sourceFile: SPLIT_PATH },
+      splitContext,
+      policyFor()
+    )
+  ).toEqual([
+    { candidate: SPLIT_LINES[0], fragment: "alphaone betatwoo", line: 1 },
+    { candidate: SPLIT_LINES[1], fragment: "gammathr deltfour", line: 2 },
+  ]);
+});
+
+it("stays silent when both fragments live on one single line", () => {
+  // Les deux fragments existent, mais la seule ligne qui les porte est la même
+  // pour les deux : rien ne dit qu'ils viennent de deux lignes différentes, donc
+  // le diagnostic se tait au lieu d'annoncer une jointure entre deux lignes.
+  const single = "src/single.ts";
+  const line = " epsilonon betatwoo zetaonly";
+  const quote = "epsilonon zetaonly";
+  const singleContext = contextWith([
+    { filename: single, patch: `@@ -1,1 +1,1 @@\n+${line}` },
+  ]);
+  expect(line).toContain("epsilonon");
+  expect(line).toContain("zetaonly");
+  expect(line).not.toContain(quote);
+  expect(
+    stitchedQuoteFragments(
+      { quote, sourceFile: single },
+      singleContext,
+      policyFor()
+    )
+  ).toEqual([]);
+  const [refusal = ""] = ungroundedPlanRefusals(
+    planWithWitnesses([
+      {
+        id: "single",
+        sourceFiles: [single],
+        requirements: [{ sourceFile: single, quote }],
+      },
+    ]),
+    singleContext,
+    policyFor()
+  );
+  expect(refusal).toContain("No source witness for single");
+  expect(refusal).not.toContain("assembles fragments");
+});
+
+/**
+ * Le candidat d'un fragment est la fenêtre de jetons ENTIERS la plus large sous
+ * la borne de suggestion : chaque extension est pesée avant d'être retenue. Un
+ * jeton ajouté sans être pesé fait déborder la fenêtre, `quoteableFragment` la
+ * refuse, et le diagnostic de recousure disparaît alors qu'un candidat citable
+ * existait — la faute que ce cas mesure.
+ */
+it("keeps a fragment citable when the next token would overflow the bound", () => {
+  const path = "src/window-cap.ts";
+  const head = "const capacite = 42;";
+  const tail = "aria-invalid={etatInvalide}";
+  // La ligne du second fragment dépasse la borne : le jeton suivant porterait
+  // la fenêtre à 149 caractères, donc elle doit s'arrêter avant lui. Les deux
+  // fragments sont séparés par une ligne de remplissage : repliés, ils ne
+  // reforment pas la citation.
+  const tailLine = `${tail} ${"a".repeat(60)} ${"b".repeat(60)}`;
+  const quote = `${head} ${tail}`;
+  const file = ["  // remplissage 1", head, "  // remplissage 3", tailLine];
+  const capContext: PrContext = {
+    ...contextWith([
+      {
+        filename: path,
+        patch: `@@ -1,4 +1,4 @@\n+${file.join("\n+")}`,
+      },
+    ]),
+    context: [{ content: file.join("\n"), path, ref: context.sha }],
+  };
+  expect(file.join("\n")).not.toContain(quote);
+  expect(tailLine).toHaveLength(149);
+  expect(
+    stitchedQuoteFragments({ quote, sourceFile: path }, capContext, policyFor())
+  ).toEqual([
+    { candidate: head, fragment: head, line: 2 },
+    { candidate: `${tail} ${"a".repeat(60)}`, fragment: tail, line: 4 },
+  ]);
+  const [, second] = stitchedQuoteFragments(
+    { quote, sourceFile: path },
+    capContext,
+    policyFor()
+  );
+  // Le candidat reste une portion EXACTE de la ligne, sous la borne, et il
+  // passe le contrat de citation du fichier critique.
+  expect(second!.candidate.length).toBeLessThanOrEqual(120);
+  expect(tailLine).toContain(second!.candidate);
+  expect(second!.candidate).toContain(tail);
+  expect(quoteCarriesContent(second!.candidate, true)).toBe(true);
+  expect(
+    stitchedQuoteRemedy({ quote, sourceFile: path }, capContext, policyFor())
+  ).toContain(`4: ${JSON.stringify(second!.candidate)}`);
+});
+
+it("stays silent when the quote and both its fragments are absent", () => {
+  // Cas (c) : rien de la citation n'existe, donc aucun fragment à nommer et
+  // aucun candidat à proposer — le refus reste celui d'aujourd'hui.
+  const nowhere = "const ouvrirTiroir = () => setOpen(true);";
+  expect(
+    stitchedQuoteFragments(
+      { quote: nowhere, sourceFile: PAGE_TSX_PATH },
+      pageTsxContext,
+      policyFor()
+    )
+  ).toEqual([]);
+  const [line = ""] = ungroundedPlanRefusals(
+    pageTsxPlan(nowhere),
+    pageTsxContext,
+    policyFor()
+  );
+  expect(line).toContain(
+    `Rejected quote: ${JSON.stringify(nowhere)}. ${UNGROUNDED_ABSENT_REMEDY}`
+  );
+  expect(line).not.toContain("assembles fragments");
+  expect(line).not.toContain("to quote instead");
+  // Une citation exacte du fichier cité reste acceptée : le gate ne bouge pas.
+  expect(
+    validateCoverage(
+      pageTsxPlan(PAGE_TSX_LINE_61),
+      pageTsxContext,
+      policyFor(),
+      config
+    ).gate
+  ).toBe("complete");
+});
+
+/**
  * Défaut signalé par la vérification interne : le remède de témoin énumérait
  * sans plafond tous les fichiers qui portent la citation, et une liste longue
  * portée par le préambule fatal écrasait la tête de la dernière classe. La
@@ -1734,18 +2091,30 @@ it("refuses a quote stitched across two reconstructed hunks", () => {
   ).toHaveLength(1);
 });
 
-it("forbids stitching two real lines into one quote in the planner prompt", () => {
+it("forbids stitching fragments read in different places in the planner prompt", () => {
   const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
-  expect(prompt).toMatch(/never stitch two separate lines into one quote/i);
-  // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
-  // lot E — et la reformulation en une ligne qui « devrait » exister est
-  // interdite ; c'est la distinction que le prompt doit enseigner.
+  // La consigne est opérationnelle : le critère que le planificateur peut
+  // vérifier lui-même — deux parties de la citation sur deux lignes du fichier —
+  // remplace la seule interdiction abstraite.
   expect(prompt).toMatch(
-    /Reflowing a multi-line block onto one line stays allowed/i
+    /Never stitch fragments you read in different places into one quote/i
   );
-  // Le contre-exemple réel du lot F est enseigné, dans ses deux lignes réelles
-  // et dans la citation recousue qu'elles ont produite.
-  expect(prompt).toContain('const result = countCash({ "500": "3,5" });');
-  expect(prompt).toContain("expect(result.ok).toBe(false);");
-  expect(prompt).toContain(STITCHED_QUOTE);
+  expect(prompt).toMatch(
+    /two parts of your quote sit on two different lines of the file, the quote is wrong/i
+  );
+  // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
+  // lot E — et une jointure inventée reste interdite ; c'est la distinction que
+  // le prompt doit enseigner.
+  expect(prompt).toMatch(
+    /Reflowing one real multi-line block onto one line stays allowed/i
+  );
+  // Le contre-exemple réel du lot G est enseigné : ses deux fragments mesurés,
+  // le chemin du fichier du cas, et la jointure qu'ils ont produite.
+  expect(prompt).toContain("apps/web/app/page.tsx");
+  expect(prompt).toContain(STITCH_FRAGMENT_A);
+  expect(prompt).toContain(STITCH_FRAGMENT_B);
+  expect(prompt).toContain("joined them with a space");
+  // La conséquence mesurée est enseignée avec l'exemple : la citation recousue a
+  // fait refuser l'exigence faute de témoin.
+  expect(prompt).toMatch(/refused as an absent quote/i);
 });
