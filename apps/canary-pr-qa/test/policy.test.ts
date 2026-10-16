@@ -6,6 +6,7 @@ import { PLANNER_PROMPT } from "../src/model.js";
 import {
   absentRequirementRemedy,
   amputatedQuote,
+  amputatedQuoteRemedy,
   isDocumentationPath,
   PolicySchema,
   quoteHasWitness,
@@ -1865,21 +1866,36 @@ it("reads the three shapes of an amputated copy on a real line", () => {
       countedContext,
       policyFor()
     )
-  ).toEqual({ candidate: COUNTED_LINE_TEXT, kind: "start", line: 12 });
+  ).toEqual({
+    candidate: COUNTED_LINE_TEXT,
+    kind: "start",
+    line: 12,
+    wholeLine: true,
+  });
   expect(
     amputatedQuote(
       { ...source, quote: COUNTED_CLEAN_HEAD },
       countedContext,
       policyFor()
     )
-  ).toEqual({ candidate: COUNTED_LINE_TEXT, kind: "end", line: 12 });
+  ).toEqual({
+    candidate: COUNTED_LINE_TEXT,
+    kind: "end",
+    line: 12,
+    wholeLine: true,
+  });
   expect(
     amputatedQuote(
       { ...source, quote: COUNTED_INTERIOR_QUOTE },
       countedContext,
       policyFor()
     )
-  ).toEqual({ candidate: COUNTED_LINE_TEXT, kind: "middle", line: 12 });
+  ).toEqual({
+    candidate: COUNTED_LINE_TEXT,
+    kind: "middle",
+    line: 12,
+    wholeLine: true,
+  });
   // Aucune ligne du fichier ne porte cette copie : pas de diagnostic plutôt
   // qu'une ligne nommée au hasard.
   expect(
@@ -1889,6 +1905,51 @@ it("reads the three shapes of an amputated copy on a real line", () => {
       policyFor()
     )
   ).toBeUndefined();
+  // Un bord commun trop court pour désigner une ligne ne fait pas un
+  // diagnostic : la copie entière n'est la fin d'aucune ligne du fichier.
+  expect(
+    amputatedQuote(
+      { ...source, quote: "invented change return result;" },
+      countedContext,
+      policyFor()
+    )
+  ).toBeUndefined();
+});
+/**
+ * Ligne réelle plus longue que la borne de `quoteableFragment` : aucun candidat
+ * ne peut être la ligne entière, donc le refus nomme une FENÊTRE de jetons prise
+ * sur cette ligne et se tait sur le premier caractère de la ligne, qu'il ne
+ * demande pas de citer — la consigne et le candidat ne peuvent pas se
+ * contredire.
+ */
+const LONG_PAGE_PATH = "apps/web/app/page.tsx";
+const LONG_LINE = `  const total = reducePrices(items, (sum, item) => sum + item.price, 0); // ${"x".repeat(60)}`;
+/** Une copie commencée par un texte inventé, mais dont la fin est celle de la ligne. */
+const LONG_LINE_QUOTE = `  const x = reducePrices(items, (sum, item) => sum + item.price, 0); // ${"x".repeat(60)}`;
+const longLineContext: PrContext = contextWith([
+  {
+    filename: LONG_PAGE_PATH,
+    patch: ["@@ -20,2 +20,3 @@", "   // totaux", `+${LONG_LINE}`].join("\n"),
+  },
+]);
+it("names a fragment of a line too long to quote whole", () => {
+  const requirement = { quote: LONG_LINE_QUOTE, sourceFile: LONG_PAGE_PATH };
+  const amputated = amputatedQuote(requirement, longLineContext, policyFor());
+  expect(amputated).toBeDefined();
+  expect(amputated?.kind).toBe("start");
+  expect(amputated?.line).toBe(21);
+  expect(amputated?.wholeLine).toBe(false);
+  const candidate = amputated?.candidate ?? "";
+  expect(candidate.length).toBeLessThan(LONG_LINE.length);
+  expect(LONG_LINE).toContain(candidate);
+  const remedy = amputatedQuoteRemedy(
+    requirement,
+    longLineContext,
+    policyFor()
+  );
+  expect(remedy).toContain("too long to quote whole");
+  expect(remedy).toContain(JSON.stringify(candidate));
+  expect(remedy).not.toContain("whole line from its first character");
 });
 
 /**

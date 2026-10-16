@@ -961,6 +961,8 @@ export interface AmputatedQuote {
   candidate: string;
   kind: QuoteAmputation;
   line: number;
+  /** Faux quand la ligne dépasse la borne de suggestion : le candidat est une fenêtre. */
+  wholeLine: boolean;
 }
 /** Ce que le refus dit de la partie perdue, et la lecture qui en découle. */
 const AMPUTATION_FAULT: Record<QuoteAmputation, string> = {
@@ -1069,7 +1071,12 @@ export function amputatedQuote(
     if (candidate === "") {
       continue;
     }
-    best = { candidate, kind: amputation.kind, line };
+    best = {
+      candidate,
+      kind: amputation.kind,
+      line,
+      wholeLine: normalizeQuoteText(candidate) === normalizeQuoteText(text),
+    };
     longest = score;
   }
   return best;
@@ -1077,8 +1084,12 @@ export function amputatedQuote(
 /**
  * Remède d'une copie amputée : la ligne réelle dont elle est recopiée, la partie
  * que la copie a laissée de côté, puis la portion exacte à citer à la place — la
- * ligne entière quand elle tient dans la borne de `quote`. Vide quand aucune
- * ligne ne s'y vérifie, pour que l'appelant retombe sur le remède d'aujourd'hui.
+ * ligne entière quand elle tient dans la borne de `quote`, sinon la fenêtre de
+ * jetons que `quoteableFragment` en a extraite, que le refus nomme comme un
+ * fragment et jamais comme la ligne entière : une consigne qui demanderait de
+ * citer « cette ligne » puis donnerait un fragment pris au milieu d'elle serait
+ * contradictoire. Vide quand aucune ligne ne s'y vérifie, pour que l'appelant
+ * retombe sur le remède d'aujourd'hui.
  */
 export function amputatedQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -1089,7 +1100,10 @@ export function amputatedQuoteRemedy(
   if (!amputated) {
     return "";
   }
-  return `Your quote is copied from line ${amputated.line} of ${requirement.sourceFile} but ${AMPUTATION_FAULT[amputated.kind]}; quote that whole line from its first character instead: ${amputated.line}: ${JSON.stringify(amputated.candidate)}.`;
+  const repair = amputated.wholeLine
+    ? `quote that whole line from its first character instead: ${amputated.line}: ${JSON.stringify(amputated.candidate)}.`
+    : `that line is too long to quote whole, so quote this exact fragment of it instead: ${amputated.line}: ${JSON.stringify(amputated.candidate)}.`;
+  return `Your quote is copied from line ${amputated.line} of ${requirement.sourceFile} but ${AMPUTATION_FAULT[amputated.kind]}; ${repair}`;
 }
 /**
  * Remède unique d'une exigence dont la citation n'a aucun témoin : quand la
