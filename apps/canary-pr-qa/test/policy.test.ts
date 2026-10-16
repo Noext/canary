@@ -465,7 +465,9 @@ it("refuses a critical quote with no visible content", () => {
   // La citation EXISTE dans le fichier : lui répondre « no source witness »
   // ferait renvoyer la même citation exacte au planificateur. Le refus nomme la
   // règle du fichier critique, et ne propose pas un skip que le gate refuse.
-  expect(refusal.message).toBe("Weak source witness for logic: src/logic.ts");
+  expect(refusal.message).toBe(
+    `Weak source witness for logic: src/logic.ts (requirement 1). Rejected quote: ${JSON.stringify(separator)}`
+  );
   expect(refusal.hint).toContain(
     `at least ${CRITICAL_QUOTE_MIN_WORD_CHARS} letter or digit`
   );
@@ -788,6 +790,104 @@ it("names the file whose content carries the reflowed quote", () => {
   ]);
   const [refusal] = ungroundedPlanRefusals(plan, misattributed, policyFor());
   expect(refusal).toContain("The quote appears verbatim in src/cash.ts");
+});
+
+/**
+ * Cas réel du run 2f0511fd (lot H) : le plan déclarait `apps/web/app/page.tsx`
+ * comme seule source du scénario de caisse, et citait pourtant le code du module
+ * de caisse, importé par la page. La citation n'existe donc dans aucun fichier
+ * déclaré, la réattribution ne peut rien réparer, et le refus ne nommait ni
+ * l'exigence fautive, ni sa citation, ni le fichier qui la porte : le
+ * planificateur reconstruisait la même citation et le run mourait avant toute
+ * exécution.
+ */
+const CASH_MODULE_LINE =
+  "export function countCash(quantities: CashQuantities = {}): CashCountResult {";
+const CASH_MODULE_PATH = "apps/web/app/caisse.ts";
+const CASH_PAGE_PATH = "apps/web/app/page.tsx";
+const cashPageOnly: PrContext = contextWith([
+  {
+    filename: CASH_PAGE_PATH,
+    patch: "+ import { countCash } from './caisse';",
+  },
+]);
+const cashMisattribution: PrContext = contextWith([
+  {
+    filename: CASH_PAGE_PATH,
+    patch: "+ import { countCash } from './caisse';",
+  },
+  { filename: CASH_MODULE_PATH, patch: `+ ${CASH_MODULE_LINE}` },
+]);
+function cashMisattributionPlan(): Plan {
+  return planWithWitnesses([
+    {
+      id: "caisse-comptage-juste-et-cloture",
+      sourceFiles: [CASH_PAGE_PATH],
+      requirements: [{ sourceFile: CASH_PAGE_PATH, quote: CASH_MODULE_LINE }],
+    },
+  ]);
+}
+
+it("names the faulty requirement, its quote and the changed file that carries it", () => {
+  const plan = cashMisattributionPlan();
+  // Le gate ne bouge pas : la citation n'existe dans aucun fichier déclaré.
+  expect(
+    ungroundedRequirements(plan, cashMisattribution, policyFor())
+  ).toHaveLength(1);
+  const refusal = refusalOfPlan(plan, cashMisattribution, policyFor());
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  // L'exigence est nommée par son rang dans le scénario, le fichier déclaré et
+  // la citation introuvable, jamais par le seul couple scénario/fichier.
+  expect(refusal.message).toBe(
+    `No source witness for caisse-comptage-juste-et-cloture: ${CASH_PAGE_PATH} (requirement 1). Rejected quote: ${JSON.stringify(CASH_MODULE_LINE)}`
+  );
+  const [refusalLine = ""] = ungroundedPlanRefusals(
+    plan,
+    cashMisattribution,
+    policyFor()
+  );
+  // Le fichier qui porte réellement la citation est proposé parce que la PR le
+  // change : le déclarer et lui attribuer l'exigence est un remède que le gate
+  // accepte.
+  expect(refusalLine).toContain(
+    `The quote appears verbatim in ${CASH_MODULE_PATH}; declare that file and attribute the requirement to it.`
+  );
+  expect(refusalLine).not.toContain("this PR does not change");
+});
+
+it("says no changed file carries the quote and proposes none outside the diff", () => {
+  const plan = cashMisattributionPlan();
+  // Le module de caisse n'appartient pas au diff : rien à déclarer, et le
+  // remède légal se limite au fichier déclaré.
+  const [refusalLine = ""] = ungroundedPlanRefusals(
+    plan,
+    cashPageOnly,
+    policyFor()
+  );
+  expect(refusalLine).toContain(
+    `No source witness for caisse-comptage-juste-et-cloture: ${CASH_PAGE_PATH}`
+  );
+  expect(refusalLine).toContain(JSON.stringify(CASH_MODULE_LINE));
+  expect(refusalLine).toContain(
+    "The quote exists in no file this PR changes; quote a real line of the declared file instead."
+  );
+  // Un fichier de contexte qui porte la citation reste hors diff : il n'est
+  // jamais proposé comme source à déclarer, la validation le refuserait.
+  const contextOnly: PrContext = {
+    ...cashPageOnly,
+    context: [
+      { content: CASH_MODULE_LINE, path: CASH_MODULE_PATH, ref: context.sha },
+    ],
+  };
+  const [outsideLine = ""] = ungroundedPlanRefusals(
+    plan,
+    contextOnly,
+    policyFor()
+  );
+  expect(outsideLine).toContain(
+    `${CASH_MODULE_PATH}, which this PR does not change`
+  );
+  expect(outsideLine).not.toContain("declare that file");
 });
 
 it("repairs an attribution only when another declared file witnesses the quote", () => {
@@ -1351,17 +1451,18 @@ it("measures the absent-quote suggestion inside the correction budget", () => {
     cashSpecContext,
     policyFor()
   );
-  const remedy =
-    "Quote exact source or diff text; page content alone is not a requirement.";
+  const remedy = UNGROUNDED_ABSENT_REMEDY;
   const before = line.slice(0, line.indexOf(remedy) + remedy.length);
-  // Mesure du coût réel : 132 caractères ajoutés à la ligne de détail, qui
+  // Mesure du coût réel : le rang de l'exigence ajoute 16 caractères à
+  // l'identité du refus, la localisation de la citation — aucun fichier du diff
+  // ne la porte ici — en ajoute 93, et la suggestion de ligne 132. La ligne
   // reste loin du budget restant après le préambule fatal (1860) dans la
   // correction que `model.ts` tronque à 2000 — le cas intégré est mesuré par
   // `unit.test.ts` ("returns real lines to quote instead of an absent quote").
   expect(before).toContain("No source witness for cash");
-  expect(before).toHaveLength(220);
-  expect(line).toHaveLength(352);
-  expect(line.length - before.length).toBe(132);
+  expect(before).toHaveLength(236);
+  expect(line).toHaveLength(461);
+  expect(line.length - before.length).toBe(225);
 });
 
 it("proposes no line when none overlaps the quote", () => {
