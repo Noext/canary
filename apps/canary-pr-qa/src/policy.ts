@@ -1029,14 +1029,22 @@ function amputationProbe(quote: string): AmputationProbe {
  * verdict est mémorisé parce que le remède d'une même citation est évalué deux
  * fois — le conseil de l'exigence, puis la ligne du refus — et qu'un plan peut
  * la répéter : chaque citation examinée ne paie qu'un balayage.
+ *
+ * Un seul budget est créé au point d'entrée du gate (voir `planRefusals`,
+ * runner.ts) et traverse le chemin qui rend un remède détaillé — les deux
+ * moitiés du gate le consomment : les classes fatales de couverture par
+ * `coverageFatalClasses` puis les refus par scénario par
+ * `ungroundedPlanRefusals`. Recréer un budget sur une moitié rendait à l'autre
+ * le plafond entier, donc chaque citation fautive d'un plan hostile repaie son
+ * balayage pour chaque exigence que le schéma autorise.
  */
-interface AmputationScans {
+export interface AmputationScans {
   found: Map<string, AmputatedQuote | undefined>;
   remaining: number;
 }
 /** Citations examinées par validation : au-delà, le remède détaillé se tait. */
 const AMPUTATION_QUOTES_EXAMINED = 32;
-function amputationScans(): AmputationScans {
+export function amputationScans(): AmputationScans {
   return { found: new Map(), remaining: AMPUTATION_QUOTES_EXAMINED };
 }
 /** Même citation, même balayage : son fichier et son texte cité l'identifient. */
@@ -1233,21 +1241,30 @@ export function amputatedQuoteRemedy(
  * similitude de jetons parce qu'elles nomment le défaut mesuré de la copie, là où
  * le recouvrement ne propose qu'une ligne plausible : c'est le cas du lot G, où
  * le recouvrement ne proposait rien, et du lot J, où il proposait la bonne ligne
- * sans dire ce qui manquait. Vide quand aucun des quatre ne s'applique, pour que
- * l'appelant retombe sur le conseil générique plutôt que sur un remède vide.
+ * sans dire ce qui manquait. Vide quand aucun des quatre ne s'applique — ou
+ * quand le budget de la validation ne permet plus de balayer le fichier cité —
+ * pour que l'appelant retombe sur le conseil générique plutôt que sur un remède
+ * vide.
+ * Les trois diagnostics détaillés balaient le fichier cité pour la même
+ * citation, donc le budget les écarte tous les trois : c'est ce silence, partagé
+ * par les deux moitiés du gate, qui borne le travail d'amputation.
  */
 export function absentRequirementRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
 ): string {
   const found = witnessFiles(requirement.quote, context, policy);
   if (found.length > 0) {
     return witnessHint(found, context).trim();
   }
+  if (!amputationScanAllowed(scans, requirement)) {
+    return "";
+  }
   return (
     stitchedQuoteRemedy(requirement, context, policy).trim() ||
-    amputatedQuoteRemedy(requirement, context, policy).trim() ||
+    amputatedQuoteRemedy(requirement, context, policy, scans).trim() ||
     quoteSuggestion(requirement, context, policy).trim()
   );
 }
@@ -1299,16 +1316,17 @@ export function quoteExcerpt(quote: string): string {
  * ce défaut précis qui a fait refuser sa citation, et c'est celui qu'il doit
  * corriger en premier. Un diagnostic de défaut précis remplace la suggestion de
  * lignes, jamais ne s'y ajoute : une seule suggestion par citation. Le budget de
- * la validation (`AmputationScans`) est partagé par toutes les exigences du plan :
- * passé le plafond, le remède détaillé se tait et les refus suivants gardent le
- * conseil générique de leur exigence, qui reste exact.
+ * la validation (`AmputationScans`) lui est remis par le point d'entrée du gate
+ * et vaut pour toutes les exigences du plan comme pour la moitié fatale qui le
+ * précède : passé le plafond, le remède détaillé se tait et les refus suivants
+ * gardent le conseil générique de leur exigence, qui reste exact.
  */
 export function ungroundedPlanRefusals(
   plan: Plan,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
 ): string[] {
-  const scans = amputationScans();
   return ungroundedRequirements(plan, context, policy).map(
     ({ rank, requirement, scenarioId }) => {
       const error = ungroundedRequirement(

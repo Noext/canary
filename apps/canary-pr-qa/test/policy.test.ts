@@ -7,6 +7,7 @@ import {
   absentRequirementRemedy,
   amputatedQuote,
   amputatedQuoteRemedy,
+  amputationScans,
   isDocumentationPath,
   PolicySchema,
   quoteHasWitness,
@@ -24,7 +25,7 @@ import {
   validateCoverage,
   witnessFiles,
 } from "../src/policy.js";
-import { planShapeRefusals } from "../src/runner.js";
+import { coverageFatalClasses, planShapeRefusals } from "../src/runner.js";
 import {
   CRITICAL_QUOTE_MIN_WORD_CHARS,
   type Plan,
@@ -1954,14 +1955,16 @@ it("names a fragment of a line too long to quote whole", () => {
 
 /**
  * Le diagnostic d'amputation est un balayage du fichier cité par citation
- * fautive : deux plafonds le bornent, et ces deux tests les MESURENT au lieu de
- * les affirmer — 2 000 lignes examinées par balayage (`CITED_LINES_EXAMINED`) et
+ * fautive : deux plafonds le bornent, et ces trois tests les MESURENT au lieu de
+ * les affirmer — 2 000 lignes examinées par balayage (`CITED_LINES_EXAMINED`),
  * 32 citations examinées par validation (`AMPUTATION_QUOTES_EXAMINED`). Le plan
  * hostile du finding alignait 60 citations fautives sur un patch de 110 KB et
- * faisait tourner le worker 49,6 s, au-delà de son lease. Le second test rejoue
+ * faisait tourner le worker 49,6 s, au-delà de son lease. Le deuxième test rejoue
  * ce fixture — 60 citations, fichier de 3 000 lignes, copies à une trentaine de
  * blancs — et compte les deux bornes : 32 citations examinées, 28 refus gardés
- * avec leur conseil générique.
+ * avec leur conseil générique. Le troisième porte le même compte sur le refus
+ * rendu par les classes FATALES de couverture du plan maximal, la moitié qui
+ * recréait son propre budget et repayait donc un balayage par citation.
  */
 const CITED_LINE_CAP = 2000;
 const CITED_QUOTE_CAP = 32;
@@ -1986,6 +1989,21 @@ function boundedContext(targetLine: number, lines: number): PrContext {
   const content = Array.from({ length: lines }, (_, position) =>
     position + 1 === targetLine
       ? BOUNDED_TARGET
+      : `  // remplissage ${position + 1}`
+  ).join("\n");
+  return {
+    ...context,
+    context: [{ content, path: BOUNDED_PATH, ref: context.sha }],
+  };
+}
+/**
+ * Le même fixture pour la moitié fatale : les `faulty` premières lignes du
+ * fichier cité sont réelles, et chacune est la source d'une copie fautive.
+ */
+function boundedFatalContext(faulty: number): PrContext {
+  const content = Array.from({ length: 3000 }, (_, position) =>
+    position < faulty
+      ? boundedFlawedLine(position)
       : `  // remplissage ${position + 1}`
   ).join("\n");
   return {
@@ -2092,6 +2110,63 @@ it("caps the citations examined per validation, and still refuses each one", () 
   // un conseil exact. Le worker tient son lease.
   expect(elapsed).toBeLessThan(2000);
 });
+it("caps the fatal half of the same plan at the shared amputation budget", () => {
+  const faulty = 400;
+  const many = boundedFatalContext(faulty);
+  const plan = boundedPlan(
+    Array.from({ length: faulty }, (_, index) => ({
+      quote: boundedFlawedQuote(index),
+      sourceFile: BOUNDED_PATH,
+    }))
+  );
+  expect(ungroundedRequirements(plan, many, policyFor())).toHaveLength(faulty);
+  // Le budget de la validation est créé au point d'entrée du gate (voir
+  // `planRefusals`, runner.ts) et traverse ses deux moitiés. Le test le remet
+  // lui-même à la moitié fatale : c'est ce qui compte le travail engagé par ce
+  // chemin, et ce qui tombe si un budget neuf y est recréé. Mesuré sur ce
+  // fixture, aux 400 citations fautives que le schéma autorise, un budget neuf
+  // par citation rendait 400 remèdes détaillés en 4 059 ms, le budget partagé
+  // 32 en 2 611 ms — dont 2 484 ms de témoins que les deux chemins paient hors
+  // budget.
+  const scans = amputationScans();
+  const fatal = coverageFatalClasses(plan, many, policyFor(), scans).find(
+    (refusal) => refusal.code === "REQUIREMENT_UNGROUNDED"
+  );
+  const faults = fatal?.faults ?? [];
+  // Une faute par citation fautive, dans l'ordre du plan : le plafond ne
+  // supprime aucun refus, il n'en détaille que les 32 premières.
+  expect(faults).toHaveLength(faulty);
+  expect(
+    faults
+      .slice(0, CITED_QUOTE_CAP)
+      .every((fault) => fault.remedy.includes("copied from line"))
+  ).toBe(true);
+  const generic = faults.slice(CITED_QUOTE_CAP);
+  expect(generic).toHaveLength(faulty - CITED_QUOTE_CAP);
+  for (const fault of generic) {
+    expect(fault.remedy).toContain(UNGROUNDED_ABSENT_REMEDY);
+    expect(fault.remedy).not.toContain("copied from line");
+  }
+  // Le budget remis est exactement ce que ce chemin a consommé : le plafond de
+  // la validation, et rien de plus.
+  expect(scans.remaining).toBe(0);
+  // La seconde moitié reçoit le même budget épuisé : les 32 citations déjà
+  // examinées gardent leur remède détaillé, servi par le verdict mémorisé, et
+  // les 368 autres un refus exact non vide. Le partage du plafond ne fait pas
+  // taire le détail du gate, il l'arrête à 32 citations.
+  const refusals = ungroundedPlanRefusals(plan, many, policyFor(), scans);
+  expect(refusals).toHaveLength(faulty);
+  expect(
+    refusals
+      .slice(0, CITED_QUOTE_CAP)
+      .every((line) => line.includes("copied from line"))
+  ).toBe(true);
+  for (const line of refusals.slice(CITED_QUOTE_CAP)) {
+    expect(line).toContain("Rejected quote:");
+    expect(line).toContain(UNGROUNDED_ABSENT_REMEDY);
+    expect(line).toContain("quote a real line of the declared file instead");
+  }
+}, 60_000);
 
 /**
  * L'exactitude prime la position : le gate accepte toute sous-chaîne verbatim
