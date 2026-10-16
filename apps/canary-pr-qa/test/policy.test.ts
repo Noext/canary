@@ -5,6 +5,7 @@ import { type PrContext, parsePrUrl } from "../src/github.js";
 import { PLANNER_PROMPT } from "../src/model.js";
 import {
   absentRequirementRemedy,
+  amputatedQuote,
   isDocumentationPath,
   PolicySchema,
   quoteHasWitness,
@@ -1748,6 +1749,144 @@ it("falls back when only one fragment of a stitched quote exists", () => {
   expect(line).not.toContain("assembles fragments");
   expect(line).not.toContain("to quote instead");
   expect(line).toContain(UNGROUNDED_ABSENT_REMEDY);
+});
+
+/**
+ * Lot J, cas réel (run f328177b, après fusion des PR #49 et #50) : le
+ * planificateur a recopié la ligne du compteur de pièces en commençant à
+ * « unité » au lieu du premier caractère de la ligne, et sa copie porte en plus
+ * un `:""` inventé dans la première interpolation. Le gate la refuse à juste
+ * titre — aucune portion réelle du fichier ne la porte — mais le refus ne disait
+ * que « No source witness for pieces-unites-sans-derive: apps/web/app/page.tsx
+ * (requirement 3) », donc le planificateur recopiait la même copie et le run
+ * mourait avant toute exécution (outcome blocked, 0 scénario exécuté).
+ *
+ * La fin de la copie, elle, est EXACTEMENT la fin de la ligne 12 : c'est cet
+ * ancrage qui nomme la ligne réelle, et le refus doit dire quel début manque.
+ * La ligne entière est courte — 94 caractères, gabarits compris — donc elle est
+ * citable d'un seul tenant depuis son premier caractère.
+ */
+const COUNTED_PAGE_PATH = "apps/web/app/page.tsx";
+/** Ligne 12 du fichier, octet pour octet : le gabarit du compteur de pièces. */
+const COUNTED_LINE = `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}`;
+/** La même ligne telle que le patch la porte, avec son indentation. */
+const COUNTED_LINE_TEXT = `  ${COUNTED_LINE}`;
+const countedContext: PrContext = contextWith([
+  {
+    filename: COUNTED_PAGE_PATH,
+    patch: [
+      "@@ -11,2 +11,3 @@",
+      "   // comptage des pièces",
+      `+${COUNTED_LINE_TEXT}`,
+    ].join("\n"),
+  },
+]);
+function countedPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "pieces-unites-sans-derive",
+      sourceFiles: [COUNTED_PAGE_PATH],
+      requirements: [{ sourceFile: COUNTED_PAGE_PATH, quote }],
+    },
+  ]);
+}
+/** La citation mesurée : la ligne amputée de son début. */
+const COUNTED_TAIL_QUOTE = `unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}`;
+/** La même copie sans l'invention du milieu : le suffixe EXACT de la ligne. */
+const COUNTED_CLEAN_TAIL = `unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}`;
+/** Le cas symétrique mesuré : le début de la ligne, tronqué à la fin. */
+const COUNTED_HEAD_QUOTE = `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée`;
+/** Le début EXACT de la ligne, amputé de sa fin. */
+const COUNTED_CLEAN_HEAD = `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée`;
+/** Un fragment pris à l'intérieur de la ligne : ni son début ni sa fin. */
+const COUNTED_INTERIOR_QUOTE = `unité\${counted.totalUnits>1?"s":""} comptée`;
+
+it("names the real line and the missing beginning of an amputated quote", () => {
+  // La fixture n'a qu'une exigence : le rang du refus est 1 là où le run mesuré
+  // portait sa troisième exigence.
+  const plan = countedPlan(COUNTED_TAIL_QUOTE);
+  // Le gate ne bouge pas : la copie amputée n'existe nulle part, même à
+  // l'espacement près, donc elle reste refusée avant toute exécution.
+  expect(
+    ungroundedRequirements(plan, countedContext, policyFor())
+  ).toHaveLength(1);
+  const refusal = refusalOfPlan(plan, countedContext, policyFor());
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  expect(refusal.message).toBe(
+    `No source witness for pieces-unites-sans-derive: ${COUNTED_PAGE_PATH} (requirement 1). Rejected quote: ${JSON.stringify(COUNTED_TAIL_QUOTE)}`
+  );
+  // Le refus nomme la ligne réelle, le début manquant et la portion exacte à
+  // citer — jamais la citation fautive elle-même.
+  expect(refusal.hint).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
+  expect(refusal.hint).toContain("its beginning is missing");
+  expect(refusal.hint).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  const [line = ""] = ungroundedPlanRefusals(plan, countedContext, policyFor());
+  expect(line).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
+  expect(line).toContain("its beginning is missing");
+  expect(line).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  // Une seule suggestion par citation : la ligne réelle n'est pas répétée par le
+  // recouvrement de jetons, ni par un diagnostic de recousure que la copie n'a
+  // pas (ses deux moitiés vivent sur la même ligne).
+  expect(line).not.toContain("Real lines of");
+  expect(line).not.toContain("assembles fragments");
+});
+
+it("names the real line of a quote truncated at its end", () => {
+  const plan = countedPlan(COUNTED_HEAD_QUOTE);
+  expect(
+    ungroundedRequirements(plan, countedContext, policyFor())
+  ).toHaveLength(1);
+  const refusal = refusalOfPlan(plan, countedContext, policyFor());
+  expect(refusal.hint).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
+  expect(refusal.hint).toContain("its end is missing");
+  expect(refusal.hint).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  const [line = ""] = ungroundedPlanRefusals(plan, countedContext, policyFor());
+  expect(line).toContain("its end is missing");
+  expect(line).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  expect(line).not.toContain("Real lines of");
+});
+
+/**
+ * Les trois formes qu'une copie amputée peut prendre, lues sur la même ligne
+ * réelle : la copie est la fin de la ligne (son début manque), son début (sa fin
+ * manque), ou un fragment pris à l'intérieur (les deux manquent). Le gate ne
+ * refuse que des copies qui ne sont pas verbatim, donc un plan n'est jamais
+ * refusé pour la troisième forme — recopiée telle quelle, elle EST un témoin —
+ * mais la règle que le refus lit doit savoir la nommer, et jamais nommer un
+ * texte inventé.
+ */
+it("reads the three shapes of an amputated copy on a real line", () => {
+  const source = { sourceFile: COUNTED_PAGE_PATH };
+  expect(
+    amputatedQuote(
+      { ...source, quote: COUNTED_CLEAN_TAIL },
+      countedContext,
+      policyFor()
+    )
+  ).toEqual({ candidate: COUNTED_LINE_TEXT, kind: "start", line: 12 });
+  expect(
+    amputatedQuote(
+      { ...source, quote: COUNTED_CLEAN_HEAD },
+      countedContext,
+      policyFor()
+    )
+  ).toEqual({ candidate: COUNTED_LINE_TEXT, kind: "end", line: 12 });
+  expect(
+    amputatedQuote(
+      { ...source, quote: COUNTED_INTERIOR_QUOTE },
+      countedContext,
+      policyFor()
+    )
+  ).toEqual({ candidate: COUNTED_LINE_TEXT, kind: "middle", line: 12 });
+  // Aucune ligne du fichier ne porte cette copie : pas de diagnostic plutôt
+  // qu'une ligne nommée au hasard.
+  expect(
+    amputatedQuote(
+      { ...source, quote: "comptée deux fois la même pièce" },
+      countedContext,
+      policyFor()
+    )
+  ).toBeUndefined();
 });
 
 /**
