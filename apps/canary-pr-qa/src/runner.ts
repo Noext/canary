@@ -28,6 +28,7 @@ import {
   hasWeakWitness,
   type Policy,
   quoteExcerpt,
+  type Requirement,
   repairRequirementAttribution,
   requirementSourceRefusal,
   trustedPolicy,
@@ -183,21 +184,25 @@ function contextFatalClasses(plan: Plan, context: PrContext): FatalClass[] {
 export interface FatalClass {
   code: string;
   entries: string[];
+  /**
+   * Citations fautives de la classe, dans l'ordre du plan, chacune appariée au
+   * remède qui la concerne. Leur extrait entier passe en tête de la ligne :
+   * c'est le détail que le planificateur doit lire pour corriger la bonne
+   * exigence, et l'appariement lui interdit d'appliquer à une citation le remède
+   * d'une autre. Le préambule les mesure : un segment qui ne tient pas est omis
+   * entier et annoncé par son nombre, jamais coupé au milieu.
+   */
+  faults?: FatalFault[];
   hint: string;
   label: string;
-  /**
-   * Citations fautives de la classe, dans l'ordre du plan. Leur extrait entier
-   * passe en tête de la ligne, avant le remède et les valeurs fautives : c'est
-   * le détail que le planificateur doit lire pour corriger la bonne exigence.
-   */
-  quotes?: string[];
-  /**
-   * Remèdes précis, un par citation fautive, placés en tête de ligne avant
-   * `hint` (qui porte alors le reste du conseil). Le préambule les mesure : ceux
-   * qui ne tiennent pas dans la place restante sont annoncés par leur nombre,
-   * jamais perdus en silence derrière le premier.
-   */
-  remedies?: string[];
+}
+/**
+ * Une citation fautive et le remède qui la concerne : le préambule fatal ne
+ * montre jamais l'un sans l'autre, dans cet ordre.
+ */
+export interface FatalFault {
+  quote: string;
+  remedy: string;
 }
 /**
  * Valeurs fautives d'une ligne agrégée, bornées en nombre et en longueur.
@@ -216,11 +221,11 @@ function boundedEntries(entries: string[]): string {
   return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
 }
 /**
- * Citations fautives montrées en entier sur une ligne fatale. L'extrait d'une
- * citation (voir `quoteExcerpt`) est l'information que le planificateur doit
- * lire et n'est jamais raccourci : une seule tient avec son remède quand les
- * onze classes sont saturées, donc les suivantes sont annoncées par leur nombre
- * — jamais perdues en silence derrière la première.
+ * Citations fautives montrées en entier sur la tête minimale d'une ligne
+ * fatale. L'extrait d'une citation (voir `quoteExcerpt`) est l'information que
+ * le planificateur doit lire et n'est jamais raccourci : une seule est montrée,
+ * les suivantes sont annoncées par leur nombre — jamais perdues en silence
+ * derrière la première.
  */
 const FATAL_QUOTES_SHOWN = 1;
 function rejectedQuotes(quotes: string[]): string {
@@ -232,20 +237,76 @@ function rejectedQuotes(quotes: string[]): string {
   const more = hidden > 0 ? ` (+${hidden} more)` : "";
   return `Rejected quote${plural}: ${shown.join(", ")}${more}`;
 }
-/**
- * Tête d'une ligne fatale : le code, la citation fautive entière, puis le
- * remède. Le remède suit la citation, jamais les valeurs fautives : il ne doit
- * pas disparaître derrière une entrée rognée. Les remèdes précis (quand la
- * classe en porte) précèdent `hint`, qui garde le conseil de reste.
- */
-function fatalHead(refusal: FatalClass, remedies = ""): string {
-  const quotes = refusal.quotes?.length
-    ? ` ${rejectedQuotes(refusal.quotes)}`
+/** Nombre de citations fautives que le préambule n'a pas montrées. */
+function hiddenFaultCounter(hidden: number): string {
+  return hidden > 0
+    ? ` (+${hidden} more faulty quote${hidden > 1 ? "s" : ""})`
     : "";
-  const hint = remedies
-    ? `${remedies}${refusal.hint ? ` ${refusal.hint}` : ""}`
-    : refusal.hint;
-  return `${refusal.code}:${quotes} ${hint}`;
+}
+/**
+ * Un segment du préambule : l'extrait de la citation fautive puis le remède qui
+ * la concerne. La citation et son remède ne sont jamais séparés, donc aucun
+ * remède affiché ne peut être appliqué à une autre citation, et l'ordre du plan
+ * est conservé.
+ */
+function faultSegment(fault: FatalFault): string {
+  return `${JSON.stringify(quoteExcerpt(fault.quote))} → ${fault.remedy}`;
+}
+/**
+ * Citations fautives appariées à leur remède, sous la borne `limit`. Un segment
+ * qui ne tient pas est omis entier — citation comme remède — et compté ; vide
+ * quand même le premier ne tient pas, pour que l'appelant retombe sur la tête
+ * minimale de la classe, qui nomme sa première citation et porte son conseil.
+ */
+function coupledFaults(faults: FatalFault[], limit: number): string {
+  const shown: string[] = [];
+  let used = 0;
+  for (const [index, fault] of faults.entries()) {
+    const segment = faultSegment(fault);
+    const cost = (shown.length > 0 ? "; ".length : 0) + segment.length;
+    const counter = hiddenFaultCounter(faults.length - index - 1).length;
+    if (used + cost + counter > limit) {
+      break;
+    }
+    shown.push(segment);
+    used += cost;
+  }
+  return shown.length > 0
+    ? `${shown.join("; ")}${hiddenFaultCounter(faults.length - shown.length)}`
+    : "";
+}
+/**
+ * Tête minimale d'une ligne fatale : le code, les citations fautives nommées et
+ * le conseil de la classe. Aucun remède n'y figure, donc rien ne peut la rogner :
+ * c'est cette place que le préambule compte dans son plafond avant de distribuer
+ * sa réserve aux remèdes.
+ */
+function minimalFatalHead(refusal: FatalClass): string {
+  return refusal.faults?.length
+    ? `${refusal.code}: ${rejectedQuotes(refusal.faults.map((fault) => fault.quote))} ${refusal.hint}`
+    : `${refusal.code}: ${refusal.hint}`;
+}
+/**
+ * Tête d'une ligne fatale : le code, les citations fautives, le remède de
+ * chacune. `budget` est la place que le préambule laisse au-dessus de la tête
+ * minimale ; dès que le premier segment y tient, chaque citation affichée l'est
+ * avec son propre remède et le conseil de la classe s'efface : il ne décrit
+ * alors plus rien que les segments ne disent mieux. Sinon la tête minimale est
+ * rendue telle quelle, et son conseil générique est le repli — même un remède
+ * trop long pour la réserve n'est jamais poussé. Le remède suit les citations,
+ * jamais les valeurs fautives : il ne doit pas disparaître derrière une entrée
+ * rognée.
+ */
+function fatalHead(refusal: FatalClass, budget = 0): string {
+  const minimal = minimalFatalHead(refusal);
+  if (!refusal.faults?.length) {
+    return minimal;
+  }
+  const coupled = coupledFaults(
+    refusal.faults,
+    budget + minimal.length - `${refusal.code}: `.length
+  );
+  return coupled ? `${refusal.code}: ${coupled}` : minimal;
 }
 /**
  * Ligne d'une classe fatale : sa tête intouchée, puis les valeurs fautives dans
@@ -273,10 +334,13 @@ function fatalError(refusal: FatalClass): QaError {
  * troncature, et les dernières, dont `PLAN_SCENARIO_ID_RESERVED`,
  * disparaissaient du message : le planificateur perdait sa seule tentative de
  * correction. L'en-tête nomme donc tous les codes fatals avant toute entrée, et
- * la tête de chaque classe — code, citation fautive entière, remède — passe
- * avant ses valeurs fautives, qui se partagent la place restante. Onze classes
- * saturées laissent encore une réserve positive, mesurée par les tests : la
- * citation de 120 et son remède survivent sans être rognés.
+ * la tête de chaque classe — code, citation fautive, remède — passe avant ses
+ * valeurs fautives, qui se partagent la place restante. Les têtes minimales
+ * (code, citations nommées, conseil de la classe) sont comptées dans ce plafond
+ * avant tout remède, et c'est la réserve qui reste au-dessus d'elles qui porte
+ * les remèdes appariés ; une classe dont le premier remède ne tient pas dans la
+ * réserve garde sa tête minimale et son conseil de repli, donc le préambule ne
+ * dépasse jamais ce plafond, quelle que soit la taille des remèdes.
  */
 export const FATAL_PRELUDE_CHARS = 1860;
 /**
@@ -298,23 +362,23 @@ function fatalPrelude(classes: FatalClass[]): string[] {
   const header = `Fatal refusals (each one blocks the whole run): ${classes
     .map((refusal) => refusal.code)
     .join(", ")}.`;
-  // Les remèdes précis passent avant les valeurs fautives : ils consomment la
-  // réserve qu'elles occuperaient, mesurée sur les têtes sans remède, et ne
-  // touchent jamais au plafond qui protège les codes. Un remède par citation,
-  // le premier toujours montré, les suivants tant que la place les porte, les
-  // autres annoncés par leur nombre.
-  const baseHeads = classes.map((refusal) => fatalHead(refusal));
+  // La réserve est mesurée sur les têtes minimales — code, citations nommées,
+  // conseil de la classe — que rien ne peut rogner : chaque classe y ajoute les
+  // remèdes appariés à ses citations tant que la place le porte, et la réserve
+  // se réduit de ce que la classe a consommé en plus de sa tête minimale. Une
+  // classe dont le premier remède ne tient pas reste donc sur sa tête minimale,
+  // qui porte son conseil de repli. La somme des têtes ne dépasse jamais
+  // `FATAL_PRELUDE_CHARS`, quelle que soit la taille des remèdes.
+  const minimalHeads = classes.map((refusal) => minimalFatalHead(refusal));
   const baseEssential =
     header.length +
-    baseHeads.reduce((total, head) => total + head.length + 1, 0);
+    minimalHeads.reduce((total, head) => total + head.length + 1, 0);
   let budget = Math.max(0, FATAL_PRELUDE_CHARS - baseEssential);
-  const heads = classes.map((refusal) => {
-    if (!refusal.remedies?.length) {
-      return fatalHead(refusal);
-    }
-    const remedies = boundedRemedies(refusal.remedies, budget);
-    budget = Math.max(0, budget - remedies.length - 1);
-    return fatalHead(refusal, remedies);
+  const heads = classes.map((refusal, index) => {
+    const head = fatalHead(refusal, budget);
+    const minimal = minimalHeads[index] ?? head;
+    budget = Math.max(0, budget - (head.length - minimal.length));
+    return head;
   });
   const essential =
     header.length + heads.reduce((total, head) => total + head.length + 1, 0);
@@ -355,9 +419,9 @@ const WEAK_UNWITNESSED_REMEDY =
 /**
  * Remède d'une classe fatale de témoin : elle agrège les citations absentes et
  * les citations exactes mais trop pauvres, dont les remèdes n'ont rien à voir.
- * `FATAL_PRELUDE_CHARS` ne garde que cette ligne quand les autres classes
- * saturent, donc elle doit dire la vérité seule — un message qui demande de
- * citer le texte réel à une citation déjà présente fait renvoyer la même
+ * `FATAL_PRELUDE_CHARS` ne garde que la tête de cette ligne quand les autres
+ * classes saturent, donc elle doit dire la vérité seule — un message qui demande
+ * de citer le texte réel à une citation déjà présente fait renvoyer la même
  * citation au planificateur.
  */
 function witnessRemedy(
@@ -372,31 +436,23 @@ function witnessRemedy(
   return hasWeak ? weak : absent;
 }
 /**
- * Remèdes d'une classe fatale, bornés par la place mesurée du préambule : ils
- * se suivent et ceux qui ne tiennent pas sont annoncés par leur nombre. Le
- * premier remède est toujours montré — la place est mesurée pour lui — pour
- * qu'une classe ne perde pas son remède au profit du compteur, mais les suivants
- * n'excèdent jamais le budget, compteur réservé.
+ * Remède d'une citation fautive que la ligne fatale apparie à sa citation : le
+ * conseil de son propre défaut quand aucun remède précis n'existe, jamais une
+ * chaîne vide — un segment du préambule affiche toujours une citation avec le
+ * remède qui la concerne.
  */
-function boundedRemedies(remedies: string[], budget: number): string {
-  const [first] = remedies;
-  if (!first) {
-    return "";
+function ungroundedRemedy(
+  requirement: Requirement,
+  context: PrContext,
+  policy: Policy
+): string {
+  if (hasWeakWitness(requirement, context, policy)) {
+    return UNGROUNDED_WEAK_REMEDY;
   }
-  const shown = [first];
-  let used = first.length;
-  const more = (hidden: number) =>
-    hidden > 0 ? ` (+${hidden} more faulty quote${hidden > 1 ? "s" : ""})` : "";
-  for (const remedy of remedies.slice(1)) {
-    const cost = remedy.length + 1;
-    const counter = more(remedies.length - shown.length - 1);
-    if (used + cost + counter.length > budget) {
-      break;
-    }
-    shown.push(remedy);
-    used += cost;
-  }
-  return `${shown.join(" ")}${more(remedies.length - shown.length)}`;
+  return (
+    absentRequirementRemedy(requirement, context, policy).trim() ||
+    UNGROUNDED_ABSENT_REMEDY
+  );
 }
 /**
  * Classes fatales de couverture, agrégées en tête du canal de correction.
@@ -439,39 +495,38 @@ function coverageFatalClasses(
     );
     const hasWeak = weak.length > 0;
     const hasAbsent = weak.length < ungrounded.length;
-    // Un remède par citation fautive absente : la réattribution quand la
-    // citation existe mot pour mot dans un autre fichier du contexte, sinon les
-    // lignes réelles du fichier cité. Le conseil générique reste le repli quand
-    // aucun remède précis n'existe, jamais ajouté à côté d'eux.
-    const remedies = [
-      ...new Set(
-        ungrounded
-          .filter((item) => !hasWeakWitness(item.requirement, context, policy))
-          .map((item) =>
-            absentRequirementRemedy(item.requirement, context, policy)
-          )
-          .filter((remedy) => remedy.length > 0)
-      ),
-    ];
-    const genericRemedy = witnessRemedy(
-      UNGROUNDED_ABSENT_REMEDY,
-      UNGROUNDED_WEAK_REMEDY,
-      hasWeak,
-      hasAbsent
-    );
-    // Avec des remèdes précis, `hint` ne garde que le conseil du témoin faible,
-    // placé après eux par `fatalHead` ; sans eux, le conseil reste générique.
-    const weakHint = hasWeak ? UNGROUNDED_WEAK_REMEDY : "";
-    const hint = remedies.length > 0 ? weakHint : genericRemedy;
+    // Une faute par citation fautive, dans l'ordre du plan, chacune appariée au
+    // remède qui la concerne : la réattribution quand la citation existe mot
+    // pour mot dans un autre fichier du contexte, sinon les lignes réelles du
+    // fichier cité, sinon le conseil de son propre défaut — témoin trop pauvre
+    // ou citation absente. Une même citation attribuée à deux fichiers garde les
+    // deux remèdes, chacun sur son segment ; deux fautes identiques ne sont
+    // montrées qu'une fois. Le conseil de la classe reste le repli quand la
+    // place ne porte pas les remèdes appariés.
+    const faults: FatalFault[] = [];
+    const seen = new Set<string>();
+    for (const item of ungrounded) {
+      const remedy = ungroundedRemedy(item.requirement, context, policy);
+      const key = JSON.stringify([item.requirement.quote, remedy]);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      faults.push({ quote: item.requirement.quote, remedy });
+    }
     classes.push({
       code: "REQUIREMENT_UNGROUNDED",
       entries: ungrounded.map(
         (item) => `${item.scenarioId}:${item.requirement.sourceFile}`
       ),
-      hint,
-      remedies,
+      faults,
+      hint: witnessRemedy(
+        UNGROUNDED_ABSENT_REMEDY,
+        UNGROUNDED_WEAK_REMEDY,
+        hasWeak,
+        hasAbsent
+      ),
       label: "requirements whose quote has no source witness",
-      quotes: [...new Set(ungrounded.map((item) => item.requirement.quote))],
     });
   }
   // Un skip de chemin critique sans approbation bloque le run : le
