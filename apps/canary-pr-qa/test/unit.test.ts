@@ -1396,6 +1396,59 @@ describe("runner false-green regressions", () => {
     expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
     expect(FATAL_PRELUDE_CHARS - preludeLength).toBeGreaterThan(0);
   }, 60_000);
+  /**
+   * Plan corrigé : le second fichier changé est déclaré et témoigné.
+   */
+  function secondFilePlan(): Plan {
+    const corrected = structuredClone(plan);
+    corrected.scenarios[0]!.sourceFiles.push("src/second.ts");
+    corrected.scenarios[0]!.requirements.push({
+      behavior: "The second changed file is reviewed",
+      quote: SECOND_FILE_QUOTE,
+      sourceFile: "src/second.ts",
+    });
+    return corrected;
+  }
+  /**
+   * Finding de revue : quand la citation déclarée est absente du fichier cité
+   * mais existe MOT POUR MOT dans un autre fichier du contexte, la ligne de
+   * classe qui survit à la troncature doit proposer la réattribution, jamais une
+   * autre ligne du fichier cité. Le patch de `src/form.ts` porte pourtant une
+   * ligne qui recouvre la citation : l'envoyer consommerait la tentative de
+   * correction du planificateur pour une preuve fausse.
+   */
+  it("reassigns a quote that lives in another file instead of proposing a line", async () => {
+    const elsewhere = 'const witness = "second changed file witness value";';
+    const saturated = saturatedFatalCandidate();
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/form.ts");
+    first!.requirements[0] = {
+      behavior: "The quote exists in the other changed file",
+      quote: elsewhere,
+      sourceFile: "src/form.ts",
+    };
+    const f = await setup({
+      plans: [saturated, secondFilePlan()],
+      secondChangedFile: "src/second.ts",
+      formPatch: `@@ -1,1 +1,2 @@\n+const witness = "other changed file witness value";\n+show('Welcome '+name)`,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // La réattribution remplace la ligne du fichier cité, jamais ajoutée à côté.
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt(elsewhere))} (+1 more) The quote appears verbatim in src/second.ts; declare that file and attribute the requirement to it.`
+    );
+    expect(correction).not.toContain("to quote instead");
+  }, 60_000);
   it("returns an unwitnessed source file to the planner before failing", async () => {
     const withoutWitness = structuredClone(plan);
     withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");

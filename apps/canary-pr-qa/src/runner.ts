@@ -22,12 +22,12 @@ import {
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
+  absentRequirementRemedy,
   contractBudgetRefusals,
   criticalSkipRefused,
   hasWeakWitness,
   type Policy,
   quoteExcerpt,
-  quoteSuggestion,
   type Requirement,
   repairRequirementAttribution,
   requirementSourceRefusal,
@@ -336,14 +336,15 @@ function witnessRemedy(
   return hasWeak ? weak : absent;
 }
 /**
- * Remède de la classe `REQUIREMENT_UNGROUNDED` pour une citation absente : les
- * lignes réelles du fichier cité quand le critère en trouve, à la place du
- * conseil générique. Cette ligne de classe survit à la troncature à 2000 de
- * `model.ts` — le préambule est borné pour ça — alors que la suggestion portée
- * par le détail par exigence tombe au-delà sous des classes saturées, ne
- * laissant que le conseil générique. La suggestion remplace donc le conseil au
- * lieu de s'y ajouter, et nomme la citation fautive montrée sur la même ligne :
- * c'est l'exigence que le planificateur doit corriger.
+ * Remède de la classe `REQUIREMENT_UNGROUNDED` pour une citation absente : le
+ * remède de cette citation — la réattribution quand elle existe mot pour mot
+ * dans un autre fichier du contexte, sinon les lignes réelles du fichier cité —
+ * à la place du conseil générique. Cette ligne de classe survit à la troncature
+ * à 2000 de `model.ts` — le préambule est borné pour ça — alors que la
+ * suggestion portée par le détail par exigence tombe au-delà sous des classes
+ * saturées, ne laissant que le conseil générique. Le remède remplace donc le
+ * conseil au lieu de s'y ajouter, et nomme la citation fautive montrée sur la
+ * même ligne : c'est l'exigence que le planificateur doit corriger.
  */
 function absentRemedy(
   ungrounded: { requirement: Requirement; scenarioId: string }[],
@@ -355,7 +356,7 @@ function absentRemedy(
     return UNGROUNDED_ABSENT_REMEDY;
   }
   return (
-    quoteSuggestion(shown.requirement, context, policy).trim() ||
+    absentRequirementRemedy(shown.requirement, context, policy) ||
     UNGROUNDED_ABSENT_REMEDY
   );
 }

@@ -4,6 +4,7 @@ import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
 import { PLANNER_PROMPT } from "../src/model.js";
 import {
+  absentRequirementRemedy,
   isDocumentationPath,
   PolicySchema,
   quoteHasWitness,
@@ -1411,6 +1412,46 @@ it("proposes no line of the cited file when the quote exists in another file", (
   );
   expect(line).toContain("The quote appears verbatim in src/form.ts");
   expect(line).not.toContain("to quote instead");
+});
+
+/**
+ * Le remède d'une citation qui existe mot pour mot dans un autre fichier est la
+ * réattribution, jamais une ligne du fichier cité : la ligne 47 recouvre
+ * largement la citation et le critère la proposerait, mais l'envoyer
+ * consommerait la tentative de correction du planificateur pour une preuve
+ * fausse.
+ */
+it("reassigns a quote that exists in another file instead of proposing a line", () => {
+  const variant = 'const result = countCash({ "500": "3,6" });';
+  const elsewhere: PrContext = {
+    ...cashSpecContext,
+    files: [
+      ...cashSpecContext.files,
+      { filename: "src/form.ts", status: "modified", patch: `+ ${variant}` },
+    ],
+    context: [
+      ...cashSpecContext.context,
+      { content: variant, path: "src/form.ts", ref: context.sha },
+    ],
+  };
+  const requirement = { quote: variant, sourceFile: CASH_SPEC_PATH };
+  expect(
+    suggestedQuoteLines(requirement, elsewhere, policyFor()).length
+  ).toBeGreaterThan(0);
+  expect(absentRequirementRemedy(requirement, elsewhere, policyFor())).toBe(
+    "The quote appears verbatim in src/form.ts; declare that file and attribute the requirement to it."
+  );
+});
+
+it("proposes a real line of the cited file when the quote exists nowhere", () => {
+  const remedy = absentRequirementRemedy(
+    { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
+    cashSpecContext,
+    policyFor()
+  );
+  expect(remedy).toBe(
+    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify('  const result = countCash({ "500": "3,5" });')}.`
+  );
 });
 
 it("suggests only head-path lines for a file renamed without deletion", () => {

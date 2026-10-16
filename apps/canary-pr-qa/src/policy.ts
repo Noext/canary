@@ -606,6 +606,28 @@ export function quoteSuggestion(
     .join(", ");
   return ` Real lines of ${requirement.sourceFile} to quote instead: ${listed}.`;
 }
+/**
+ * Remède unique d'une exigence dont la citation n'a aucun témoin : quand la
+ * citation existe mot pour mot — à l'espacement près — dans l'évidence d'un
+ * autre fichier du contexte, le remède est la réattribution à ce fichier.
+ * Proposer une autre ligne du fichier cité dans ce cas enverrait le
+ * planificateur vers une preuve fausse : sa tentative de correction serait
+ * consommée, et le fichier qui porte réellement le texte resterait non couvert.
+ * Sinon le remède est une ligne réelle du fichier cité (voir `quoteSuggestion`).
+ * Vide quand aucun des deux ne s'applique, pour que l'appelant retombe sur le
+ * conseil générique plutôt que sur un remède vide.
+ */
+export function absentRequirementRemedy(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): string {
+  const found = witnessFiles(requirement.quote, context, policy);
+  if (found.length > 0) {
+    return witnessHint(found, context).trim();
+  }
+  return quoteSuggestion(requirement, context, policy).trim();
+}
 
 /**
  * Exigences citées sans témoin textuel, même à l'espacement près, avec le
