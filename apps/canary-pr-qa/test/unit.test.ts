@@ -1313,7 +1313,9 @@ describe("runner false-green regressions", () => {
     );
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("REQUIREMENT_UNGROUNDED");
-    expect(result.error).toBe("No source witness for welcome: src/form.ts");
+    expect(result.error).toBe(
+      `No source witness for welcome: src/form.ts (requirement 1). Rejected quote: ${JSON.stringify("show('Welcome '+nom)")}`
+    );
     expect(result.scenarios).toEqual([]);
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload

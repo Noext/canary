@@ -363,24 +363,33 @@ export const UNGROUNDED_WEAK_REMEDY =
  * du cas faible ne propose jamais un skip que le gate refuserait : un chemin
  * critique s'écarte avec une approbation sur la branche de base, pas en
  * retirant le fichier.
+ *
+ * Le refus nomme l'exigence fautive — le scénario, le fichier déclaré, le rang
+ * de l'exigence dans le scénario et sa citation en extrait — parce qu'un refus
+ * qui ne nomme que le scénario et le fichier laisse le planificateur deviner
+ * laquelle de ses exigences est fausse, et lui fait reconstruire la même
+ * citation. Le cas absent y ajoute où la citation vit réellement, ou l'aveu
+ * qu'aucun fichier que la PR change ne la porte (voir `witnessLocation`).
  */
 export function ungroundedRequirement(
   scenarioId: string,
   requirement: Requirement,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  rank: number
 ): QaError {
+  const fault = `${scenarioId}: ${requirement.sourceFile} (requirement ${rank}). Rejected quote: ${JSON.stringify(quoteExcerpt(requirement.quote))}`;
   if (hasWeakWitness(requirement, context, policy)) {
     return new QaError(
       "REQUIREMENT_UNGROUNDED",
-      `Weak source witness for ${scenarioId}: ${requirement.sourceFile}`,
+      `Weak source witness for ${fault}`,
       `The quote exists in ${requirement.sourceFile}, a critical file: a witness there must carry at least ${CRITICAL_QUOTE_MIN_WORD_CHARS} letter or digit of visible content, so a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
     );
   }
   return new QaError(
     "REQUIREMENT_UNGROUNDED",
-    `No source witness for ${scenarioId}: ${requirement.sourceFile}`,
-    UNGROUNDED_ABSENT_REMEDY
+    `No source witness for ${fault}`,
+    `${UNGROUNDED_ABSENT_REMEDY} ${witnessLocation(requirement, context, policy)}`
   );
 }
 
@@ -469,6 +478,27 @@ function witnessHint(found: string[], context: PrContext): string {
     return "";
   }
   return ` The quote only appears in ${boundedPaths(outside)}, which this PR does not change; quote the changed file instead.`;
+}
+/**
+ * Où la citation se trouve réellement, ou l'aveu qu'aucun fichier que la PR
+ * change ne la porte : `witnessHint` nomme le fichier qui la porte — jamais un
+ * fichier hors diff, que la validation refuserait — mais se tait quand la
+ * citation n'existe dans aucune évidence du contexte. Ce silence laissait le
+ * planificateur recopier la même citation ; le repli nomme alors la seule
+ * réparation légale qui reste, citer une ligne réelle du fichier déclaré.
+ */
+const NO_CHANGED_FILE_WITNESS =
+  "The quote exists in no file this PR changes; quote a real line of the declared file instead.";
+function witnessLocation(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): string {
+  const hint = witnessHint(
+    witnessFiles(requirement.quote, context, policy),
+    context
+  ).trim();
+  return hint === "" ? NO_CHANGED_FILE_WITNESS : hint;
 }
 /**
  * Longueur maximale de la liste de chemins d'un remède de témoin. Le premier
@@ -940,30 +970,33 @@ export function absentRequirementRemedy(
 
 /**
  * Exigences citées sans témoin textuel, même à l'espacement près, avec le
- * scénario qui les porte : la classe fatale `REQUIREMENT_UNGROUNDED` en est
- * rendue une par entrée, et le canal de correction peut aussi l'agréger en une
- * seule ligne.
+ * scénario qui les porte et le rang de l'exigence dans ce scénario : la classe
+ * fatale `REQUIREMENT_UNGROUNDED` en est rendue une par entrée, et le canal de
+ * correction peut aussi l'agréger en une seule ligne. Le rang est celui du plan
+ * — une exigence nommée « requirement 2 » désigne la deuxième liste du scénario.
  */
 export function ungroundedRequirements(
   plan: Plan,
   context: PrContext,
   policy: Policy
-): { requirement: Requirement; scenarioId: string }[] {
+): { rank: number; requirement: Requirement; scenarioId: string }[] {
   return plan.scenarios.flatMap((scenario) =>
-    scenario.requirements
-      .filter(
-        (requirement) => !requirementHasWitness(requirement, context, policy)
-      )
-      .map((requirement) => ({ requirement, scenarioId: scenario.id }))
+    scenario.requirements.flatMap((requirement, index) =>
+      requirementHasWitness(requirement, context, policy)
+        ? []
+        : [{ rank: index + 1, requirement, scenarioId: scenario.id }]
+    )
   );
 }
 
 /**
- * Forme courte de la citation fautive : un refus qui ne nomme que le scénario
- * et le fichier laisse le planificateur deviner laquelle de ses exigences est
- * fausse. La ligne reste bornée — le préambule fatal et la troncature de
- * `model.ts` se partagent un budget de correction. L'extrait est aussi le
- * détail placé en tête de la ligne fatale, pour qu'une ligne rognée le garde.
+ * Forme courte de la citation fautive, qui fait partie de l'identité d'un refus
+ * par exigence (voir `ungroundedRequirement`) : un refus qui ne nomme que le
+ * scénario et le fichier laisse le planificateur deviner laquelle de ses
+ * exigences est fausse. La ligne reste bornée — le préambule fatal et la
+ * troncature de `model.ts` se partagent un budget de correction. L'extrait est
+ * aussi le détail placé en tête de la ligne fatale, pour qu'une ligne rognée le
+ * garde.
  */
 const QUOTE_EXCERPT_CHARS = 120;
 export function quoteExcerpt(quote: string): string {
@@ -989,16 +1022,17 @@ export function ungroundedPlanRefusals(
   policy: Policy
 ): string[] {
   return ungroundedRequirements(plan, context, policy).map(
-    ({ requirement, scenarioId }) => {
+    ({ rank, requirement, scenarioId }) => {
       const error = ungroundedRequirement(
         scenarioId,
         requirement,
         context,
-        policy
+        policy,
+        rank
       );
-      const quote = JSON.stringify(quoteExcerpt(requirement.quote));
       // La citation existe ailleurs : le remède est l'attribution à l'autre
-      // fichier, et proposer aussi une ligne de ce fichier-ci serait du bruit.
+      // fichier, déjà porté par le conseil de l'exigence, et proposer aussi une
+      // ligne de ce fichier-ci serait du bruit.
       const found = witnessFiles(requirement.quote, context, policy);
       const stitched =
         found.length === 0
@@ -1010,8 +1044,8 @@ export function ungroundedPlanRefusals(
           : "";
       const remedy = stitched
         ? `${stitched} ${error.hint}`
-        : `${error.hint}${witnessHint(found, context)}${suggestion}`;
-      return `${error.message}. Rejected quote: ${quote}. ${remedy}`;
+        : `${error.hint}${suggestion}`;
+      return `${error.message}. ${remedy}`;
     }
   );
 }
@@ -1286,9 +1320,15 @@ export function validateCoverage(
     if (budget) {
       throw budget;
     }
-    for (const requirement of scenario.requirements) {
+    for (const [index, requirement] of scenario.requirements.entries()) {
       if (!requirementHasWitness(requirement, context, policy)) {
-        throw ungroundedRequirement(scenario.id, requirement, context, policy);
+        throw ungroundedRequirement(
+          scenario.id,
+          requirement,
+          context,
+          policy,
+          index + 1
+        );
       }
     }
     coverWitnessedSourceFiles(covered, scenario, context, policy);
