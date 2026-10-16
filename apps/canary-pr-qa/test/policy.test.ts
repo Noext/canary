@@ -1892,6 +1892,20 @@ it("reads the three shapes of an amputated copy on a real line", () => {
 });
 
 /**
+ * L'exactitude prime la position : le gate accepte toute sous-chaîne verbatim
+ * (voir `quoteHasWitness`), donc une copie exacte commencée au milieu d'une ligne
+ * EST un témoin, et le refus ne nomme le début manquant que d'une copie qui
+ * n'existe nulle part. Ces deux citations exactes passent le gate sans remède.
+ */
+it("accepts an exact suffix or interior copy of a real line", () => {
+  for (const quote of [COUNTED_CLEAN_TAIL, COUNTED_INTERIOR_QUOTE]) {
+    expect(
+      ungroundedRequirements(countedPlan(quote), countedContext, policyFor())
+    ).toHaveLength(0);
+  }
+});
+
+/**
  * Déterministe : quand plusieurs découpages se vérifient, c'est le plus
  * équilibré qui est rendu — celui dont le plus court fragment est le plus long —
  * jamais le premier venu, et jamais plus de deux fragments.
@@ -2376,26 +2390,36 @@ it("forbids stitching fragments read in different places in the planner prompt",
   expect(prompt).toMatch(/refused as an absent quote/i);
 });
 
-it("forbids copying a quote from the middle of a line in the planner prompt", () => {
+it("asks for the first character of a quote without forbidding a verbatim fragment", () => {
   const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
-  // La consigne est opérationnelle : le premier caractère du fragment recopié, et
-  // le cas mesuré du lot J — une copie commencée à « unité » — est enseigné avec
-  // sa ligne réelle, sans contredire la contiguïté ni l'interdiction de recoudre.
+  // La consigne est opérationnelle sans contredire le gate : une copie exacte
+  // commencée au milieu d'une ligne est un témoin, donc la règle demande de
+  // partir du premier caractère quand le texte est court, sans jamais exiger
+  // une ligne entière qu'aucun plan ne pourrait citer.
   expect(prompt).toMatch(
-    /Copy every quote from the first character of the text you take from the file/i
+    /Copy a quote from the first character of the text you take from the file whenever that text is short enough/i
   );
   expect(prompt).toMatch(
-    /a copy that starts in the middle of a line — after a `.*` interpolation or any other text/i
+    /an exact suffix or an interior fragment of a line is a witness/i
   );
-  expect(prompt).toMatch(/has no witness and is refused even when/i);
   expect(prompt).toMatch(
-    /A line carrying `.*` interpolations is short: quote that whole line from its first character, or do not quote from that line at all/i
+    /Prefer a whole line to a fragment of it — a line carrying `.*` interpolations is short — but never force a whole line/i
   );
+  // Une ligne minifiée dépasse la borne du schéma `quote` : la copie partielle
+  // est alors la seule citation possible, et la règle doit le dire.
+  expect(prompt).toMatch(
+    /quotes are capped at 1000 characters, so a long or minified line must be witnessed by an exact fragment of it/i
+  );
+  // Les deux phrases qui affirmaient le contraire du gate ne doivent pas
+  // revenir : ce contrôle tombe si on les rétablit.
+  expect(prompt).not.toMatch(/has no witness and is refused even when/i);
+  expect(prompt).not.toMatch(/do not quote from that line at all/i);
+  // L'exemple enseigné est le cas mesuré avec son invention, et la ligne réelle
+  // qu'il vise : le début de la ligne, la copie fautive, et le remède exact.
   expect(prompt).toMatch(/Another real refusal: a planner quoted/i);
-  // L'exemple enseigné est le cas mesuré, recopié sans son invention : la copie
-  // amputée, et le début de la ligne réelle qu'elle a laissé de côté.
-  expect(prompt).toContain(COUNTED_CLEAN_TAIL);
-  expect(prompt).toContain(COUNTED_LINE_HEAD);
   expect(prompt).toContain(COUNTED_PAGE_PATH);
-  expect(prompt).toMatch(/the copy is only the tail of that line/i);
+  expect(prompt).toContain(COUNTED_LINE_HEAD);
+  expect(prompt).toContain(COUNTED_LINE);
+  expect(prompt).toContain(COUNTED_TAIL_QUOTE);
+  expect(prompt).toMatch(/its exact tail alone would have been a witness/i);
 });
