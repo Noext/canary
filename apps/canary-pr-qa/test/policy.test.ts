@@ -1454,6 +1454,68 @@ it("proposes a real line of the cited file when the quote exists nowhere", () =>
   );
 });
 
+/**
+ * Défaut signalé par la vérification interne : le remède de témoin énumérait
+ * sans plafond tous les fichiers qui portent la citation, et une liste longue
+ * portée par le préambule fatal écrasait la tête de la dernière classe. La
+ * liste est plafonnée et les fichiers non montrés sont comptés.
+ */
+it("caps the witness path list and counts the files it omits", () => {
+  const quote = 'const witness = "carried by many changed files";';
+  const paths = Array.from(
+    { length: 8 },
+    (_, index) => `src/witness-${index}-with-a-long-name.ts`
+  );
+  const changed = contextWith(
+    paths.map((filename) => ({ filename, patch: `+ ${quote}` }))
+  );
+  expect(witnessFiles(quote, changed, policyFor())).toEqual(paths);
+  expect(
+    absentRequirementRemedy(
+      { quote, sourceFile: "src/cited.ts" },
+      changed,
+      policyFor()
+    )
+  ).toBe(
+    `The quote appears verbatim in ${paths.slice(0, 3).join(", ")} (+5 more); declare that file and attribute the requirement to it.`
+  );
+  // Même borne pour la branche hors diff : la liste des fichiers que la PR ne
+  // change pas est comptée elle aussi.
+  const outside: PrContext = {
+    ...changed,
+    files: [],
+    context: paths.map((path) => ({ content: quote, path, ref: context.sha })),
+  };
+  expect(
+    absentRequirementRemedy(
+      { quote, sourceFile: "src/cited.ts" },
+      outside,
+      policyFor()
+    )
+  ).toBe(
+    `The quote only appears in ${paths.slice(0, 3).join(", ")} (+5 more), which this PR does not change; quote the changed file instead.`
+  );
+});
+
+it("shows one witness path whole rather than a path the planner cannot open", () => {
+  const quote = 'const witness = "carried by the longest path";';
+  const longest = `src/${"d".repeat(140)}/module.ts`;
+  const paths = [longest, "src/second.ts", "src/third.ts"];
+  const many = contextWith(
+    paths.map((filename) => ({ filename, patch: `+ ${quote}` }))
+  );
+  expect(witnessFiles(quote, many, policyFor())).toEqual(paths);
+  expect(
+    absentRequirementRemedy(
+      { quote, sourceFile: "src/cited.ts" },
+      many,
+      policyFor()
+    )
+  ).toBe(
+    `The quote appears verbatim in ${longest} (+2 more); declare that file and attribute the requirement to it.`
+  );
+});
+
 it("suggests only head-path lines for a file renamed without deletion", () => {
   // Contenu de tête de l'ANCIEN chemin : c'est lui qui portait la ligne
   // trompeuse quand l'appariement lisait `previous_filename` à la révision de

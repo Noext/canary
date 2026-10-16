@@ -451,19 +451,45 @@ export function repairRequirementAttribution(
 /**
  * Où la citation se trouve réellement, en ne proposant que des fichiers que la
  * PR change : déclarer une source hors diff consommerait la tentative de
- * correction pour rien, puisque la validation la refuserait.
+ * correction pour rien, puisque la validation la refuserait. La liste de chemins
+ * est plafonnée : le remède finit dans un préambule fatal borné, où une
+ * énumération de chemins sans fin écraserait les têtes des autres classes. Les
+ * fichiers non montrés sont comptés, jamais perdus en silence.
  */
 function witnessHint(found: string[], context: PrContext): string {
   const changed = context.files.map((file) => file.filename);
   const pr = found.filter((path) => changed.includes(path));
   if (pr.length > 0) {
-    return ` The quote appears verbatim in ${pr.join(", ")}; declare that file and attribute the requirement to it.`;
+    return ` The quote appears verbatim in ${boundedPaths(pr)}; declare that file and attribute the requirement to it.`;
   }
   const outside = found.filter((path) => !changed.includes(path));
   if (outside.length === 0) {
     return "";
   }
-  return ` The quote only appears in ${outside.join(", ")}, which this PR does not change; quote the changed file instead.`;
+  return ` The quote only appears in ${boundedPaths(outside)}, which this PR does not change; quote the changed file instead.`;
+}
+/**
+ * Longueur maximale de la liste de chemins d'un remède de témoin. Le premier
+ * chemin est toujours montré — un remède vide ne dirigerait le planificateur
+ * nulle part — et les suivants tant que la liste tient dans la borne.
+ */
+const WITNESS_HINT_PATHS_CHARS = 120;
+function boundedPaths(paths: string[]): string {
+  const [first] = paths;
+  if (!first) {
+    return "";
+  }
+  const shown = [first];
+  let used = first.length;
+  for (const path of paths.slice(1)) {
+    if (used + path.length + 2 > WITNESS_HINT_PATHS_CHARS) {
+      break;
+    }
+    shown.push(path);
+    used += path.length + 2;
+  }
+  const hidden = paths.length - shown.length;
+  return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
 }
 
 /** Nombre minimal de jetons de la citation qu'une ligne candidate doit reprendre. */
