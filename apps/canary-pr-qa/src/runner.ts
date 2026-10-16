@@ -22,7 +22,9 @@ import {
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
+  type AmputationScans,
   absentRequirementRemedy,
+  amputationScans,
   contractBudgetRefusals,
   criticalSkipRefused,
   hasWeakWitness,
@@ -444,13 +446,14 @@ function witnessRemedy(
 function ungroundedRemedy(
   requirement: Requirement,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans
 ): string {
   if (hasWeakWitness(requirement, context, policy)) {
     return UNGROUNDED_WEAK_REMEDY;
   }
   return (
-    absentRequirementRemedy(requirement, context, policy).trim() ||
+    absentRequirementRemedy(requirement, context, policy, scans).trim() ||
     UNGROUNDED_ABSENT_REMEDY
   );
 }
@@ -458,11 +461,18 @@ function ungroundedRemedy(
  * Classes fatales de couverture, agrégées en tête du canal de correction.
  * Toutes bloquent le run via `validateCoverage`, donc toutes passent avant les
  * refus par scénario qui suivent la même liste.
+ *
+ * Le budget d'amputation de la validation est reçu, jamais créé ici : cette
+ * moitié du gate et `ungroundedPlanRefusals` qui la suit nomment les mêmes
+ * citations fautives, donc lui donner un budget neuf ferait repayer à chacune un
+ * balayage du fichier cité. Exportée pour que le test mesure ce plafond sur ce
+ * chemin.
  */
-function coverageFatalClasses(
+export function coverageFatalClasses(
   candidate: Plan,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans
 ): FatalClass[] {
   const classes: FatalClass[] = [];
   const unwitnessed = unwitnessedSources(candidate, context, policy);
@@ -506,7 +516,7 @@ function coverageFatalClasses(
     const faults: FatalFault[] = [];
     const seen = new Set<string>();
     for (const item of ungrounded) {
-      const remedy = ungroundedRemedy(item.requirement, context, policy);
+      const remedy = ungroundedRemedy(item.requirement, context, policy, scans);
       const key = JSON.stringify([item.requirement.quote, remedy]);
       if (seen.has(key)) {
         continue;
@@ -737,10 +747,11 @@ function planRefusals(
   context: PrContext,
   config: Config
 ): string[] {
+  const scans = amputationScans();
   const shape = planShapeRefusals(candidate, context, config);
   return [
     ...fatalPrelude([
-      ...coverageFatalClasses(candidate, context, policy),
+      ...coverageFatalClasses(candidate, context, policy, scans),
       ...contextFatalClasses(candidate, context),
       ...namedFatalClass(
         contractBudgetRefusals(candidate, config),
@@ -753,7 +764,7 @@ function planRefusals(
     ...shape.map(
       (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
     ),
-    ...ungroundedPlanRefusals(candidate, context, policy),
+    ...ungroundedPlanRefusals(candidate, context, policy, scans),
     ...writeEvidenceRefusals(candidate, policy).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
