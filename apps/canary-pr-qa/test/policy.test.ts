@@ -2091,18 +2091,30 @@ it("refuses a quote stitched across two reconstructed hunks", () => {
   ).toHaveLength(1);
 });
 
-it("forbids stitching two real lines into one quote in the planner prompt", () => {
+it("forbids stitching fragments read in different places in the planner prompt", () => {
   const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
-  expect(prompt).toMatch(/never stitch two separate lines into one quote/i);
-  // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
-  // lot E — et la reformulation en une ligne qui « devrait » exister est
-  // interdite ; c'est la distinction que le prompt doit enseigner.
+  // La consigne est opérationnelle : le critère que le planificateur peut
+  // vérifier lui-même — deux parties de la citation sur deux lignes du fichier —
+  // remplace la seule interdiction abstraite.
   expect(prompt).toMatch(
-    /Reflowing a multi-line block onto one line stays allowed/i
+    /Never stitch fragments you read in different places into one quote/i
   );
-  // Le contre-exemple réel du lot F est enseigné, dans ses deux lignes réelles
-  // et dans la citation recousue qu'elles ont produite.
-  expect(prompt).toContain('const result = countCash({ "500": "3,5" });');
-  expect(prompt).toContain("expect(result.ok).toBe(false);");
-  expect(prompt).toContain(STITCHED_QUOTE);
+  expect(prompt).toMatch(
+    /two parts of your quote sit on two different lines of the file, the quote is wrong/i
+  );
+  // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
+  // lot E — et une jointure inventée reste interdite ; c'est la distinction que
+  // le prompt doit enseigner.
+  expect(prompt).toMatch(
+    /Reflowing one real multi-line block onto one line stays allowed/i
+  );
+  // Le contre-exemple réel du lot G est enseigné : ses deux fragments mesurés,
+  // le chemin du fichier du cas, et la jointure qu'ils ont produite.
+  expect(prompt).toContain("apps/web/app/page.tsx");
+  expect(prompt).toContain(STITCH_FRAGMENT_A);
+  expect(prompt).toContain(STITCH_FRAGMENT_B);
+  expect(prompt).toContain("joined them with a space");
+  // La conséquence mesurée est enseignée avec l'exemple : la citation recousue a
+  // fait refuser l'exigence faute de témoin.
+  expect(prompt).toMatch(/refused as an absent quote/i);
 });
