@@ -2195,13 +2195,28 @@ it("refuses a quote stitched across two reconstructed hunks", () => {
 it("forbids stitching fragments read in different places in the planner prompt", () => {
   const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
   // La consigne est opérationnelle : le critère que le planificateur peut
-  // vérifier lui-même — deux parties de la citation sur deux lignes du fichier —
-  // remplace la seule interdiction abstraite.
+  // vérifier lui-même — deux parties de la citation lues à des endroits NON
+  // CONTIGUS du fichier — remplace la seule interdiction abstraite. Réserve 3 de
+  // la vérification de la PR #49 : la règle ne porte jamais sur le nombre de
+  // lignes, sinon elle interdirait le repli légitime d'un bloc multi-lignes sur
+  // une ligne, que le gate accepte.
   expect(prompt).toMatch(
     /Never stitch fragments you read in different places into one quote/i
   );
   expect(prompt).toMatch(
-    /two parts of your quote sit on two different lines of the file, the quote is wrong/i
+    /two parts of your quote come from two places that are not contiguous in the file/i
+  );
+  expect(prompt).not.toMatch(
+    /different lines of the file, the quote is wrong/i
+  );
+  // La preuve ne peut venir que d'un fichier déclaré par le scénario : le code
+  // lu dans un module importé ou un fichier de contexte n'en est pas une, même
+  // quand le fichier cité l'importe — cause mesurée du lot H.
+  expect(prompt).toMatch(
+    /that file must be one of the scenario's own sourceFiles/i
+  );
+  expect(prompt).toMatch(
+    /code you read in an imported module or a context file cannot prove the requirement/i
   );
   // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
   // lot E — et une jointure inventée reste interdite ; c'est la distinction que
