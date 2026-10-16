@@ -1449,6 +1449,105 @@ describe("runner false-green regressions", () => {
     );
     expect(correction).not.toContain("to quote instead");
   }, 60_000);
+  /**
+   * Résidu de vérification interne : chaque exigence fautive reçoit son remède
+   * quand la place le permet. Deux citations absentes, chacune avec une ligne
+   * réelle à citer : les deux suggestions survivent entières dans le préambule,
+   * qui reste sous son plafond.
+   */
+  it("keeps one suggestion per faulty quote when the fatal prelude has room", async () => {
+    const suggestionLine =
+      "Use the Name textbox and Save button; status displays Welcome <name>";
+    const saturated = saturatedFatalCandidate();
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/form.ts", "src/second.ts");
+    first!.requirements[0] = {
+      behavior: "The absent quote is replaced by a real line",
+      quote: "show('Welcome '+nom) and save",
+      sourceFile: "src/form.ts",
+    };
+    first!.requirements.push({
+      behavior: "The second absent quote is replaced by a real line",
+      quote: "Use the Save button and textbox",
+      sourceFile: "src/second.ts",
+    });
+    const f = await setup({
+      plans: [saturated, secondFilePlan()],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    const formSuggestion = `Real lines of src/form.ts to quote instead: 1: ${JSON.stringify(suggestionLine)}.`;
+    const secondSuggestion = `Real lines of src/second.ts to quote instead: 1: ${JSON.stringify(suggestionLine)}.`;
+    expect(correction).toContain(formSuggestion);
+    expect(correction).toContain(secondSuggestion);
+    // Les deux remèdes tiennent : aucun n'est annoncé par un compteur.
+    expect(correction).not.toContain("more faulty quote");
+    expect(correction).toHaveLength(2000);
+    const preludeLength =
+      correction.indexOf("Scenario welcome declares") -
+      "Plan rejected: ".length -
+      1;
+    expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+  }, 60_000);
+  /**
+   * Quand la place ne porte pas tous les remèdes, les citations fautives non
+   * montrées sont annoncées par leur nombre : onze classes fatales saturées ne
+   * laissent tenir qu'une suggestion, jamais un silence qui ferait croire qu'une
+   * seule citation est fautive.
+   */
+  it("announces the faulty quotes whose remedy the fatal prelude cannot show", async () => {
+    const suggestionLine =
+      "Use the Name textbox and Save button; status displays Welcome <name>";
+    const saturated = saturatedFatalCandidate();
+    const [first] = saturated.scenarios;
+    first!.sourceFiles.push("src/form.ts");
+    first!.requirements[0] = {
+      behavior: "The absent quote is replaced by a real line",
+      quote: "show('Welcome '+nom) and save",
+      sourceFile: "src/form.ts",
+    };
+    first!.requirements.push({
+      behavior: "The second absent quote is replaced by a real line",
+      quote: "Use the Save button and textbox",
+      sourceFile: "src/second.ts",
+    });
+    const f = await setup({
+      plans: [saturated, secondFilePlan()],
+      secondChangedFile: "src/second.ts",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    const formSuggestion = `Real lines of src/form.ts to quote instead: 1: ${JSON.stringify(suggestionLine)}.`;
+    // La première suggestion survit ; la seconde est comptée, pas perdue.
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt("show('Welcome '+nom) and save"))} (+2 more) ${formSuggestion} (+1 more faulty quote)`
+    );
+    expect(correction).toHaveLength(2000);
+    const preludeLength =
+      correction.indexOf("Scenario welcome declares") -
+      "Plan rejected: ".length -
+      1;
+    expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+  }, 60_000);
   it("returns an unwitnessed source file to the planner before failing", async () => {
     const withoutWitness = structuredClone(plan);
     withoutWitness.scenarios[0]!.sourceFiles.push("src/second.ts");
