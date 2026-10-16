@@ -1237,6 +1237,71 @@ describe("runner false-green regressions", () => {
     expect(correction.length).toBeLessThan(2000);
     expect(result.outcome).toBe("passed");
   }, 60_000);
+  /**
+   * Lot G, cas réel (run 925abf20, PR pharmania/arpilabe-pilotage#17) : le
+   * planificateur a recollé deux attributs d'une même expression JSX en
+   * supprimant ce qui les séparait. La citation n'existe nulle part, mais ses
+   * deux fragments existent chacun sur une ligne réelle différente, et ces
+   * lignes dépassent la borne d'une suggestion de ligne (120) : le recouvrement
+   * de jetons ne proposait rien, et le planificateur ne recevait que le conseil
+   * générique — qu'il a reproduit. Le refus doit nommer les deux fragments, leurs
+   * deux lignes réelles et le texte exact à citer à leur place.
+   */
+  const STITCH_FRAGMENT_A = 'inputMode="decimal"';
+  const STITCH_FRAGMENT_B = "aria-invalid={expected.ok?undefined:true}";
+  const STITCHED_JSX_QUOTE = `${STITCH_FRAGMENT_A} ${STITCH_FRAGMENT_B}`;
+  /** Les deux lignes réelles du fichier, chacune plus longue que 120 caractères. */
+  const STITCH_FORM_PATCH = [
+    "@@ -1,1 +1,3 @@",
+    `+ <input value={e=>onChange({expected:e.target.value})} disabled={closed} ${STITCH_FRAGMENT_A} aria-label="Montant d'espèces attendu" />`,
+    `+ <input value={expected.input} inputMode="numeric" aria-label="Total attendu" ${STITCH_FRAGMENT_B} />`,
+    " show('Welcome '+name)",
+  ].join("\n");
+  it("names the stitched fragments and the real lines to quote instead", async () => {
+    const stitched = structuredClone(plan);
+    stitched.scenarios[0]!.requirements[0]!.quote = STITCHED_JSX_QUOTE;
+    // Le plan corrigé cite un fragment EXACT de la première ligne réelle.
+    const corrected = structuredClone(plan);
+    corrected.scenarios[0]!.requirements[0]!.quote =
+      `disabled={closed} ${STITCH_FRAGMENT_A}`;
+    const f = await setup({
+      formPatch: STITCH_FORM_PATCH,
+      plans: [stitched, corrected],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(STITCHED_JSX_QUOTE).toHaveLength(61);
+    expect(correction).toContain("No source witness for welcome: src/form.ts");
+    // Le diagnostic nomme les DEUX fragments et la ligne réelle de chacun.
+    expect(correction).toContain(
+      `Your quote assembles fragments from different lines: ${JSON.stringify(STITCH_FRAGMENT_A)} is line 1, ${JSON.stringify(STITCH_FRAGMENT_B)} is line 2.`
+    );
+    // Et il propose les deux lignes réelles, recopiées du patch avec leur numéro.
+    expect(correction).toContain(
+      `1: ${JSON.stringify(`disabled={closed} ${STITCH_FRAGMENT_A} aria-label="Montant d'espèces attendu" />`)}`
+    );
+    expect(correction).toContain(
+      `2: ${JSON.stringify(`value={expected.input} inputMode="numeric" aria-label="Total attendu" ${STITCH_FRAGMENT_B} />`)}`
+    );
+    // Il passe avant le conseil générique, et la correction n'est pas tronquée :
+    // le planificateur lit le diagnostic entier dans sa tentative de réparation.
+    expect(
+      correction.indexOf("assembles fragments from different lines")
+    ).toBeLessThan(correction.indexOf(UNGROUNDED_ABSENT_REMEDY));
+    expect(correction.length).toBeLessThan(2000);
+    // Le gate ne bouge pas : la citation recousue reste refusée, et le plan
+    // corrigé — un fragment exact d'une ligne réelle — passe.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(result.outcome).toBe("passed");
+  }, 60_000);
   it("refuses the run when the corrected plan still cites without a witness", async () => {
     const ungrounded = structuredClone(plan);
     ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
@@ -1401,6 +1466,71 @@ describe("runner false-green regressions", () => {
     const preludeLength = preludeEnd - "Plan rejected: ".length - 1;
     expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
     expect(FATAL_PRELUDE_CHARS - preludeLength).toBeGreaterThan(0);
+  }, 60_000);
+  /**
+   * Pire cas mesuré avec le diagnostic de recousure : onze classes fatales
+   * saturées et une citation recousue dont les deux fragments vivent sur deux
+   * lignes réelles de plus de 120 caractères — deux candidats à la borne de la
+   * suggestion (120 chacun). Le préambule fatal reste borné par
+   * `FATAL_PRELUDE_CHARS` : le couplage citation/remède omet le segment qui ne
+   * tient pas au lieu de dépasser le plafond, et aucune classe ne perd sa tête.
+   */
+  it("bounds the fatal prelude on the worst stitched quote", async () => {
+    const saturated = saturatedFatalCandidate(STITCHED_JSX_QUOTE);
+    const [first] = saturated.scenarios;
+    first!.requirements[0] = {
+      behavior: "The stitched quote is replaced by one real fragment",
+      quote: STITCHED_JSX_QUOTE,
+      sourceFile: "src/form.ts",
+    };
+    const f = await setup({
+      formPatch: STITCH_FORM_PATCH,
+      plans: [saturated, plan],
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    const preludeEnd = correction.indexOf("Scenario welcome declares");
+    expect(preludeEnd).toBeGreaterThan(0);
+    const preludeLength = preludeEnd - "Plan rejected: ".length - 1;
+    expect(preludeLength).toBeLessThanOrEqual(FATAL_PRELUDE_CHARS);
+    // Toutes les classes gardent leur tête sous onze classes saturées, y compris
+    // la dernière : le diagnostic de recousure, long de deux candidats — deux
+    // lignes réelles de plus de 120 caractères — ne tient pas dans la réserve
+    // qui reste, donc sa classe retombe sur sa tête minimale, sans dépasser le
+    // plafond ni pousser un message plus long que lui. C'est la même mesure que
+    // pour le remède générique au plafond de ses deux lignes (`keeps every fatal
+    // head when the first coupled remedy does not fit`) : 1756 caractères mesurés
+    // ici, contre les 1860 de `FATAL_PRELUDE_CHARS`.
+    expect(correction.slice(0, preludeLength)).not.toContain(
+      "assembles fragments"
+    );
+    expect(correction).toContain(
+      `REQUIREMENT_UNGROUNDED: Rejected quotes: ${JSON.stringify(quoteExcerpt(STITCHED_JSX_QUOTE))}`
+    );
+    for (const code of [
+      "COVERAGE_WITNESS_MISSING",
+      "COVERAGE_REQUIREMENT_SOURCE_MISSING",
+      "REQUIREMENT_UNGROUNDED",
+      "CRITICAL_COVERAGE_MISSING",
+      "CONTEXT_INCOMPLETE",
+      "CONTRACT_BUDGET",
+      "PLAN_TOO_MANY_SCENARIOS",
+      "PLAN_SCENARIO_ID_RESERVED",
+      "PLAN_SOURCE_OUTSIDE_DIFF",
+      "PLAN_SKIP_OUTSIDE_DIFF",
+      "PLAN_CHANGED_FILE_UNCOVERED",
+    ]) {
+      expect(correction).toContain(`${code}: `);
+    }
   }, 60_000);
   /**
    * Plan corrigé : le second fichier changé est déclaré et témoigné.

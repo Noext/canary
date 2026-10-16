@@ -6,6 +6,7 @@ import {
   CRITICAL_QUOTE_MIN_WORD_CHARS,
   normalizeQuoteText,
   type Plan,
+  QUOTE_MIN_TEXT_CHARS,
   quoteCarriesContent,
   type Scenario,
 } from "./schema.js";
@@ -334,9 +335,10 @@ export function hasWeakWitness(
 /**
  * Remède d'une citation absente : elle n'existe nulle part, mot pour mot. Le
  * refus par exigence et la classe fatale agrégée le partagent — sauf quand le
- * critère trouve des lignes réelles à citer : la classe porte alors ces lignes
- * à sa place (voir `absentRemedy`, runner.ts) pour qu'elles survivent à la
- * troncature, et le refus par exigence les ajoute au conseil.
+ * diagnostic de recousure ou le critère de recouvrement trouve du texte réel du
+ * fichier à citer : la classe porte alors ce texte à sa place (voir
+ * `ungroundedRemedy`, runner.ts) pour qu'il survive à la troncature, et le refus
+ * par exigence le remet en tête de son conseil.
  */
 export const UNGROUNDED_ABSENT_REMEDY =
   "Quote exact source or diff text; page content alone is not a requirement.";
@@ -614,7 +616,7 @@ export function suggestedQuoteLines(
  * citation existe ailleurs — le remède est alors l'attribution à l'autre
  * fichier, pas une autre ligne de celui-ci — ni quand aucune ligne ne franchit
  * le seuil de recouvrement. La classe fatale agrégée du canal de correction la
- * porte aussi (voir `absentRemedy` dans runner.ts) : le préambule fatal la
+ * porte aussi (voir `ungroundedRemedy` dans runner.ts) : le préambule fatal la
  * protège de la troncature, là où le détail par exigence qui la portait
  * disparaissait sous des classes saturées.
  */
@@ -633,15 +635,293 @@ export function quoteSuggestion(
   return ` Real lines of ${requirement.sourceFile} to quote instead: ${listed}.`;
 }
 /**
+ * Un fragment d'une citation recousue, retrouvé tel quel sur une ligne réelle du
+ * fichier cité : le fragment recopié de la citation, la ligne qui le porte, et
+ * l'extrait de cette ligne que le planificateur peut citer à la place.
+ */
+export interface StitchedFragment {
+  candidate: string;
+  fragment: string;
+  line: number;
+}
+/**
+ * Longueur minimale d'un fragment nommé comme tel. En deçà, le fragment — une
+ * accolade, un mot courant — existe à trop d'endroits pour désigner une ligne,
+ * et le diagnostic nommerait deux fragments sans rapport avec la faute.
+ */
+const STITCH_FRAGMENT_MIN_CHARS = QUOTE_MIN_TEXT_CHARS;
+const STITCH_FRAGMENT_WORD_CHARS = /[\p{L}\p{N}]/u;
+function isStitchFragment(value: string): boolean {
+  const normalized = normalizeQuoteText(value);
+  return (
+    normalized.length >= STITCH_FRAGMENT_MIN_CHARS &&
+    STITCH_FRAGMENT_WORD_CHARS.test(normalized)
+  );
+}
+/**
+ * Nombre maximal de découpages examinés : chaque découpage coûte un balayage des
+ * lignes du fichier cité par fragment, donc une citation anormalement longue ne
+ * doit pas faire payer au gate un coût quadratique.
+ */
+const STITCH_SPLITS_EXAMINED = 32;
+/**
+ * Découpages de la citation à chaque suite de blancs : le fragment de gauche et
+ * celui de droite, recopiés tels quels, sans le blanc qui les sépare. C'est la
+ * forme mesurée d'une recousure — deux attributs d'une même expression, que le
+ * fichier sépare par d'autres attributs et que la citation recolle par un
+ * espace. Les découpages sont rendus du plus équilibré au moins équilibré,
+ * c'est-à-dire dans l'ordre du critère de sélection : la borne ci-dessus
+ * n'écarte donc jamais un découpage mieux noté que celui qu'elle garde. À
+ * équilibre égal, l'ordre de la citation est conservé — le plus à gauche gagne.
+ */
+function whitespaceSplits(
+  quote: string
+): { head: string; shortest: number; tail: string }[] {
+  const splits: { head: string; shortest: number; tail: string }[] = [];
+  for (const match of quote.matchAll(/\s+/gu)) {
+    const at = match.index ?? 0;
+    const head = quote.slice(0, at);
+    const tail = quote.slice(at + match[0].length);
+    splits.push({ head, shortest: Math.min(head.length, tail.length), tail });
+  }
+  return splits
+    .sort((left, right) => right.shortest - left.shortest)
+    .slice(0, STITCH_SPLITS_EXAMINED);
+}
+/**
+ * Lignes réelles du fichier cité qui portent ce fragment tel quel, une fois
+ * chacune et dans l'ordre du fichier : la même ligne vient du contenu après
+ * changement et du contenu de tête, et le fragment y est identique.
+ */
+function fragmentLines(
+  lines: PostChangeLine[],
+  fragment: string
+): PostChangeLine[] {
+  const found = new Map<number, PostChangeLine>();
+  for (const line of lines) {
+    if (!found.has(line.line) && line.text.includes(fragment)) {
+      found.set(line.line, line);
+    }
+  }
+  return [...found.values()].sort((left, right) => left.line - right.line);
+}
+/**
+ * Première occurrence de chaque fragment dont les deux lignes diffèrent : deux
+ * fragments portés par la même ligne ne sont jamais une recousure de deux
+ * lignes, donc le diagnostic se tait plutôt que de nommer une ligne fausse.
+ */
+function distinctLinePair(
+  left: PostChangeLine[],
+  right: PostChangeLine[]
+): [PostChangeLine, PostChangeLine] | undefined {
+  const pairs: [PostChangeLine | undefined, PostChangeLine | undefined][] = [
+    [left[0], right[0]],
+    [left[0], right[1]],
+    [left[1], right[0]],
+  ];
+  for (const [first, second] of pairs) {
+    if (first && second && first.line !== second.line) {
+      return [first, second];
+    }
+  }
+}
+/** Un jeton entier d'une ligne, avec ses bornes : jamais un jeton rogné. */
+interface LineToken {
+  end: number;
+  start: number;
+}
+function lineTokens(line: string): LineToken[] {
+  return [...line.matchAll(/\S+/gu)].map((match) => ({
+    end: (match.index ?? 0) + match[0].length,
+    start: match.index ?? 0,
+  }));
+}
+/**
+ * Bornes des jetons entiers qui portent la portion [from, to) de la ligne : le
+ * premier jeton que la portion touche et le dernier. `undefined` quand la
+ * portion n'en touche aucun.
+ */
+function coveringTokens(
+  tokens: LineToken[],
+  from: number,
+  to: number
+): [number, number] | undefined {
+  const first = tokens.findIndex((token) => token.end > from);
+  let last = -1;
+  for (const [index, token] of tokens.entries()) {
+    if (token.start < to) {
+      last = index;
+    }
+  }
+  return first < 0 || last < first ? undefined : [first, last];
+}
+/**
+ * Fenêtre la plus large qui porte ces jetons sous la borne de suggestion : elle
+ * s'étend d'abord à droite jusqu'à la borne, puis à gauche avec ce qu'il reste,
+ * donc l'extrait porte le contexte réel du fragment — jamais un jeton rogné, et
+ * toujours recopiable d'un seul tenant. Chaque extension est pesée AVANT d'être
+ * retenue : un jeton n'est ajouté que si la fenêtre qu'il formerait tient encore
+ * dans la borne. Peser la fenêtre courante à la place laissait le dernier jeton
+ * la faire déborder, et `quoteableFragment` écartait alors un fragment citable —
+ * le diagnostic disparaissait au lieu de nommer la ligne.
+ */
+function windowBounds(
+  tokens: LineToken[],
+  first: number,
+  last: number
+): [number, number] {
+  let low = first;
+  let high = last;
+  const fits = (from: number, to: number): boolean =>
+    (tokens[to] as LineToken).end - (tokens[from] as LineToken).start <=
+    SUGGESTED_QUOTE_MAX_CHARS;
+  while (high + 1 < tokens.length && fits(low, high + 1)) {
+    high += 1;
+  }
+  while (low > 0 && fits(low - 1, high)) {
+    low -= 1;
+  }
+  return [low, high];
+}
+/**
+ * Extrait exact d'une ligne réelle à citer à la place d'un fragment : la ligne
+ * entière quand elle tient dans la borne et que le contrat de `quote`
+ * l'accepte, sinon la plus longue suite de jetons ENTIERS qui porte le
+ * fragment (voir `windowBounds`). Jamais de texte inventé ni de jeton rogné : la
+ * fenêtre est une portion exacte de la ligne. Vide quand aucune fenêtre ne
+ * franchit le contrat — une suggestion que le gate refuserait ne dirigerait le
+ * planificateur nulle part.
+ */
+function quoteableFragment(
+  line: string,
+  fragment: string,
+  critical: boolean
+): string {
+  if (
+    line.length <= SUGGESTED_QUOTE_MAX_CHARS &&
+    quoteCarriesContent(line, critical)
+  ) {
+    return line;
+  }
+  const at = line.indexOf(fragment);
+  if (at < 0) {
+    return "";
+  }
+  const tokens = lineTokens(line);
+  const covering = coveringTokens(tokens, at, at + fragment.length);
+  if (!covering) {
+    return "";
+  }
+  const [low, high] = windowBounds(tokens, ...covering);
+  const window = line.slice(
+    (tokens[low] as LineToken).start,
+    (tokens[high] as LineToken).end
+  );
+  return window.length <= SUGGESTED_QUOTE_MAX_CHARS &&
+    quoteCarriesContent(window, critical)
+    ? window
+    : "";
+}
+/**
+ * Les deux fragments d'une citation recousue, chacun recopié tel quel sur une
+ * ligne RÉELLE du fichier cité, quand ces deux lignes sont différentes : la
+ * citation est introuvable, mais chacune de ses moitiés existe à un endroit
+ * distinct, et c'est ce que le refus doit dire au planificateur — sinon il
+ * reconstruit la même paire plausible. Déterministe et borné : au plus deux
+ * fragments et deux lignes, choisis par le découpage dont le plus court
+ * fragment est le plus long (à égalité, le plus à gauche), puis par la première
+ * ligne de chaque fragment qui diffère de celle de l'autre. JAMAIS de texte
+ * inventé : chaque fragment est recopié de la citation, et chaque candidat est
+ * une portion exacte du fichier. Une liste vide dès qu'un fragment n'existe
+ * nulle part, qu'un fragment ne désigne pas une ligne, que les seules
+ * occurrences partagent la même ligne, ou qu'aucune fenêtre citable n'en sort :
+ * l'absence de diagnostic vaut mieux qu'un diagnostic faux. Un découpage ne
+ * voit que les recousures séparées par des blancs — une fusion de jetons
+ * (lot F) garde le remède générique de `quoteSuggestion`. Chaque fragment doit
+ * aussi tenir ENTIER sur une seule ligne réelle : une moitié coupée par un saut
+ * de ligne n'appartient à aucune ligne, donc elle est introuvable et la
+ * recousure garde le remède générique plutôt qu'une ligne nommée au hasard.
+ */
+export function stitchedQuoteFragments(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): StitchedFragment[] {
+  const critical = isCriticalPath(policy, requirement.sourceFile);
+  const lines = fileContentLines(requirement, context);
+  let best: { fragments: StitchedFragment[]; shortest: number } | undefined;
+  for (const { head, tail, shortest } of whitespaceSplits(requirement.quote)) {
+    if (!(isStitchFragment(head) && isStitchFragment(tail))) {
+      continue;
+    }
+    const pair = distinctLinePair(
+      fragmentLines(lines, head),
+      fragmentLines(lines, tail)
+    );
+    if (!pair) {
+      continue;
+    }
+    const [headLine, tailLine] = pair;
+    const headCandidate = quoteableFragment(headLine.text, head, critical);
+    const tailCandidate = quoteableFragment(tailLine.text, tail, critical);
+    if (!(headCandidate && tailCandidate)) {
+      continue;
+    }
+    if (best && best.shortest >= shortest) {
+      continue;
+    }
+    best = {
+      fragments: [
+        { candidate: headCandidate, fragment: head, line: headLine.line },
+        { candidate: tailCandidate, fragment: tail, line: tailLine.line },
+      ],
+      shortest,
+    };
+  }
+  return best?.fragments ?? [];
+}
+/**
+ * Remède d'une citation recousue : les deux fragments que la citation a
+ * recollés, chacun avec la ligne réelle qui le porte, puis la portion exacte de
+ * chacune de ces lignes à citer à la place. Le diagnostic nomme la faute — la
+ * citation n'existe nulle part, ses moitiés existent à deux endroits — avant de
+ * proposer les lignes : c'est le premier remède que le planificateur doit lire,
+ * puisque le conseil générique ne lui a pas suffi. Vide quand aucun découpage
+ * ne se vérifie, pour que l'appelant retombe sur le remède d'aujourd'hui.
+ */
+export function stitchedQuoteRemedy(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): string {
+  const fragments = stitchedQuoteFragments(requirement, context, policy);
+  const [head, tail] = fragments;
+  if (!(head && tail)) {
+    return "";
+  }
+  const named = fragments
+    .map((item) => `${JSON.stringify(item.fragment)} is line ${item.line}`)
+    .join(", ");
+  const candidates = fragments
+    .map((item) => `${item.line}: ${JSON.stringify(item.candidate)}`)
+    .join(", ");
+  return `Your quote assembles fragments from different lines: ${named}. Quote one of these real fragments of ${requirement.sourceFile} instead: ${candidates}.`;
+}
+/**
  * Remède unique d'une exigence dont la citation n'a aucun témoin : quand la
  * citation existe mot pour mot — à l'espacement près — dans l'évidence d'un
  * autre fichier du contexte, le remède est la réattribution à ce fichier.
  * Proposer une autre ligne du fichier cité dans ce cas enverrait le
  * planificateur vers une preuve fausse : sa tentative de correction serait
  * consommée, et le fichier qui porte réellement le texte resterait non couvert.
- * Sinon le remède est une ligne réelle du fichier cité (voir `quoteSuggestion`).
- * Vide quand aucun des deux ne s'applique, pour que l'appelant retombe sur le
- * conseil générique plutôt que sur un remède vide.
+ * Sinon le remède est le diagnostic de recousure quand il se vérifie (voir
+ * `stitchedQuoteRemedy`), puis une ligne réelle du fichier cité (voir
+ * `quoteSuggestion`). La recousure passe avant la similitude de jetons parce
+ * qu'une citation recousue est justement celle dont les lignes sont trop
+ * longues pour être proposées entières : c'est le cas mesuré du lot G, où le
+ * recouvrement ne proposait rien. Vide quand aucun des trois ne s'applique,
+ * pour que l'appelant retombe sur le conseil générique plutôt que sur un remède
+ * vide.
  */
 export function absentRequirementRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -652,7 +932,10 @@ export function absentRequirementRemedy(
   if (found.length > 0) {
     return witnessHint(found, context).trim();
   }
-  return quoteSuggestion(requirement, context, policy).trim();
+  return (
+    stitchedQuoteRemedy(requirement, context, policy).trim() ||
+    quoteSuggestion(requirement, context, policy).trim()
+  );
 }
 
 /**
@@ -694,7 +977,11 @@ export function quoteExcerpt(quote: string): string {
  * Exigences sans témoin textuel, sous forme de refus rendus au planificateur.
  * Le planificateur dispose d'une tentative de correction (voir `runner.ts`),
  * comme pour `writeEvidenceRefusals` ; `validateCoverage` reste le contrôle
- * final et refuse le plan si la correction n'a pas suffi.
+ * final et refuse le plan si la correction n'a pas suffi. Une citation recousue
+ * reçoit le diagnostic de ses deux fragments AVANT le conseil générique : c'est
+ * ce défaut précis qui a fait refuser sa citation, et c'est celui qu'il doit
+ * corriger en premier. Le diagnostic de recousure remplace la suggestion de
+ * lignes, jamais ne s'y ajoute : une seule suggestion par citation.
  */
 export function ungroundedPlanRefusals(
   plan: Plan,
@@ -713,9 +1000,18 @@ export function ungroundedPlanRefusals(
       // La citation existe ailleurs : le remède est l'attribution à l'autre
       // fichier, et proposer aussi une ligne de ce fichier-ci serait du bruit.
       const found = witnessFiles(requirement.quote, context, policy);
+      const stitched =
+        found.length === 0
+          ? stitchedQuoteRemedy(requirement, context, policy).trim()
+          : "";
       const suggestion =
-        found.length === 0 ? quoteSuggestion(requirement, context, policy) : "";
-      return `${error.message}. Rejected quote: ${quote}. ${error.hint}${witnessHint(found, context)}${suggestion}`;
+        found.length === 0 && stitched === ""
+          ? quoteSuggestion(requirement, context, policy)
+          : "";
+      const remedy = stitched
+        ? `${stitched} ${error.hint}`
+        : `${error.hint}${witnessHint(found, context)}${suggestion}`;
+      return `${error.message}. Rejected quote: ${quote}. ${remedy}`;
     }
   );
 }
