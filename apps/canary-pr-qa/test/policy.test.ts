@@ -1953,6 +1953,147 @@ it("names a fragment of a line too long to quote whole", () => {
 });
 
 /**
+ * Le diagnostic d'amputation est un balayage du fichier cité par citation
+ * fautive : deux plafonds le bornent, et ces deux tests les MESURENT au lieu de
+ * les affirmer — 2 000 lignes examinées par balayage (`CITED_LINES_EXAMINED`) et
+ * 32 citations examinées par validation (`AMPUTATION_QUOTES_EXAMINED`). Le plan
+ * hostile du finding alignait 60 citations fautives sur un patch de 110 KB et
+ * faisait tourner le worker 49,6 s, au-delà de son lease. Le second test rejoue
+ * ce fixture — 60 citations, fichier de 3 000 lignes, copies à une trentaine de
+ * blancs — et compte les deux bornes : 32 citations examinées, 28 refus gardés
+ * avec leur conseil générique.
+ */
+const CITED_LINE_CAP = 2000;
+const CITED_QUOTE_CAP = 32;
+const BOUNDED_PATH = "src/bounded.ts";
+/** La ligne réelle dont la copie fautive a gardé la fin. */
+const BOUNDED_TARGET = "  const total = somme(items);";
+/** La copie mesurée : un début inventé, la fin exacte de la ligne. */
+const BOUNDED_QUOTE = "const x = somme(items);";
+/**
+ * La ligne réelle du test de plafond et sa copie fautive, avec assez de blancs
+ * pour que chaque ligne ait vraiment des découpages à examiner : c'est ce coût
+ * — les découpages recalculés pour CHAQUE ligne du fichier — que la revue a
+ * mesuré, et la sonde le paie une fois par citation.
+ */
+function boundedFlawedLine(index: number): string {
+  return `  const total${index} = somme(items${index}) + reste(prix${index}) + base(unite${index}) + taxe(taux${index}) + marge(ecart${index}) + solde(reste${index}) + parts(lot${index});`;
+}
+function boundedFlawedQuote(index: number): string {
+  return `  const x${index} = somme(items${index}) + reste(prix${index}) + base(unite${index}) + taxe(taux${index}) + marge(ecart${index}) + solde(reste${index}) + parts(lot${index});`;
+}
+function boundedContext(targetLine: number, lines: number): PrContext {
+  const content = Array.from({ length: lines }, (_, position) =>
+    position + 1 === targetLine
+      ? BOUNDED_TARGET
+      : `  // remplissage ${position + 1}`
+  ).join("\n");
+  return {
+    ...context,
+    context: [{ content, path: BOUNDED_PATH, ref: context.sha }],
+  };
+}
+function boundedPlan(requirements: { sourceFile: string; quote: string }[]) {
+  const chunks: { sourceFile: string; quote: string }[][] = [];
+  for (let at = 0; at < requirements.length; at += 20) {
+    chunks.push(requirements.slice(at, at + 20));
+  }
+  return planWithWitnesses(
+    chunks.map((chunk, index) => ({
+      id: `bounded-${index + 1}`,
+      sourceFiles: [BOUNDED_PATH],
+      requirements: chunk,
+    }))
+  );
+}
+it("stops examining the cited file at the line cap, and still refuses exactly", () => {
+  const requirement = { quote: BOUNDED_QUOTE, sourceFile: BOUNDED_PATH };
+  // La 2000e ligne est examinée, la 2001e ne l'est plus : la borne est comptée,
+  // pas seulement présente. Les deux contextes ne diffèrent que par la position
+  // de la ligne réelle dans un fichier de même taille.
+  expect(
+    amputatedQuote(
+      requirement,
+      boundedContext(CITED_LINE_CAP, CITED_LINE_CAP + 1),
+      policyFor()
+    )
+  ).toEqual({
+    candidate: BOUNDED_TARGET,
+    kind: "start",
+    line: CITED_LINE_CAP,
+    wholeLine: true,
+  });
+  const beyond = boundedContext(CITED_LINE_CAP + 1, CITED_LINE_CAP + 1);
+  expect(amputatedQuote(requirement, beyond, policyFor())).toBeUndefined();
+  // Le refus reste rendu, non vide et exact : la citation est refusée pour ce
+  // qu'elle est — un texte qui n'existe nulle part — et le remède générique
+  // nomme la seule réparation légale sans inventer de ligne.
+  const plan = boundedPlan([requirement]);
+  expect(ungroundedRequirements(plan, beyond, policyFor())).toHaveLength(1);
+  const [refusal = ""] = ungroundedPlanRefusals(plan, beyond, policyFor());
+  expect(refusal).toContain(`Rejected quote: ${JSON.stringify(BOUNDED_QUOTE)}`);
+  expect(refusal).toContain(UNGROUNDED_ABSENT_REMEDY);
+  expect(refusal).toContain("quote a real line of the declared file instead");
+  expect(refusal).not.toContain("copied from line");
+  // La même citation, la ligne réelle DANS le balayage, garde son remède : la
+  // borne ne supprime pas le diagnostic, elle l'arrête.
+  const [detailed = ""] = ungroundedPlanRefusals(
+    plan,
+    boundedContext(CITED_LINE_CAP, CITED_LINE_CAP + 1),
+    policyFor()
+  );
+  expect(detailed).toContain(
+    `copied from line ${CITED_LINE_CAP} of ${BOUNDED_PATH}`
+  );
+});
+it("caps the citations examined per validation, and still refuses each one", () => {
+  const faulty = 60;
+  const targets = new Map<number, string>();
+  for (let index = 0; index < faulty; index += 1) {
+    targets.set(100 + index * 30, boundedFlawedLine(index));
+  }
+  const content = Array.from(
+    { length: 3000 },
+    (_, position) =>
+      targets.get(position + 1) ?? `  // remplissage ${position + 1}`
+  ).join("\n");
+  const many: PrContext = {
+    ...context,
+    context: [{ content, path: BOUNDED_PATH, ref: context.sha }],
+  };
+  const requirements = Array.from({ length: faulty }, (_, index) => ({
+    quote: boundedFlawedQuote(index),
+    sourceFile: BOUNDED_PATH,
+  }));
+  const plan = boundedPlan(requirements);
+  expect(ungroundedRequirements(plan, many, policyFor())).toHaveLength(faulty);
+  // Le balayage des 32 premières citations est mesuré, comme le refus des 28
+  // suivantes : chaque citation fautive garde son refus, et le plafond ne
+  // fabrique aucune réponse vide ni inexacte.
+  const started = performance.now();
+  const refusals = ungroundedPlanRefusals(plan, many, policyFor());
+  const elapsed = performance.now() - started;
+  expect(refusals).toHaveLength(faulty);
+  expect(
+    refusals
+      .slice(0, CITED_QUOTE_CAP)
+      .every((line) => line.includes("copied from line"))
+  ).toBe(true);
+  const generic = refusals.slice(CITED_QUOTE_CAP);
+  expect(generic).toHaveLength(faulty - CITED_QUOTE_CAP);
+  for (const line of generic) {
+    expect(line).toContain("Rejected quote:");
+    expect(line).toContain(UNGROUNDED_ABSENT_REMEDY);
+    expect(line).toContain("quote a real line of the declared file instead");
+  }
+  // Le travail payé reste celui des deux bornes — 32 balayages de 3 000 lignes
+  // ramenées aux 2 000 lues — là où le head 3dad30d balayait les 60 citations :
+  // 1 228 ms sur ce fixture, 319 ms borné, et les 28 refus non examinés gardent
+  // un conseil exact. Le worker tient son lease.
+  expect(elapsed).toBeLessThan(2000);
+});
+
+/**
  * L'exactitude prime la position : le gate accepte toute sous-chaîne verbatim
  * (voir `quoteHasWitness`), donc une copie exacte commencée au milieu d'une ligne
  * EST un témoin, et le refus ne nomme le début manquant que d'une copie qui

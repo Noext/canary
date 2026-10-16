@@ -376,7 +376,8 @@ export function ungroundedRequirement(
   requirement: Requirement,
   context: PrContext,
   policy: Policy,
-  rank: number
+  rank: number,
+  scans: AmputationScans = amputationScans()
 ): QaError {
   const fault = `${scenarioId}: ${requirement.sourceFile} (requirement ${rank}). Rejected quote: ${JSON.stringify(quoteExcerpt(requirement.quote))}`;
   if (hasWeakWitness(requirement, context, policy)) {
@@ -389,7 +390,7 @@ export function ungroundedRequirement(
   return new QaError(
     "REQUIREMENT_UNGROUNDED",
     `No source witness for ${fault}`,
-    `${UNGROUNDED_ABSENT_REMEDY} ${witnessLocation(requirement, context, policy)}`
+    `${UNGROUNDED_ABSENT_REMEDY} ${witnessLocation(requirement, context, policy, scans)}`
   );
 }
 
@@ -493,7 +494,8 @@ const NO_CHANGED_FILE_WITNESS =
 function witnessLocation(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
 ): string {
   const hint = witnessHint(
     witnessFiles(requirement.quote, context, policy),
@@ -505,7 +507,7 @@ function witnessLocation(
   // Le reproche précis de la copie passe avant l'aveu générique : il dit quelle
   // ligne citer, là où l'aveu laisse le planificateur recopier la même copie.
   return (
-    amputatedQuoteRemedy(requirement, context, policy).trim() ||
+    amputatedQuoteRemedy(requirement, context, policy, scans).trim() ||
     NO_CHANGED_FILE_WITNESS
   );
 }
@@ -556,6 +558,18 @@ function quoteTokenSet(value: string): Set<string> {
   );
 }
 /**
+ * Nombre maximal de lignes du fichier cité que les diagnostics de copie lisent
+ * pour une citation — suggestion de ligne, recousure, amputation. Les lignes du
+ * contenu après changement viennent en tête, donc la borne couvre d'abord la
+ * région que la PR change. Au-delà, le diagnostic se tait : le refus est rendu
+ * quand même, avec son conseil générique, qui reste exact. Sans elle, chaque
+ * citation fautive d'un plan hostile faisait payer au worker le balayage du
+ * fichier entier, alors que le lease d'exécution ne survit pas à ce travail ;
+ * `AMPUTATION_QUOTES_EXAMINED` borne le nombre de citations qui paient ce
+ * balayage dans une validation.
+ */
+const CITED_LINES_EXAMINED = 2000;
+/**
  * Lignes réelles du fichier cité, avec leur numéro : le contenu après
  * changement reconstruit depuis le patch, et le contenu récupéré à la révision
  * de tête. Chaque révision est indexée par le chemin qui la porte, comme
@@ -565,6 +579,8 @@ function quoteTokenSet(value: string): Set<string> {
  * seule révision où il existe encore. Apparier `previous_filename` à la
  * révision de tête proposait des lignes du fichier d'avant le renommage, qui
  * n'existent pas dans le fichier cité.
+ *
+ * Les lignes rendues sont plafonnées à `CITED_LINES_EXAMINED`.
  */
 function fileContentLines(
   requirement: Pick<Requirement, "sourceFile">,
@@ -589,7 +605,7 @@ function fileContentLines(
         .map((text, index) => ({ line: index + 1, text }))
     );
   }
-  return lines;
+  return lines.slice(0, CITED_LINES_EXAMINED);
 }
 /**
  * Lignes réelles du fichier cité à citer à la place d'une citation absente :
@@ -971,6 +987,76 @@ const AMPUTATION_FAULT: Record<QuoteAmputation, string> = {
     "its beginning and its end are missing, so the copy is only a fragment taken inside that line",
   start: "its beginning is missing, so the copy is only the end of that line",
 };
+/** Un bord d'un découpage : le fragment recopié et sa forme normalisée. */
+interface AmputationEdge {
+  fragment: string;
+  normalized: string;
+}
+/**
+ * Sonde d'amputation d'une citation : la copie normalisée, et les découpages de
+ * la copie sur ses blancs dont les DEUX fragments désignent une ligne, chacun
+ * avec ses bords déjà normalisés. Elle ne dépend que de la citation, donc elle
+ * est calculée une fois pour tout le balayage du fichier cité : la calculer par
+ * ligne — découper, trier, normaliser les bords à chaque ligne — faisait payer
+ * au gate les lignes fois les découpages, pour une réponse qui ne bouge pas.
+ */
+interface AmputationProbe {
+  copy: string;
+  quote: string;
+  splits: { head: AmputationEdge; tail: AmputationEdge }[];
+}
+function amputationProbe(quote: string): AmputationProbe {
+  const splits: AmputationProbe["splits"] = [];
+  for (const { head, tail } of whitespaceSplits(quote)) {
+    if (!(isStitchFragment(head) && isStitchFragment(tail))) {
+      continue;
+    }
+    splits.push({
+      head: { fragment: head, normalized: normalizeQuoteText(head) },
+      tail: { fragment: tail, normalized: normalizeQuoteText(tail) },
+    });
+  }
+  return { copy: normalizeQuoteText(quote), quote, splits };
+}
+/**
+ * Citations dont la copie amputée est examinée pour une même validation, et
+ * verdict mémorisé de chacune : `remaining` compte les citations qui peuvent
+ * encore être examinées, `found` porte ce que le balayage en a dit. Deux
+ * plafonds gouvernent ce travail — `CITED_LINES_EXAMINED` lignes par citation,
+ * `AMPUTATION_QUOTES_EXAMINED` citations par validation — parce qu'un plan
+ * hostile aligne les citations fautives et que le worker tient un lease : hors
+ * de ces bornes, le refus reste rendu, seul son remède détaillé se tait. Le
+ * verdict est mémorisé parce que le remède d'une même citation est évalué deux
+ * fois — le conseil de l'exigence, puis la ligne du refus — et qu'un plan peut
+ * la répéter : chaque citation examinée ne paie qu'un balayage.
+ */
+interface AmputationScans {
+  found: Map<string, AmputatedQuote | undefined>;
+  remaining: number;
+}
+/** Citations examinées par validation : au-delà, le remède détaillé se tait. */
+const AMPUTATION_QUOTES_EXAMINED = 32;
+function amputationScans(): AmputationScans {
+  return { found: new Map(), remaining: AMPUTATION_QUOTES_EXAMINED };
+}
+/** Même citation, même balayage : son fichier et son texte cité l'identifient. */
+function amputationScanKey(
+  requirement: Pick<Requirement, "quote" | "sourceFile">
+): string {
+  return `${requirement.sourceFile}\u0000${requirement.quote}`;
+}
+/**
+ * Vrai quand la copie de cette citation a été examinée, ou quand le budget de la
+ * validation permet encore de l'examiner. Faux : le remède détaillé de cette
+ * citation se tait, et le refus garde le conseil générique de son exigence, qui
+ * reste exact.
+ */
+function amputationScanAllowed(
+  scans: AmputationScans,
+  requirement: Pick<Requirement, "quote" | "sourceFile">
+): boolean {
+  return scans.found.has(amputationScanKey(requirement)) || scans.remaining > 0;
+}
 /**
  * Copie amputée d'une ligne réelle : une copie qui commence au milieu d'une
  * ligne et s'arrête avant sa fin n'existe nulle part mot pour mot, donc le gate
@@ -991,13 +1077,17 @@ const AMPUTATION_FAULT: Record<QuoteAmputation, string> = {
  * nommerait une réparation qui ne répare pas son défaut. Et un découpage dont les
  * DEUX bords sont recopiés n'est pas une amputation — le texte sauté est au
  * milieu de la ligne — donc il ne reçoit aucun des trois diagnostics.
+ *
+ * Les découpages de la copie et leurs bords normalisés viennent de la sonde
+ * (voir `amputationProbe`), calculée une fois pour tout le balayage : chaque
+ * ligne ne paie que ses propres comparaisons.
  */
 function lineAmputation(
   line: string,
-  quote: string
+  probe: AmputationProbe
 ): { fragment: string; kind: QuoteAmputation } | undefined {
   const text = normalizeQuoteText(line);
-  const copy = normalizeQuoteText(quote);
+  const { copy, quote } = probe;
   if (copy.length === 0 || copy.length > text.length) {
     return;
   }
@@ -1012,16 +1102,13 @@ function lineAmputation(
   }
   let best: { fragment: string; kind: QuoteAmputation } | undefined;
   let longest = 0;
-  for (const { head, tail } of whitespaceSplits(quote)) {
-    if (!(isStitchFragment(head) && isStitchFragment(tail))) {
-      continue;
-    }
-    const headAt = text.startsWith(normalizeQuoteText(head));
-    const tailAt = text.endsWith(normalizeQuoteText(tail));
+  for (const { head, tail } of probe.splits) {
+    const headAt = text.startsWith(head.normalized);
+    const tailAt = text.endsWith(tail.normalized);
     if (headAt === tailAt) {
       continue;
     }
-    const fragment = headAt ? head : tail;
+    const fragment = headAt ? head.fragment : tail.fragment;
     if (fragment.length <= longest) {
       continue;
     }
@@ -1043,23 +1130,48 @@ function lineAmputation(
  * doit rester recopiable d'un seul tenant, donc `quoteableFragment` en sort une
  * portion exacte. Jamais de texte inventé : le candidat est toujours une portion
  * de la ligne réelle, jamais la citation fautive.
+ *
+ * Le budget de la validation (`AmputationScans`) écarte aussi une citation sans
+ * balayage : hors du budget, le refus garde son conseil générique, qui reste
+ * exact.
  */
 export function amputatedQuote(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
 ): AmputatedQuote | undefined {
   const critical = isCriticalPath(policy, requirement.sourceFile);
   if (!quoteCarriesContent(requirement.quote, critical)) {
     return;
   }
+  const key = amputationScanKey(requirement);
+  if (scans.found.has(key)) {
+    return scans.found.get(key);
+  }
+  if (scans.remaining <= 0) {
+    return;
+  }
+  scans.remaining -= 1;
+  const verdict = scanAmputatedQuote(requirement, context, policy, critical);
+  scans.found.set(key, verdict);
+  return verdict;
+}
+/** Le balayage lui-même, payé une fois par citation examinée (voir `amputatedQuote`). */
+function scanAmputatedQuote(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy,
+  critical: boolean
+): AmputatedQuote | undefined {
   if (stitchedQuoteFragments(requirement, context, policy).length > 0) {
     return;
   }
   let best: AmputatedQuote | undefined;
   let longest = 0;
+  const probe = amputationProbe(requirement.quote);
   for (const { line, text } of fileContentLines(requirement, context)) {
-    const amputation = lineAmputation(text, requirement.quote);
+    const amputation = lineAmputation(text, probe);
     if (!amputation) {
       continue;
     }
@@ -1088,15 +1200,17 @@ export function amputatedQuote(
  * jetons que `quoteableFragment` en a extraite, que le refus nomme comme un
  * fragment et jamais comme la ligne entière : une consigne qui demanderait de
  * citer « cette ligne » puis donnerait un fragment pris au milieu d'elle serait
- * contradictoire. Vide quand aucune ligne ne s'y vérifie, pour que l'appelant
+ * contradictoire. Vide quand aucune ligne ne s'y vérifie, ou quand le budget de
+ * la validation ne permet plus d'examiner cette citation, pour que l'appelant
  * retombe sur le remède d'aujourd'hui.
  */
 export function amputatedQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
 ): string {
-  const amputated = amputatedQuote(requirement, context, policy);
+  const amputated = amputatedQuote(requirement, context, policy, scans);
   if (!amputated) {
     return "";
   }
@@ -1184,13 +1298,17 @@ export function quoteExcerpt(quote: string): string {
  * reçoit le diagnostic de ses deux fragments AVANT le conseil générique : c'est
  * ce défaut précis qui a fait refuser sa citation, et c'est celui qu'il doit
  * corriger en premier. Un diagnostic de défaut précis remplace la suggestion de
- * lignes, jamais ne s'y ajoute : une seule suggestion par citation.
+ * lignes, jamais ne s'y ajoute : une seule suggestion par citation. Le budget de
+ * la validation (`AmputationScans`) est partagé par toutes les exigences du plan :
+ * passé le plafond, le remède détaillé se tait et les refus suivants gardent le
+ * conseil générique de leur exigence, qui reste exact.
  */
 export function ungroundedPlanRefusals(
   plan: Plan,
   context: PrContext,
   policy: Policy
 ): string[] {
+  const scans = amputationScans();
   return ungroundedRequirements(plan, context, policy).map(
     ({ rank, requirement, scenarioId }) => {
       const error = ungroundedRequirement(
@@ -1198,24 +1316,29 @@ export function ungroundedPlanRefusals(
         requirement,
         context,
         policy,
-        rank
+        rank,
+        scans
       );
       // La citation existe ailleurs : le remède est l'attribution à l'autre
       // fichier, déjà porté par le conseil de l'exigence, et proposer aussi une
       // ligne de ce fichier-ci serait du bruit.
       const found = witnessFiles(requirement.quote, context, policy);
+      // Le budget épuisé écarte aussi les deux autres remèdes détaillés : ils
+      // balaient le fichier cité pour la même citation, et le refus générique
+      // suffit à la nommer sans travailler plus loin.
+      const detailed =
+        found.length === 0 && amputationScanAllowed(scans, requirement);
       // La copie amputée est déjà nommée par le conseil de l'exigence (voir
       // `witnessLocation`) : la suggestion de ligne la répéterait mot pour mot.
-      const amputated =
-        found.length === 0
-          ? amputatedQuoteRemedy(requirement, context, policy).trim()
-          : "";
+      const amputated = detailed
+        ? amputatedQuoteRemedy(requirement, context, policy, scans).trim()
+        : "";
       const stitched =
-        found.length === 0 && amputated === ""
+        detailed && amputated === ""
           ? stitchedQuoteRemedy(requirement, context, policy).trim()
           : "";
       const suggestion =
-        found.length === 0 && amputated === "" && stitched === ""
+        detailed && amputated === "" && stitched === ""
           ? quoteSuggestion(requirement, context, policy)
           : "";
       const remedy = stitched
