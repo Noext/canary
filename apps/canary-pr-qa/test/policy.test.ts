@@ -1771,6 +1771,8 @@ const COUNTED_PAGE_PATH = "apps/web/app/page.tsx";
 const COUNTED_LINE = `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}`;
 /** La même ligne telle que le patch la porte, avec son indentation. */
 const COUNTED_LINE_TEXT = `  ${COUNTED_LINE}`;
+/** Le début de la ligne, que la copie mesurée a laissé de côté. */
+const COUNTED_LINE_HEAD = COUNTED_LINE.slice(0, COUNTED_LINE.indexOf("unité"));
 const countedContext: PrContext = contextWith([
   {
     filename: COUNTED_PAGE_PATH,
@@ -2372,4 +2374,28 @@ it("forbids stitching fragments read in different places in the planner prompt",
   // La conséquence mesurée est enseignée avec l'exemple : la citation recousue a
   // fait refuser l'exigence faute de témoin.
   expect(prompt).toMatch(/refused as an absent quote/i);
+});
+
+it("forbids copying a quote from the middle of a line in the planner prompt", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // La consigne est opérationnelle : le premier caractère du fragment recopié, et
+  // le cas mesuré du lot J — une copie commencée à « unité » — est enseigné avec
+  // sa ligne réelle, sans contredire la contiguïté ni l'interdiction de recoudre.
+  expect(prompt).toMatch(
+    /Copy every quote from the first character of the text you take from the file/i
+  );
+  expect(prompt).toMatch(
+    /a copy that starts in the middle of a line — after a `.*` interpolation or any other text/i
+  );
+  expect(prompt).toMatch(/has no witness and is refused even when/i);
+  expect(prompt).toMatch(
+    /A line carrying `.*` interpolations is short: quote that whole line from its first character, or do not quote from that line at all/i
+  );
+  expect(prompt).toMatch(/Another real refusal: a planner quoted/i);
+  // L'exemple enseigné est le cas mesuré, recopié sans son invention : la copie
+  // amputée, et le début de la ligne réelle qu'elle a laissé de côté.
+  expect(prompt).toContain(COUNTED_CLEAN_TAIL);
+  expect(prompt).toContain(COUNTED_LINE_HEAD);
+  expect(prompt).toContain(COUNTED_PAGE_PATH);
+  expect(prompt).toMatch(/the copy is only the tail of that line/i);
 });
