@@ -2,13 +2,16 @@ import { expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
+import { PLANNER_PROMPT } from "../src/model.js";
 import {
+  absentRequirementRemedy,
   isDocumentationPath,
   PolicySchema,
   quoteHasWitness,
   repairRequirementAttribution,
   requirementEvidence,
   requirementHasWitness,
+  suggestedQuoteLines,
   undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
   ungroundedRequirements,
@@ -1241,4 +1244,508 @@ it.each([
   expect(refusal.message).toBe(
     "Critical changes skipped: apps/web/src/panel.ts"
   );
+});
+
+/**
+ * Lot F, cas réel (runs c7d46e91 et 973cf40f) : le planificateur a recousu deux
+ * lignes réelles de `cash.spec.ts` — sa ligne 47 et sa ligne 55 — en une
+ * assertion qui n'existe dans aucune version du fichier ni dans aucun patch de
+ * la PR. Le refus reste dû ; ce que la PR change, c'est la production de la
+ * citation et l'aide à la réparation.
+ */
+const CASH_SPEC_PATH = "packages/domain/src/__tests__/cash.spec.ts";
+const CASH_SPEC_LINES = [
+  'import { describe, expect, it } from "vitest";', // 1
+  'import { countCash } from "../src/cash";', // 2
+  "", // 3
+  'describe("countCash", () => {', // 4
+  ...Array.from({ length: 42 }, (_, index) => `  // cas ${index + 5}`), // 5..46
+  '  const result = countCash({ "500": "3,5" });', // 47
+  ...Array.from({ length: 7 }, (_, index) => `  // étape ${index + 48}`), // 48..54
+  "  expect(result.ok).toBe(false);", // 55
+  "});", // 56
+];
+const CASH_SPEC_FILE = CASH_SPEC_LINES.join("\n");
+/** Citation recousue du lot F, octet pour octet : 51 caractères, ASCII. */
+const STITCHED_QUOTE = 'expect(countCash({ "500": "3,5" }).ok).toBe(false);';
+const cashSpecContext: PrContext = {
+  ...contextWith([
+    {
+      filename: CASH_SPEC_PATH,
+      patch: [
+        "@@ -46,3 +46,4 @@",
+        "   // cas 46",
+        '   const result = countCash({ "500": "3,5" });',
+        "+  // commentaire ajouté",
+        "   // étape 48",
+      ].join("\n"),
+    },
+  ]),
+  context: [
+    { content: CASH_SPEC_FILE, path: CASH_SPEC_PATH, ref: context.sha },
+  ],
+};
+function cashSpecPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash",
+      sourceFiles: [CASH_SPEC_PATH],
+      requirements: [{ sourceFile: CASH_SPEC_PATH, quote }],
+    },
+  ]);
+}
+
+it("refuses a quote stitched from two real lines and proposes real lines instead", () => {
+  expect(STITCHED_QUOTE).toHaveLength(51);
+  expect(CASH_SPEC_LINES[46]).toBe(
+    '  const result = countCash({ "500": "3,5" });'
+  );
+  expect(CASH_SPEC_LINES[54]).toBe("  expect(result.ok).toBe(false);");
+  expect(CASH_SPEC_FILE).not.toContain(STITCHED_QUOTE);
+  const plan = cashSpecPlan(STITCHED_QUOTE);
+  // Le gate n'est pas touché : la citation recousue n'a aucun témoin.
+  expect(
+    ungroundedRequirements(plan, cashSpecContext, policyFor())
+  ).toHaveLength(1);
+  expect(refusalOfPlan(plan, cashSpecContext, policyFor()).code).toBe(
+    "REQUIREMENT_UNGROUNDED"
+  );
+  const [line = ""] = ungroundedPlanRefusals(
+    plan,
+    cashSpecContext,
+    policyFor()
+  );
+  expect(line).toContain(`Rejected quote: ${JSON.stringify(STITCHED_QUOTE)}`);
+  // Au plus deux candidats, chacun une ligne EXACTE du fichier avec son numéro.
+  const suggestions = suggestedQuoteLines(
+    { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
+    cashSpecContext,
+    policyFor()
+  );
+  expect(suggestions.length).toBeGreaterThan(0);
+  expect(suggestions.length).toBeLessThanOrEqual(2);
+  for (const candidate of suggestions) {
+    expect(CASH_SPEC_LINES[candidate.line - 1]).toBe(candidate.text);
+    expect(CASH_SPEC_FILE).toContain(candidate.text);
+    expect(quoteCarriesContent(candidate.text, true)).toBe(true);
+  }
+  // La ligne 47 reprend quatre des huit mots de la citation ; la ligne 55 en
+  // reprend quatre aussi, mais ne forme qu'un seul jeton au contrat de `quote`
+  // (aucun blanc intérieur) : le remède ne propose jamais un fragment que le
+  // plan refuserait.
+  expect(suggestions).toEqual([
+    { line: 47, text: '  const result = countCash({ "500": "3,5" });' },
+  ]);
+  expect(line).toContain(
+    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify(suggestions[0]!.text)}.`
+  );
+});
+
+it("measures the absent-quote suggestion inside the correction budget", () => {
+  const plan = cashSpecPlan(STITCHED_QUOTE);
+  const [line = ""] = ungroundedPlanRefusals(
+    plan,
+    cashSpecContext,
+    policyFor()
+  );
+  const remedy =
+    "Quote exact source or diff text; page content alone is not a requirement.";
+  const before = line.slice(0, line.indexOf(remedy) + remedy.length);
+  // Mesure du coût réel : 132 caractères ajoutés à la ligne de détail, qui
+  // reste loin du budget restant après le préambule fatal (1860) dans la
+  // correction que `model.ts` tronque à 2000 — le cas intégré est mesuré par
+  // `unit.test.ts` ("returns real lines to quote instead of an absent quote").
+  expect(before).toContain("No source witness for cash");
+  expect(before).toHaveLength(220);
+  expect(line).toHaveLength(352);
+  expect(line.length - before.length).toBe(132);
+});
+
+it("proposes no line when none overlaps the quote", () => {
+  const invented = "let totally unrelated invented statement here;";
+  expect(
+    suggestedQuoteLines(
+      { quote: invented, sourceFile: CASH_SPEC_PATH },
+      cashSpecContext,
+      policyFor()
+    )
+  ).toEqual([]);
+  const [line = ""] = ungroundedPlanRefusals(
+    cashSpecPlan(invented),
+    cashSpecContext,
+    policyFor()
+  );
+  expect(line).not.toContain("to quote instead");
+});
+
+it("proposes no line of the cited file when the quote exists in another file", () => {
+  const variant = 'const result = countCash({ "500": "3,6" });';
+  const elsewhere: PrContext = {
+    ...cashSpecContext,
+    files: [
+      ...cashSpecContext.files,
+      {
+        filename: "src/form.ts",
+        status: "modified",
+        patch: `+ ${variant}`,
+      },
+    ],
+    context: [
+      ...cashSpecContext.context,
+      { content: variant, path: "src/form.ts", ref: context.sha },
+    ],
+  };
+  // La ligne 47 du fichier cité recouvre largement la citation, donc le critère
+  // la proposerait ; mais la citation existe mot pour mot ailleurs, et le remède
+  // est alors l'attribution à l'autre fichier, pas une autre ligne de celui-ci.
+  expect(
+    suggestedQuoteLines(
+      { quote: variant, sourceFile: CASH_SPEC_PATH },
+      elsewhere,
+      policyFor()
+    ).length
+  ).toBeGreaterThan(0);
+  const [line = ""] = ungroundedPlanRefusals(
+    cashSpecPlan(variant),
+    elsewhere,
+    policyFor()
+  );
+  expect(line).toContain("The quote appears verbatim in src/form.ts");
+  expect(line).not.toContain("to quote instead");
+});
+
+/**
+ * Le remède d'une citation qui existe mot pour mot dans un autre fichier est la
+ * réattribution, jamais une ligne du fichier cité : la ligne 47 recouvre
+ * largement la citation et le critère la proposerait, mais l'envoyer
+ * consommerait la tentative de correction du planificateur pour une preuve
+ * fausse.
+ */
+it("reassigns a quote that exists in another file instead of proposing a line", () => {
+  const variant = 'const result = countCash({ "500": "3,6" });';
+  const elsewhere: PrContext = {
+    ...cashSpecContext,
+    files: [
+      ...cashSpecContext.files,
+      { filename: "src/form.ts", status: "modified", patch: `+ ${variant}` },
+    ],
+    context: [
+      ...cashSpecContext.context,
+      { content: variant, path: "src/form.ts", ref: context.sha },
+    ],
+  };
+  const requirement = { quote: variant, sourceFile: CASH_SPEC_PATH };
+  expect(
+    suggestedQuoteLines(requirement, elsewhere, policyFor()).length
+  ).toBeGreaterThan(0);
+  expect(absentRequirementRemedy(requirement, elsewhere, policyFor())).toBe(
+    "The quote appears verbatim in src/form.ts; declare that file and attribute the requirement to it."
+  );
+});
+
+it("proposes a real line of the cited file when the quote exists nowhere", () => {
+  const remedy = absentRequirementRemedy(
+    { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
+    cashSpecContext,
+    policyFor()
+  );
+  expect(remedy).toBe(
+    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify('  const result = countCash({ "500": "3,5" });')}.`
+  );
+});
+
+/**
+ * Défaut signalé par la vérification interne : le remède de témoin énumérait
+ * sans plafond tous les fichiers qui portent la citation, et une liste longue
+ * portée par le préambule fatal écrasait la tête de la dernière classe. La
+ * liste est plafonnée et les fichiers non montrés sont comptés.
+ */
+it("caps the witness path list and counts the files it omits", () => {
+  const quote = 'const witness = "carried by many changed files";';
+  const paths = Array.from(
+    { length: 8 },
+    (_, index) => `src/witness-${index}-with-a-long-name.ts`
+  );
+  const changed = contextWith(
+    paths.map((filename) => ({ filename, patch: `+ ${quote}` }))
+  );
+  expect(witnessFiles(quote, changed, policyFor())).toEqual(paths);
+  expect(
+    absentRequirementRemedy(
+      { quote, sourceFile: "src/cited.ts" },
+      changed,
+      policyFor()
+    )
+  ).toBe(
+    `The quote appears verbatim in ${paths.slice(0, 3).join(", ")} (+5 more); declare that file and attribute the requirement to it.`
+  );
+  // Même borne pour la branche hors diff : la liste des fichiers que la PR ne
+  // change pas est comptée elle aussi.
+  const outside: PrContext = {
+    ...changed,
+    files: [],
+    context: paths.map((path) => ({ content: quote, path, ref: context.sha })),
+  };
+  expect(
+    absentRequirementRemedy(
+      { quote, sourceFile: "src/cited.ts" },
+      outside,
+      policyFor()
+    )
+  ).toBe(
+    `The quote only appears in ${paths.slice(0, 3).join(", ")} (+5 more), which this PR does not change; quote the changed file instead.`
+  );
+});
+
+it("shows one witness path whole rather than a path the planner cannot open", () => {
+  const quote = 'const witness = "carried by the longest path";';
+  const longest = `src/${"d".repeat(140)}/module.ts`;
+  const paths = [longest, "src/second.ts", "src/third.ts"];
+  const many = contextWith(
+    paths.map((filename) => ({ filename, patch: `+ ${quote}` }))
+  );
+  expect(witnessFiles(quote, many, policyFor())).toEqual(paths);
+  expect(
+    absentRequirementRemedy(
+      { quote, sourceFile: "src/cited.ts" },
+      many,
+      policyFor()
+    )
+  ).toBe(
+    `The quote appears verbatim in ${longest} (+2 more); declare that file and attribute the requirement to it.`
+  );
+});
+
+it("suggests only head-path lines for a file renamed without deletion", () => {
+  // Contenu de tête de l'ANCIEN chemin : c'est lui qui portait la ligne
+  // trompeuse quand l'appariement lisait `previous_filename` à la révision de
+  // tête.
+  const oldHead = [
+    'export const brandNew = countCash({ "500": "3,6" });',
+    "const legacy = 'old head only';",
+  ].join("\n");
+  const newHead = [
+    "const countCash = (cash: string) => cash;",
+    'const normalized = countCash({ "500": "3,5" });',
+  ].join("\n");
+  const newPath = "src/util/new.ts";
+  const renamed: PrContext = {
+    ...context,
+    files: [
+      {
+        filename: newPath,
+        patch:
+          "@@ -1,2 +1,2 @@\n- const countCash = legacy;\n+ const countCash = renamed;",
+        previous_filename: "src/util/old.ts",
+        status: "renamed",
+      },
+    ],
+    context: [
+      { content: oldHead, path: "src/util/old.ts", ref: context.sha },
+      { content: oldHead, path: "src/util/old.ts", ref: context.baseSha },
+      { content: newHead, path: newPath, ref: context.sha },
+    ],
+  };
+  const suggestions = suggestedQuoteLines(
+    { quote: 'countCash({ "500": "3,5" })', sourceFile: newPath },
+    renamed,
+    policyFor()
+  );
+  expect(suggestions).toEqual([
+    { line: 2, text: 'const normalized = countCash({ "500": "3,5" });' },
+  ]);
+  // Chaque candidat est une ligne exacte du fichier cité, avec son numéro :
+  // comparé caractère par caractère au contenu de tête du chemin de tête. La
+  // ligne de l'ancien chemin n'est jamais proposée, même quand elle recouvre la
+  // citation mieux que toute ligne du fichier cité.
+  const headLines = newHead.split("\n");
+  for (const candidate of suggestions) {
+    expect(headLines[candidate.line - 1]).toBe(candidate.text);
+  }
+  expect(suggestions.map((candidate) => candidate.text)).not.toContain(
+    oldHead.split("\n")[0]
+  );
+  // Quand seul l'ancien chemin recouvre la citation, le remède préfère
+  // l'absence de suggestion à une ligne qui n'existe pas dans le fichier cité.
+  const unrelated: PrContext = {
+    ...renamed,
+    context: renamed.context.map((item) =>
+      item.path === newPath
+        ? { ...item, content: "const untouched = 'nothing to quote here';" }
+        : item
+    ),
+  };
+  expect(
+    suggestedQuoteLines(
+      { quote: 'countCash({ "500": "3,5" })', sourceFile: newPath },
+      unrelated,
+      policyFor()
+    )
+  ).toEqual([]);
+});
+
+it("never proposes more than two candidate lines", () => {
+  const quote = "const alpha = value + offset;";
+  const content = [
+    "const alpha = 1 + offset;",
+    "const alpha = 2 + offset;",
+    "const alpha = 3 + offset;",
+    "const alpha = 4 + offset;",
+  ].join("\n");
+  const ctx: PrContext = {
+    ...contextWith([
+      {
+        filename: "src/logic.ts",
+        patch: [
+          "@@ -1,4 +1,4 @@",
+          " const alpha = 1 + offset;",
+          " const alpha = 2 + offset;",
+          " const alpha = 3 + offset;",
+          " const alpha = 4 + offset;",
+        ].join("\n"),
+      },
+    ]),
+    context: [{ content, path: "src/logic.ts", ref: context.sha }],
+  };
+  // Quatre lignes franchissent le seuil ; deux sont proposées, dans l'ordre
+  // déterministe du critère.
+  expect(
+    suggestedQuoteLines({ quote, sourceFile: "src/logic.ts" }, ctx, policyFor())
+  ).toEqual([
+    { line: 1, text: "const alpha = 1 + offset;" },
+    { line: 2, text: "const alpha = 2 + offset;" },
+  ]);
+});
+
+it("accepts an exact single-line quote from the cited file", () => {
+  const plan = cashSpecPlan(CASH_SPEC_LINES[46]!);
+  expect(ungroundedRequirements(plan, cashSpecContext, policyFor())).toEqual(
+    []
+  );
+  expect(
+    validateCoverage(plan, cashSpecContext, policyFor(), config).gate
+  ).toBe("complete");
+});
+
+it("accepts a contiguous multi-line quote copied from the cited file", () => {
+  const contiguous = [
+    CASH_SPEC_LINES[46],
+    CASH_SPEC_LINES[47],
+    CASH_SPEC_LINES[48],
+  ].join("\n");
+  const plan = cashSpecPlan(contiguous);
+  expect(
+    validateCoverage(plan, cashSpecContext, policyFor(), config).gate
+  ).toBe("complete");
+  // Recoudre deux lignes NON contiguës du même fichier — 47 et 49, en sautant
+  // 48 — reste refusé : c'est la jointure qui est fausse, jamais la longueur.
+  const skipped = [CASH_SPEC_LINES[46], CASH_SPEC_LINES[48]].join("\n");
+  expect(
+    ungroundedRequirements(cashSpecPlan(skipped), cashSpecContext, policyFor())
+  ).toHaveLength(1);
+});
+
+/**
+ * H1 : pour un fichier modifié au-delà du plafond de contexte, la preuve ne
+ * portait que le patch brut, dont les préfixes `+`/`-` ne sont pas des blancs —
+ * une citation multi-lignes du nouveau contenu n'y avait donc pas de témoin. Le
+ * contenu après changement est reconstruit depuis les hunks du patch, chaque
+ * hunk restant un segment témoin à part entière : une citation fabriquée en
+ * recousant la fin d'un hunk au début du suivant n'a pas de témoin, sans que
+ * cette garantie repose sur le choix d'un séparateur.
+ */
+const RECONSTRUCTED_PATH = "src/cash.ts";
+const RECONSTRUCTED_PATCH = [
+  "@@ -1,3 +1,4 @@",
+  " const before = 1;",
+  '+ const witness = "reconstructed witness value";',
+  " const after = 2;",
+  "@@ -10,3 +11,4 @@",
+  " const tail = 3;",
+  "+ const other = 4;",
+  " };",
+].join("\n");
+/** Contenu de tête absent, comme lorsqu'un fichier dépasse le plafond de contexte. */
+const reconstructedContext: PrContext = contextWith([
+  { filename: RECONSTRUCTED_PATH, patch: RECONSTRUCTED_PATCH },
+]);
+
+/** Segments témoins de `RECONSTRUCTED_PATCH` : le patch, puis un par hunk. */
+const RECONSTRUCTED_SEGMENTS = [
+  RECONSTRUCTED_PATCH,
+  [
+    "const before = 1;",
+    ' const witness = "reconstructed witness value";',
+    "const after = 2;",
+  ].join("\n"),
+  ["const tail = 3;", " const other = 4;", "};"].join("\n"),
+];
+
+it("witnesses a new-content quote from the reconstructed hunks", () => {
+  const quote = [
+    "const before = 1;",
+    'const witness = "reconstructed witness value";',
+  ].join("\n");
+  expect(reconstructedContext.context).toEqual([]);
+  // Le patch brut ne porte pas la citation : le `+` de la ligne ajoutée est un
+  // caractère non blanc que la comparaison ne tolère pas.
+  expect(quoteHasWitness(RECONSTRUCTED_PATCH, quote)).toBe(false);
+  // Le patch, puis chaque hunk pris séparément : deux hunks ne se joignent
+  // jamais en une chaîne, même séparée.
+  expect(
+    requirementEvidence(
+      { quote, sourceFile: RECONSTRUCTED_PATH },
+      reconstructedContext
+    )
+  ).toEqual(RECONSTRUCTED_SEGMENTS);
+  expect(
+    requirementHasWitness(
+      { quote, sourceFile: RECONSTRUCTED_PATH },
+      reconstructedContext,
+      policyFor()
+    )
+  ).toBe(true);
+  expect(
+    ungroundedRequirements(cashPlan(quote), reconstructedContext, policyFor())
+  ).toEqual([]);
+});
+
+it("refuses a quote stitched across two reconstructed hunks", () => {
+  const stitched = ["const after = 2;", "const tail = 3;"].join("\n");
+  // Les deux lignes sont réelles, mais chacune appartient à son propre hunk :
+  // aucune portion réelle du fichier ne les joint, et aucun segment témoin ne
+  // les contient ensemble.
+  for (const segment of RECONSTRUCTED_SEGMENTS) {
+    expect(segment).not.toContain(stitched);
+  }
+  expect(
+    requirementHasWitness(
+      { quote: stitched, sourceFile: RECONSTRUCTED_PATH },
+      reconstructedContext,
+      policyFor()
+    )
+  ).toBe(false);
+  expect(
+    ungroundedRequirements(
+      cashPlan(stitched),
+      reconstructedContext,
+      policyFor()
+    )
+  ).toHaveLength(1);
+});
+
+it("forbids stitching two real lines into one quote in the planner prompt", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  expect(prompt).toMatch(/never stitch two separate lines into one quote/i);
+  // Le repli d'un bloc multi-lignes sur une ligne reste permis — cas accepté du
+  // lot E — et la reformulation en une ligne qui « devrait » exister est
+  // interdite ; c'est la distinction que le prompt doit enseigner.
+  expect(prompt).toMatch(
+    /Reflowing a multi-line block onto one line stays allowed/i
+  );
+  // Le contre-exemple réel du lot F est enseigné, dans ses deux lignes réelles
+  // et dans la citation recousue qu'elles ont produite.
+  expect(prompt).toContain('const result = countCash({ "500": "3,5" });');
+  expect(prompt).toContain("expect(result.ok).toBe(false);");
+  expect(prompt).toContain(STITCHED_QUOTE);
 });

@@ -10,7 +10,11 @@ import {
   type Scenario,
 } from "./schema.js";
 
-type Requirement = Scenario["requirements"][number];
+/**
+ * Une exigence de scénario : le type que les refus de couverture et le canal de
+ * correction échangent entre `policy.ts` et `runner.ts`.
+ */
+export type Requirement = Scenario["requirements"][number];
 
 export const PolicySchema = z
   .object({
@@ -172,11 +176,67 @@ export function writeEvidenceRefusals(
   return refusals;
 }
 /**
- * Segments témoins d'une exigence : le patch du fichier dans la PR, puis chaque
- * contenu contextuel récupéré pour ce chemin. Chaque élément est un témoin à
- * part entière, comparé seul : une citation qui n'existe qu'en recousant la fin
- * d'un segment au début du suivant — jonction patch→contenu, ou contenu de tête
- * → contenu de base — n'a pas de témoin.
+ * Une ligne du contenu après changement : son numéro dans le nouveau fichier et
+ * son texte, sans le préfixe du patch.
+ */
+interface PostChangeLine {
+  line: number;
+  text: string;
+}
+const PATCH_HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+/**
+ * Lignes du contenu après changement, hunk par hunk et numérotées dans le
+ * nouveau fichier : les lignes de contexte et les lignes ajoutées, sans leur
+ * préfixe. Les lignes supprimées et le marqueur « no newline at end of file »
+ * n'appartiennent pas à ce contenu.
+ */
+function postChangeHunks(patch: string): PostChangeLine[][] {
+  const hunks: PostChangeLine[][] = [];
+  let line = 0;
+  for (const raw of patch.split("\n")) {
+    const header = PATCH_HUNK_HEADER.exec(raw);
+    if (header) {
+      hunks.push([]);
+      line = Number(header[1]);
+      continue;
+    }
+    const hunk = hunks.at(-1);
+    const prefix = raw.slice(0, 1);
+    if (!hunk || (prefix !== "+" && prefix !== " ")) {
+      continue;
+    }
+    hunk.push({ line, text: raw.slice(1) });
+    line += 1;
+  }
+  return hunks;
+}
+/**
+ * Contenu APRÈS CHANGEMENT reconstruit depuis les hunks du patch : ce que la PR
+ * produit, donc ce qu'une citation du nouveau contenu doit porter. Le patch brut
+ * porte les préfixes `+` et `-`, qu'aucune citation recopiée du fichier n'a, et
+ * le contenu de tête manque dès qu'un fichier dépasse le plafond de contexte.
+ *
+ * Un hunk est un segment témoin à part entière, jamais joint au suivant : deux
+ * hunks ne sont pas une portion continue du fichier — les lignes qu'ils sautent
+ * n'y sont pas — donc une citation fabriquée en recousant la fin du premier au
+ * début du second ne doit avoir aucun témoin. Joindre les hunks en une chaîne,
+ * même séparée par un caractère sentinelle, laissait cette garantie reposer sur
+ * le choix du séparateur ; le découpage la rend structurelle. La liste est vide
+ * quand aucun hunk n'apporte de ligne de contexte ou ajoutée : fichier supprimé,
+ * diff binaire, ou patch sans en-tête `@@` où aucun hunk n'est identifiable.
+ */
+function postChangeSegments(patch: string): string[] {
+  return postChangeHunks(patch)
+    .map((hunk) => hunk.map((item) => item.text).join("\n"))
+    .filter((block) => block.length > 0);
+}
+/**
+ * Segments témoins d'une exigence : le patch du fichier dans la PR, chaque hunk
+ * du contenu après changement pris séparément, puis chaque contenu contextuel
+ * récupéré pour ce chemin. Chaque élément est un témoin à part entière, comparé
+ * seul : une citation qui n'existe qu'en recousant la fin d'un segment au début
+ * du suivant — jonction patch→contenu, contenu de tête → contenu de base, ou
+ * hunk→hunk — n'a pas de témoin.
  */
 export function requirementEvidence(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -187,6 +247,7 @@ export function requirementEvidence(
   )?.patch;
   return [
     ...(patch ? [patch] : []),
+    ...(patch ? postChangeSegments(patch) : []),
     ...context.context
       .filter((item) => item.path === requirement.sourceFile)
       .map((item) => item.content),
@@ -272,9 +333,10 @@ export function hasWeakWitness(
 
 /**
  * Remède d'une citation absente : elle n'existe nulle part, mot pour mot. Le
- * refus par exigence et la classe fatale agrégée le partagent, pour que les
- * deux moitiés du message — celle qui survit à la troncature et le détail —
- * disent la même règle.
+ * refus par exigence et la classe fatale agrégée le partagent — sauf quand le
+ * critère trouve des lignes réelles à citer : la classe porte alors ces lignes
+ * à sa place (voir `absentRemedy`, runner.ts) pour qu'elles survivent à la
+ * troncature, et le refus par exigence les ajoute au conseil.
  */
 export const UNGROUNDED_ABSENT_REMEDY =
   "Quote exact source or diff text; page content alone is not a requirement.";
@@ -389,24 +451,208 @@ export function repairRequirementAttribution(
 /**
  * Où la citation se trouve réellement, en ne proposant que des fichiers que la
  * PR change : déclarer une source hors diff consommerait la tentative de
- * correction pour rien, puisque la validation la refuserait.
+ * correction pour rien, puisque la validation la refuserait. La liste de chemins
+ * est plafonnée : le remède finit dans un préambule fatal borné, où une
+ * énumération de chemins sans fin écraserait les têtes des autres classes. Les
+ * fichiers non montrés sont comptés, jamais perdus en silence.
  */
-function witnessHint(
-  quote: string,
-  context: PrContext,
-  policy: Policy
-): string {
+function witnessHint(found: string[], context: PrContext): string {
   const changed = context.files.map((file) => file.filename);
-  const found = witnessFiles(quote, context, policy);
   const pr = found.filter((path) => changed.includes(path));
   if (pr.length > 0) {
-    return ` The quote appears verbatim in ${pr.join(", ")}; declare that file and attribute the requirement to it.`;
+    return ` The quote appears verbatim in ${boundedPaths(pr)}; declare that file and attribute the requirement to it.`;
   }
   const outside = found.filter((path) => !changed.includes(path));
   if (outside.length === 0) {
     return "";
   }
-  return ` The quote only appears in ${outside.join(", ")}, which this PR does not change; quote the changed file instead.`;
+  return ` The quote only appears in ${boundedPaths(outside)}, which this PR does not change; quote the changed file instead.`;
+}
+/**
+ * Longueur maximale de la liste de chemins d'un remède de témoin. Le premier
+ * chemin est toujours montré — un remède vide ne dirigerait le planificateur
+ * nulle part — et les suivants tant que la liste tient dans la borne.
+ */
+const WITNESS_HINT_PATHS_CHARS = 120;
+function boundedPaths(paths: string[]): string {
+  const [first] = paths;
+  if (!first) {
+    return "";
+  }
+  const shown = [first];
+  let used = first.length;
+  for (const path of paths.slice(1)) {
+    if (used + path.length + 2 > WITNESS_HINT_PATHS_CHARS) {
+      break;
+    }
+    shown.push(path);
+    used += path.length + 2;
+  }
+  const hidden = paths.length - shown.length;
+  return `${shown.join(", ")}${hidden > 0 ? ` (+${hidden} more)` : ""}`;
+}
+
+/** Nombre minimal de jetons de la citation qu'une ligne candidate doit reprendre. */
+const SUGGESTED_QUOTE_MIN_SHARED_TOKENS = 3;
+/** Part minimale des jetons de la citation qu'une ligne candidate doit porter. */
+const SUGGESTED_QUOTE_MIN_OVERLAP = 0.5;
+/**
+ * Longueur maximale d'une ligne candidate : le remède reste borné sans qu'aucun
+ * fragment ne soit rogné, donc chaque candidat est recopiable d'un seul tenant.
+ */
+const SUGGESTED_QUOTE_MAX_CHARS = 120;
+/** Nombre maximal de candidats : au-delà, la suggestion noie la correction. */
+const SUGGESTED_QUOTE_LIMIT = 2;
+function quoteTokenSet(value: string): Set<string> {
+  // Découper sur les seuls blancs cachait le recouvrement réel : `expect(countCash({`
+  // ne partage aucun jeton avec `countCash({`. Les jetons sont donc les suites
+  // de lettres, chiffres et soulignés, en minuscules.
+  return new Set(
+    normalizeQuoteText(value)
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}_]+/u)
+      .filter(Boolean)
+  );
+}
+/**
+ * Lignes réelles du fichier cité, avec leur numéro : le contenu après
+ * changement reconstruit depuis le patch, et le contenu récupéré à la révision
+ * de tête. Chaque révision est indexée par le chemin qui la porte, comme
+ * `completeSource` (runner.ts) : le contenu de tête est celui du chemin de
+ * tête — `filename`, que la PR renomme éventuellement — et le contenu de base
+ * celui du `previous_filename`, lu seulement quand la PR supprime le fichier,
+ * seule révision où il existe encore. Apparier `previous_filename` à la
+ * révision de tête proposait des lignes du fichier d'avant le renommage, qui
+ * n'existent pas dans le fichier cité.
+ */
+function fileContentLines(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): PostChangeLine[] {
+  const file = context.files.find(
+    (item) => item.filename === requirement.sourceFile
+  );
+  const lines = file?.patch ? postChangeHunks(file.patch).flat() : [];
+  const removed = file?.status === "removed";
+  const refs = removed ? [context.baseSha] : [context.sha];
+  const path = removed
+    ? (file?.previous_filename ?? requirement.sourceFile)
+    : requirement.sourceFile;
+  for (const item of context.context) {
+    if (item.path !== path || !refs.includes(item.ref)) {
+      continue;
+    }
+    lines.push(
+      ...item.content
+        .split("\n")
+        .map((text, index) => ({ line: index + 1, text }))
+    );
+  }
+  return lines;
+}
+/**
+ * Lignes réelles du fichier cité à citer à la place d'une citation absente :
+ * celles dont le recouvrement de jetons avec la citation est le plus élevé, au
+ * plus deux, à un seuil qui écarte une ressemblance de hasard. Chaque candidat
+ * est une ligne exacte du fichier avec son numéro, jamais un texte inventé ou
+ * rogné, et le critère est déterministe. Une liste vide — aucune ligne ne
+ * franchit le seuil — préfère l'absence de suggestion à une suggestion
+ * trompeuse.
+ */
+export function suggestedQuoteLines(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): { line: number; text: string }[] {
+  const quote = quoteTokenSet(requirement.quote);
+  if (quote.size < SUGGESTED_QUOTE_MIN_SHARED_TOKENS) {
+    return [];
+  }
+  const critical = isCriticalPath(policy, requirement.sourceFile);
+  const candidates = new Map<
+    string,
+    { line: number; ratio: number; shared: number; text: string }
+  >();
+  for (const { line, text } of fileContentLines(requirement, context)) {
+    // Un candidat qui ne franchirait pas le contrat de citation de ce fichier
+    // serait un remède que le gate refuserait : il n'est jamais proposé.
+    if (
+      text.length > SUGGESTED_QUOTE_MAX_CHARS ||
+      !quoteCarriesContent(text, critical)
+    ) {
+      continue;
+    }
+    const tokens = quoteTokenSet(text);
+    const shared = [...quote].filter((token) => tokens.has(token)).length;
+    const ratio = shared / quote.size;
+    if (
+      shared < SUGGESTED_QUOTE_MIN_SHARED_TOKENS ||
+      ratio < SUGGESTED_QUOTE_MIN_OVERLAP
+    ) {
+      continue;
+    }
+    // La même ligne peut venir de deux révisions : la première occurrence, dans
+    // le nouveau contenu d'abord, garde son numéro.
+    const existing = candidates.get(text);
+    if (!existing || existing.line > line) {
+      candidates.set(text, { line, ratio, shared, text });
+    }
+  }
+  return [...candidates.values()]
+    .sort(
+      (left, right) =>
+        right.ratio - left.ratio ||
+        right.shared - left.shared ||
+        left.line - right.line
+    )
+    .slice(0, SUGGESTED_QUOTE_LIMIT)
+    .map(({ line, text }) => ({ line, text }));
+}
+/**
+ * Remède d'une citation absente : les lignes réelles du fichier cité que le
+ * planificateur peut citer à la place, au plus deux. Jamais proposé quand la
+ * citation existe ailleurs — le remède est alors l'attribution à l'autre
+ * fichier, pas une autre ligne de celui-ci — ni quand aucune ligne ne franchit
+ * le seuil de recouvrement. La classe fatale agrégée du canal de correction la
+ * porte aussi (voir `absentRemedy` dans runner.ts) : le préambule fatal la
+ * protège de la troncature, là où le détail par exigence qui la portait
+ * disparaissait sous des classes saturées.
+ */
+export function quoteSuggestion(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): string {
+  const candidates = suggestedQuoteLines(requirement, context, policy);
+  if (candidates.length === 0) {
+    return "";
+  }
+  const listed = candidates
+    .map(({ line, text }) => `${line}: ${JSON.stringify(text)}`)
+    .join(", ");
+  return ` Real lines of ${requirement.sourceFile} to quote instead: ${listed}.`;
+}
+/**
+ * Remède unique d'une exigence dont la citation n'a aucun témoin : quand la
+ * citation existe mot pour mot — à l'espacement près — dans l'évidence d'un
+ * autre fichier du contexte, le remède est la réattribution à ce fichier.
+ * Proposer une autre ligne du fichier cité dans ce cas enverrait le
+ * planificateur vers une preuve fausse : sa tentative de correction serait
+ * consommée, et le fichier qui porte réellement le texte resterait non couvert.
+ * Sinon le remède est une ligne réelle du fichier cité (voir `quoteSuggestion`).
+ * Vide quand aucun des deux ne s'applique, pour que l'appelant retombe sur le
+ * conseil générique plutôt que sur un remède vide.
+ */
+export function absentRequirementRemedy(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy
+): string {
+  const found = witnessFiles(requirement.quote, context, policy);
+  if (found.length > 0) {
+    return witnessHint(found, context).trim();
+  }
+  return quoteSuggestion(requirement, context, policy).trim();
 }
 
 /**
@@ -464,7 +710,12 @@ export function ungroundedPlanRefusals(
         policy
       );
       const quote = JSON.stringify(quoteExcerpt(requirement.quote));
-      return `${error.message}. Rejected quote: ${quote}. ${error.hint}${witnessHint(requirement.quote, context, policy)}`;
+      // La citation existe ailleurs : le remède est l'attribution à l'autre
+      // fichier, et proposer aussi une ligne de ce fichier-ci serait du bruit.
+      const found = witnessFiles(requirement.quote, context, policy);
+      const suggestion =
+        found.length === 0 ? quoteSuggestion(requirement, context, policy) : "";
+      return `${error.message}. Rejected quote: ${quote}. ${error.hint}${witnessHint(found, context)}${suggestion}`;
     }
   );
 }
