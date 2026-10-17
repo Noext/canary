@@ -91,7 +91,7 @@ export function json(res: ServerResponse, value: unknown, status = 200) {
  * Réponse `text/event-stream` : deltas partiels (dont un delta de raisonnement), usage final
  * puis `[DONE]`. Le contenu est coupé sur une frontière sûre pour forcer un vrai recollage.
  */
-export function sse(res: ServerResponse, text: string) {
+export function sse(res: ServerResponse, text: string, finishReason = "stop") {
   res.writeHead(200, {
     "Cache-Control": "no-store",
     "Content-Type": "text/event-stream",
@@ -114,7 +114,7 @@ export function sse(res: ServerResponse, text: string) {
   chunk({ content: text.slice(cut) });
   res.write(
     `data: ${JSON.stringify({
-      choices: [{ delta: {}, finish_reason: "stop", index: 0 }],
+      choices: [{ delta: {}, finish_reason: finishReason, index: 0 }],
       usage: { completion_tokens: 7, prompt_tokens: 11, total_tokens: 18 },
     })}\n\n`
   );
@@ -184,6 +184,16 @@ export async function fixture(
     modelResets?: number;
     /** Nombre de flux de plan fermés sans marqueur terminal. */
     modelTruncations?: number;
+    /** Nombre de plans coupés par la borne de sortie (`finish_reason: "length"`). */
+    modelIncomplete?: number;
+    /** Contenu partiel servi à la place du plan d'une réponse coupée. */
+    incompleteContent?: string;
+    /** Nombre de plans complets mais illisibles : un contenu qui n'est pas du JSON. */
+    modelUnreadable?: number;
+    /** Contenu servi à la place du plan d'une réponse illisible. */
+    unreadableContent?: string;
+    /** Statut HTTP servi par `chat/completions` au lieu d'une réponse de plan. */
+    completionsStatus?: number;
     /** Variables d'environnement ajoutées à la configuration du fixture. */
     env?: Record<string, string>;
   } = {}
@@ -197,6 +207,8 @@ export async function fixture(
   let planRequests = 0;
   let modelResets = options.modelResets ?? 0;
   let modelTruncations = options.modelTruncations ?? 0;
+  let modelIncomplete = options.modelIncomplete ?? 0;
+  let modelUnreadable = options.modelUnreadable ?? 0;
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) =>
       json(res, { error: String(error) }, 500)
@@ -452,27 +464,54 @@ export async function fixture(
         return;
       }
       const payload = await body(req);
+      if (options.completionsStatus) {
+        // Le corps est lu avant la réponse, comme un vrai endpoint : la requête
+        // n'est pas un plan, elle n'est donc pas enregistrée dans modelRequests.
+        json(
+          res,
+          { error: { message: "fixture refusal" } },
+          options.completionsStatus
+        );
+        return;
+      }
       modelRequests.push(payload);
       const messages = payload.messages as { role: string; content: string }[];
       let value: unknown;
+      let raw: string | undefined;
+      let finishReason = "stop";
       if (messages[0]?.content.startsWith("You are a connection diagnostic")) {
         value = { ok: true };
       } else if (messages[0]?.content.startsWith("You plan")) {
-        const scripted = options.plans?.[planRequests] ?? options.plans?.at(-1);
-        planRequests++;
-        value = options.noScenarios
-          ? {
-              summary: "No browser changes",
-              scenarios: [],
-              skipped: [{ sourceFile: "src/form.ts", reason: "fixture" }],
-            }
-          : structuredClone(scripted ?? plan);
-        if (options.unnamedStatus && !options.noScenarios) {
-          (value as Plan).scenarios[0]!.assertions[0]!.target = {
-            by: "role",
-            value: "status",
-            name: "",
-          };
+        if (modelUnreadable > 0) {
+          modelUnreadable -= 1;
+          // Réponse complète mais hors schéma : le contenu n'est pas du JSON.
+          raw = options.unreadableContent ?? "I cannot produce a plan here.";
+        } else if (modelIncomplete > 0) {
+          modelIncomplete -= 1;
+          // Génération arrêtée par la borne de sortie : un JSON resté ouvert,
+          // la signature d'un MODEL_OUTPUT_INCOMPLETE.
+          raw =
+            options.incompleteContent ??
+            '{"summary":"Cut before the end of the plan","scenarios":[{"id":"welcome"';
+          finishReason = "length";
+        } else {
+          const scripted =
+            options.plans?.[planRequests] ?? options.plans?.at(-1);
+          planRequests++;
+          value = options.noScenarios
+            ? {
+                summary: "No browser changes",
+                scenarios: [],
+                skipped: [{ sourceFile: "src/form.ts", reason: "fixture" }],
+              }
+            : structuredClone(scripted ?? plan);
+          if (options.unnamedStatus && !options.noScenarios) {
+            (value as Plan).scenarios[0]!.assertions[0]!.target = {
+              by: "role",
+              value: "status",
+              name: "",
+            };
+          }
         }
       } else {
         // L'exécuteur rejoue le contrat figé et ne consulte plus le modèle : un
@@ -484,7 +523,7 @@ export async function fixture(
         );
         return;
       }
-      const text = JSON.stringify(value);
+      const text = raw ?? JSON.stringify(value);
       if (payload.stream === true) {
         if (modelTruncations > 0) {
           modelTruncations -= 1;
@@ -497,14 +536,14 @@ export async function fixture(
           res.end();
           return;
         }
-        sse(res, text);
+        sse(res, text, finishReason);
         return;
       }
       json(res, {
         choices: [
           {
             message: { content: text },
-            finish_reason: "stop",
+            finish_reason: finishReason,
           },
         ],
       });

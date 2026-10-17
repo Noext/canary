@@ -2547,6 +2547,146 @@ describe("runner false-green regressions", () => {
     expect(result.outcome).toBe("passed");
     expect(f.modelRequests).toHaveLength(2);
   }, 40_000);
+  it("replays once a plan cut by the endpoint's own output bound", async () => {
+    // Le run 49bdb8b9 est mort sur MODEL_OUTPUT_INCOMPLETE avec retries: 0 :
+    // l'endpoint avait répondu, la reprise d'un contenu inexploitable tranche.
+    const f = await setup({ modelIncomplete: 1 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(2);
+    // La réponse coupée n'offre rien à corriger : la reprise repose le plan.
+    expect(f.modelRequests).toHaveLength(2);
+    const events = await readFile(
+      join(f.dataDir, result.id, "events.jsonl"),
+      "utf8"
+    );
+    expect(events).toContain(
+      '"retry":{"attempt":1,"max":1,"code":"MODEL_OUTPUT_INCOMPLETE"}'
+    );
+  }, 40_000);
+  it("replays once a complete plan the schema cannot read", async () => {
+    // Le run 47fb77de est mort sur MODEL_JSON_INVALID avec retries: 0 : deux
+    // réponses illisibles suffisaient à perdre le run.
+    const f = await setup({ modelUnreadable: 2 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(3);
+    expect(f.modelRequests).toHaveLength(3);
+  }, 40_000);
+  it("keeps a second truncated generation fatal, naming the retry", async () => {
+    const f = await setup({ modelIncomplete: 2 });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("MODEL_OUTPUT_INCOMPLETE");
+    expect(result.diagnostic?.message).toContain("(after 1 retry)");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(2);
+    expect(f.modelRequests).toHaveLength(2);
+  }, 40_000);
+  it("sends no replay when retries are disabled", async () => {
+    const f = await setup({
+      env: { QA_MODEL_RETRIES: "0" },
+      modelIncomplete: 1,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("MODEL_OUTPUT_INCOMPLETE");
+    expect(result.usage?.retries).toBe(0);
+    expect(result.diagnostic?.message).not.toContain("retry");
+    expect(f.modelRequests).toHaveLength(1);
+  }, 40_000);
+  it.each([
+    401, 500,
+  ])("never replays a content failure the endpoint answers with HTTP %i", async (status) => {
+    const f = await setup({ completionsStatus: status });
+    fakeBrowser();
+    const request = vi.spyOn(globalThis, "fetch");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe(`HTTP_${status}`);
+    expect(result.usage?.retries).toBe(0);
+    // Ni 4xx ni 5xx ne s'améliorent au second essai : un seul envoi part.
+    expect(
+      request.mock.calls.filter(([url]) =>
+        String(url).endsWith("/chat/completions")
+      )
+    ).toHaveLength(1);
+  }, 40_000);
+  it("keeps the diagnostic on the response, bounded and without the prompt", async () => {
+    // Le prompt n'est jamais recopié dans le diagnostic, et l'extrait est borné :
+    // 500 caractères, plus la position d'arrêt de la génération.
+    const incomplete = `{"summary":"${"x".repeat(700)}","scenarios":[{"id":"welcome"`;
+    const f = await setup({
+      modelIncomplete: 2,
+      incompleteContent: incomplete,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const message = result.diagnostic?.message ?? "";
+    expect(message).toContain("finish_reason=length");
+    expect(message).toContain(`${incomplete.length} characters`);
+    // Un JSON resté ouvert à la coupure : la signature d'une troncature.
+    expect(message).toContain(JSON.stringify(incomplete.slice(0, 500)));
+    expect(message).not.toContain(JSON.stringify(incomplete.slice(0, 501)));
+    expect(message).toContain("[truncated]");
+    // Le prompt système et le diff de la PR restent hors de l'extrait.
+    expect(message).not.toContain("You plan functional QA");
+    expect(message).not.toContain("changedFiles");
+  }, 40_000);
+  it("keeps a second unreadable plan fatal, and names the drift in a redacted excerpt", async () => {
+    const f = await setup({
+      modelUnreadable: 3,
+      unreadableContent:
+        "I cannot use fixture-token for this plan, ask the maintainer.",
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const message = result.diagnostic?.message ?? "";
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("MODEL_JSON_INVALID");
+    expect(message).toContain("(after 1 retry)");
+    expect(result.usage?.retries).toBe(1);
+    // La reprise consommée n'ouvre pas un second cycle de correction : le plan
+    // reste fatal au troisième appel, sans boucle.
+    expect(f.modelRequests).toHaveLength(3);
+    // Contenu complet (finish_reason=stop) mais hors schéma : une dérive du
+    // modèle, là où une accolade non fermée trahirait une coupure.
+    expect(message).toContain("finish_reason=stop");
+    expect(result.diagnostic?.hint).toContain(
+      "Response content is not valid JSON"
+    );
+    expect(message).toContain("cannot use");
+    expect(message).toContain("[REDACTED]");
+    expect(message).not.toContain("fixture-token");
+    expect(message).not.toContain("You plan functional QA");
+  }, 40_000);
   it("refuses a retry the current failure and the retry would push over the cap", () => {
     // `used` compte les réponses et les reprises déjà faites : l'échec courant
     // et la reprise envisagée occupent deux créneaux de plus.
