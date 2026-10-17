@@ -33,13 +33,15 @@ interface DeliveredTrial {
 }
 
 /**
- * Codes rejouables : la connexion meurt avant tout contenu utile, donc la
- * reprise est sans effet de bord et sans double facturation. Les deux derniers
- * sont nos normalisations de transport — `TIMEOUT` (délai du client modèle,
- * issu d'un `AbortSignal.timeout`) et `MODEL_STREAM_TRUNCATED` (flux fermé
- * proprement avant `[DONE]`). Tout autre code échoue sans reprise : un refus
- * sémantique (JSON, schéma, preuve) et une erreur rapportée par l'endpoint
- * (`MODEL_STREAM_ERROR`) sont déterministes, pas transitoires.
+ * Codes de transport rejouables : la connexion meurt avant tout contenu utile,
+ * donc la reprise est sans effet de bord et sans double facturation. Les deux
+ * derniers sont nos normalisations de transport — `TIMEOUT` (délai du client
+ * modèle, issu d'un `AbortSignal.timeout`) et `MODEL_STREAM_TRUNCATED` (flux
+ * fermé proprement avant `[DONE]`). Restent définitifs un refus de plan (preuve,
+ * schéma, couverture) et une erreur rapportée par l'endpoint
+ * (`MODEL_STREAM_ERROR`) : ils ne s'améliorent pas en rejouant la même requête.
+ * Les deux codes d'une réponse reçue mais inexploitable ont leur propre reprise,
+ * unique (`CONTENT_RETRY_CODES`).
  */
 const TRANSPORT_CODES = new Set([
   "ECONNRESET",
@@ -50,13 +52,43 @@ const TRANSPORT_CODES = new Set([
   "MODEL_STREAM_TRUNCATED",
 ]);
 
+/**
+ * Codes d'un contenu inexploitable, rejoués une fois : l'endpoint a répondu,
+ * mais sa réponse ne peut pas servir de plan — vide ou coupée par sa propre
+ * borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou complète mais hors schéma
+ * (`MODEL_JSON_INVALID`). Ces deux échecs sont mesurés avec `retries: 0` : rien
+ * ne distingue une coupure de transport d'une dérive du modèle, et un endpoint
+ * qui alterne les deux ne se voit pas. Une reprise unique tranche ce doute pour
+ * le prix d'un appel, là où le run entier est perdu. Tout autre code reste
+ * définitif : un refus de plan, un `MODEL_STREAM_ERROR`, un HTTP 4xx/5xx ou un
+ * échec d'authentification ne changent pas au second essai.
+ */
+const CONTENT_RETRY_CODES = new Set([
+  "MODEL_OUTPUT_INCOMPLETE",
+  "MODEL_JSON_INVALID",
+]);
+
 /** Délais entre deux reprises ; le nombre de reprises vient de QA_MODEL_RETRIES. */
 export const MODEL_RETRY_DELAYS_MS = [1000, 4000, 10_000];
 
 /**
- * Plafond absolu d'appels modèle par run, reprises de transport et reprise
- * sémantique confondues : une valeur généreuse de QA_MODEL_RETRIES ne peut pas
- * faire exploser la dépense d'un run.
+ * Reprises d'un contenu inexploitable par tentative de plan, quel que soit
+ * QA_MODEL_RETRIES : une seule, et jamais un second cycle de correction.
+ */
+const CONTENT_RETRY_ATTEMPTS = 1;
+
+/**
+ * Appels d'une tentative de plan : la génération, puis la correction de son
+ * contenu illisible dans la même conversation. Le contenu encore illisible
+ * après ces deux appels est fatal, sauf la reprise d'un contenu inexploitable
+ * qui accorde un appel de plus (`CONTENT_RETRY_ATTEMPTS`).
+ */
+const PLAN_ATTEMPT_CALLS = 2;
+
+/**
+ * Plafond absolu d'appels modèle par run : reprises de transport, reprise d'un
+ * contenu inexploitable et correction d'un plan refusé comprises. Une valeur
+ * généreuse de QA_MODEL_RETRIES ne peut pas faire exploser la dépense d'un run.
  */
 export const MAX_MODEL_CALLS_PER_RUN = 10;
 
@@ -91,6 +123,21 @@ function failedAttempt(
   );
 }
 
+/**
+ * L'échec définitif d'une réponse rejouée : le code et l'indice restent ceux de
+ * la cause, et le message dit que le second essai a bien eu lieu — sans quoi le
+ * diagnostic laisserait croire à une seule tentative.
+ */
+function retriedFailure(error: QaError, retries: number): QaError {
+  return retries === 0
+    ? error
+    : new QaError(
+        error.code,
+        `${error.message} (after ${retries} retry)`,
+        error.hint
+      );
+}
+
 /** Classe une erreur : code rejouable, ou `undefined` (échec définitif). */
 export function transportCode(error: unknown): string | undefined {
   for (const candidate of [
@@ -122,6 +169,29 @@ function measuredCount(value: number | undefined): number | undefined {
     : undefined;
 }
 
+/**
+ * Caractères de la réponse fautive conservés dans le diagnostic. Borné, sans le
+ * prompt et passé par `redact` : l'extrait sert à distinguer une troncature
+ * d'une dérive, jamais à recopier une réponse entière dans un rapport.
+ */
+const OUTPUT_EXCERPT_CHARS = 500;
+
+/**
+ * Extrait borné de la réponse fautive, avec sa position d'arrêt : le nombre de
+ * caractères reçus et le `finish_reason` de l'endpoint. Une accolade non fermée à
+ * la fin de l'extrait trahit une génération coupée, un JSON complet — ou du texte
+ * qui n'en est pas — porte une dérive du modèle que le schéma refuse.
+ */
+function responseExcerpt(
+  content: string,
+  finishReason: string | undefined,
+  config: Config
+): string {
+  const safe = redact(content, config);
+  const excerpt = safe.slice(0, OUTPUT_EXCERPT_CHARS);
+  return ` Response excerpt (${safe.length} characters, finish_reason=${finishReason ?? "none"}): ${JSON.stringify(excerpt)}${safe.length > excerpt.length ? " [truncated]" : ""}`;
+}
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -145,8 +215,29 @@ export class Model {
     ];
     let validation = "";
     let refused: T | undefined;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      this.claim(messages, maxTokens);
+    /** Reprises d'un contenu inexploitable déjà consommées : une au plus. */
+    let contentRetries = 0;
+    /**
+     * Corrections déjà déposées dans la conversation. Elles bornent le cycle de
+     * correction à `PLAN_ATTEMPT_CALLS` appels — la génération, puis la sienne —
+     * sans compter la reprise d'un contenu inexploitable : cette reprise ne
+     * produit aucun candidat, donc elle ne doit pas manger le créneau de
+     * correction d'un refus renvoyé ensuite. Compter les itérations de la boucle
+     * reviendrait à confondre les deux.
+     */
+    let corrections = 0;
+    /**
+     * Vrai quand la reprise d'un contenu inexploitable a déjà déposé la
+     * réservation de l'appel qu'elle autorise : l'itération suivante ne réserve
+     * pas ce même appel une seconde fois.
+     */
+    let prepaid = false;
+    for (;;) {
+      if (prepaid) {
+        prepaid = false;
+      } else {
+        this.claim(messages, maxTokens);
+      }
       const started = Date.now();
       const response = await traced(
         "model.json",
@@ -195,12 +286,24 @@ export class Model {
       checkBudget();
       const choice = response.choices?.[0];
       const content = choice?.message?.content;
-      if (!content || choice?.finish_reason === "length") {
-        throw new QaError(
-          "MODEL_OUTPUT_INCOMPLETE",
-          "AI returned an empty or truncated response",
-          "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
+      const finishReason = choice?.finish_reason;
+      if (!content || finishReason === "length") {
+        // Une génération coupée par sa propre borne n'offre rien à corriger :
+        // la reprise repose le même prompt, une seule fois, et l'échec remonte
+        // tel quel quand elle n'est plus permise.
+        await this.replayUnusableContent(
+          new QaError(
+            "MODEL_OUTPUT_INCOMPLETE",
+            `AI returned an empty or truncated response.${responseExcerpt(content ?? "", finishReason, this.config)}`,
+            "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
+          ),
+          messages,
+          maxTokens,
+          contentRetries
         );
+        contentRetries += 1;
+        prepaid = true;
+        continue;
       }
       let value: T;
       try {
@@ -216,11 +319,33 @@ export class Model {
                 .join("; ")
             : "Response content is not valid JSON";
         validation = redact(validation, this.config).slice(0, 2000);
+        // Le contenu illisible rejoint la conversation pour que l'appel rejoué
+        // sache ce qui n'a pas été lu, et cela AVANT toute réservation : la
+        // reprise réserve ce qu'elle envoie, jamais une conversation plus courte
+        // que celle qui partira.
         messages.push({ role: "assistant", content });
         messages.push({
           role: "user",
           content: `Invalid JSON or schema: ${validation}. Return only a JSON object matching the exact schema in the system message. Do not add fields. Preserve the original product requirements and assertion targets.`,
         });
+        corrections += 1;
+        if (corrections >= PLAN_ATTEMPT_CALLS) {
+          // Après la correction, il ne reste qu'un appel dans la tentative :
+          // c'est le seul moment où la reprise d'un contenu inexploitable peut
+          // encore sauver le run.
+          await this.replayUnusableContent(
+            new QaError(
+              "MODEL_JSON_INVALID",
+              `AI returned invalid structured output twice.${responseExcerpt(content, finishReason, this.config)}`,
+              `Validation: ${validation}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
+            ),
+            messages,
+            maxTokens,
+            contentRetries
+          );
+          contentRetries += 1;
+          prepaid = true;
+        }
         continue;
       }
       // Un échec du contrôle appelé — navigateur, provenance, sonde de cibles —
@@ -238,15 +363,11 @@ export class Model {
         role: "user",
         content: redact(rejection, this.config).slice(0, 2000),
       });
+      corrections += 1;
+      if (corrections >= PLAN_ATTEMPT_CALLS) {
+        return refused;
+      }
     }
-    if (refused !== undefined) {
-      return refused;
-    }
-    throw new QaError(
-      "MODEL_JSON_INVALID",
-      "AI returned invalid structured output twice",
-      `Validation: ${validation}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
-    );
   }
 
   /**
@@ -496,17 +617,66 @@ export class Model {
           throw failedAttempt(error, code, attempt);
         }
         this.claim(messages, maxTokens);
-        const wait =
-          (MODEL_RETRY_DELAYS_MS[
-            Math.min(attempt, MODEL_RETRY_DELAYS_MS.length - 1)
-          ] ?? 10_000) + Math.floor(Math.random() * 250);
         if (scope) {
           scope.retries = (scope.retries ?? 0) + 1;
           scope.onRetry?.({ attempt: attempt + 1, max, code });
         }
-        await this.pause(wait);
+        await this.pause(this.retryDelay(attempt));
       }
     }
+  }
+
+  /**
+   * Délai de repli de la reprise `attempt`, avec le jitter qui évite la rafale.
+   * Le dernier délai connu porte les reprises suivantes.
+   */
+  private retryDelay(attempt: number): number {
+    return (
+      (MODEL_RETRY_DELAYS_MS[
+        Math.min(attempt, MODEL_RETRY_DELAYS_MS.length - 1)
+      ] ?? 10_000) + Math.floor(Math.random() * 250)
+    );
+  }
+
+  /**
+   * Rejoue une seule fois un contenu inexploitable, et remonte l'échec sinon.
+   *
+   * L'endpoint a répondu, mais sa réponse ne peut pas servir de plan : elle est
+   * vide ou coupée par la borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou
+   * complète mais hors schéma (`MODEL_JSON_INVALID`). Elle emprunte le mécanisme
+   * de la reprise de transport — admission (`mayRetry`, plafond d'appels
+   * partagé), réservation avant tout envoi, délai de repli, compteur
+   * `usage.retries` et événement de progression — pour un seul appel de plus par
+   * tentative de plan. Elle reste bornée par `QA_MODEL_RETRIES` : un opérateur
+   * qui désactive les reprises désactive celle-ci aussi. Quand elle n'est plus
+   * permise — une seule par tentative, variable à 0, plafond d'appels atteint ou
+   * enveloppe insuffisante — l'échec remonte tel quel, enrichi de la reprise déjà
+   * consommée. La réservation est déposée avant la déclaration pour qu'une
+   * enveloppe qui ne couvre pas la reprise la refuse sans qu'aucune reprise soit
+   * annoncée ni envoyée.
+   */
+  private async replayUnusableContent(
+    error: QaError,
+    messages: { content: string; role: string }[],
+    maxTokens: number,
+    retries: number
+  ): Promise<void> {
+    const scope = runScope.getStore();
+    const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
+    const max = Math.min(CONTENT_RETRY_ATTEMPTS, this.config.QA_MODEL_RETRIES);
+    if (
+      retries > 0 ||
+      !CONTENT_RETRY_CODES.has(error.code) ||
+      !mayRetry(0, max, used)
+    ) {
+      throw retriedFailure(error, retries);
+    }
+    this.claim(messages, maxTokens);
+    if (scope) {
+      scope.retries = (scope.retries ?? 0) + 1;
+      scope.onRetry?.({ attempt: 1, max, code: error.code });
+    }
+    await this.pause(this.retryDelay(0));
   }
 
   /** Attente bornée qui respecte l'annulation du run. */
