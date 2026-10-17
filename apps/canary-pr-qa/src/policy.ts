@@ -486,8 +486,11 @@ function witnessHint(found: string[], context: PrContext): string {
  * la validation refuserait — mais se tait quand la citation n'existe dans aucune
  * évidence du contexte. Ce silence laissait le planificateur recopier la même
  * citation ; le repli nomme alors la réparation : la ligne réelle dont la copie
- * est amputée (voir `amputatedQuoteRemedy`) quand elle se vérifie, sinon la seule
- * réparation légale qui reste, citer une ligne réelle du fichier déclaré.
+ * est amputée — et ce qu'elle écrit là où elle en diffère — quand elle se
+ * vérifie (voir `amputatedQuoteRemedy`), la ligne dont la copie s'écarte sans en
+ * être une amputation quand c'est elle qui se vérifie (voir
+ * `divergentQuoteRemedy`), sinon la seule réparation légale qui reste, citer une
+ * ligne réelle du fichier déclaré.
  */
 const NO_CHANGED_FILE_WITNESS =
   "The quote exists in no file this PR changes; quote a real line of the declared file instead.";
@@ -508,6 +511,7 @@ function witnessLocation(
   // ligne citer, là où l'aveu laisse le planificateur recopier la même copie.
   return (
     amputatedQuoteRemedy(requirement, context, policy, scans).trim() ||
+    divergentQuoteRemedy(requirement, context, policy, scans).trim() ||
     NO_CHANGED_FILE_WITNESS
   );
 }
@@ -980,13 +984,42 @@ export interface AmputatedQuote {
   /** Faux quand la ligne dépasse la borne de suggestion : le candidat est une fenêtre. */
   wholeLine: boolean;
 }
-/** Ce que le refus dit de la partie perdue, et la lecture qui en découle. */
+/**
+ * Ce que le refus dit de la partie perdue, et la lecture qui en découle. Le
+ * défaut est séparé de la lecture parce qu'une copie ALTÉRÉE à l'intérieur garde
+ * le défaut — sa fin manque toujours — sans la lecture, qui affirmerait qu'elle
+ * n'est que le début de la ligne alors que le diagnostic de divergence nomme ce
+ * qu'elle écrit à la place (voir `quoteDivergence`).
+ */
 const AMPUTATION_FAULT: Record<QuoteAmputation, string> = {
-  end: "its end is missing, so the copy is only the beginning of that line",
+  end: "its end is missing",
   middle:
     "its beginning and its end are missing, so the copy is only a fragment taken inside that line",
-  start: "its beginning is missing, so the copy is only the end of that line",
+  start: "its beginning is missing",
 };
+/** La lecture qui suit le défaut quand rien ne la contredit. */
+const AMPUTATION_READING: Record<QuoteAmputation, string> = {
+  end: "so the copy is only the beginning of that line",
+  middle: "",
+  start: "so the copy is only the end of that line",
+};
+/**
+ * La portion exacte de la ligne réelle à citer à la place de la copie refusée,
+ * et ce que le refus dit d'elle : la ligne entière quand elle tient dans la
+ * borne de `quote`, sinon la fenêtre de jetons ENTIERS que `quoteableFragment`
+ * en a extraite — nommée comme un fragment, jamais comme la ligne entière, pour
+ * qu'une consigne ne demande pas de citer « cette ligne » en donnant un fragment
+ * pris au milieu d'elle.
+ */
+function quoteRepair(
+  line: number,
+  candidate: string,
+  wholeLine: boolean
+): string {
+  return wholeLine
+    ? `quote that whole line from its first character instead: ${line}: ${JSON.stringify(candidate)}.`
+    : `that line is too long to quote whole, so quote this exact fragment of it instead: ${line}: ${JSON.stringify(candidate)}.`;
+}
 /** Un bord d'un découpage : le fragment recopié et sa forme normalisée. */
 interface AmputationEdge {
   fragment: string;
@@ -1019,16 +1052,28 @@ function amputationProbe(quote: string): AmputationProbe {
   return { copy: normalizeQuoteText(quote), quote, splits };
 }
 /**
- * Citations dont la copie amputée est examinée pour une même validation, et
- * verdict mémorisé de chacune : `remaining` compte les citations qui peuvent
- * encore être examinées, `found` porte ce que le balayage en a dit. Deux
- * plafonds gouvernent ce travail — `CITED_LINES_EXAMINED` lignes par citation,
+ * Les deux verdicts d'un même balayage du fichier cité : la ligne dont la copie
+ * est une amputation, et l'endroit où cette copie s'écarte de cette même ligne.
+ * Les deux sont rendus ensemble parce qu'ils viennent du même parcours et du
+ * même budget : un refus peut donc nommer la ligne ET ce qui diffère réellement
+ * sans repayer le fichier.
+ */
+interface QuoteCopyScan {
+  amputation: AmputatedQuote | undefined;
+  divergence: QuoteDivergence | undefined;
+}
+/**
+ * Citations dont la copie est examinée pour une même validation, et verdict
+ * mémorisé de chacune : `remaining` compte les citations qui peuvent encore être
+ * examinées, `found` porte ce que le balayage en a dit. Deux plafonds gouvernent
+ * ce travail — `CITED_LINES_EXAMINED` lignes par citation,
  * `AMPUTATION_QUOTES_EXAMINED` citations par validation — parce qu'un plan
  * hostile aligne les citations fautives et que le worker tient un lease : hors
  * de ces bornes, le refus reste rendu, seul son remède détaillé se tait. Le
  * verdict est mémorisé parce que le remède d'une même citation est évalué deux
  * fois — le conseil de l'exigence, puis la ligne du refus — et qu'un plan peut
- * la répéter : chaque citation examinée ne paie qu'un balayage.
+ * la répéter : chaque citation examinée ne paie qu'un balayage, pour ses deux
+ * verdicts.
  *
  * Un seul budget est créé au point d'entrée du gate (voir `planRefusals`,
  * runner.ts) et traverse le chemin qui rend un remède détaillé — les deux
@@ -1039,7 +1084,7 @@ function amputationProbe(quote: string): AmputationProbe {
  * balayage pour chaque exigence que le schéma autorise.
  */
 export interface AmputationScans {
-  found: Map<string, AmputatedQuote | undefined>;
+  found: Map<string, QuoteCopyScan | undefined>;
   remaining: number;
 }
 /** Citations examinées par validation : au-delà, le remède détaillé se tait. */
@@ -1149,6 +1194,41 @@ export function amputatedQuote(
   policy: Policy,
   scans: AmputationScans = amputationScans()
 ): AmputatedQuote | undefined {
+  return quoteCopyScan(requirement, context, policy, scans)?.amputation;
+}
+/**
+ * L'endroit où la copie refusée s'écarte de la ligne réelle dont elle est
+ * recopiée : la ligne, la portion exacte qu'elle reproduit encore, et TOUTES les
+ * divergences qu'elle porte avec elle — ce que la ligne écrit là où la copie en
+ * diffère, et ce que la copie écrit à la place. Une copie ALTÉRÉE à l'intérieur
+ * n'est pas une amputation de bord : le gate la refuse, mais le remède
+ * d'amputation nomme alors une cause fausse — sa fin ne manque pas, son texte
+ * diffère. C'est ce que ce diagnostic dit à sa place, avec le fragment réel le
+ * plus proche et la portion exacte de la ligne à citer à la place.
+ *
+ * Rendu par le même balayage et le même budget que l'amputation (voir
+ * `quoteCopyScan`) : le refus qui nomme la ligne ne repaie pas le fichier cité.
+ */
+export function quoteDivergence(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
+): QuoteDivergence | undefined {
+  return quoteCopyScan(requirement, context, policy, scans)?.divergence;
+}
+/**
+ * Le balayage partagé, payé une fois par citation examinée : ses deux verdicts
+ * — l'amputation et la divergence — sortent du même parcours, donc `remaining`
+ * ne décrémente qu'une fois et le verdict mémorisé sert les deux (voir
+ * `AmputationScans`).
+ */
+function quoteCopyScan(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy,
+  scans: AmputationScans
+): QuoteCopyScan | undefined {
   const critical = isCriticalPath(policy, requirement.sourceFile);
   if (!quoteCarriesContent(requirement.quote, critical)) {
     return;
@@ -1161,25 +1241,63 @@ export function amputatedQuote(
     return;
   }
   scans.remaining -= 1;
-  const verdict = scanAmputatedQuote(requirement, context, policy, critical);
+  const verdict = scanQuoteCopy(requirement, context, policy, critical);
   scans.found.set(key, verdict);
   return verdict;
 }
-/** Le balayage lui-même, payé une fois par citation examinée (voir `amputatedQuote`). */
-function scanAmputatedQuote(
+/**
+ * Le balayage lui-même : la ligne dont la copie est une amputation, puis — sur
+ * cette ligne, ou sur la plus proche quand aucune amputation ne se vérifie —
+ * l'endroit où la copie s'en écarte. Une amputation dont la revendication est
+ * contredite par l'alignement des mots est écartée au profit de la divergence :
+ * une copie qui atteint la fin de la ligne ne peut pas avoir sa fin manquante,
+ * elle a un texte altéré (voir `amputationConfirmed`).
+ */
+function scanQuoteCopy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
   policy: Policy,
   critical: boolean
-): AmputatedQuote | undefined {
+): QuoteCopyScan | undefined {
   if (stitchedQuoteFragments(requirement, context, policy).length > 0) {
     return;
   }
-  let best: AmputatedQuote | undefined;
+  const lines = fileContentLines(requirement, context);
+  const copy = requirement.quote;
+  const copyWords = lineWords(copy);
+  const match = scanAmputation(lines, amputationProbe(copy), critical);
+  const words = match ? lineWords(match.line.text) : [];
+  const run = match ? longestWordRun(copyWords, words) : undefined;
+  const confirmed =
+    match && amputationConfirmed(match.quote, run, words) ? match : undefined;
+  const divergence = confirmed
+    ? lineDivergence(
+        copy,
+        copyWords,
+        confirmed.line.text,
+        confirmed.line.line,
+        critical
+      )
+    : scanDivergence(lines, copy, copyWords, critical);
+  return confirmed || divergence
+    ? { amputation: confirmed?.quote, divergence }
+    : undefined;
+}
+/** La ligne réelle dont la copie est une amputation, avec son verdict. */
+interface AmputationMatch {
+  line: PostChangeLine;
+  quote: AmputatedQuote;
+}
+/** Le balayage d'amputation, payé une fois par citation examinée. */
+function scanAmputation(
+  lines: PostChangeLine[],
+  probe: AmputationProbe,
+  critical: boolean
+): AmputationMatch | undefined {
+  let best: AmputationMatch | undefined;
   let longest = 0;
-  const probe = amputationProbe(requirement.quote);
-  for (const { line, text } of fileContentLines(requirement, context)) {
-    const amputation = lineAmputation(text, probe);
+  for (const item of lines) {
+    const amputation = lineAmputation(item.text, probe);
     if (!amputation) {
       continue;
     }
@@ -1187,15 +1305,23 @@ function scanAmputatedQuote(
     if (best && longest >= score) {
       continue;
     }
-    const candidate = quoteableFragment(text, amputation.fragment, critical);
+    const candidate = quoteableFragment(
+      item.text,
+      amputation.fragment,
+      critical
+    );
     if (candidate === "") {
       continue;
     }
     best = {
-      candidate,
-      kind: amputation.kind,
-      line,
-      wholeLine: normalizeQuoteText(candidate) === normalizeQuoteText(text),
+      line: item,
+      quote: {
+        candidate,
+        kind: amputation.kind,
+        line: item.line,
+        wholeLine:
+          normalizeQuoteText(candidate) === normalizeQuoteText(item.text),
+      },
     };
     longest = score;
   }
@@ -1203,14 +1329,15 @@ function scanAmputatedQuote(
 }
 /**
  * Remède d'une copie amputée : la ligne réelle dont elle est recopiée, la partie
- * que la copie a laissée de côté, puis la portion exacte à citer à la place — la
- * ligne entière quand elle tient dans la borne de `quote`, sinon la fenêtre de
- * jetons que `quoteableFragment` en a extraite, que le refus nomme comme un
- * fragment et jamais comme la ligne entière : une consigne qui demanderait de
- * citer « cette ligne » puis donnerait un fragment pris au milieu d'elle serait
- * contradictoire. Vide quand aucune ligne ne s'y vérifie, ou quand le budget de
- * la validation ne permet plus d'examiner cette citation, pour que l'appelant
- * retombe sur le remède d'aujourd'hui.
+ * que la copie a laissée de côté, puis la portion exacte à citer à la place.
+ * Quand la copie est en plus ALTÉRÉE à l'intérieur de cette ligne, le refus
+ * nomme aussi la divergence avant la partie perdue : c'est elle qui a fait
+ * refuser la copie, et sans elle le planificateur recopie la même altération. La
+ * lecture du défaut est alors écartée — une copie qui n'est pas le début fidèle
+ * de la ligne ne peut pas être « seulement le début » de cette ligne. Vide quand
+ * aucune ligne ne s'y vérifie, ou quand le budget de la validation ne permet
+ * plus d'examiner cette citation, pour que l'appelant retombe sur le remède
+ * d'aujourd'hui.
  */
 export function amputatedQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -1218,14 +1345,399 @@ export function amputatedQuoteRemedy(
   policy: Policy,
   scans: AmputationScans = amputationScans()
 ): string {
-  const amputated = amputatedQuote(requirement, context, policy, scans);
+  const scan = quoteCopyScan(requirement, context, policy, scans);
+  const amputated = scan?.amputation;
   if (!amputated) {
     return "";
   }
-  const repair = amputated.wholeLine
-    ? `quote that whole line from its first character instead: ${amputated.line}: ${JSON.stringify(amputated.candidate)}.`
-    : `that line is too long to quote whole, so quote this exact fragment of it instead: ${amputated.line}: ${JSON.stringify(amputated.candidate)}.`;
-  return `Your quote is copied from line ${amputated.line} of ${requirement.sourceFile} but ${AMPUTATION_FAULT[amputated.kind]}; ${repair}`;
+  const divergence = scan?.divergence;
+  const fault = divergence
+    ? `${divergenceFault(divergence)}, and ${AMPUTATION_FAULT[amputated.kind]}`
+    : `${AMPUTATION_FAULT[amputated.kind]}, ${AMPUTATION_READING[amputated.kind]}`;
+  return `Your quote is copied from line ${amputated.line} of ${requirement.sourceFile} but ${fault}; ${quoteRepair(amputated.line, amputated.candidate, amputated.wholeLine)}`;
+}
+/** Le sens d'une divergence : des caractères inventés, ou seuls les blancs qui diffèrent. */
+export type QuoteDivergenceKind = "invented" | "whitespace";
+/**
+ * Une divergence de la copie avec la ligne : les deux textes que le refus
+ * compare — ce que la ligne écrit là, recopié d'elle, et ce que la copie porte à
+ * la place, recopié d'elle — et son sens, lu sur ces deux textes : `whitespace`
+ * quand ils ne diffèrent que par leurs blancs, `invented` sinon.
+ */
+interface DivergenceFault {
+  copy: string;
+  kind: QuoteDivergenceKind;
+  real: string;
+}
+/**
+ * Où une copie refusée s'écarte de la ligne réelle qu'elle recopie : la ligne, la
+ * portion exacte qu'elle reproduit encore — le fragment réel le plus proche — et
+ * TOUTES les divergences qu'elle porte avec cette ligne, lues dans l'ordre de la
+ * copie. `kind` est le sens de l'ensemble : `whitespace` seulement quand aucune
+ * des divergences n'invente de caractère. `candidate` est la portion exacte de la
+ * ligne à citer à la place : la ligne entière quand elle tient dans la borne de
+ * `quote`, sinon la plus longue fenêtre de jetons ENTIERS qui porte `closest`.
+ * Jamais de texte inventé, jamais de jeton rogné.
+ */
+export interface QuoteDivergence {
+  candidate: string;
+  closest: string;
+  faults: DivergenceFault[];
+  kind: QuoteDivergenceKind;
+  line: number;
+  /** Faux quand la ligne dépasse la borne de suggestion : le candidat est une fenêtre. */
+  wholeLine: boolean;
+}
+/** Un mot d'une ligne ou d'une copie : une suite de lettres, chiffres et soulignés. */
+interface LineWord extends LineToken {
+  text: string;
+}
+function lineWords(value: string): LineWord[] {
+  return [...value.matchAll(/[\p{L}\p{N}_]+/gu)].map((match) => ({
+    end: (match.index ?? 0) + match[0].length,
+    start: match.index ?? 0,
+    text: match[0],
+  }));
+}
+/** Deux textes qui ne diffèrent que par leurs blancs : une copie reformatée. */
+function sameWithoutWhitespace(left: string, right: string): boolean {
+  return left.replace(/\s+/gu, "") === right.replace(/\s+/gu, "");
+}
+/** Une suite de mots communs : son premier mot dans la copie et dans la ligne, et sa longueur. */
+interface WordRun {
+  copy: number;
+  length: number;
+  line: number;
+}
+/** Longueur de la suite de mots égaux qui commence à ces deux positions. */
+function wordRunLength(
+  copy: LineWord[],
+  line: LineWord[],
+  copyIndex: number,
+  lineIndex: number
+): number {
+  let length = 0;
+  while (
+    copyIndex + length < copy.length &&
+    lineIndex + length < line.length &&
+    (copy[copyIndex + length] as LineWord).text ===
+      (line[lineIndex + length] as LineWord).text
+  ) {
+    length += 1;
+  }
+  return length;
+}
+/** La meilleure suite : la plus longue, à longueur égale celle qui commence le plus tôt. */
+function bestWordRun(best: WordRun | undefined, candidate: WordRun): WordRun {
+  if (
+    best &&
+    (candidate.length < best.length ||
+      (candidate.length === best.length && candidate.copy > best.copy))
+  ) {
+    return best;
+  }
+  return candidate;
+}
+/**
+ * Plus longue suite de mots que la copie et la ligne portent dans le même ordre,
+ * sans autre condition : la base des deux lectures de `scanQuoteCopy` — la
+ * divergence, qui exige en plus qu'elle touche un bord de la copie, et la
+ * vérification d'une amputation, qui lit si elle atteint les bords de la ligne.
+ * Les mots sont comparés comme `quoteTokenSet` les découpe, donc une suite
+ * commune survit aux blancs, aux guillemets et aux opérateurs qui les séparent :
+ * c'est exactement ce qu'une recopie ratée change. Un départ d'extension qui ne
+ * peut plus battre la meilleure suite est écarté, donc le balayage reste borné.
+ */
+function longestWordRun(
+  copy: LineWord[],
+  line: LineWord[]
+): WordRun | undefined {
+  const at = new Map<string, number[]>();
+  for (const [index, word] of line.entries()) {
+    const found = at.get(word.text);
+    if (found) {
+      found.push(index);
+    } else {
+      at.set(word.text, [index]);
+    }
+  }
+  let best: WordRun | undefined;
+  for (const [copyIndex, word] of copy.entries()) {
+    if (best && copy.length - copyIndex <= best.length) {
+      break;
+    }
+    for (const lineIndex of at.get(word.text) ?? []) {
+      if (best && line.length - lineIndex <= best.length) {
+        continue;
+      }
+      const length = wordRunLength(copy, line, copyIndex, lineIndex);
+      if (length > 0) {
+        best = bestWordRun(best, { copy: copyIndex, length, line: lineIndex });
+      }
+    }
+  }
+  return best;
+}
+/**
+ * Vrai quand l'amputation annoncée par le balayage est confirmée par les mots :
+ * une fin « manquante » que la copie atteint pourtant, ou un début « manquant »
+ * que la copie reprend pourtant, est une copie ALTÉRÉE et non une copie
+ * tronquée — le diagnostic de divergence le dit alors à sa place, sinon le refus
+ * nomme une cause fausse. Sans suite commune pour trancher, la revendication est
+ * gardée : elle vient d'un bord EXACT de la ligne.
+ */
+function amputationConfirmed(
+  amputation: AmputatedQuote,
+  run: WordRun | undefined,
+  words: LineWord[]
+): boolean {
+  if (!run) {
+    return true;
+  }
+  if (amputation.kind === "end") {
+    return run.line + run.length < words.length;
+  }
+  return amputation.kind === "start" ? run.line > 0 : true;
+}
+/**
+ * TOUTES les divergences de la copie d'avec la ligne, lues dans l'ordre de la
+ * copie : le texte d'avant la suite commune, puis chacun des écarts entre deux de
+ * ses mots, puis le texte d'après. Chaque bord est comparé à celui de la ligne —
+ * un début qui n'est pas la fin du début de la ligne, des blancs différents, une
+ * fin qui n'est pas le début de la fin de la ligne — et chaque fenêtre rendue est
+ * recopiée des deux textes : jamais de texte inventé. S'arrêter à la première
+ * fenêtre faisait mentir le refus : une copie qui changeait à la fois un blanc et
+ * un signe était annoncée comme ne différant que par ses blancs, la divergence
+ * suivante n'étant jamais lue (P2 de la revue de la PR #52). Les deux ouvertures
+ * sont donc comparées même quand la suite commune commence au premier mot des
+ * deux côtés : la ponctuation d'avant ce mot — `(` pour `[` — n'était jamais lue
+ * autrement, et le refus ne parlait que des blancs d'une copie qui changeait
+ * aussi son délimiteur (P2 de la même revue). Vide quand aucun bord ne diffère.
+ */
+function divergenceWindows(
+  copy: string,
+  copyWords: LineWord[],
+  text: string,
+  words: LineWord[],
+  run: WordRun
+): DivergenceFault[] {
+  const { copy: ci, length, line: li } = run;
+  const faults: DivergenceFault[] = [];
+  const add = (copyText: string, realText: string): void => {
+    faults.push({
+      copy: copyText,
+      kind: sameWithoutWhitespace(copyText, realText)
+        ? "whitespace"
+        : "invented",
+      real: realText,
+    });
+  };
+  // La tête de la copie face à celle de la ligne, quand la suite commune ne
+  // commence pas après un préfixe aligné mot pour mot : l'ouverture de la copie
+  // (`(`, `let`) ne se comparait nulle part autrement, et le refus ne parlait
+  // alors que des blancs de la suite commune (P2 de la revue de la PR #52, deux
+  // derniers tours).
+  const addHead = (): void => {
+    const copyHead = copy.slice(0, (copyWords[ci] as LineWord).start);
+    const realHead = text.slice(0, (words[li] as LineWord).start);
+    if (!realHead.endsWith(copyHead)) {
+      add(copyHead, realHead);
+    }
+  };
+  if (ci === 0) {
+    addHead();
+  } else if (ci === li) {
+    for (let index = 0; index < ci; index += 1) {
+      const copyWord = copyWords[index] as LineWord;
+      const realWord = words[index] as LineWord;
+      if (copyWord.text === realWord.text) {
+        continue;
+      }
+      const before = Math.max(0, index - 1);
+      add(
+        copy.slice((copyWords[before] as LineWord).start, copyWord.end),
+        text.slice((words[before] as LineWord).start, realWord.end)
+      );
+    }
+  } else if (li === 0) {
+    add(
+      copy.slice(
+        (copyWords[0] as LineWord).start,
+        (copyWords[ci] as LineWord).end
+      ),
+      text.slice(0, (words[0] as LineWord).end)
+    );
+  } else {
+    addHead();
+  }
+  for (let offset = 0; offset + 1 < length; offset += 1) {
+    const left = copyWords[ci + offset] as LineWord;
+    const right = copyWords[ci + offset + 1] as LineWord;
+    const realLeft = words[li + offset] as LineWord;
+    const realRight = words[li + offset + 1] as LineWord;
+    if (
+      copy.slice(left.end, right.start) ===
+      text.slice(realLeft.end, realRight.start)
+    ) {
+      continue;
+    }
+    add(
+      copy.slice(left.start, right.end),
+      text.slice(realLeft.start, realRight.end)
+    );
+  }
+  const copyTail = copy.slice((copyWords[ci + length - 1] as LineWord).end);
+  const realTail = text.slice((words[li + length - 1] as LineWord).end);
+  if (!realTail.startsWith(copyTail)) {
+    add(copyTail, realTail);
+  }
+  return faults;
+}
+/**
+ * La divergence de la copie d'avec une ligne réelle : la suite de mots la plus
+ * longue qui les rapproche — assez longue, et touchant un bord de la copie, pour
+ * qu'elle désigne une copie de CETTE ligne plutôt qu'une recousure, qui a son
+ * propre diagnostic (voir `stitchedQuoteFragments`) — puis TOUTES les fenêtres où
+ * les deux textes diffèrent. `undefined` quand la copie existe mot pour mot dans
+ * la ligne, quand aucun mot commun ne désigne la ligne, ou quand aucune fenêtre
+ * n'en sort un candidat citable : l'absence de diagnostic vaut mieux qu'une ligne
+ * nommée au hasard, et le refus garde alors son conseil générique, qui reste
+ * exact.
+ */
+function lineDivergence(
+  copy: string,
+  copyWords: LineWord[],
+  text: string,
+  line: number,
+  critical: boolean
+): QuoteDivergence | undefined {
+  if (quoteAppears(text, copy)) {
+    return;
+  }
+  const words = lineWords(text);
+  const run = longestWordRun(copyWords, words);
+  if (
+    !run ||
+    run.length < SUGGESTED_QUOTE_MIN_SHARED_TOKENS ||
+    (run.copy > 0 && run.copy + run.length < copyWords.length)
+  ) {
+    return;
+  }
+  const faults = divergenceWindows(copy, copyWords, text, words, run);
+  const [first] = faults;
+  if (!first) {
+    return;
+  }
+  const closest = text.slice(
+    (words[run.line] as LineWord).start,
+    (words[run.line + run.length - 1] as LineWord).end
+  );
+  // La copie doit être surtout CETTE ligne : quand la majeure partie de la copie
+  // est du texte que la ligne ne porte pas, elle est une fabrication ou une
+  // recousure, et le recouvrement de jetons la propose déjà comme ligne à citer
+  // (voir `suggestedQuoteLines`). Le seuil est celui de ce recouvrement, appliqué
+  // aux caractères : la part de la copie que la ligne porte réellement.
+  if (
+    closest.length <
+    normalizeQuoteText(copy).length * SUGGESTED_QUOTE_MIN_OVERLAP
+  ) {
+    return;
+  }
+  const candidate =
+    quoteableFragment(text, first.real, critical) ||
+    quoteableFragment(text, closest, critical);
+  if (candidate === "") {
+    return;
+  }
+  return {
+    candidate,
+    closest,
+    faults,
+    kind: faults.some((fault) => fault.kind === "invented")
+      ? "invented"
+      : "whitespace",
+    line,
+    wholeLine: normalizeQuoteText(candidate) === normalizeQuoteText(text),
+  };
+}
+/**
+ * La ligne réelle dont la copie s'écarte le plus : la portion qu'elle reproduit
+ * encore est la plus longue, à égalité la première du fichier. `undefined` quand
+ * aucune ligne ne franchit les conditions de `lineDivergence`.
+ */
+function scanDivergence(
+  lines: PostChangeLine[],
+  copy: string,
+  copyWords: LineWord[],
+  critical: boolean
+): QuoteDivergence | undefined {
+  let best: QuoteDivergence | undefined;
+  let longest = 0;
+  for (const { line, text } of lines) {
+    const divergence = lineDivergence(copy, copyWords, text, line, critical);
+    if (!divergence) {
+      continue;
+    }
+    const score = normalizeQuoteText(divergence.closest).length;
+    if (best && longest >= score) {
+      continue;
+    }
+    best = divergence;
+    longest = score;
+  }
+  return best;
+}
+/** Une divergence dite comme elle se compare : ce que la ligne écrit, puis la copie. */
+function faultClause(fault: DivergenceFault): string {
+  return `the file writes ${JSON.stringify(fault.real)} where your copy has ${JSON.stringify(fault.copy)}`;
+}
+/** Les divergences dites à la suite, dans l'ordre de la copie. */
+function faultClauses(faults: DivergenceFault[]): string {
+  const clauses = faults.map(faultClause);
+  const last = clauses.at(-1) ?? "";
+  const head = clauses.slice(0, -1).join(", ");
+  return head === "" ? last : `${head}, and ${last}`;
+}
+/**
+ * Ce que le refus dit des divergences d'une copie avec la ligne qu'elle recopie :
+ * leur sens, lu sur TOUTES les fenêtres — des blancs seulement quand aucune
+ * n'invente de caractère — puis chacune d'elles, recopiée de la ligne et de la
+ * copie. Le sens lu sur la première fenêtre seule annonçait « only in whitespace »
+ * d'une copie qui changeait aussi un signe plus loin, et le planificateur ne
+ * réparait que les blancs (P2 de la revue de la PR #52) : chaque divergence de la
+ * copie est donc nommée, et le sens porte sur l'ensemble.
+ */
+function divergenceFault(divergence: QuoteDivergence): string {
+  const whitespace = divergence.faults.some(
+    (fault) => fault.kind === "whitespace"
+  );
+  let reading = "only in whitespace";
+  if (divergence.kind === "invented") {
+    reading = whitespace ? "in whitespace and in characters" : "in characters";
+  }
+  return `it differs from that line ${reading}: ${faultClauses(divergence.faults)}`;
+}
+/**
+ * Remède d'une copie qui s'écarte d'une ligne réelle sans en être une amputation
+ * de bord : la ligne, la première différence avec elle — ce que le fichier écrit
+ * là où la copie a autre chose — puis la portion exacte à citer à la place. C'est
+ * le défaut que le remède générique ne nommait pas : une copie retapée caractère
+ * par caractère, dont les blancs ou une expression diffèrent, est refusée à juste
+ * titre, mais son remède doit dire CE QUI DIFFÈRE, sinon le planificateur
+ * reconstruit la même copie. Vide quand aucune ligne ne se vérifie, ou quand le
+ * budget de la validation ne permet plus d'examiner cette citation.
+ */
+export function divergentQuoteRemedy(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  policy: Policy,
+  scans: AmputationScans = amputationScans()
+): string {
+  const divergence = quoteDivergence(requirement, context, policy, scans);
+  if (!divergence) {
+    return "";
+  }
+  return `Your quote is copied from line ${divergence.line} of ${requirement.sourceFile} but ${divergenceFault(divergence)}; ${quoteRepair(divergence.line, divergence.candidate, divergence.wholeLine)}`;
 }
 /**
  * Remède unique d'une exigence dont la citation n'a aucun témoin : quand la
@@ -1236,15 +1748,18 @@ export function amputatedQuoteRemedy(
  * consommée, et le fichier qui porte réellement le texte resterait non couvert.
  * Sinon le remède est le diagnostic de recousure quand il se vérifie (voir
  * `stitchedQuoteRemedy`), la ligne réelle dont la copie est amputée quand elle
- * se vérifie (voir `amputatedQuoteRemedy`), puis une ligne réelle du fichier cité
- * (voir `quoteSuggestion`). La recousure et l'amputation passent avant la
- * similitude de jetons parce qu'elles nomment le défaut mesuré de la copie, là où
- * le recouvrement ne propose qu'une ligne plausible : c'est le cas du lot G, où
- * le recouvrement ne proposait rien, et du lot J, où il proposait la bonne ligne
- * sans dire ce qui manquait. Vide quand aucun des quatre ne s'applique — ou
- * quand le budget de la validation ne permet plus de balayer le fichier cité —
- * pour que l'appelant retombe sur le conseil générique plutôt que sur un remède
- * vide.
+ * se vérifie (voir `amputatedQuoteRemedy`, qui nomme aussi la divergence avec
+ * cette ligne), la divergence seule quand la copie n'est l'amputation d'aucune
+ * ligne (voir `divergentQuoteRemedy`), puis une ligne réelle du fichier cité
+ * (voir `quoteSuggestion`). La recousure, l'amputation et la divergence passent
+ * avant la similitude de jetons parce qu'elles nomment le défaut mesuré de la
+ * copie, là où le recouvrement ne propose qu'une ligne plausible : c'est le cas
+ * du lot G, où le recouvrement ne proposait rien, du lot J, où il proposait la
+ * bonne ligne sans dire ce qui manquait, et du lot K, où la copie retapée était
+ * refusée sans que le refus nomme ce qu'elle avait changé. Vide quand aucun des
+ * cinq ne s'applique — ou quand le budget de la validation ne permet plus de
+ * balayer le fichier cité — pour que l'appelant retombe sur le conseil générique
+ * plutôt que sur un remède vide.
  * Les trois diagnostics détaillés balaient le fichier cité pour la même
  * citation, donc le budget les écarte tous les trois : c'est ce silence, partagé
  * par les deux moitiés du gate, qui borne le travail d'amputation.
@@ -1265,6 +1780,7 @@ export function absentRequirementRemedy(
   return (
     stitchedQuoteRemedy(requirement, context, policy).trim() ||
     amputatedQuoteRemedy(requirement, context, policy, scans).trim() ||
+    divergentQuoteRemedy(requirement, context, policy, scans).trim() ||
     quoteSuggestion(requirement, context, policy).trim()
   );
 }
@@ -1347,16 +1863,22 @@ export function ungroundedPlanRefusals(
       const detailed =
         found.length === 0 && amputationScanAllowed(scans, requirement);
       // La copie amputée est déjà nommée par le conseil de l'exigence (voir
-      // `witnessLocation`) : la suggestion de ligne la répéterait mot pour mot.
+      // `witnessLocation`), comme la divergence d'une copie qui n'est
+      // l'amputation d'aucune ligne : la suggestion de ligne les répéterait mot
+      // pour mot, et elle ne doit jamais masquer ce qui diffère réellement.
       const amputated = detailed
         ? amputatedQuoteRemedy(requirement, context, policy, scans).trim()
         : "";
-      const stitched =
+      const divergent =
         detailed && amputated === ""
+          ? divergentQuoteRemedy(requirement, context, policy, scans).trim()
+          : "";
+      const stitched =
+        detailed && amputated === "" && divergent === ""
           ? stitchedQuoteRemedy(requirement, context, policy).trim()
           : "";
       const suggestion =
-        detailed && amputated === "" && stitched === ""
+        detailed && amputated === "" && divergent === "" && stitched === ""
           ? quoteSuggestion(requirement, context, policy)
           : "";
       const remedy = stitched
