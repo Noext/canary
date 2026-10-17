@@ -2389,6 +2389,73 @@ it("reports both the whitespace and the changed character of a retyped copy", ()
   expect(line).toContain(`61: ${JSON.stringify(BOTH_KINDS_LINE)}`);
 });
 /**
+ * La ponctuation d'avant le premier mot commun : la suite commune commence au
+ * premier mot des deux textes, donc le `(` de la copie fait face au `[` de la
+ * ligne. Les deux ouvertures ne se comparaient pas dans ce cas, et le refus ne
+ * parlait que du blanc de la copie — la même revendication fausse que la première
+ * fenêtre seule (P2 de la revue de la PR #52, cas mesuré par la revue).
+ */
+const LEAD_DELIMITER_PATH = "apps/web/app/page.tsx";
+const LEAD_DELIMITER_LINE = "[alpha, beta = gamma]";
+const LEAD_DELIMITER_QUOTE = "(alpha, beta= gamma]";
+const leadDelimiterContext: PrContext = contextWith([
+  {
+    filename: LEAD_DELIMITER_PATH,
+    patch: ["@@ -60,2 +60,3 @@", "   // total", `+${LEAD_DELIMITER_LINE}`].join(
+      "\n"
+    ),
+  },
+]);
+function leadDelimiterPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash-lead-delimiter",
+      sourceFiles: [LEAD_DELIMITER_PATH],
+      requirements: [{ sourceFile: LEAD_DELIMITER_PATH, quote }],
+    },
+  ]);
+}
+it("names the leading delimiter a retyped copy changed", () => {
+  const requirement = {
+    quote: LEAD_DELIMITER_QUOTE,
+    sourceFile: LEAD_DELIMITER_PATH,
+  };
+  expect(
+    requirementHasWitness(requirement, leadDelimiterContext, policyFor())
+  ).toBe(false);
+  const divergence = quoteDivergence(
+    requirement,
+    leadDelimiterContext,
+    policyFor()
+  );
+  // L'ouverture est lue comme les autres fenêtres : le `(` de la copie face au
+  // `[` de la ligne, puis le blanc de la copie.
+  expect(divergence).toMatchObject({
+    candidate: LEAD_DELIMITER_LINE,
+    faults: [
+      { copy: "(", kind: "invented", real: "[" },
+      { copy: "beta= gamma", kind: "whitespace", real: "beta = gamma" },
+    ],
+    kind: "invented",
+    line: 61,
+    wholeLine: true,
+  });
+  const [line = ""] = ungroundedPlanRefusals(
+    leadDelimiterPlan(LEAD_DELIMITER_QUOTE),
+    leadDelimiterContext,
+    policyFor()
+  );
+  expect(line).toContain(`copied from line 61 of ${LEAD_DELIMITER_PATH}`);
+  expect(line).toContain(
+    "it differs from that line in whitespace and in characters"
+  );
+  expect(line).toContain(
+    `the file writes ${JSON.stringify("[")} where your copy has ${JSON.stringify("(")}`
+  );
+  expect(line).not.toContain("only in whitespace");
+  expect(line).toContain(`61: ${JSON.stringify(LEAD_DELIMITER_LINE)}`);
+});
+/**
  * Ligne réelle plus longue que la borne de `quoteableFragment`, avec une copie
  * qui s'en écarte : le remède doit proposer la plus longue fenêtre de jetons
  * ENTIERS réellement présente sur cette ligne — jamais la ligne entière, jamais

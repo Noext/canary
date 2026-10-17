@@ -1508,8 +1508,11 @@ function amputationConfirmed(
  * recopiée des deux textes : jamais de texte inventé. S'arrêter à la première
  * fenêtre faisait mentir le refus : une copie qui changeait à la fois un blanc et
  * un signe était annoncée comme ne différant que par ses blancs, la divergence
- * suivante n'étant jamais lue (P2 de la revue de la PR #52). Vide quand aucun
- * bord ne diffère.
+ * suivante n'étant jamais lue (P2 de la revue de la PR #52). Les deux ouvertures
+ * sont donc comparées même quand la suite commune commence au premier mot des
+ * deux côtés : la ponctuation d'avant ce mot — `(` pour `[` — n'était jamais lue
+ * autrement, et le refus ne parlait que des blancs d'une copie qui changeait
+ * aussi son délimiteur (P2 de la même revue). Vide quand aucun bord ne diffère.
  */
 function divergenceWindows(
   copy: string,
@@ -1529,7 +1532,7 @@ function divergenceWindows(
       real: realText,
     });
   };
-  if (ci === 0 && li > 0) {
+  if (ci === 0) {
     const copyHead = copy.slice(0, (copyWords[0] as LineWord).start);
     const realHead = text.slice(0, (words[li] as LineWord).start);
     if (!realHead.endsWith(copyHead)) {
