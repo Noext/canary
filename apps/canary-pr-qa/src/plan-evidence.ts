@@ -28,6 +28,13 @@ import type { Locator, Plan, Scenario } from "./schema.js";
  * additionne les graphies du même signe, donc une seule graphie présente suffit
  * à rendre le plan exécutable, et un total qui ne tombe pas juste reste une
  * assertion fausse jugée à l'exécution.
+ *
+ * Un refus nomme la cible réelle quand la proximité est mesurable : le même nom
+ * replié sous un autre rôle (`spinbutton` visé comme `textbox`), ou un nom du
+ * rôle visé qui ne diffère que par un mot (`Billet de 20 €` pour
+ * `Pièce de 20 €`, l'écart du lot L). Deux candidats et plus se nomment tous :
+ * choisir l'un d'eux serait une décision que le relevé n'a pas à prendre, et
+ * aucun candidat ne rend jamais la cible acceptable — le refus reste un refus.
  */
 
 /** Seul alias de rôle accepté par getByRole qui diffère du rôle imprimé par l'instantané. */
@@ -59,6 +66,13 @@ interface AriaNames {
 }
 
 export interface PlanEvidenceRefusal {
+  /**
+   * Cibles de l'instantané dont la proximité avec la cible visée est mesurable :
+   * le même nom replié sous un autre rôle, ou un nom du rôle visé qui ne diffère
+   * que par un mot. Nommées pour rendre le refus réparable, jamais acceptées :
+   * la décision reste le refus.
+   */
+  near?: string[];
   scenarioId: string;
   stepId: string;
   target: string;
@@ -245,6 +259,60 @@ function describeTarget(locator: Locator): string {
     : `${locator.by}=${JSON.stringify(locator.value)}`;
 }
 
+/** Mots d'un nom normalisé : la comparaison des libellés se fait mot à mot. */
+function words(value: string): string[] {
+  return normalizeText(value).split(" ").filter(Boolean);
+}
+
+/**
+ * Deux libellés ne diffèrent que par un mot, au même rang, et en partagent au
+ * moins un autre. C'est l'écart mesuré du lot L : le plan vise
+ * « Quantité · Pièce de 20 € » là où la page expose « Quantité · Billet de
+ * 20 € ». Rien de flou n'y entre : même nombre de mots, exactement un rang
+ * différent, tout le reste identique. Un libellé d'un seul mot n'a aucun mot
+ * partagé, donc aucun voisin : « P&L » ne se rapproche pas de « Pilotage ».
+ */
+function oneWordApart(planned: string, exposed: string): boolean {
+  const left = words(planned);
+  const right = words(exposed);
+  if (left.length < 2 || left.length !== right.length) {
+    return false;
+  }
+  return left.filter((word, index) => word !== right[index]).length === 1;
+}
+
+/**
+ * Cibles de la page dont la proximité avec la cible visée est mesurable, jamais
+ * devinée : le même nom replié — casse comprise — porté par un autre rôle, ou un
+ * nom du rôle visé qui ne diffère que par un mot. Le relevé ne décide rien : il
+ * enrichit le refus, qui reste un refus prononcé avant toute dépense.
+ */
+function nearTargets(
+  locator: Locator & { by: "role" },
+  role: string,
+  nodes: AriaNameNode[]
+): string[] {
+  const planned = normalizeText(locator.name);
+  const near: string[] = [];
+  for (const node of nodes) {
+    const exposed = normalizeText(node.name);
+    if (!exposed || (node.role === role && exposed === planned)) {
+      continue;
+    }
+    const folded = foldTypography(exposed) === foldTypography(planned);
+    const candidate =
+      folded || (node.role === role && oneWordApart(planned, exposed));
+    if (!candidate) {
+      continue;
+    }
+    const target = `role=${node.role} name=${JSON.stringify(node.name)}`;
+    if (!near.includes(target)) {
+      near.push(target);
+    }
+  }
+  return near;
+}
+
 /** Un `goto` vers la page de découverte recharge la même page : l'équivalence tient (fragment ignoré). */
 function staysOnDiscoveryPage(path: string, discoveryUrl: string): boolean {
   try {
@@ -411,6 +479,10 @@ function checkTarget(
     scenarioId: scenario.id,
     stepId,
     target: describeTarget(locator),
+    // Un refus muet sur l'écart réel laisse le planificateur recopier la même
+    // cible : le relevé nomme donc ce que la page expose à la place, quand un
+    // seul candidat est mesurable, et l'ambiguïté quand plusieurs le sont.
+    near: nearTargets(locator, role, names.nodes),
   });
 }
 
@@ -583,7 +655,8 @@ export function validatePlanEvidence(
   return report;
 }
 
-/** Message et aide du refus : ils nomment le scénario, l'étape et la cible introuvable. */
+/** Message et aide du refus : ils nomment le scénario, l'étape, la cible introuvable et,
+ * quand un candidat de la page est mesurable, la cible réelle à recopier. */
 export function planEvidenceDiagnostic(
   scenario: Scenario,
   refusals: PlanEvidenceRefusal[],
@@ -592,11 +665,21 @@ export function planEvidenceDiagnostic(
   const targets = refusals
     .map((item) => `${item.stepId} → ${item.target}`)
     .join(" ; ");
+  // Un candidat unique se recopie tel quel ; plusieurs candidats se nomment tous,
+  // parce que choisir à la place du planificateur serait une décision que le
+  // relevé n'a pas le droit de prendre.
+  const near = [...new Set(refusals.flatMap((item) => item.near ?? []))];
+  let exposed = "";
+  if (near.length === 1) {
+    exposed = ` ; la page expose à la place ${near[0]}`;
+  } else if (near.length > 1) {
+    exposed = ` ; la page expose plusieurs cibles approchantes : ${near.join(" ; ")}`;
+  }
   const unresolved = inconclusiveCount
     ? ` ${inconclusiveCount} autre(s) cible(s) restent non concluantes (voir la timeline du run).`
     : "";
   return {
-    message: `Scénario ${scenario.id} non exécuté : cible absente de l'instantané de la page de découverte (${targets})`,
-    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
+    message: `Scénario ${scenario.id} non exécuté : cible absente de l'instantané de la page de découverte (${targets})${exposed}`,
+    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan${near.length ? " en recopiant la cible exposée" : ""}, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
   };
 }
