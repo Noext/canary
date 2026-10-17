@@ -662,24 +662,32 @@ export function planEvidenceDiagnostic(
   refusals: PlanEvidenceRefusal[],
   inconclusiveCount: number
 ): { hint: string; message: string } {
+  // Les candidats restent rattachés au refus qui les a mesurés : agrégés au
+  // niveau du scénario, le candidat unique d'une cible se lisait comme le
+  // remplacement d'une autre, et deux refus à un candidat chacun annonçaient une
+  // ambiguïté qu'aucune des deux cibles ne porte.
   const targets = refusals
-    .map((item) => `${item.stepId} → ${item.target}`)
+    .map((item) => {
+      const near = item.near ?? [];
+      if (near.length === 0) {
+        return `${item.stepId} → ${item.target}`;
+      }
+      // Un candidat unique se recopie tel quel ; plusieurs candidats pour cette
+      // cible se nomment tous, parce que choisir à la place du planificateur
+      // serait une décision que le relevé n'a pas le droit de prendre.
+      const exposed =
+        near.length === 1
+          ? `la page expose à la place ${near[0]}`
+          : `la page expose plusieurs cibles approchantes : ${near.join(" ; ")}`;
+      return `${item.stepId} → ${item.target} (${exposed})`;
+    })
     .join(" ; ");
-  // Un candidat unique se recopie tel quel ; plusieurs candidats se nomment tous,
-  // parce que choisir à la place du planificateur serait une décision que le
-  // relevé n'a pas le droit de prendre.
-  const near = [...new Set(refusals.flatMap((item) => item.near ?? []))];
-  let exposed = "";
-  if (near.length === 1) {
-    exposed = ` ; la page expose à la place ${near[0]}`;
-  } else if (near.length > 1) {
-    exposed = ` ; la page expose plusieurs cibles approchantes : ${near.join(" ; ")}`;
-  }
+  const hasNear = refusals.some((item) => (item.near?.length ?? 0) > 0);
   const unresolved = inconclusiveCount
     ? ` ${inconclusiveCount} autre(s) cible(s) restent non concluantes (voir la timeline du run).`
     : "";
   return {
-    message: `Scénario ${scenario.id} non exécuté : cible absente de l'instantané de la page de découverte (${targets})${exposed}`,
-    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan${near.length ? " en recopiant la cible exposée" : ""}, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
+    message: `Scénario ${scenario.id} non exécuté : cible absente de l'instantané de la page de découverte (${targets})`,
+    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan${hasNear ? " en recopiant la cible exposée" : ""}, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
   };
 }

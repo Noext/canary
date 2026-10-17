@@ -137,21 +137,24 @@ async function runCompiledScript(
  * seules les graphies listées existent, et leur méthode d'action échoue avec le
  * délai d'une cible introuvable, jamais avec un autre message.
  */
-async function runTypographicAction(exposed: string[]): Promise<{
+async function runTypographicAction(
+  exposed: string[],
+  name = "Justification de l'écart"
+): Promise<{
   acted: string[];
   failure: unknown;
   observation: { targetName?: string } | undefined;
 }> {
   const acted: string[] = [];
-  const locator = (name: string) => ({
-    count: async () => (exposed.includes(name) ? 1 : 0),
+  const locator = (target: string) => ({
+    count: async () => (exposed.includes(target) ? 1 : 0),
     fill: async () => {
-      if (!exposed.includes(name)) {
+      if (!exposed.includes(target)) {
         throw new Error(
-          `Timeout 10000ms exceeded.\n  - waiting for getByRole("textbox", { name: ${JSON.stringify(name)} })`
+          `Timeout 10000ms exceeded.\n  - waiting for getByRole("textbox", { name: ${JSON.stringify(target)} })`
         );
       }
-      acted.push(name);
+      acted.push(target);
     },
   });
   const { failure, observation } = await runCompiledScript(
@@ -161,7 +164,7 @@ async function runTypographicAction(exposed: string[]): Promise<{
         locator: {
           by: "role",
           value: "textbox",
-          name: "Justification de l'écart",
+          name,
         },
         value: "Écart constaté",
       },
@@ -540,6 +543,10 @@ describe("validation and deterministic assertions", () => {
         "Justification de l’écart",
         "justification de l'écart",
         "JUSTIFICATION DE L'ÉCART",
+        "justification de l‘écart",
+        "JUSTIFICATION DE L‘ÉCART",
+        "justification de l’écart",
+        "JUSTIFICATION DE L’ÉCART",
       ],
     });
     // Le point médian d'un libellé réel : le plan peut en recopier une autre
@@ -549,6 +556,14 @@ describe("validation and deterministic assertions", () => {
     );
     expect(typographicVariants("Quantité · Pièce de 20 €").names).toContain(
       "QUANTITÉ · PIÈCE DE 20 €"
+    );
+    // Casse et signe portent chacun une équivalence : leur produit est le repli
+    // exact d'un libellé qui diffère des deux à la fois.
+    expect(typographicVariants("Quantité · Pièce de 20 €").names).toContain(
+      "QUANTITÉ ⋅ PIÈCE DE 20 €"
+    );
+    expect(typographicVariants("Quantité · Pièce de 20 €").names).toContain(
+      "quantité ⋅ pièce de 20 €"
     );
     expect(typographicCodepoints(planned, "Justification de l’écart")).toBe(
       "U+0027"
@@ -580,12 +595,13 @@ describe("validation and deterministic assertions", () => {
     expect(variants).toContain("Montant d'espèces attendu");
     expect(variants).toContain("Montant d’espèces attendu");
     expect(variants).not.toContain("Montant\u00a0d’espèces attendu");
-    // Huit graphies de signes, plus la graphie uniforme en majuscules qu'ajoute
-    // la casse : les deux apostrophes ne changent pas la casse des lettres.
-    expect(typographicVariants("l'l'").names).toHaveLength(9);
+    // Huit graphies de signes sous la casse du plan, plus les deux casses
+    // uniformes de chacune : les deux apostrophes ne changent pas la casse des
+    // lettres, et les minuscules se confondent avec la graphie du plan.
+    expect(typographicVariants("l'l'").names).toHaveLength(17);
     // Trois signes repliables tiennent désormais dans le plafond : un libellé
     // français ordinaire n'est plus replié en silence.
-    expect(typographicVariants("l'l'l'").names).toHaveLength(27);
+    expect(typographicVariants("l'l'l'").names).toHaveLength(53);
     // Au-delà, l'énumération s'arrête et le déclare : une liste vide ne peut plus
     // se confondre avec « aucun signe repliable ».
     const saturated = typographicVariants("l'l'l'l'l'l'");
@@ -606,6 +622,20 @@ describe("validation and deterministic assertions", () => {
     expect(failure).toBeUndefined();
     expect(acted).toEqual(["Justification de l’écart"]);
     expect(observation?.targetName).toBe("Justification de l’écart");
+  });
+
+  it("vise la graphie exposée quand la casse et le signe diffèrent ensemble", async () => {
+    // Un libellé réel de la caisse : le plan recopie le point médian du clavier
+    // en minuscules mixtes, la page expose un opérateur mathématique tout en
+    // majuscules. Ne combiner la casse qu'avec la graphie du plan laisse cette
+    // cible sans repli, alors que chaque écart est déclaré équivalent.
+    const { acted, failure, observation } = await runTypographicAction(
+      ["QUANTITÉ ⋅ PIÈCE"],
+      "Quantité · Pièce"
+    );
+    expect(failure).toBeUndefined();
+    expect(acted).toEqual(["QUANTITÉ ⋅ PIÈCE"]);
+    expect(observation?.targetName).toBe("QUANTITÉ ⋅ PIÈCE");
   });
 
   it("ne vise rien quand deux graphies concurrentes existent", async () => {

@@ -78,11 +78,12 @@ const TYPOGRAPHIC_FOLD = new Map<string, string>(
 );
 
 /**
- * Plafond des graphies énumérées pour un libellé : chaque signe repliable
- * multiplie les candidats, et les essayer tous est le seul repli exact. Un
- * libellé réel en compte peu ; au-delà du plafond, le repli n'est plus
+ * Plafond des graphies de signe énumérées pour un libellé : chaque signe
+ * repliable multiplie les candidats, et les essayer tous est le seul repli
+ * exact. Un libellé réel en compte peu ; au-delà du plafond, le repli n'est plus
  * énumérable et devient un cas explicite (`overflow`), jamais une lecture de la
- * graphie brute qui croirait avoir mesuré.
+ * graphie brute qui croirait avoir mesuré. Les deux casses uniformes de chaque
+ * graphie multiplient ensuite cette liste par trois au plus.
  */
 const MAX_TYPOGRAPHIC_VARIANTS = 256;
 
@@ -173,11 +174,13 @@ export interface TypographicVariants {
  * l'espace ordinaire et le point médian (un libellé réel) ; l'écart inverse
  * reste nommé par le diagnostic, jamais cliqué.
  *
- * La casse s'essaie sous ses deux graphies uniformes seulement : chaque signe a
- * deux casses, donc toutes les casses mêlées font 2^n candidats et dépasseraient
- * le plafond dès huit lettres. Un nom du plan tout en minuscules est ainsi visé
- * sur une page tout en majuscules, et réciproquement ; une casse mêlée reste
- * nommée par `foldTypography`, jamais cliquée.
+ * La casse s'essaie sous ses deux graphies uniformes seulement, appliquées à
+ * chaque graphie énumérée du signe : chaque lettre a deux casses, donc toutes
+ * les casses mêlées font 2^n candidats et dépasseraient le plafond dès huit
+ * lettres. Le produit des deux est ce qui couvre un libellé qui diffère à la
+ * fois par la casse et par la graphie du signe (« Quantité · Pièce » contre
+ * « QUANTITÉ ⋅ PIÈCE ») ; une casse mêlée reste nommée par `foldTypography`,
+ * jamais cliquée.
  */
 export function typographicVariants(name: string): TypographicVariants {
   let variants = [""];
@@ -204,18 +207,19 @@ export function typographicVariants(name: string): TypographicVariants {
       overflow: { signs, variants: product, ceiling: MAX_TYPOGRAPHIC_VARIANTS },
     };
   }
-  // Les graphies de casse viennent après celles des signes repliables : elles ne
-  // dépendent d'aucun signe, donc elles existent même quand le libellé n'en
-  // porte aucun.
+  // Les deux casses uniformes de chaque graphie énumérée viennent après celles
+  // des signes repliables : elles ne dépendent d'aucun signe, donc elles
+  // existent même quand le libellé n'en porte aucun, et elles portent le produit
+  // cartésien que le repli doit couvrir.
+  const cased = variants.flatMap((variant) => [
+    variant.toLowerCase(),
+    variant.toUpperCase(),
+  ]);
   return {
     planned: name,
-    names: [
-      ...new Set([
-        ...variants.filter((variant) => variant !== name),
-        name.toLowerCase(),
-        name.toUpperCase(),
-      ]),
-    ].filter((variant) => variant !== name),
+    names: [...new Set([...variants, ...cased])].filter(
+      (variant) => variant !== name
+    ),
   };
 }
 
