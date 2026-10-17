@@ -303,6 +303,18 @@ describe("validation du plan contre l'instantané de découverte", () => {
         scenarioId: "heading-visible",
         stepId: "check-heading",
         target: 'role=textbox name="Justification de l\'écart"',
+        // Les deux graphies exposées se nomment : le refus dit l'ambiguïté au
+        // lieu de laisser deviner laquelle des deux existe.
+        near: [
+          {
+            target: 'role=textbox name="Justification de l’écart"',
+            elements: 1,
+          },
+          {
+            target: 'role=textbox name="Justification de l‘écart"',
+            elements: 1,
+          },
+        ],
       },
     ]);
     // Une seule graphie portée par deux éléments n'est pas plus unique : le run
@@ -312,6 +324,41 @@ describe("validation du plan contre l'instantané de découverte", () => {
       aria: `- main [ref=e1]:\n  - textbox "Justification de l’écart" [ref=e2]\n  - textbox "Justification de l’écart" [ref=e3]`,
     });
     expect(duplicated.refusals).toHaveLength(1);
+  });
+  it("compte les éléments quand deux boutons portent la graphie repliée", () => {
+    // Reproduction du finding P2 : le plan vise « save », la page expose deux
+    // boutons « SAVE ». La casse uniforme est une graphie du repli, mais elle
+    // atteint deux éléments : le refus doit dire qu'ils sont plusieurs au lieu de
+    // laisser lire un candidat unique, et n'en désigner aucun comme la cible
+    // réelle — recopier « SAVE » viserait encore deux éléments.
+    const planned = readOnlyPlan({
+      by: "role",
+      value: "button",
+      name: "save",
+    });
+    const report = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:\n  - button "SAVE" [ref=e2]\n  - button "SAVE" [ref=e3]`,
+    });
+    expect(report.refusals).toEqual([
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-heading",
+        target: 'role=button name="save"',
+        near: [{ target: 'role=button name="SAVE"', elements: 2 }],
+      },
+    ]);
+    const { message, hint } = planEvidenceDiagnostic(
+      PlanSchema.parse(planned).scenarios[0]!,
+      report.refusals,
+      0
+    );
+    expect(message).toContain(
+      'la page expose role=button name="SAVE" sur 2 éléments'
+    );
+    // Aucun des deux éléments n'est présenté comme la cible unique à recopier.
+    expect(message).not.toContain("la page expose à la place");
+    expect(hint).not.toContain("en recopiant la cible exposée");
   });
   it("refuse un texte ou un placeholder porté par plusieurs graphies, comme role+nom", () => {
     // Le défaut aggravant : role+nom refusait déjà une cible que deux graphies
@@ -500,9 +547,308 @@ describe("validation du plan contre l'instantané de découverte", () => {
         scenarioId: "preview-badge-kept-across-views",
         stepId: "go-pnl",
         target: 'role=heading name="P&L"',
+        // La page porte ce nom sous un bouton : le refus le nomme, sans
+        // l'accepter à la place du titre visé.
+        near: [{ target: 'role=button name="P&L"', elements: 1 }],
       },
     ]);
     expect(report.inconclusive).toEqual([]);
+  });
+  it("nomme le rôle réel quand la page expose le même nom sous un autre rôle", () => {
+    // Un `<input type="number">` s'annonce `spinbutton`, jamais `textbox` : le
+    // nom du plan existe, seul son rôle est faux, et le refus doit dire lequel.
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Quantité · Pièce de 20 €",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - spinbutton "Quantité · Pièce de 20 €" [ref=e2]',
+      }
+    );
+    expect(report.refusals).toEqual([
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-heading",
+        target: 'role=textbox name="Quantité · Pièce de 20 €"',
+        near: [
+          {
+            target: 'role=spinbutton name="Quantité · Pièce de 20 €"',
+            elements: 1,
+          },
+        ],
+      },
+    ]);
+    // Le refus reste un refus : nommer la cible réelle n'autorise jamais à viser
+    // une cible que le plan n'a pas écrite.
+    expect(report.inconclusive).toEqual([]);
+  });
+  it("nomme la cible réelle quand un seul mot diffère", () => {
+    // Écart mesuré du lot L, run 445c9178 : le plan recopie « Pièce de 10 € »,
+    // la page expose « Billet de 10 € » pour la même ligne de comptage.
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Quantité · Pièce de 10 €",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: `- main [ref=e1]:
+  - textbox "Quantité · Billet de 10 €" [ref=e2]
+  - textbox "Quantité · Billet de 20 €" [ref=e3]`,
+      }
+    );
+    expect(report.refusals).toEqual([
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-heading",
+        target: 'role=textbox name="Quantité · Pièce de 10 €"',
+        // La ligne de 20 € diffère par deux mots : elle n'est pas nommée.
+        near: [
+          {
+            target: 'role=textbox name="Quantité · Billet de 10 €"',
+            elements: 1,
+          },
+        ],
+      },
+    ]);
+  });
+  it("nomme l'ambiguïté quand deux candidats la portent", () => {
+    const planned = readOnlyPlan({
+      by: "role",
+      value: "textbox",
+      name: "Quantité · Pièce de 10 €",
+    });
+    const report = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:
+  - textbox "Quantité · Billet de 10 €" [ref=e2]
+  - textbox "Quantité · Rouleau de 10 €" [ref=e3]`,
+    });
+    expect(report.refusals[0]?.near).toEqual([
+      { target: 'role=textbox name="Quantité · Billet de 10 €"', elements: 1 },
+      { target: 'role=textbox name="Quantité · Rouleau de 10 €"', elements: 1 },
+    ]);
+    const { message, hint } = planEvidenceDiagnostic(
+      PlanSchema.parse(planned).scenarios[0]!,
+      report.refusals,
+      0
+    );
+    expect(message).toContain("plusieurs cibles approchantes");
+    expect(message).toContain('role=textbox name="Quantité · Billet de 10 €"');
+    expect(message).toContain('role=textbox name="Quantité · Rouleau de 10 €"');
+    expect(hint).toContain("en recopiant la cible exposée");
+  });
+  it("rattache chaque candidat à son refus, sans annoncer une ambiguïté inventée", () => {
+    // Deux cibles absentes à un candidat chacune : agréger les candidats au
+    // niveau du scénario annonçait « plusieurs cibles approchantes » alors
+    // qu'aucune des deux cibles n'en portait plusieurs, et présentait le
+    // candidat d'une cible comme le remplacement de l'autre.
+    const planned = readOnlyPlan({
+      by: "role",
+      value: "textbox",
+      name: "Quantité · Pièce de 10 €",
+    });
+    planned.scenarios[0]!.steps.push({
+      id: "check-second",
+      description: "vérifier la seconde ligne",
+      action: { type: "assert", assertionId: "second" },
+    });
+    planned.scenarios[0]!.assertions.push({
+      id: "second",
+      description: "La seconde ligne de comptage est affichée",
+      kind: "visible",
+      target: {
+        by: "role",
+        value: "textbox",
+        name: "Quantité · Pièce de 20 €",
+      },
+      afterStep: "load",
+      verification: "state",
+    });
+    const parsed = PlanSchema.parse(planned);
+    const report = validatePlanEvidence(parsed, {
+      url: "https://preview.test/",
+      aria: `- main [ref=e1]:
+  - textbox "Quantité · Billet de 10 €" [ref=e2]
+  - textbox "Quantité · Billet de 20 €" [ref=e3]`,
+    });
+    expect(report.refusals).toEqual([
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-heading",
+        target: 'role=textbox name="Quantité · Pièce de 10 €"',
+        near: [
+          {
+            target: 'role=textbox name="Quantité · Billet de 10 €"',
+            elements: 1,
+          },
+        ],
+      },
+      {
+        scenarioId: "heading-visible",
+        stepId: "check-second",
+        target: 'role=textbox name="Quantité · Pièce de 20 €"',
+        near: [
+          {
+            target: 'role=textbox name="Quantité · Billet de 20 €"',
+            elements: 1,
+          },
+        ],
+      },
+    ]);
+    const { message } = planEvidenceDiagnostic(
+      parsed.scenarios[0]!,
+      report.refusals,
+      report.inconclusive.length
+    );
+    expect(message).not.toContain("plusieurs cibles approchantes");
+    expect(message).toContain(
+      'check-heading → role=textbox name="Quantité · Pièce de 10 €" (la page expose à la place role=textbox name="Quantité · Billet de 10 €")'
+    );
+    expect(message).toContain(
+      'check-second → role=textbox name="Quantité · Pièce de 20 €" (la page expose à la place role=textbox name="Quantité · Billet de 20 €")'
+    );
+  });
+  it("nomme une graphie que le repli d'exécution n'essaie pas", () => {
+    // L'espace insécable exposé n'est pas une graphie énumérable du nom du plan
+    // (l'inverse l'est) : le refus nomme la cible réelle au lieu de laisser
+    // recopier la même cible une deuxième fois.
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Montant d'espèces attendu",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - textbox "Montant d’espèces\u00a0attendu" [ref=e2]',
+      }
+    );
+    expect(report.refusals[0]?.near).toEqual([
+      {
+        target: 'role=textbox name="Montant d’espèces\u00a0attendu"',
+        elements: 1,
+      },
+    ]);
+  });
+  it("ne nomme aucun candidat quand la page n'en expose aucun", () => {
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Justification de l'écart",
+        })
+      ),
+      { url: "https://preview.test/", aria: ARIA }
+    );
+    expect(report.refusals).toHaveLength(1);
+    expect(report.refusals[0]?.near).toEqual([]);
+  });
+  it("accepte une casse uniforme et nomme une casse mêlée", () => {
+    // « save » contre « SAVE » : la casse uniforme est une graphie que le repli
+    // essaie, donc le plan est exécutable. « Save » est une casse mêlée, qu'une
+    // énumération bornée ne peut pas viser (2^n candidats) : le plan reste
+    // refusé, et le refus nomme la cible réelle.
+    const uniform = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({ by: "role", value: "button", name: "save" })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - button "SAVE" [ref=e2]',
+      }
+    );
+    expect(uniform).toEqual({ refusals: [], inconclusive: [] });
+    const mixed = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({ by: "role", value: "button", name: "save" })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - button "Save" [ref=e2]',
+      }
+    );
+    expect(mixed.refusals[0]?.near).toEqual([
+      { target: 'role=button name="Save"', elements: 1 },
+    ]);
+  });
+  it("accepte le point médian d'une autre graphie", () => {
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Quantité · Pièce de 20 €",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - textbox "Quantité ⋅ Pièce de 20 €" [ref=e2]',
+      }
+    );
+    expect(report).toEqual({ refusals: [], inconclusive: [] });
+  });
+  it("accepte une graphie qui diffère par la casse et par le signe ensemble", () => {
+    // « Quantité · Pièce » contre « QUANTITÉ ⋅ PIÈCE » : chaque écart est déclaré
+    // équivalent, donc les deux réunis ne peuvent pas fonder un refus.
+    const report = validatePlanEvidence(
+      PlanSchema.parse(
+        readOnlyPlan({
+          by: "role",
+          value: "textbox",
+          name: "Quantité · Pièce",
+        })
+      ),
+      {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - textbox "QUANTITÉ ⋅ PIÈCE" [ref=e2]',
+      }
+    );
+    expect(report).toEqual({ refusals: [], inconclusive: [] });
+  });
+  it("nomme la cible réelle de l'écart mesuré du lot L dans le message de refus", () => {
+    // Run 445c9178 : le plan a recopié « Pièce de 10 € » d'une autre source, la
+    // page expose « Billet de 10 € ». Le message doit nommer la cible réelle,
+    // sans quoi le planificateur recopie la même cible absente.
+    const planned = observedPlan();
+    planned.scenarios[0]!.steps[1]!.action = {
+      type: "fill",
+      locator: {
+        by: "role",
+        value: "textbox",
+        name: "Quantité · Pièce de 10 €",
+      },
+      value: "4",
+    };
+    const aria = `- main [ref=e1]:
+  - textbox "Quantité · Billet de 500 €" [ref=e2]
+  - textbox "Quantité · Billet de 10 €" [ref=e3]`;
+    const report = validatePlanEvidence(PlanSchema.parse(planned), {
+      url: "https://preview.test/",
+      aria,
+    });
+    const { message } = planEvidenceDiagnostic(
+      PlanSchema.parse(planned).scenarios[0]!,
+      report.refusals,
+      report.inconclusive.length
+    );
+    expect(message).toContain(
+      'go-pnl → role=textbox name="Quantité · Pièce de 10 €"'
+    );
+    expect(message).toContain(
+      'la page expose à la place role=textbox name="Quantité · Billet de 10 €"'
+    );
   });
   it("accepte une cible role+nom présente et une cible de la même page", () => {
     const report = validatePlanEvidence(
