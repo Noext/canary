@@ -2014,20 +2014,25 @@ it("names the real line and the retyped interpolation of a template literal", ()
     retypedTemplateContext,
     policyFor()
   );
-  // La ligne réelle est nommée, et la divergence avec elle : la copie s'arrête
+  // La ligne réelle est nommée, et les divergences avec elle : la copie s'arrête
   // sur `>` là où la ligne écrit l'espace puis le reste du ternaire.
   expect(divergence).toMatchObject({
     candidate: RETYPED_TEMPLATE_LINE,
-    copyText: ">",
+    faults: [
+      {
+        copy: ">",
+        kind: "invented",
+        real: ' > 1 ? "s" : ""}` : null}',
+      },
+    ],
     kind: "invented",
     line: 12,
-    realText: '> 1 ? "s" : ""}` : null}',
     wholeLine: true,
   });
   // Aucun texte inventé : le fragment réel le plus proche et le candidat sont
   // recopiés de la ligne, la fenêtre de la copie l'est de la copie.
   expect(RETYPED_TEMPLATE_LINE).toContain(divergence?.closest ?? "");
-  expect(RETYPED_TEMPLATE_QUOTE).toContain(divergence?.copyText ?? "");
+  expect(RETYPED_TEMPLATE_QUOTE).toContain(divergence?.faults?.[0]?.copy ?? "");
   const [line = ""] = ungroundedPlanRefusals(
     retypedTemplatePlan(RETYPED_TEMPLATE_QUOTE),
     retypedTemplateContext,
@@ -2036,7 +2041,7 @@ it("names the real line and the retyped interpolation of a template literal", ()
   expect(line).toContain("No source witness for cash-exact-count-close-reopen");
   expect(line).toContain(`copied from line 12 of ${RETYPED_TEMPLATE_PATH}`);
   expect(line).toContain(
-    `the file writes ${JSON.stringify('> 1 ? "s" : ""}` : null}')} where your copy has ${JSON.stringify(">")}`
+    `the file writes ${JSON.stringify(' > 1 ? "s" : ""}` : null}')} where your copy has ${JSON.stringify(">")}`
   );
   expect(line).toContain(`12: ${JSON.stringify(RETYPED_TEMPLATE_LINE)}`);
   // La cause réelle est nommée AVANT l'amputation de bord : c'est la divergence
@@ -2074,13 +2079,21 @@ it("names the whitespace a retyped interpolation changed, without a false amputa
     policyFor()
   );
   // La copie atteint la fin de la ligne : seuls les blancs de l'interpolation
-  // diffèrent, et c'est ce que le refus doit dire — sa fin ne manque pas.
+  // diffèrent, et c'est ce que le refus doit dire — sa fin ne manque pas. Les
+  // trois écarts de blancs sont nommés, pas seulement le premier.
   expect(divergence).toMatchObject({
     candidate: RETYPED_TEMPLATE_LINE,
-    copyText: "totalUnits>1",
+    faults: [
+      { copy: "totalUnits>1", kind: "whitespace", real: "totalUnits > 1" },
+      { copy: '1?"s', kind: "whitespace", real: '1 ? "s' },
+      {
+        copy: 's":""}` : null',
+        kind: "whitespace",
+        real: 's" : ""}` : null',
+      },
+    ],
     kind: "whitespace",
     line: 12,
-    realText: "totalUnits > 1",
     wholeLine: true,
   });
   const [line = ""] = ungroundedPlanRefusals(
@@ -2153,12 +2166,32 @@ it("names the real line of a retyped typed arrow and quotes it whole", () => {
     retypedArrowContext,
     policyFor()
   );
+  // La copie a retiré TOUS ses blancs, et sa fin recopiée diffère aussi : le
+  // refus dit les deux, chaque écart nommé dans l'ordre de la copie.
   expect(divergence).toMatchObject({
     candidate: RETYPED_ARROW_LINE,
-    copyText: "updateCash=(patch",
-    kind: "whitespace",
+    faults: [
+      {
+        copy: "updateCash=(patch",
+        kind: "whitespace",
+        real: "updateCash = (patch",
+      },
+      { copy: "patch:Partial", kind: "whitespace", real: "patch: Partial" },
+      {
+        copy: "CashSession>)=>setCash",
+        kind: "whitespace",
+        real: "CashSession>) => setCash",
+      },
+      {
+        copy: "prev)=>({...prev",
+        kind: "whitespace",
+        real: "prev) => ({ ...prev",
+      },
+      { copy: "prev,...patch", kind: "whitespace", real: "prev, ...patch" },
+      { copy: "}))", kind: "invented", real: " }));" },
+    ],
+    kind: "invented",
     line: 31,
-    realText: "updateCash = (patch",
     wholeLine: true,
   });
   expect(RETYPED_ARROW_LINE).toContain(divergence?.closest ?? "");
@@ -2169,7 +2202,13 @@ it("names the real line of a retyped typed arrow and quotes it whole", () => {
   );
   expect(line).toContain("No source witness for caisse-comptage-par-pharmacie");
   expect(line).toContain(`copied from line 31 of ${RETYPED_ARROW_PATH}`);
-  expect(line).toContain("only in whitespace");
+  // Le signe de la fin recopiée est nommé, et le refus ne dit plus que les
+  // blancs seuls diffèrent.
+  expect(line).toContain("in whitespace and in characters");
+  expect(line).not.toContain("only in whitespace");
+  expect(line).toContain(
+    `the file writes ${JSON.stringify(" }));")} where your copy has ${JSON.stringify("}))")}`
+  );
   expect(line).toContain(`31: ${JSON.stringify(RETYPED_ARROW_LINE)}`);
   // Aucun diagnostic d'amputation ici — la copie n'a pas de bord à nommer — et
   // pas de suggestion par-dessus : le remède porte la ligne réelle.
@@ -2189,12 +2228,20 @@ it("names the real line of the arrow copy the report shows, cut mid-token", () =
     retypedArrowContext,
     policyFor()
   );
+  // La coupe ne fait pas taire le diagnostic : la copie est un préfixe de la
+  // ligne, donc ses seuls écarts sont ses blancs retirés, et les deux sont dits.
   expect(divergence).toMatchObject({
     candidate: RETYPED_ARROW_LINE,
-    copyText: "updateCash=(patch",
+    faults: [
+      {
+        copy: "updateCash=(patch",
+        kind: "whitespace",
+        real: "updateCash = (patch",
+      },
+      { copy: "patch:Partial", kind: "whitespace", real: "patch: Partial" },
+    ],
     kind: "whitespace",
     line: 31,
-    realText: "updateCash = (patch",
     wholeLine: true,
   });
   const [line = ""] = ungroundedPlanRefusals(
@@ -2251,16 +2298,15 @@ it("names the characters invented inside a copy of a real line", () => {
   );
   expect(divergence).toMatchObject({
     candidate: INVENTED_CHAR_LINE,
-    copyText: ',3" });',
+    faults: [{ copy: ',3" });', kind: "invented", real: ',2" });' }],
     kind: "invented",
     line: 41,
-    realText: ',2" });',
     wholeLine: true,
   });
   // La fenêtre nommée est recopiée de la copie et de la ligne : le refus ne
   // fabrique pas le fragment qu'il demande de citer.
-  expect(INVENTED_CHAR_QUOTE).toContain(divergence?.copyText ?? "");
-  expect(INVENTED_CHAR_LINE).toContain(divergence?.realText ?? "");
+  expect(INVENTED_CHAR_QUOTE).toContain(divergence?.faults?.[0]?.copy ?? "");
+  expect(INVENTED_CHAR_LINE).toContain(divergence?.faults?.[0]?.real ?? "");
   const [line = ""] = ungroundedPlanRefusals(
     inventedCharPlan(INVENTED_CHAR_QUOTE),
     inventedCharContext,
@@ -2271,6 +2317,76 @@ it("names the characters invented inside a copy of a real line", () => {
     `the file writes ${JSON.stringify(',2" });')} where your copy has ${JSON.stringify(',3" });')}`
   );
   expect(line).toContain(`41: ${JSON.stringify(INVENTED_CHAR_LINE)}`);
+});
+/**
+ * Une copie qui change À LA FOIS un blanc et un signe : la première divergence
+ * de la copie — l'espace autour du `=` — ne diffère que par ses blancs, et le
+ * signe changé vient plus loin. Le sens lu sur cette seule première divergence
+ * annonçait « only in whitespace » d'une copie dont le `-` différait aussi du
+ * `+` de la ligne : le planificateur ne réparait alors que l'espacement et
+ * reconstruisait la même copie invalide (P2 de la revue de la PR #52).
+ */
+const BOTH_KINDS_PATH = "apps/web/app/page.tsx";
+const BOTH_KINDS_LINE = "  const alpha = beta + gamma;";
+const BOTH_KINDS_QUOTE = "  const alpha=beta - gamma;";
+const bothKindsContext: PrContext = contextWith([
+  {
+    filename: BOTH_KINDS_PATH,
+    patch: ["@@ -60,2 +60,3 @@", "   // total", `+${BOTH_KINDS_LINE}`].join(
+      "\n"
+    ),
+  },
+]);
+function bothKindsPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash-both-kinds",
+      sourceFiles: [BOTH_KINDS_PATH],
+      requirements: [{ sourceFile: BOTH_KINDS_PATH, quote }],
+    },
+  ]);
+}
+it("reports both the whitespace and the changed character of a retyped copy", () => {
+  const requirement = {
+    quote: BOTH_KINDS_QUOTE,
+    sourceFile: BOTH_KINDS_PATH,
+  };
+  expect(
+    requirementHasWitness(requirement, bothKindsContext, policyFor())
+  ).toBe(false);
+  const divergence = quoteDivergence(
+    requirement,
+    bothKindsContext,
+    policyFor()
+  );
+  // Les DEUX divergences de la copie sont lues, dans l'ordre de la copie : la
+  // première ne diffère que par ses blancs, la seconde par son signe.
+  expect(divergence).toMatchObject({
+    candidate: BOTH_KINDS_LINE,
+    faults: [
+      { copy: "alpha=beta", kind: "whitespace", real: "alpha = beta" },
+      { copy: "beta - gamma", kind: "invented", real: "beta + gamma" },
+    ],
+    kind: "invented",
+    line: 61,
+    wholeLine: true,
+  });
+  const [line = ""] = ungroundedPlanRefusals(
+    bothKindsPlan(BOTH_KINDS_QUOTE),
+    bothKindsContext,
+    policyFor()
+  );
+  expect(line).toContain(`copied from line 61 of ${BOTH_KINDS_PATH}`);
+  // Le refus dit les deux ensemble, et il nomme le signe changé — les deux
+  // fenêtres sont recopiées, l'une de la copie, l'autre de la ligne.
+  expect(line).toContain(
+    "it differs from that line in whitespace and in characters"
+  );
+  expect(line).toContain(
+    `the file writes ${JSON.stringify("alpha = beta")} where your copy has ${JSON.stringify("alpha=beta")}, and the file writes ${JSON.stringify("beta + gamma")} where your copy has ${JSON.stringify("beta - gamma")}`
+  );
+  expect(line).not.toContain("only in whitespace");
+  expect(line).toContain(`61: ${JSON.stringify(BOTH_KINDS_LINE)}`);
 });
 /**
  * Ligne réelle plus longue que la borne de `quoteableFragment`, avec une copie

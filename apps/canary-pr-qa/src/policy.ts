@@ -1198,13 +1198,13 @@ export function amputatedQuote(
 }
 /**
  * L'endroit où la copie refusée s'écarte de la ligne réelle dont elle est
- * recopiée : la ligne, la portion exacte qu'elle reproduit encore, et les deux
- * textes que le refus compare — ce que la ligne écrit là où la copie en diffère,
- * et ce que la copie écrit à la place. Une copie ALTÉRÉE à l'intérieur n'est pas
- * une amputation de bord : le gate la refuse, mais le remède d'amputation nomme
- * alors une cause fausse — sa fin ne manque pas, son texte diffère. C'est ce que
- * ce diagnostic dit à sa place, avec le fragment réel le plus proche et la
- * portion exacte de la ligne à citer à la place.
+ * recopiée : la ligne, la portion exacte qu'elle reproduit encore, et TOUTES les
+ * divergences qu'elle porte avec elle — ce que la ligne écrit là où la copie en
+ * diffère, et ce que la copie écrit à la place. Une copie ALTÉRÉE à l'intérieur
+ * n'est pas une amputation de bord : le gate la refuse, mais le remède
+ * d'amputation nomme alors une cause fausse — sa fin ne manque pas, son texte
+ * diffère. C'est ce que ce diagnostic dit à sa place, avec le fragment réel le
+ * plus proche et la portion exacte de la ligne à citer à la place.
  *
  * Rendu par le même balayage et le même budget que l'amputation (voir
  * `quoteCopyScan`) : le refus qui nomme la ligne ne repaie pas le fichier cité.
@@ -1359,21 +1359,32 @@ export function amputatedQuoteRemedy(
 /** Le sens d'une divergence : des caractères inventés, ou seuls les blancs qui diffèrent. */
 export type QuoteDivergenceKind = "invented" | "whitespace";
 /**
- * Où une copie refusée s'écarte de la ligne réelle qu'elle recopie : la ligne,
- * la portion exacte qu'elle reproduit encore — le fragment réel le plus proche —
- * et les deux textes que le refus compare, recopiés l'un de la copie, l'autre de
- * la ligne. `candidate` est la portion exacte de la ligne à citer à la place : la
- * ligne entière quand elle tient dans la borne de `quote`, sinon la plus longue
- * fenêtre de jetons ENTIERS qui porte `closest`. Jamais de texte inventé, jamais
- * de jeton rogné.
+ * Une divergence de la copie avec la ligne : les deux textes que le refus
+ * compare — ce que la ligne écrit là, recopié d'elle, et ce que la copie porte à
+ * la place, recopié d'elle — et son sens, lu sur ces deux textes : `whitespace`
+ * quand ils ne diffèrent que par leurs blancs, `invented` sinon.
+ */
+interface DivergenceFault {
+  copy: string;
+  kind: QuoteDivergenceKind;
+  real: string;
+}
+/**
+ * Où une copie refusée s'écarte de la ligne réelle qu'elle recopie : la ligne, la
+ * portion exacte qu'elle reproduit encore — le fragment réel le plus proche — et
+ * TOUTES les divergences qu'elle porte avec cette ligne, lues dans l'ordre de la
+ * copie. `kind` est le sens de l'ensemble : `whitespace` seulement quand aucune
+ * des divergences n'invente de caractère. `candidate` est la portion exacte de la
+ * ligne à citer à la place : la ligne entière quand elle tient dans la borne de
+ * `quote`, sinon la plus longue fenêtre de jetons ENTIERS qui porte `closest`.
+ * Jamais de texte inventé, jamais de jeton rogné.
  */
 export interface QuoteDivergence {
   candidate: string;
   closest: string;
-  copyText: string;
+  faults: DivergenceFault[];
   kind: QuoteDivergenceKind;
   line: number;
-  realText: string;
   /** Faux quand la ligne dépasse la borne de suggestion : le candidat est une fenêtre. */
   wholeLine: boolean;
 }
@@ -1488,35 +1499,41 @@ function amputationConfirmed(
   }
   return amputation.kind === "start" ? run.line > 0 : true;
 }
-/** Où la copie s'écarte de la ligne : les deux textes recopiés de part et d'autre. */
-interface DivergenceWindow {
-  copy: string;
-  real: string;
-}
 /**
- * Première divergence de la copie d'avec la ligne, lue dans l'ordre de la copie :
- * le texte d'avant la suite commune, les blancs entre deux de ses mots, puis le
- * texte d'après. Chaque bord est comparé à celui de la ligne — un début qui n'est
- * pas la fin du début de la ligne, des blancs différents, une fin qui n'est pas
- * le début de la fin de la ligne — et la fenêtre rendue est recopiée des deux
- * textes : jamais de texte inventé, et c'est la première différence de la copie
- * que le refus nomme. `undefined` quand aucun bord ne diffère.
+ * TOUTES les divergences de la copie d'avec la ligne, lues dans l'ordre de la
+ * copie : le texte d'avant la suite commune, puis chacun des écarts entre deux de
+ * ses mots, puis le texte d'après. Chaque bord est comparé à celui de la ligne —
+ * un début qui n'est pas la fin du début de la ligne, des blancs différents, une
+ * fin qui n'est pas le début de la fin de la ligne — et chaque fenêtre rendue est
+ * recopiée des deux textes : jamais de texte inventé. S'arrêter à la première
+ * fenêtre faisait mentir le refus : une copie qui changeait à la fois un blanc et
+ * un signe était annoncée comme ne différant que par ses blancs, la divergence
+ * suivante n'étant jamais lue (P2 de la revue de la PR #52). Vide quand aucun
+ * bord ne diffère.
  */
-function divergenceWindow(
+function divergenceWindows(
   copy: string,
   copyWords: LineWord[],
   text: string,
   words: LineWord[],
   run: WordRun
-): DivergenceWindow | undefined {
+): DivergenceFault[] {
   const { copy: ci, length, line: li } = run;
-  if (ci === 0) {
-    if (li > 0) {
-      const copyHead = copy.slice(0, (copyWords[0] as LineWord).start);
-      const realHead = text.slice(0, (words[li] as LineWord).start);
-      if (!realHead.endsWith(copyHead)) {
-        return { copy: copyHead, real: realHead };
-      }
+  const faults: DivergenceFault[] = [];
+  const add = (copyText: string, realText: string): void => {
+    faults.push({
+      copy: copyText,
+      kind: sameWithoutWhitespace(copyText, realText)
+        ? "whitespace"
+        : "invented",
+      real: realText,
+    });
+  };
+  if (ci === 0 && li > 0) {
+    const copyHead = copy.slice(0, (copyWords[0] as LineWord).start);
+    const realHead = text.slice(0, (words[li] as LineWord).start);
+    if (!realHead.endsWith(copyHead)) {
+      add(copyHead, realHead);
     }
   } else if (ci === li) {
     for (let index = 0; index < ci; index += 1) {
@@ -1526,19 +1543,19 @@ function divergenceWindow(
         continue;
       }
       const before = Math.max(0, index - 1);
-      return {
-        copy: copy.slice((copyWords[before] as LineWord).start, copyWord.end),
-        real: text.slice((words[before] as LineWord).start, realWord.end),
-      };
+      add(
+        copy.slice((copyWords[before] as LineWord).start, copyWord.end),
+        text.slice((words[before] as LineWord).start, realWord.end)
+      );
     }
   } else if (li === 0) {
-    return {
-      copy: copy.slice(
+    add(
+      copy.slice(
         (copyWords[0] as LineWord).start,
         (copyWords[ci] as LineWord).end
       ),
-      real: text.slice(0, (words[0] as LineWord).end),
-    };
+      text.slice(0, (words[0] as LineWord).end)
+    );
   }
   for (let offset = 0; offset + 1 < length; offset += 1) {
     const left = copyWords[ci + offset] as LineWord;
@@ -1551,22 +1568,23 @@ function divergenceWindow(
     ) {
       continue;
     }
-    return {
-      copy: copy.slice(left.start, right.end),
-      real: text.slice(realLeft.start, realRight.end),
-    };
+    add(
+      copy.slice(left.start, right.end),
+      text.slice(realLeft.start, realRight.end)
+    );
   }
   const copyTail = copy.slice((copyWords[ci + length - 1] as LineWord).end);
   const realTail = text.slice((words[li + length - 1] as LineWord).end);
-  return realTail.startsWith(copyTail)
-    ? undefined
-    : { copy: copyTail, real: realTail };
+  if (!realTail.startsWith(copyTail)) {
+    add(copyTail, realTail);
+  }
+  return faults;
 }
 /**
  * La divergence de la copie d'avec une ligne réelle : la suite de mots la plus
  * longue qui les rapproche — assez longue, et touchant un bord de la copie, pour
  * qu'elle désigne une copie de CETTE ligne plutôt qu'une recousure, qui a son
- * propre diagnostic (voir `stitchedQuoteFragments`) — puis la première fenêtre où
+ * propre diagnostic (voir `stitchedQuoteFragments`) — puis TOUTES les fenêtres où
  * les deux textes diffèrent. `undefined` quand la copie existe mot pour mot dans
  * la ligne, quand aucun mot commun ne désigne la ligne, ou quand aucune fenêtre
  * n'en sort un candidat citable : l'absence de diagnostic vaut mieux qu'une ligne
@@ -1592,8 +1610,9 @@ function lineDivergence(
   ) {
     return;
   }
-  const window = divergenceWindow(copy, copyWords, text, words, run);
-  if (!window) {
+  const faults = divergenceWindows(copy, copyWords, text, words, run);
+  const [first] = faults;
+  if (!first) {
     return;
   }
   const closest = text.slice(
@@ -1612,20 +1631,19 @@ function lineDivergence(
     return;
   }
   const candidate =
-    quoteableFragment(text, window.real, critical) ||
+    quoteableFragment(text, first.real, critical) ||
     quoteableFragment(text, closest, critical);
   if (candidate === "") {
     return;
   }
   return {
     candidate,
-    copyText: quoteExcerpt(window.copy),
-    kind: sameWithoutWhitespace(window.copy, window.real)
-      ? "whitespace"
-      : "invented",
-    line,
     closest,
-    realText: quoteExcerpt(window.real),
+    faults,
+    kind: faults.some((fault) => fault.kind === "invented")
+      ? "invented"
+      : "whitespace",
+    line,
     wholeLine: normalizeQuoteText(candidate) === normalizeQuoteText(text),
   };
 }
@@ -1656,9 +1674,35 @@ function scanDivergence(
   }
   return best;
 }
-/** Ce que le refus dit d'une copie qui s'écarte de la ligne qu'elle recopie. */
+/** Une divergence dite comme elle se compare : ce que la ligne écrit, puis la copie. */
+function faultClause(fault: DivergenceFault): string {
+  return `the file writes ${JSON.stringify(fault.real)} where your copy has ${JSON.stringify(fault.copy)}`;
+}
+/** Les divergences dites à la suite, dans l'ordre de la copie. */
+function faultClauses(faults: DivergenceFault[]): string {
+  const clauses = faults.map(faultClause);
+  const last = clauses.at(-1) ?? "";
+  const head = clauses.slice(0, -1).join(", ");
+  return head === "" ? last : `${head}, and ${last}`;
+}
+/**
+ * Ce que le refus dit des divergences d'une copie avec la ligne qu'elle recopie :
+ * leur sens, lu sur TOUTES les fenêtres — des blancs seulement quand aucune
+ * n'invente de caractère — puis chacune d'elles, recopiée de la ligne et de la
+ * copie. Le sens lu sur la première fenêtre seule annonçait « only in whitespace »
+ * d'une copie qui changeait aussi un signe plus loin, et le planificateur ne
+ * réparait que les blancs (P2 de la revue de la PR #52) : chaque divergence de la
+ * copie est donc nommée, et le sens porte sur l'ensemble.
+ */
 function divergenceFault(divergence: QuoteDivergence): string {
-  return `it differs from that line${divergence.kind === "whitespace" ? " only in whitespace" : ""}: the file writes ${JSON.stringify(divergence.realText)} where your copy has ${JSON.stringify(divergence.copyText)}`;
+  const whitespace = divergence.faults.some(
+    (fault) => fault.kind === "whitespace"
+  );
+  let reading = "only in whitespace";
+  if (divergence.kind === "invented") {
+    reading = whitespace ? "in whitespace and in characters" : "in characters";
+  }
+  return `it differs from that line ${reading}: ${faultClauses(divergence.faults)}`;
 }
 /**
  * Remède d'une copie qui s'écarte d'une ligne réelle sans en être une amputation
