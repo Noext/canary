@@ -56,11 +56,18 @@ export function resolvedTargetName(observation: string): string | undefined {
  * pas « Justification de l’écart » de « Justification de l'écart » ; Playwright,
  * avec `exact: true`, compare le nom accessible caractère par caractère et ne
  * résout jamais l'autre graphie.
+ *
+ * Toutes ces classes sont univoques : elles ne contiennent que des graphies du
+ * même signe, lisibles l'une pour l'autre. Le point médian en fait partie depuis
+ * un libellé réel — « Quantité · Pièce de 20 € » — où le plan peut recopier
+ * indifféremment le point médian du clavier, le point de césure typographique ou
+ * un opérateur mathématique visuellement identique.
  */
 const TYPOGRAPHIC_CLASSES: readonly (readonly string[])[] = [
   ["'", "\u2018", "\u2019"],
   ['"', "\u00ab", "\u00bb"],
   [" ", "\u00a0", "\u202f"],
+  ["\u00b7", "\u2027", "\u2219", "\u22c5"],
 ];
 
 /** Repli de chaque graphie vers le représentant de sa classe, sa propre graphie comprise. */
@@ -79,9 +86,27 @@ const TYPOGRAPHIC_FOLD = new Map<string, string>(
  */
 const MAX_TYPOGRAPHIC_VARIANTS = 256;
 
-/** Nom ramené aux graphies représentatives de ses signes. */
+/**
+ * Minuscule d'un signe, seulement quand elle tient sur un signe : « İ » se
+ * replie en deux codepoints, et un repli qui change la longueur décalerait la
+ * comparaison position par position de `typographicCodepoints`.
+ */
+function lowerCase(char: string): string {
+  const lowered = char.toLowerCase();
+  return lowered.length === 1 ? lowered : char;
+}
+
+/**
+ * Nom ramené aux graphies représentatives de ses signes, casse comprise : c'est
+ * la relation que le relevé emploie pour expliquer un nom introuvable, plus
+ * large que le repli d'exécution qui, lui, n'énumère que des graphies précises.
+ * Un signe replié le reste caractère par caractère : deux noms repliables sur
+ * l'autre gardent donc la même longueur.
+ */
 export function foldTypography(value: string): string {
-  return [...value].map((char) => TYPOGRAPHIC_FOLD.get(char) ?? char).join("");
+  return [...value]
+    .map((char) => TYPOGRAPHIC_FOLD.get(char) ?? lowerCase(char))
+    .join("");
 }
 
 /**
@@ -89,15 +114,27 @@ export function foldTypography(value: string): string {
  * l'ordre d'apparition : deux noms que `foldTypography` confond ont la même
  * longueur, donc l'écart se lit position par position. C'est ce qui rend la
  * différence nommable sans ambiguïté (`U+0027` contre `U+2019`).
+ *
+ * La casse se nomme comme les autres classes, sans quoi une divergence de casse
+ * afficherait une parenthèse vide : le signe du plan et celui de la page sont
+ * alors les deux mêmes lettres, d'une casse à l'autre.
  */
 export function typographicCodepoints(value: string, other: string): string {
   const points = new Set<string>();
   const compared = [...other];
   for (const [index, char] of [...value].entries()) {
-    if (char !== compared[index] && TYPOGRAPHIC_FOLD.has(char)) {
-      const code = (char.codePointAt(0) ?? 0).toString(16).toUpperCase();
-      points.add(`U+${code.padStart(4, "0")}`);
+    const counterpart = compared[index] ?? "";
+    if (char === counterpart) {
+      continue;
     }
+    const named =
+      TYPOGRAPHIC_FOLD.has(char) ||
+      (counterpart !== "" && lowerCase(char) === lowerCase(counterpart));
+    if (!named) {
+      continue;
+    }
+    const code = (char.codePointAt(0) ?? 0).toString(16).toUpperCase();
+    points.add(`U+${code.padStart(4, "0")}`);
   }
   return [...points].join(" ");
 }
@@ -113,10 +150,11 @@ function typographicEquivalents(char: string): string[] {
 
 /**
  * Graphies que la même cible peut viser par repli. `names` est vide seulement
- * quand le libellé ne porte aucun signe repliable : une liste vide ne dit donc
- * jamais « le repli a échoué ». Le produit des graphies croît avec chaque signe
- * repliable ; au plafond, l'énumération s'arrête et `overflow` le déclare, pour
- * que l'appelant en fasse un cas explicite au lieu de mesurer la graphie brute.
+ * quand le libellé ne porte aucun signe repliable ni aucune lettre : une liste
+ * vide ne dit donc jamais « le repli a échoué ». Le produit des graphies croît
+ * avec chaque signe repliable ; au plafond, l'énumération s'arrête et `overflow`
+ * le déclare, pour que l'appelant en fasse un cas explicite au lieu de mesurer
+ * la graphie brute.
  */
 export interface TypographicVariants {
   /** Graphies de rechange à essayer, sans la graphie du plan. */
@@ -131,9 +169,15 @@ export interface TypographicVariants {
  * Graphies d'un libellé pour le même locator. L'espace ordinaire ne se replie
  * pas position par position : un nom en compte plusieurs, et le produit
  * dépasserait le plafond pour la plupart des noms. Le repli couvre donc
- * l'apostrophe et le guillemet (la cause observée) ainsi que l'espace insécable
- * ramené à l'espace ordinaire ; l'écart inverse reste nommé par le diagnostic,
- * jamais cliqué.
+ * l'apostrophe et le guillemet (la cause observée), l'espace insécable ramené à
+ * l'espace ordinaire et le point médian (un libellé réel) ; l'écart inverse
+ * reste nommé par le diagnostic, jamais cliqué.
+ *
+ * La casse s'essaie sous ses deux graphies uniformes seulement : chaque signe a
+ * deux casses, donc toutes les casses mêlées font 2^n candidats et dépasseraient
+ * le plafond dès huit lettres. Un nom du plan tout en minuscules est ainsi visé
+ * sur une page tout en majuscules, et réciproquement ; une casse mêlée reste
+ * nommée par `foldTypography`, jamais cliquée.
  */
 export function typographicVariants(name: string): TypographicVariants {
   let variants = [""];
@@ -160,9 +204,18 @@ export function typographicVariants(name: string): TypographicVariants {
       overflow: { signs, variants: product, ceiling: MAX_TYPOGRAPHIC_VARIANTS },
     };
   }
+  // Les graphies de casse viennent après celles des signes repliables : elles ne
+  // dépendent d'aucun signe, donc elles existent même quand le libellé n'en
+  // porte aucun.
   return {
     planned: name,
-    names: variants.filter((variant) => variant !== name),
+    names: [
+      ...new Set([
+        ...variants.filter((variant) => variant !== name),
+        name.toLowerCase(),
+        name.toUpperCase(),
+      ]),
+    ].filter((variant) => variant !== name),
   };
 }
 

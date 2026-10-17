@@ -528,10 +528,28 @@ describe("validation and deterministic assertions", () => {
     expect(foldTypography("Montant d’espèces\u00a0attendu")).toBe(
       foldTypography("Montant d'espèces attendu")
     );
+    // La casse se replie comme les graphies : le relevé d'un nom introuvable la
+    // nomme (`typographicCodepoints`), sinon il afficherait une parenthèse vide.
+    expect(foldTypography("Quantité · Pièce de 20 €")).toBe(
+      foldTypography("QUANTITÉ ⋅ PIÈCE de 20 €")
+    );
     expect(typographicVariants(planned)).toEqual({
       planned,
-      names: ["Justification de l‘écart", "Justification de l’écart"],
+      names: [
+        "Justification de l‘écart",
+        "Justification de l’écart",
+        "justification de l'écart",
+        "JUSTIFICATION DE L'ÉCART",
+      ],
     });
+    // Le point médian d'un libellé réel : le plan peut en recopier une autre
+    // graphie, le repli les essaie toutes.
+    expect(typographicVariants("Quantité · Pièce de 20 €").names).toContain(
+      "Quantité ⋅ Pièce de 20 €"
+    );
+    expect(typographicVariants("Quantité · Pièce de 20 €").names).toContain(
+      "QUANTITÉ · PIÈCE DE 20 €"
+    );
     expect(typographicCodepoints(planned, "Justification de l’écart")).toBe(
       "U+0027"
     );
@@ -544,10 +562,11 @@ describe("validation and deterministic assertions", () => {
         "Montant d'espèces\u00a0attendu"
       )
     ).toBe("U+0020");
-    // Un nom sans signe repliable garde son appel direct : la liste vide dit
-    // « rien à replier », jamais « le repli a échoué ».
-    expect(typographicVariants("Save")).toEqual({
-      planned: "Save",
+    expect(typographicCodepoints("Save", "save")).toBe("U+0053");
+    // Un libellé sans lettre ni signe repliable garde son appel direct : la liste
+    // vide dit « rien à replier », jamais « le repli a échoué ».
+    expect(typographicVariants("12")).toEqual({
+      planned: "12",
       names: [],
     });
   });
@@ -561,10 +580,12 @@ describe("validation and deterministic assertions", () => {
     expect(variants).toContain("Montant d'espèces attendu");
     expect(variants).toContain("Montant d’espèces attendu");
     expect(variants).not.toContain("Montant\u00a0d’espèces attendu");
-    expect(typographicVariants("l'l'").names).toHaveLength(8);
+    // Huit graphies de signes, plus la graphie uniforme en majuscules qu'ajoute
+    // la casse : les deux apostrophes ne changent pas la casse des lettres.
+    expect(typographicVariants("l'l'").names).toHaveLength(9);
     // Trois signes repliables tiennent désormais dans le plafond : un libellé
     // français ordinaire n'est plus replié en silence.
-    expect(typographicVariants("l'l'l'").names).toHaveLength(26);
+    expect(typographicVariants("l'l'l'").names).toHaveLength(27);
     // Au-delà, l'énumération s'arrête et le déclare : une liste vide ne peut plus
     // se confondre avec « aucun signe repliable ».
     const saturated = typographicVariants("l'l'l'l'l'l'");
