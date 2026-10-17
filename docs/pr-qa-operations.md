@@ -201,7 +201,7 @@ reste possible pour ce que l'automatisation a sauté.
 | `CONTEXT_INCOMPLETE` | Diff/versions source manquants : rendre le contexte disponible ou réduire la PR |
 | `CONTRACT_VIOLATION`, `CRITICAL_COVERAGE_MISSING` | Étapes/omissions/citations du plan, politique de confiance au SHA de base ; ne pas assouplir les assertions |
 | `PRECONDITION_UNVERIFIED` | Rôle authentifié / fixture seed-cleanup de confiance disponible pour ce dépôt |
-| `MODEL_OUTPUT_INCOMPLETE`, `MODEL_JSON_INVALID` | Détail de validation, troncature/budgets de sortie, support JSON et paramètre de tokens ; conserver le modèle imposé |
+| `MODEL_OUTPUT_INCOMPLETE`, `MODEL_JSON_INVALID` | Détail de validation, extrait borné de la réponse et position d'arrêt (`finish_reason`, nombre de caractères) dans le diagnostic — une accolade non fermée dit la coupure, un JSON complet hors schéma dit la dérive —, reprise unique déjà consommée, troncature/budgets de sortie, support JSON et paramètre de tokens ; conserver le modèle imposé |
 | `RUN_BUDGET_EXCEEDED` | Usage/tarifs et réserves avant appel ; modifier les limites uniquement après inspection |
 | `RUN_OWNERSHIP_LOST`, run `interrupted` | Annulation, heartbeat/lease et disponibilité SQL ; pas de replay automatique des écritures |
 | `CANARY_START_FAILED`, `ENOENT` | Logs `browser`, installation runtime/Chromium dans l'image, versions et transport |
