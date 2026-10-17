@@ -1532,12 +1532,20 @@ function divergenceWindows(
       real: realText,
     });
   };
-  if (ci === 0) {
-    const copyHead = copy.slice(0, (copyWords[0] as LineWord).start);
+  // La tête de la copie face à celle de la ligne, quand la suite commune ne
+  // commence pas après un préfixe aligné mot pour mot : l'ouverture de la copie
+  // (`(`, `let`) ne se comparait nulle part autrement, et le refus ne parlait
+  // alors que des blancs de la suite commune (P2 de la revue de la PR #52, deux
+  // derniers tours).
+  const addHead = (): void => {
+    const copyHead = copy.slice(0, (copyWords[ci] as LineWord).start);
     const realHead = text.slice(0, (words[li] as LineWord).start);
     if (!realHead.endsWith(copyHead)) {
       add(copyHead, realHead);
     }
+  };
+  if (ci === 0) {
+    addHead();
   } else if (ci === li) {
     for (let index = 0; index < ci; index += 1) {
       const copyWord = copyWords[index] as LineWord;
@@ -1559,6 +1567,8 @@ function divergenceWindows(
       ),
       text.slice(0, (words[0] as LineWord).end)
     );
+  } else {
+    addHead();
   }
   for (let offset = 0; offset + 1 < length; offset += 1) {
     const left = copyWords[ci + offset] as LineWord;

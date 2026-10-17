@@ -2456,6 +2456,74 @@ it("names the leading delimiter a retyped copy changed", () => {
   expect(line).toContain(`61: ${JSON.stringify(LEAD_DELIMITER_LINE)}`);
 });
 /**
+ * Les deux préfixes, quand la suite commune ne commence au premier mot d'aucun
+ * des deux textes, et à des rangs différents : la copie réécrit `let` là où la
+ * ligne écrit `const extra`. Les mots d'avant la suite commune ne s'alignaient
+ * pas, donc aucun bord ne les comparaît, et le refus ne parlait que du blanc de
+ * la suite — la même revendication fausse que la première fenêtre seule (P2 de
+ * la revue de la PR #52, dernier tour, cas mesuré par la revue).
+ */
+const OFFSET_PREFIX_PATH = "apps/web/app/page.tsx";
+const OFFSET_PREFIX_LINE = "const extra alpha = beta gamma";
+const OFFSET_PREFIX_QUOTE = "let alpha= beta gamma";
+const offsetPrefixContext: PrContext = contextWith([
+  {
+    filename: OFFSET_PREFIX_PATH,
+    patch: ["@@ -60,2 +60,3 @@", "   // total", `+${OFFSET_PREFIX_LINE}`].join(
+      "\n"
+    ),
+  },
+]);
+function offsetPrefixPlan(quote: string): Plan {
+  return planWithWitnesses([
+    {
+      id: "cash-offset-prefix",
+      sourceFiles: [OFFSET_PREFIX_PATH],
+      requirements: [{ sourceFile: OFFSET_PREFIX_PATH, quote }],
+    },
+  ]);
+}
+it("names the prefix a copy rewrote at a different word offset", () => {
+  const requirement = {
+    quote: OFFSET_PREFIX_QUOTE,
+    sourceFile: OFFSET_PREFIX_PATH,
+  };
+  expect(
+    requirementHasWitness(requirement, offsetPrefixContext, policyFor())
+  ).toBe(false);
+  const divergence = quoteDivergence(
+    requirement,
+    offsetPrefixContext,
+    policyFor()
+  );
+  // Le préfixe réécrit est lu comme les autres fenêtres, avant le blanc de la
+  // suite commune que la copie a retiré autour de son `=`.
+  expect(divergence).toMatchObject({
+    candidate: OFFSET_PREFIX_LINE,
+    faults: [
+      { copy: "let ", kind: "invented", real: "const extra " },
+      { copy: "alpha= beta", kind: "whitespace", real: "alpha = beta" },
+    ],
+    kind: "invented",
+    line: 61,
+    wholeLine: true,
+  });
+  const [line = ""] = ungroundedPlanRefusals(
+    offsetPrefixPlan(OFFSET_PREFIX_QUOTE),
+    offsetPrefixContext,
+    policyFor()
+  );
+  expect(line).toContain(`copied from line 61 of ${OFFSET_PREFIX_PATH}`);
+  expect(line).toContain(
+    "it differs from that line in whitespace and in characters"
+  );
+  expect(line).toContain(
+    `the file writes ${JSON.stringify("const extra ")} where your copy has ${JSON.stringify("let ")}`
+  );
+  expect(line).not.toContain("only in whitespace");
+  expect(line).toContain(`61: ${JSON.stringify(OFFSET_PREFIX_LINE)}`);
+});
+/**
  * Ligne réelle plus longue que la borne de `quoteableFragment`, avec une copie
  * qui s'en écarte : le remède doit proposer la plus longue fenêtre de jetons
  * ENTIERS réellement présente sur cette ligne — jamais la ligne entière, jamais
