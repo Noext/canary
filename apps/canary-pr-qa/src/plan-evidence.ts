@@ -32,9 +32,11 @@ import type { Locator, Plan, Scenario } from "./schema.js";
  * Un refus nomme la cible réelle quand la proximité est mesurable : le même nom
  * replié sous un autre rôle (`spinbutton` visé comme `textbox`), ou un nom du
  * rôle visé qui ne diffère que par un mot (`Billet de 20 €` pour
- * `Pièce de 20 €`, l'écart du lot L). Deux candidats et plus se nomment tous :
- * choisir l'un d'eux serait une décision que le relevé n'a pas à prendre, et
- * aucun candidat ne rend jamais la cible acceptable — le refus reste un refus.
+ * `Pièce de 20 €`, l'écart du lot L). Deux candidats et plus se nomment tous, et
+ * un couple rôle+nom porté par plusieurs éléments se compte au lieu d'être lu
+ * comme un candidat unique : choisir l'un d'eux serait une décision que le relevé
+ * n'a pas à prendre, et aucun candidat ne rend jamais la cible acceptable — le
+ * refus reste un refus.
  */
 
 /** Seul alias de rôle accepté par getByRole qui diffère du rôle imprimé par l'instantané. */
@@ -65,6 +67,16 @@ interface AriaNames {
   texts: string[];
 }
 
+/**
+ * Candidat mesuré par le relevé : le couple rôle+nom qu'un refus peut nommer, et
+ * le nombre d'éléments de l'instantané qui le portent. Deux éléments du même
+ * couple ne font pas une cible : le refus les compte au lieu d'en désigner un.
+ */
+export interface PlanEvidenceNear {
+  /** Éléments qui exposent ce couple : plus d'un rend la cible non unique. */
+  elements: number;
+  target: string;
+}
 export interface PlanEvidenceRefusal {
   /**
    * Cibles de l'instantané dont la proximité avec la cible visée est mesurable :
@@ -72,7 +84,7 @@ export interface PlanEvidenceRefusal {
    * que par un mot. Nommées pour rendre le refus réparable, jamais acceptées :
    * la décision reste le refus.
    */
-  near?: string[];
+  near?: PlanEvidenceNear[];
   scenarioId: string;
   stepId: string;
   target: string;
@@ -286,14 +298,17 @@ function oneWordApart(planned: string, exposed: string): boolean {
  * devinée : le même nom replié — casse comprise — porté par un autre rôle, ou un
  * nom du rôle visé qui ne diffère que par un mot. Le relevé ne décide rien : il
  * enrichit le refus, qui reste un refus prononcé avant toute dépense.
+ *
+ * Chaque cible est comptée par élément : deux boutons « SAVE » pour un plan
+ * visant « save » sont une ambiguïté, jamais un candidat unique.
  */
 function nearTargets(
   locator: Locator & { by: "role" },
   role: string,
   nodes: AriaNameNode[]
-): string[] {
+): PlanEvidenceNear[] {
   const planned = normalizeText(locator.name);
-  const near: string[] = [];
+  const counts = new Map<string, number>();
   for (const node of nodes) {
     const exposed = normalizeText(node.name);
     if (!exposed || (node.role === role && exposed === planned)) {
@@ -306,11 +321,9 @@ function nearTargets(
       continue;
     }
     const target = `role=${node.role} name=${JSON.stringify(node.name)}`;
-    if (!near.includes(target)) {
-      near.push(target);
-    }
+    counts.set(target, (counts.get(target) ?? 0) + 1);
   }
-  return near;
+  return [...counts].map(([target, elements]) => ({ elements, target }));
 }
 
 /** Un `goto` vers la page de découverte recharge la même page : l'équivalence tient (fragment ignoré). */
@@ -480,8 +493,9 @@ function checkTarget(
     stepId,
     target: describeTarget(locator),
     // Un refus muet sur l'écart réel laisse le planificateur recopier la même
-    // cible : le relevé nomme donc ce que la page expose à la place, quand un
-    // seul candidat est mesurable, et l'ambiguïté quand plusieurs le sont.
+    // cible : le relevé nomme donc ce que la page expose à la place quand un seul
+    // candidat porté par un seul élément est mesurable, et l'ambiguïté — plusieurs
+    // candidats, ou un couple porté par plusieurs éléments — quand elle l'est.
     near: nearTargets(locator, role, names.nodes),
   });
 }
@@ -655,8 +669,35 @@ export function validatePlanEvidence(
   return report;
 }
 
+/** Candidat listé dans un refus : son couple rôle+nom, compté dès qu'il atteint plus d'un élément. */
+function countedNear(candidate: PlanEvidenceNear): string {
+  return candidate.elements > 1
+    ? `${candidate.target} (porté par ${candidate.elements} éléments)`
+    : candidate.target;
+}
+
+/**
+ * Ce que la page expose à la place de la cible absente. Un candidat unique porté
+ * par un seul élément est la cible à recopier ; plusieurs candidats se nomment
+ * tous, et un couple porté par plusieurs éléments se compte, parce qu'aucun de
+ * ces éléments ne peut alors être désigné comme la cible réelle.
+ */
+function exposedInstead(near: PlanEvidenceNear[]): string {
+  const [first] = near;
+  if (!first) {
+    return "";
+  }
+  if (near.length > 1) {
+    return `la page expose plusieurs cibles approchantes : ${near.map(countedNear).join(" ; ")}`;
+  }
+  return first.elements > 1
+    ? `la page expose ${first.target} sur ${first.elements} éléments : aucune cible unique n'est atteignable`
+    : `la page expose à la place ${first.target}`;
+}
+
 /** Message et aide du refus : ils nomment le scénario, l'étape, la cible introuvable et,
- * quand un candidat de la page est mesurable, la cible réelle à recopier. */
+ * quand un candidat de la page est mesurable, la cible réelle à recopier — ou
+ * l'ambiguïté quand plusieurs éléments la portent. */
 export function planEvidenceDiagnostic(
   scenario: Scenario,
   refusals: PlanEvidenceRefusal[],
@@ -668,26 +709,28 @@ export function planEvidenceDiagnostic(
   // ambiguïté qu'aucune des deux cibles ne porte.
   const targets = refusals
     .map((item) => {
-      const near = item.near ?? [];
-      if (near.length === 0) {
-        return `${item.stepId} → ${item.target}`;
-      }
-      // Un candidat unique se recopie tel quel ; plusieurs candidats pour cette
-      // cible se nomment tous, parce que choisir à la place du planificateur
-      // serait une décision que le relevé n'a pas le droit de prendre.
-      const exposed =
-        near.length === 1
-          ? `la page expose à la place ${near[0]}`
-          : `la page expose plusieurs cibles approchantes : ${near.join(" ; ")}`;
-      return `${item.stepId} → ${item.target} (${exposed})`;
+      // Un candidat unique porté par un seul élément se recopie tel quel ;
+      // plusieurs candidats — ou un couple porté par plusieurs éléments — se
+      // nomment et se comptent, parce que choisir à la place du planificateur,
+      // ou présenter un doublon comme une cible unique, serait une décision que
+      // le relevé n'a pas le droit de prendre.
+      const exposed = exposedInstead(item.near ?? []);
+      return exposed
+        ? `${item.stepId} → ${item.target} (${exposed})`
+        : `${item.stepId} → ${item.target}`;
     })
     .join(" ; ");
-  const hasNear = refusals.some((item) => (item.near?.length ?? 0) > 0);
+  // Le conseil de recopie ne vaut que pour un candidat qu'un seul élément porte :
+  // recopier un couple atteint deux fois ne lèverait pas l'ambiguïté, et le
+  // message ne doit pas désigner cet élément comme la cible réelle.
+  const copyable = refusals.some((item) =>
+    (item.near ?? []).some((candidate) => candidate.elements === 1)
+  );
   const unresolved = inconclusiveCount
     ? ` ${inconclusiveCount} autre(s) cible(s) restent non concluantes (voir la timeline du run).`
     : "";
   return {
     message: `Scénario ${scenario.id} non exécuté : cible absente de l'instantané de la page de découverte (${targets})`,
-    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan${hasNear ? " en recopiant la cible exposée" : ""}, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
+    hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan${copyable ? " en recopiant la cible exposée" : ""}, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
   };
 }
