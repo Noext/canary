@@ -218,18 +218,21 @@ export class Model {
     /** Reprises d'un contenu inexploitable déjà consommées : une au plus. */
     let contentRetries = 0;
     /**
+     * Corrections déjà déposées dans la conversation. Elles bornent le cycle de
+     * correction à `PLAN_ATTEMPT_CALLS` appels — la génération, puis la sienne —
+     * sans compter la reprise d'un contenu inexploitable : cette reprise ne
+     * produit aucun candidat, donc elle ne doit pas manger le créneau de
+     * correction d'un refus renvoyé ensuite. Compter les itérations de la boucle
+     * reviendrait à confondre les deux.
+     */
+    let corrections = 0;
+    /**
      * Vrai quand la reprise d'un contenu inexploitable a déjà déposé la
      * réservation de l'appel qu'elle autorise : l'itération suivante ne réserve
      * pas ce même appel une seconde fois.
      */
     let prepaid = false;
-    /**
-     * Bornes d'appels d'une tentative de plan : la génération, puis la correction
-     * de son contenu illisible dans la même conversation. La reprise d'un contenu
-     * inexploitable ajoute un appel, jamais un second cycle de correction : la
-     * boucle termine donc en trois itérations au plus.
-     */
-    for (let attempt = 0; ; attempt++) {
+    for (;;) {
       if (prepaid) {
         prepaid = false;
       } else {
@@ -316,11 +319,20 @@ export class Model {
                 .join("; ")
             : "Response content is not valid JSON";
         validation = redact(validation, this.config).slice(0, 2000);
-        if (attempt + 1 >= PLAN_ATTEMPT_CALLS) {
+        // Le contenu illisible rejoint la conversation pour que l'appel rejoué
+        // sache ce qui n'a pas été lu, et cela AVANT toute réservation : la
+        // reprise réserve ce qu'elle envoie, jamais une conversation plus courte
+        // que celle qui partira.
+        messages.push({ role: "assistant", content });
+        messages.push({
+          role: "user",
+          content: `Invalid JSON or schema: ${validation}. Return only a JSON object matching the exact schema in the system message. Do not add fields. Preserve the original product requirements and assertion targets.`,
+        });
+        corrections += 1;
+        if (corrections >= PLAN_ATTEMPT_CALLS) {
           // Après la correction, il ne reste qu'un appel dans la tentative :
           // c'est le seul moment où la reprise d'un contenu inexploitable peut
-          // encore sauver le run. Le contenu illisible rejoint la conversation
-          // pour que l'appel rejoué sache ce qui n'a pas été lu.
+          // encore sauver le run.
           await this.replayUnusableContent(
             new QaError(
               "MODEL_JSON_INVALID",
@@ -334,11 +346,6 @@ export class Model {
           contentRetries += 1;
           prepaid = true;
         }
-        messages.push({ role: "assistant", content });
-        messages.push({
-          role: "user",
-          content: `Invalid JSON or schema: ${validation}. Return only a JSON object matching the exact schema in the system message. Do not add fields. Preserve the original product requirements and assertion targets.`,
-        });
         continue;
       }
       // Un échec du contrôle appelé — navigateur, provenance, sonde de cibles —
@@ -356,7 +363,8 @@ export class Model {
         role: "user",
         content: redact(rejection, this.config).slice(0, 2000),
       });
-      if (attempt + 1 >= PLAN_ATTEMPT_CALLS) {
+      corrections += 1;
+      if (corrections >= PLAN_ATTEMPT_CALLS) {
         return refused;
       }
     }

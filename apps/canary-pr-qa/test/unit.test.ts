@@ -95,6 +95,21 @@ function fakeBrowser() {
     "trace.zip",
   ]);
 }
+/**
+ * La borne qu'une réservation doit couvrir pour l'envoi qu'elle précède : la
+ * même mesure que `Model.inputTokenBound` — un demi-token par octet du corps
+ * transmis, plus les marqueurs de rôle du gabarit de chat — et la sortie
+ * maximale autorisée. Le prompt du fixture tient en un seul champ `content` par
+ * message, donc le corps enregistré est exactement ce qui a été sérialisé.
+ */
+function sentReservation(request: Record<string, unknown>): number {
+  const messages = request.messages as { content: string; role: string }[];
+  return (
+    (request.max_tokens as number) +
+    Math.ceil(Buffer.byteLength(JSON.stringify(messages), "utf8") / 2) +
+    64 * (messages.length + 1)
+  );
+}
 
 /**
  * Exécute un script compilé contre un faux Playwright, comme le fait le daemon :
@@ -2687,6 +2702,78 @@ describe("runner false-green regressions", () => {
     expect(message).not.toContain("fixture-token");
     expect(message).not.toContain("You plan functional QA");
   }, 40_000);
+  it("reserves the content replay on the request it actually sends", async () => {
+    // Deux réponses illisibles d'affilée : la seconde place la reprise unique,
+    // et la conversation porte alors le contenu fautif et son message correctif.
+    // La réservation doit porter sur cet envoi-là, jamais sur la version plus
+    // courte d'avant la correction.
+    const unreadableContent = "x".repeat(60_000);
+    const reference = await setup({ modelUnreadable: 2, unreadableContent });
+    fakeBrowser();
+    const before = budget.reserves.length;
+    const replayed = await runQa(
+      { prUrl: PR_URL, previewUrl: reference.baseUrl },
+      reference.config
+    );
+    expect(replayed.outcome).toBe("passed");
+    expect(replayed.usage?.retries).toBe(1);
+    const sent = reference.modelRequests;
+    expect(sent).toHaveLength(3);
+    // Mesure : la réservation déposée avant chaque envoi couvre la taille réelle
+    // de cet envoi. Le troisième porte le contenu fautif et sa correction, que
+    // la réservation du deuxième ne mesure pas.
+    for (const [index, request] of sent.entries()) {
+      expect(budget.reserves[before + index] ?? 0).toBeGreaterThanOrEqual(
+        sentReservation(request)
+      );
+    }
+    expect(sentReservation(sent[2]!)).toBeGreaterThan(
+      sentReservation(sent[1]!)
+    );
+    // Enveloppe qui couvre la réservation du deuxième envoi, pas le troisième :
+    // la reprise doit être refusée avant l'envoi au lieu de laisser partir une
+    // requête plus grosse que l'enveloppe ne l'autorise.
+    const tight = await setup({
+      env: { QA_RUN_MAX_TOKENS: String(sentReservation(sent[1]!) + 1000) },
+      modelUnreadable: 2,
+      unreadableContent,
+    });
+    fakeBrowser();
+    const refused = await runQa(
+      { prUrl: PR_URL, previewUrl: tight.baseUrl },
+      tight.config
+    );
+    expect(refused.outcome).toBe("blocked");
+    expect(refused.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    expect(tight.modelRequests).toHaveLength(2);
+  }, 60_000);
+  it("keeps the correction cycle after an incomplete replay", async () => {
+    // Une génération coupée ne produit aucun candidat : sa reprise ne consomme
+    // pas le créneau de correction. Le refus renvoyé ensuite reçoit son message
+    // correctif au lieu d'être retourné tel quel à `settlePlan`, qui bloque alors
+    // le run sur la preuve manquante.
+    const refused = structuredClone(plan);
+    refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
+    const f = await setup({ modelIncomplete: 1, plans: [refused, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(3);
+    expect(f.modelRequests).toHaveLength(3);
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    // Le troisième envoi porte le refus et le message correctif qui l'explique.
+    expect(messages.at(-1)!.role).toBe("user");
+    expect(messages.at(-1)!.content).toContain("Plan rejected:");
+    expect(messages.at(-2)!.role).toBe("assistant");
+    expect(messages.at(-2)!.content).toContain("show('Welcome '+nom)");
+  }, 60_000);
   it("refuses a retry the current failure and the retry would push over the cap", () => {
     // `used` compte les réponses et les reprises déjà faites : l'échec courant
     // et la reprise envisagée occupent deux créneaux de plus.
