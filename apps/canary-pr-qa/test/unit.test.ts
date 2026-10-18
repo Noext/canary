@@ -12,13 +12,14 @@ import {
   locatorCall,
   locatorCount,
   locatorExpression,
+  type Observation,
   typographicCodepoints,
   typographicVariants,
 } from "../src/canary.js";
 import { loadConfig, validatePreviewUrl } from "../src/config.js";
 import { diagnose, QaError } from "../src/diagnostics.js";
-import { GitHub, parsePrUrl } from "../src/github.js";
-import { mayRetry, transportCode } from "../src/model.js";
+import { GitHub, type PrContext, parsePrUrl } from "../src/github.js";
+import { mayRetry, PLANNER_PROMPT, transportCode } from "../src/model.js";
 import {
   PolicySchema,
   quoteExcerpt,
@@ -33,6 +34,7 @@ import { saveReport } from "../src/report.js";
 import { type RunScope, runScope } from "../src/run-scope.js";
 import {
   FATAL_PRELUDE_CHARS,
+  planPayload,
   relayModelRetries,
   runQa,
 } from "../src/runner.js";
@@ -3316,4 +3318,98 @@ it("links a session report only for the scenarios that produced one", async () =
   const html = await readFile(join(root, "report.html"), "utf8");
   expect(html).toContain('href="welcome/report.html"');
   expect(html).not.toContain('href="refused/report.html"');
+});
+
+/**
+ * Contexte minimal d'un PR d'une ligne : le contrôle structurel du prompt n'a
+ * besoin que des clés du payload et du matériel numéroté.
+ */
+const PLANNER_CONTEXT: PrContext = {
+  baseSha: BASE_SHA,
+  body: "",
+  context: [],
+  contextWarnings: [],
+  files: [
+    {
+      filename: "src/a.ts",
+      patch: "@@ -1,0 +1,1 @@\n+const saved = true;",
+      status: "modified",
+    },
+  ],
+  headRepo: "fixture/app",
+  ref: parsePrUrl(PR_URL),
+  sha: SHA,
+  title: "",
+};
+const PLANNER_PREVIEW = {
+  evidence: "JSON sha at /version.json",
+  sha: SHA,
+  url: "https://preview.example/",
+};
+const PLANNER_PAGE: Observation = {
+  snapshot: "",
+  url: "https://preview.example/",
+};
+const PLANNER_FIXTURES = { fixtures: {}, roles: [], visuals: [] };
+
+/**
+ * Les chemins de champs que le prompt annonce au planificateur : un span entre
+ * backticks qui est un chemin de segments (`sourceLines`, `pr.files`) dont le
+ * premier est une clé du payload reçu — c'est la racine que le modèle voit. Les
+ * autres spans cités sont des exemples de code ou de citation tirés du dépôt,
+ * jamais des chemins du message.
+ */
+function citedPayloadPaths(prompt: string, payload: object): string[] {
+  const roots = new Set(Object.keys(payload));
+  return [...prompt.matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1] ?? "")
+    .filter(
+      (span) =>
+        roots.has(span.split(".")[0] ?? "") &&
+        /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*$/.test(span)
+    );
+}
+
+/** Vrai quand ce chemin de champs existe dans le payload réellement envoyé. */
+function resolvesPath(payload: object, path: string): boolean {
+  let node: unknown = payload;
+  for (const segment of path.split(".")) {
+    if (
+      typeof node !== "object" ||
+      node === null ||
+      !Object.hasOwn(node, segment)
+    ) {
+      return false;
+    }
+    node = (node as Record<string, unknown>)[segment];
+  }
+  return true;
+}
+
+/**
+ * Le prompt annonce des chemins de champs au modèle ; chacun doit exister dans
+ * le message qu'il reçoit vraiment, sinon le matériel numéroté que les refus
+ * réclament reste hors de portée. Un prompt qui citait `pr.sourceLines` — le
+ * matériel est à la racine du payload, pas sous `pr` — échoue ici.
+ */
+it("points the planner only at payload paths it actually receives", () => {
+  const payload = planPayload(
+    PLANNER_CONTEXT,
+    PLANNER_PREVIEW,
+    PLANNER_PAGE,
+    PLANNER_FIXTURES,
+    loadConfig({})
+  );
+  const cited = citedPayloadPaths(PLANNER_PROMPT, payload);
+  // Tout chemin cité doit exister dans le message envoyé : `pr.sourceLines`
+  // n'y est pas, le matériel numéroté est à la racine du payload.
+  expect(cited.filter((path) => !resolvesPath(payload, path))).toEqual([]);
+  // La consigne qui fait recopier les lignes réelles fait partie du prompt.
+  expect(cited).toContain("sourceLines");
+  // Le chemin cité atteint le matériel numéroté lui-même : à la racine du
+  // message, `[{ path, lines: [{ line, text }] }]` avec les lignes réelles du
+  // diff, numérotées dans le nouveau fichier.
+  expect(payload.sourceLines).toEqual([
+    { path: "src/a.ts", lines: [{ line: 1, text: "const saved = true;" }] },
+  ]);
 });

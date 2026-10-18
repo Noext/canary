@@ -3785,8 +3785,10 @@ it("keeps the planner message inside the context budget with its numbered materi
       ],
     },
   ]);
-  // La consigne qui fait recopier le matériel fait partie du prompt envoyé.
-  expect(PLANNER_PROMPT).toContain("pr.sourceLines");
+  // La consigne qui fait recopier le matériel fait partie du prompt envoyé, au
+  // chemin réel du payload : `sourceLines` à la racine (voir
+  // `unit.test.ts`, qui vérifie que tout chemin cité existe dans le message).
+  expect(PLANNER_PROMPT).toContain("`sourceLines`");
   // Un contexte qui remplit la borne : le matériel se réduit, le message tient.
   const saturated: PrContext = {
     ...contextWith([
