@@ -52,6 +52,23 @@ export function normalizeQuoteText(value: string): string {
  * Sans ce retrait, un diff hostile fournit un « contenu visible » que la pile
  * de rendu ne dessine pas — huit remplisseurs et un blanc satisfont une lettre.
  *
+ * La longueur et la lettre ne suffisent pas : un identifiant NU les franchit —
+ * `function` (8 caractères), `undefined` (9), `countedValue` (12) portent tous
+ * des lettres —, et un fichier qui contient un mot courant couvrirait alors
+ * n'importe quelle exigence, y compris sur un chemin critique. Un témoin doit
+ * donc porter une STRUCTURE de code : au moins `QUOTE_MIN_STRUCTURE_CHARS`
+ * caractère VISIBLE qui ne soit ni lettre ni chiffre — un opérateur, une
+ * ponctuation, le blanc qui sépare deux mots. C'est ce qui distingue une
+ * EXPRESSION d'un identifiant nu : `total=17`, `value 12` et `if (x) {`
+ * passent, `function` non.
+ *
+ * Le seuil de structure vaut UN et non deux : des contrats déjà tenus par la
+ * suite acceptent une citation dont c'est le seul caractère de structure —
+ * `total=17` porte un seul `=`, `value 12` un seul blanc —, donc exiger deux
+ * caractères rouvrirait le faux refus que ces cas mesurent. Le compteur, comme
+ * celui des lettres, ne retient pas un caractère invisible : sans ce retrait,
+ * huit zéro-largeurs et un `x` offriraient une structure que rien ne dessine.
+ *
  * Le seuil de contenu visible est le plus bas qui satisfasse les deux revues :
  * `if (x) {` porte trois lettres et `{"x": 1}` deux, donc exiger plus qu'une
  * lettre rouvrirait le plan juste bloqué, et le plancher de longueur seul
@@ -68,7 +85,14 @@ export function normalizeQuoteText(value: string): string {
 export const QUOTE_MIN_TEXT_CHARS = 8;
 /** Lettres ou chiffres visibles exigés d'une citation, quel que soit son fichier. */
 export const QUOTE_MIN_WORD_CHARS = 1;
+/**
+ * Caractères de structure de code exigés d'une citation : ni lettre, ni
+ * chiffre. Un opérateur, une ponctuation, le blanc qui sépare deux mots.
+ */
+export const QUOTE_MIN_STRUCTURE_CHARS = 1;
 const WORD_CHARS = /[\p{L}\p{N}]/gu;
+/** Tout ce qui n'est ni lettre ni chiffre : la structure de code d'une citation. */
+const STRUCTURE_CHARS = /[^\p{L}\p{N}]/gu;
 /**
  * Caractères que la pile de rendu ne dessine pas, quelle que soit leur
  * catégorie Unicode : U+00AD, U+200B..U+200F, U+2060..U+206F, U+FE00..U+FE0F,
@@ -87,11 +111,22 @@ function visibleWordChars(value: string): number {
     (char) => !DEFAULT_IGNORABLE.test(char)
   ).length;
 }
+/**
+ * Caractères de structure d'une chaîne qui s'affichent réellement : même
+ * compteur que celui des lettres, sur tout ce qui n'est ni lettre ni chiffre,
+ * donc un zéro-largeur ne compte pas comme une ponctuation.
+ */
+function visibleStructureChars(value: string): number {
+  return (value.match(STRUCTURE_CHARS) ?? []).filter(
+    (char) => !DEFAULT_IGNORABLE.test(char)
+  ).length;
+}
 export function quoteCarriesContent(value: string): boolean {
   const normalized = normalizeQuoteText(value);
   return (
     normalized.length >= QUOTE_MIN_TEXT_CHARS &&
-    visibleWordChars(normalized) >= QUOTE_MIN_WORD_CHARS
+    visibleWordChars(normalized) >= QUOTE_MIN_WORD_CHARS &&
+    visibleStructureChars(normalized) >= QUOTE_MIN_STRUCTURE_CHARS
   );
 }
 
@@ -100,8 +135,9 @@ const quote = z
   .string()
   // Le schéma ne connaît pas le fichier cité : il ne garde que le plancher de
   // longueur. Le gate de témoin applique la règle de contenu — au moins
-  // `QUOTE_MIN_WORD_CHARS` lettre ou chiffre visible — et c'est lui le seul juge
-  // d'acceptation (voir `quoteCarriesContent`).
+  // `QUOTE_MIN_WORD_CHARS` lettre ou chiffre visible et une structure de code
+  // (`QUOTE_MIN_STRUCTURE_CHARS`) — et c'est lui le seul juge d'acceptation
+  // (voir `quoteCarriesContent`).
   .min(QUOTE_MIN_TEXT_CHARS)
   .max(1000);
 const locator = z.discriminatedUnion("by", [

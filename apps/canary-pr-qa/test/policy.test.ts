@@ -40,6 +40,7 @@ import {
   type Plan,
   PlanSchema,
   type Preview,
+  QUOTE_MIN_STRUCTURE_CHARS,
   QUOTE_MIN_TEXT_CHARS,
   QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
@@ -648,6 +649,78 @@ it("accepts an exact whitespace-free quote of a real line", () => {
   const finish = "finish(function(){return;});";
   expect(quoteCarriesContent(finish)).toBe(true);
   expect(quoteHasWitness(`+ ${finish}`, finish)).toBe(true);
+});
+
+/**
+ * P2 de la revue : la longueur et la lettre seules acceptaient un identifiant
+ * NU — `function` fait huit caractères et porte des lettres —, donc un fichier
+ * qui contient un mot courant couvrait n'importe quelle exigence, y compris sur
+ * un chemin critique. Un témoin doit porter une STRUCTURE de code : au moins
+ * `QUOTE_MIN_STRUCTURE_CHARS` caractère VISIBLE qui ne soit ni lettre ni
+ * chiffre — un opérateur, une ponctuation, le blanc qui sépare deux mots. C'est
+ * ce qui distingue une EXPRESSION d'un identifiant nu.
+ *
+ * Jamais de retour au plancher de jetons par blancs :
+ * `disabled={closed||!counted.ok}` (27 caractères, un seul jeton au sens des
+ * blancs) est une copie exacte qui reste un témoin, et le seuil de structure
+ * vaut UN, pas deux : un seul `=` (`total=17`) ou un seul blanc (`value 12`)
+ * suffit, donc exiger deux caractères rouvrirait le faux refus que ces deux cas
+ * mesurent.
+ */
+it("refuses a bare identifier as a witness, exact or not", () => {
+  // `return`, `true` et `type` sont déjà sous le plancher de longueur ;
+  // `function` (8) et `undefined` (9) le franchissaient : la liste nommée par
+  // la revue est refusée entière.
+  for (const word of ["function", "return", "true", "type", "undefined"]) {
+    expect(quoteCarriesContent(word), `${word}: contenu`).toBe(false);
+    // Le mot est bien dans le fichier, verbatim : c'est le CONTENU qui manque,
+    // pas la présence.
+    const line = `const ${word}Value = compute();`;
+    expect(quoteHasWitness(line, word), `${word}: présence`).toBe(false);
+    expect(
+      requirementHasWitness(
+        { quote: word, sourceFile: "src/logic.ts" },
+        contextWith([{ filename: "src/logic.ts", patch: `+ ${line}` }])
+      ),
+      `${word}: témoin`
+    ).toBe(false);
+  }
+  const file = "src/logic.ts";
+  const line = "export function compute() {";
+  const scenarioContext = contextWith([{ filename: file, patch: `+ ${line}` }]);
+  const plan = planWithWitnesses([
+    {
+      id: "logic",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: "function" }],
+    },
+  ]);
+  expect(ungroundedRequirements(plan, scenarioContext)).toHaveLength(1);
+  const refusal = refusalOfPlan(plan, scenarioContext, policyFor());
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  // Le refus dit la vérité : la citation existe et porte des lettres ; ce qui
+  // manque est la structure de code. Un message qui demande une lettre déjà
+  // présente ferait renvoyer la même citation au planificateur.
+  expect(refusal.message).toBe(
+    `Weak source witness for logic: ${file} (requirement 1). Rejected quote: "function"`
+  );
+  expect(refusal.hint).toContain("code structure");
+  // La ligne qui PORTE le mot reste un témoin : la règle distingue un
+  // identifiant nu d'une expression, elle ne bloque pas le fichier.
+  expect(
+    requirementHasWitness({ quote: line, sourceFile: file }, scenarioContext)
+  ).toBe(true);
+  expect(QUOTE_MIN_STRUCTURE_CHARS).toBe(1);
+  for (const single of ["total=17", "value 12"]) {
+    expect(quoteCarriesContent(single), `${single}: un seul caractère`).toBe(
+      true
+    );
+  }
+  // Les deux ponctuations nommées par la revue restent refusées : sous le
+  // plancher de longueur, elles ne portent aucun mot.
+  for (const punctuation of [");", "}}"]) {
+    expect(quoteCarriesContent(punctuation), punctuation).toBe(false);
+  }
 });
 
 /**
@@ -3743,6 +3816,38 @@ it("bounds the numbered material by the budget it is given", () => {
     expect(shown, `budget ${budget}`).toBeLessThan(lines.length);
   }
   expect(numberedSourceLines(scenarioContext, 10)).toEqual([]);
+});
+
+/**
+ * P2 de la revue : git accepte un guillemet ou un antislash dans un nom de
+ * fichier, que JSON échappe. Le budget comptait la longueur BRUTE du nom, donc
+ * un nom long échappé laissait entrer une ligne de trop et le matériel
+ * sérialisé dépassait le budget reçu — `planPayload` rejetait alors un payload
+ * qui tenait avant l'ajout du matériel. Le coût se mesure sur le chemin
+ * SÉRIALISÉ, ce que la mesure sous le budget du nom échappé prouve.
+ */
+it("charges an escaped filename its serialized length in the line budget", () => {
+  // Un nom court, puis le même diff sous un nom que JSON échappe beaucoup :
+  // 40 guillemets et 40 antislashs ajoutent 82 caractères à la sérialisation.
+  const shortName = "src/a.ts";
+  const escapedName = `src/${'\\"'.repeat(40)}.ts`;
+  expect(escapedName.length).toBeLessThan(JSON.stringify(escapedName).length);
+  const patch =
+    "@@ -1,1 +1,2 @@\n+const first = compute();\n+const second = compute();\n";
+  for (const name of [shortName, escapedName]) {
+    const scenarioContext = contextWith([{ filename: name, patch }]);
+    const all = numberedSourceLines(scenarioContext, 1_000_000);
+    expect(all[0]?.lines, name).toHaveLength(2);
+    // Un caractère de moins que la taille sérialisée réelle : la marge couvre
+    // la structure JSON, donc le nom échappé ne peut plus tenir avec sa ligne.
+    // Compté sur la longueur brute, il y tenait — et le matériel dépassait.
+    const serialized = JSON.stringify(all).length;
+    const bounded = numberedSourceLines(scenarioContext, serialized - 1);
+    expect(
+      JSON.stringify(bounded).length,
+      `${name} sous ${serialized - 1}`
+    ).toBeLessThanOrEqual(serialized - 1);
+  }
 });
 
 const PLAN_PREVIEW: Preview = {

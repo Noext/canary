@@ -418,7 +418,7 @@ function namedFatalClass(refusals: QaError[], label: string): FatalClass[] {
  * défauts, et celui-ci ne se répare pas en ajoutant une citation déjà présente.
  */
 const WEAK_UNWITNESSED_REMEDY =
-  "A requirement already cites a listed file, but its exact quote carries no letter or digit to witness that file: quote a substantial fragment, or get its skip approved in .canary/qa.json on the trusted base branch.";
+  "A requirement already cites a listed file, but its exact quote carries no visible code content to witness that file: quote a substantial fragment, or get its skip approved in .canary/qa.json on the trusted base branch.";
 /**
  * Remède d'une classe fatale de témoin : elle agrège les citations absentes et
  * les citations exactes mais trop pauvres, dont les remèdes n'ont rien à voir.

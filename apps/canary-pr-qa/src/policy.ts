@@ -343,7 +343,7 @@ export const UNGROUNDED_ABSENT_REMEDY =
  * préambule plafonné à `FATAL_PRELUDE_CHARS` (runner.ts).
  */
 export const UNGROUNDED_WEAK_REMEDY =
-  "The quote exists in the cited file but carries no letter or digit of visible content: quote a substantial fragment, or get that file's skip approved in .canary/qa.json on the trusted base branch.";
+  "The quote exists in the cited file but carries no visible code content: quote a substantial fragment, or get that file's skip approved in .canary/qa.json on the trusted base branch.";
 
 /**
  * Une exigence dont la citation n'a pas de témoin acceptable : soit elle
@@ -377,7 +377,7 @@ export function ungroundedRequirement(
     return new QaError(
       "REQUIREMENT_UNGROUNDED",
       `Weak source witness for ${fault}`,
-      `The quote exists in ${requirement.sourceFile} but carries no letter or digit of visible content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit, so a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
+      `The quote exists in ${requirement.sourceFile} but carries no visible code content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit and a code structure (an operator, a punctuation, or the blank between two words), so a bare identifier, a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
     );
   }
   return new QaError(
@@ -606,9 +606,13 @@ function fileContentLines(
  * Borné par le budget que l'appelant peut encore envoyer : au-delà, la ligne
  * n'est pas montrée et le patch reste la source du planificateur. Le coût d'une
  * ligne est sa taille sérialisée plus `SOURCE_LINE_COST_CHARS`, celui d'un
- * fichier la taille de son chemin plus `SOURCE_FILE_COST_CHARS` ; ces marges
- * couvrent les accolades et les virgules, donc le total sérialisé tient dans le
- * budget reçu.
+ * fichier la taille SÉRIALISÉE de son chemin plus `SOURCE_FILE_COST_CHARS` ; ces
+ * marges couvrent les accolades et les virgules, donc le total sérialisé tient
+ * dans le budget reçu. Le chemin n'y échappe pas : git accepte un guillemet ou
+ * un antislash dans un nom de fichier, que JSON échappe, donc la longueur brute
+ * du nom sous-estime la place qu'il prend. Compter la longueur brute laissait
+ * entrer une ligne de trop, et `planPayload` rejetait alors un payload passé
+ * au-dessus de sa limite.
  */
 export function numberedSourceLines(
   context: PrContext,
@@ -620,7 +624,7 @@ export function numberedSourceLines(
     if (!file.patch) {
       continue;
     }
-    const cost = file.filename.length + SOURCE_FILE_COST_CHARS;
+    const cost = JSON.stringify(file.filename).length + SOURCE_FILE_COST_CHARS;
     if (used + cost > budget) {
       continue;
     }
@@ -646,9 +650,9 @@ export function numberedSourceLines(
 }
 /**
  * Marge de coût d'une ligne numérotée, d'un fichier numéroté : la virgule qui
- * sépare deux entrées, les accolades du tableau, et pour un fichier la taille de
- * son chemin. Elle surestime volontairement, pour que le matériel tienne
- * toujours dans la place que `planPayload` lui alloue.
+ * sépare deux entrées, les accolades du tableau, et pour un fichier la clé
+ * `path` et son deux-points. Elle surestime volontairement, pour que le matériel
+ * tienne toujours dans la place que `planPayload` lui alloue.
  */
 const SOURCE_LINE_COST_CHARS = 24;
 const SOURCE_FILE_COST_CHARS = 32;
@@ -1938,7 +1942,7 @@ export function unwitnessedRequirement(
   if (!inDiff) {
     hint = `This PR does not change ${file}, so it cannot be listed in skipped: drop it from sourceFiles and quote a changed file instead.`;
   } else if (weak) {
-    hint = `A requirement already cites ${file}, but its exact quote carries no letter or digit to witness this file: quote a substantial fragment of ${file}${criticalSkipRefused(policy, file) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`;
+    hint = `A requirement already cites ${file}, but its exact quote carries no visible code content to witness this file: quote a substantial fragment of ${file}${criticalSkipRefused(policy, file) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`;
   } else if (criticalSkipRefused(policy, file)) {
     hint = `Add a requirement whose quote exists verbatim in ${file}; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch.`;
   } else {
