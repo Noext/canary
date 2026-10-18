@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import type { Observation } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
@@ -9,8 +11,10 @@ import {
   amputatedQuoteRemedy,
   amputationScans,
   isDocumentationPath,
+  numberedSourceLines,
   PolicySchema,
   quoteDivergence,
+  quoteExcerpt,
   quoteHasWitness,
   repairRequirementAttribution,
   requirementEvidence,
@@ -21,19 +25,31 @@ import {
   UNGROUNDED_ABSENT_REMEDY,
   undeclaredSourcePlanRefusals,
   ungroundedPlanRefusals,
+  ungroundedRequirement,
   ungroundedRequirements,
   unwitnessedPlanRefusals,
   validateCoverage,
   witnessFiles,
 } from "../src/policy.js";
-import { coverageFatalClasses, planShapeRefusals } from "../src/runner.js";
 import {
-  CRITICAL_QUOTE_MIN_WORD_CHARS,
+  coverageFatalClasses,
+  planPayload,
+  planShapeRefusals,
+} from "../src/runner.js";
+import {
   type Plan,
   PlanSchema,
+  type Preview,
+  QUOTE_MIN_STRUCTURE_CHARS,
   QUOTE_MIN_TEXT_CHARS,
+  QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
 } from "../src/schema.js";
+import {
+  lineAt,
+  MEASURED_COPY_REFUSALS,
+  type MeasuredCopyRefusal,
+} from "./fixture.js";
 
 const context: PrContext = {
   baseSha: "2".repeat(40),
@@ -205,9 +221,7 @@ it("compares a quote to its file up to whitespace", () => {
 
 it("accepts a quote whose only difference from the file is whitespace", () => {
   const plan = cashPlan(REFLOWED_QUOTE);
-  expect(
-    ungroundedRequirements(plan, reflowedCashContext, policyFor())
-  ).toEqual([]);
+  expect(ungroundedRequirements(plan, reflowedCashContext)).toEqual([]);
   expect(
     unwitnessedPlanRefusals(plan, reflowedCashContext, policyFor())
   ).toEqual([]);
@@ -218,9 +232,7 @@ it("accepts a quote whose only difference from the file is whitespace", () => {
 
 it("still refuses a quote with one different character", () => {
   const plan = cashPlan(REFLOWED_QUOTE.replace("false", "true"));
-  expect(
-    ungroundedRequirements(plan, reflowedCashContext, policyFor())
-  ).toHaveLength(1);
+  expect(ungroundedRequirements(plan, reflowedCashContext)).toHaveLength(1);
   expect(refusalOfPlan(plan, reflowedCashContext, policyFor()).code).toBe(
     "REQUIREMENT_UNGROUNDED"
   );
@@ -232,35 +244,35 @@ it("does not read the patch marker as whitespace", () => {
   // citation a recollées : seuls les blancs sont tolérés, jamais un caractère
   // non blanc — et le contenu accompagne toujours le patch dans un vrai
   // contexte, donc ce refus ne se produit pas en run.
-  expect(ungroundedRequirements(plan, cashPatchOnly, policyFor())).toHaveLength(
-    1
-  );
+  expect(ungroundedRequirements(plan, cashPatchOnly)).toHaveLength(1);
 });
 
 it("refuses a quote that carries no real content", () => {
-  // Le seuil vit dans le schéma de `quote` (PlanSchema) : un plan dont la
-  // citation n'a pas de contenu réel n'est pas valide. Sept espaces suivis
-  // d'une accolade se normalisent en « } », que tout fichier contient, et
-  // couvriraient un fichier entier ; huit caractères invisibles se normalisent
-  // en chaîne vide, que `includes` accepte toujours.
-  expect(() => cashPlan("        ")).toThrow();
-  expect(() => cashPlan(`${"\u200b".repeat(7)}}`)).toThrow();
-  expect(() => cashPlan("        }")).toThrow();
-  // Le gate de témoin refuse la même citation, y compris forgée après le schéma :
-  // la comparaison reste la dernière barrière si un plan contourne le contrat.
+  // Le seuil de contenu vit dans le gate de témoin, seul juge d'acceptation : un
+  // plan dont la citation n'a pas de contenu réel est refusé au même endroit que
+  // le run le refuse. Sept espaces suivis d'une accolade se normalisent en
+  // « } », que tout fichier contient, et couvriraient un fichier entier ; huit
+  // caractères invisibles se normalisent en chaîne vide, que `includes` accepte
+  // toujours. Le schéma Zod ne garde que le plancher de longueur — il ne connaît
+  // pas le fichier cité —, donc il n'est jamais la barrière de ce refus.
+  for (const empty of ["        ", `${"\u200b".repeat(7)}}`, "        }"]) {
+    const plan = cashPlan(empty);
+    expect(
+      ungroundedRequirements(plan, reflowedCashContext),
+      empty
+    ).toHaveLength(1);
+    expect(
+      refusalOfPlan(plan, reflowedCashContext, policyFor()).code,
+      empty
+    ).toBe("REQUIREMENT_UNGROUNDED");
+  }
+  // La comparaison reste la barrière : aucune de ces citations n'a de témoin,
+  // même quand le fichier contient l'accolade qu'elles normalisent.
   expect(quoteHasWitness(CASH_FILE, "")).toBe(false);
   expect(quoteHasWitness(CASH_FILE, "   \n\t ")).toBe(false);
   expect(quoteHasWitness(CASH_FILE, "        ")).toBe(false);
   expect(quoteHasWitness(CASH_FILE, "        }")).toBe(false);
   expect(quoteHasWitness(CASH_FILE, `${"\u200b".repeat(7)}}`)).toBe(false);
-  const forged = cashPlan(REFLOWED_QUOTE);
-  forged.scenarios[0]!.requirements[0]!.quote = "        }";
-  expect(
-    ungroundedRequirements(forged, reflowedCashContext, policyFor())
-  ).toHaveLength(1);
-  expect(refusalOfPlan(forged, reflowedCashContext, policyFor()).code).toBe(
-    "REQUIREMENT_UNGROUNDED"
-  );
 });
 
 /**
@@ -331,8 +343,7 @@ it("refuses a quote that omits an invisible inside an identifier", () => {
           ],
         },
       ]),
-      invisibleIdContext,
-      policyFor()
+      invisibleIdContext
     )
   ).toHaveLength(1);
   // Recopié AVEC l'invisible à la bonne place : témoin.
@@ -398,7 +409,6 @@ function witnessed(quote: string, sourceFile: string, scenarioId: string) {
     ]),
   };
 }
-
 it("accepts an exact short quote in a non-critical alphanumeric-poor file", () => {
   const shortQuote = "if (x) {";
   // Trois lettres seulement : le compteur d'alphanumériques la refusait, et le
@@ -410,9 +420,7 @@ it("accepts an exact short quote in a non-critical alphanumeric-poor file", () =
     SCRIPT_FILE,
     "toggle"
   );
-  expect(ungroundedRequirements(plan, scenarioContext, policyFor())).toEqual(
-    []
-  );
+  expect(ungroundedRequirements(plan, scenarioContext)).toEqual([]);
   expect(
     validateCoverage(plan, scenarioContext, policyFor(), config).gate
   ).toBe("complete");
@@ -424,142 +432,373 @@ it("accepts an exact short quote on a critical path", () => {
   // compter les lettres au-delà de leur présence rouvrirait le plan juste
   // bloqué que le tour 3 signalait.
   const shortQuote = "if (x) {";
-  expect(quoteCarriesContent(shortQuote, true)).toBe(true);
+  expect(quoteCarriesContent(shortQuote)).toBe(true);
   const logic = witnessed(shortQuote, "src/logic.ts", "logic");
-  expect(
-    ungroundedRequirements(logic.plan, logic.scenarioContext, policyFor())
-  ).toEqual([]);
+  expect(ungroundedRequirements(logic.plan, logic.scenarioContext)).toEqual([]);
   expect(
     validateCoverage(logic.plan, logic.scenarioContext, policyFor(), config)
       .gate
   ).toBe("complete");
   // Le cas nommé par la revue du tour 3 : `src/value.json` réduit à `{"x": 1}`,
   // deux alphanumériques, chemin critique.
-  expect(quoteCarriesContent(JSON_QUOTE, true)).toBe(true);
+  expect(quoteCarriesContent(JSON_QUOTE)).toBe(true);
   const json = witnessed(JSON_QUOTE, JSON_FILE, "value");
-  expect(
-    ungroundedRequirements(json.plan, json.scenarioContext, policyFor())
-  ).toEqual([]);
+  expect(ungroundedRequirements(json.plan, json.scenarioContext)).toEqual([]);
   expect(
     validateCoverage(json.plan, json.scenarioContext, policyFor(), config).gate
   ).toBe("complete");
 });
 
-it("refuses a critical quote with no visible content", () => {
+it("refuses a quote with no visible letter or digit, on every path", () => {
   // Les fragments nommés par la revue du tour 4 : un séparateur de ponctuation
-  // et huit zéro-largeurs non-joignants, plantés dans un diff hostile.
+  // et huit zéro-largeurs non-joignants, plantés dans un diff hostile. Le
+  // seuil de contenu visible vaut maintenant partout — c'est lui qui refusait
+  // la ponctuation seule sur un chemin critique —, donc le fichier ordinaire
+  // n'a plus de tolérance à lui.
   const separator = "// ------";
   const invisible = ZWNJ.repeat(8);
-  expect(quoteCarriesContent(separator)).toBe(true);
-  expect(quoteCarriesContent(separator, true)).toBe(false);
-  // Le plancher universel suffit déjà pour les invisibles : huit zéro-largeurs
-  // forment un seul jeton, refusé par le contrat de `quote` comme par le gate.
+  expect(quoteCarriesContent(separator)).toBe(false);
+  // Le plancher de longueur suffit déjà pour les invisibles : huit zéro-largeurs
+  // se normalisent en une chaîne vide, refusée par le contrat de `quote` comme
+  // par le gate.
   expect(quoteCarriesContent(invisible)).toBe(false);
-  expect(quoteHasWitness(`${invisible}\n`, invisible, true)).toBe(false);
-  const { plan, scenarioContext } = witnessed(
-    separator,
-    "src/logic.ts",
-    "logic"
-  );
+  expect(quoteHasWitness(`${invisible}\n`, invisible)).toBe(false);
+  for (const path of ["src/logic.ts", SCRIPT_FILE]) {
+    const plan = planWithWitnesses([
+      {
+        id: "logic",
+        sourceFiles: [path],
+        requirements: [{ sourceFile: path, quote: separator }],
+      },
+    ]);
+    const scenarioContext = contextWith([
+      { filename: path, patch: `+ ${separator}` },
+    ]);
+    expect(ungroundedRequirements(plan, scenarioContext)).toHaveLength(1);
+    const refusal = refusalOfPlan(plan, scenarioContext, policyFor());
+    expect(refusal.code, `${path}: code`).toBe("REQUIREMENT_UNGROUNDED");
+    // La citation EXISTE dans le fichier : lui répondre « no source witness »
+    // ferait renvoyer la même citation exacte au planificateur. Le refus nomme
+    // la règle du contenu, et ne propose un skip que là où le gate le demande.
+    expect(refusal.message, `${path}: message`).toBe(
+      `Weak source witness for logic: ${path} (requirement 1). Rejected quote: ${JSON.stringify(separator)}`
+    );
+    expect(refusal.hint, `${path}: seuil nommé`).toContain(
+      `at least ${QUOTE_MIN_WORD_CHARS} letter or digit`
+    );
+    // Aucun fichier n'est proposé comme portant la citation : elle y est, et le
+    // remède est une citation qui porte du contenu, pas une réattribution.
+    expect(witnessFiles(separator, scenarioContext)).toEqual([]);
+    expect(() =>
+      validateCoverage(plan, scenarioContext, policyFor(), config)
+    ).toThrow();
+  }
+  // Le chemin critique, lui, propose en plus le skip approuvé sur la branche de
+  // base — jamais un retrait du fichier que le gate refuserait.
+  const criticalContext = contextWith([
+    { filename: "src/logic.ts", patch: `+ ${separator}` },
+  ]);
   expect(
-    ungroundedRequirements(plan, scenarioContext, policyFor())
-  ).toHaveLength(1);
-  const refusal = refusalOfPlan(plan, scenarioContext, policyFor());
-  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
-  // La citation EXISTE dans le fichier : lui répondre « no source witness »
-  // ferait renvoyer la même citation exacte au planificateur. Le refus nomme la
-  // règle du fichier critique, et ne propose pas un skip que le gate refuse.
-  expect(refusal.message).toBe(
-    `Weak source witness for logic: src/logic.ts (requirement 1). Rejected quote: ${JSON.stringify(separator)}`
-  );
-  expect(refusal.hint).toContain(
-    `at least ${CRITICAL_QUOTE_MIN_WORD_CHARS} letter or digit`
-  );
-  expect(refusal.hint).toContain(".canary/qa.json");
-  // Aucun fichier n'est proposé comme portant la citation : elle y est, et le
-  // remède est une citation qui porte du contenu, pas une réattribution.
-  const [line] = ungroundedPlanRefusals(plan, scenarioContext, policyFor());
-  expect(line).toContain(JSON.stringify(separator));
-  expect(witnessFiles(separator, scenarioContext, policyFor())).toEqual([]);
-  expect(line).not.toContain("appears verbatim in");
-  // Le fragment invisible forgé après le contrat ne franchit pas le gate non
-  // plus : le schéma le refuse déjà.
-  expect(() =>
+    refusalOfPlan(
+      planWithWitnesses([
+        {
+          id: "logic",
+          sourceFiles: ["src/logic.ts"],
+          requirements: [{ sourceFile: "src/logic.ts", quote: separator }],
+        },
+      ]),
+      criticalContext,
+      policyFor()
+    ).hint
+  ).toContain(".canary/qa.json");
+  const script = contextWith([
+    { filename: SCRIPT_FILE, patch: `+ ${separator}` },
+  ]);
+  const [line] = ungroundedPlanRefusals(
     planWithWitnesses([
       {
         id: "logic",
-        sourceFiles: ["src/logic.ts"],
-        requirements: [{ sourceFile: "src/logic.ts", quote: invisible }],
+        sourceFiles: [SCRIPT_FILE],
+        requirements: [{ sourceFile: SCRIPT_FILE, quote: separator }],
       },
-    ])
-  ).toThrow();
-  // Hors chemin critique, le même séparateur exact reste un témoin : un
-  // séparateur recopié d'un script n'est pas un faux vert.
-  const script = witnessed(separator, SCRIPT_FILE, "toggle");
-  expect(
-    validateCoverage(script.plan, script.scenarioContext, policyFor(), config)
-      .gate
-  ).toBe("complete");
+    ]),
+    script,
+    policyFor()
+  );
+  expect(line).toContain(JSON.stringify(separator));
+  expect(line).not.toContain("appears verbatim in");
+  // Le fragment invisible par le contrat ne franchit pas le gate : aucune
+  // lettre visible ne subsiste après normalisation, donc aucune exigence ne le
+  // porte comme témoin et le run est refusé là, pas au schéma.
+  for (const quote of [invisible, "      \u200b\u200b}"]) {
+    const plan = planWithWitnesses([
+      {
+        id: "logic",
+        sourceFiles: ["src/logic.ts"],
+        requirements: [{ sourceFile: "src/logic.ts", quote }],
+      },
+    ]);
+    const scenarioContext = contextWith([
+      { filename: "src/logic.ts", patch: `+ ${quote}` },
+    ]);
+    expect(ungroundedRequirements(plan, scenarioContext), quote).toHaveLength(
+      1
+    );
+    expect(refusalOfPlan(plan, scenarioContext, policyFor()).code, quote).toBe(
+      "REQUIREMENT_UNGROUNDED"
+    );
+  }
 });
 
 it("does not count a default-ignorable letter as visible content", () => {
   // U+115F HANGUL CHOSEONG FILLER, U+1160 HANGUL JUNGSEONG FILLER, U+3164
   // HANGUL FILLER et U+FFA0 HALFWIDTH HANGUL FILLER sont à la fois `\p{L}` et
   // `Default_Ignorable_Code_Point` : invisibles, ils satisfaisaient la lettre
-  // exigée d'un témoin critique. Un diff hostile les plante et couvrait le
-  // fichier sans rien montrer.
+  // exigée d'un témoin. Un diff hostile les plante et couvrait le fichier sans
+  // rien montrer — le seuil de contenu visible les retire avant de compter,
+  // désormais sur tout fichier et non plus sur le seul chemin critique.
   for (const filler of ["\u115f", "\u1160", "\u3164", "\uffa0"]) {
     const quote = `${filler.repeat(4)} ${filler.repeat(4)}`;
-    // Le plancher universel est franchi : assez de caractères, deux jetons.
     expect(quote.length).toBeGreaterThanOrEqual(QUOTE_MIN_TEXT_CHARS);
-    expect(quoteCarriesContent(quote)).toBe(true);
-    // Mais aucun caractère visible ne subsiste, donc aucun témoin critique.
-    expect(quoteCarriesContent(quote, true)).toBe(false);
-    expect(quoteHasWitness(`+ ${quote}`, quote, true)).toBe(false);
+    expect(quoteCarriesContent(quote)).toBe(false);
+    expect(quoteHasWitness(`+ ${quote}`, quote)).toBe(false);
   }
   // Une vraie lettre ou un vrai chiffre reste visible, y compris quand la
   // source en offre peu — les cas que la revue du tour 3 demandait de garder.
   for (const visible of ["if (x) {", JSON_QUOTE, "value 12"]) {
-    expect(quoteCarriesContent(visible, true)).toBe(true);
+    expect(quoteCarriesContent(visible)).toBe(true);
   }
 });
 
-it("refuses a quote reduced to a single token, exact or not", () => {
-  const line = "finish(function(){return;});";
-  // Longue mais d'un seul jeton : elle ne désigne aucun endroit précis, et le
-  // plancher de longueur seul l'accepterait. Le contrat de `quote` la refuse
-  // déjà, comme le gate de témoin si un plan la forge après coup.
-  expect(line.length).toBeGreaterThanOrEqual(QUOTE_MIN_TEXT_CHARS);
-  expect(quoteCarriesContent(line)).toBe(false);
-  expect(quoteCarriesContent("alt")).toBe(false);
-  expect(quoteCarriesContent("end();")).toBe(false);
-  const singleTokenFile = ["alt", "  end();", `  ${line}`].join("\n");
-  expect(quoteHasWitness(singleTokenFile, line)).toBe(false);
-  expect(quoteHasWitness(singleTokenFile, "alt")).toBe(false);
-  // Refusée partout, y compris dans le fichier ordinaire où le seuil critique
-  // ne s'applique pas.
+it("refuses a quote reduced to punctuation, exact or not", () => {
+  // La ponctuation seule ne désigne aucun endroit précis, et le gate la refuse
+  // partout par la règle de contenu — plus par un comptage de blancs. Le
+  // contrat de `quote` la refuse, par la règle de contenu.
+  const punctuation = ["}}", ");", "=>", "+", "end();"];
+  for (const quote of punctuation) {
+    expect(quoteCarriesContent(quote), `${quote}: contenu`).toBe(false);
+  }
+  // Rembourrée à la longueur du plancher, elle reste de la ponctuation : la
+  // longueur seule ne suffit jamais à prouver un témoin.
+  const padded = "        }";
+  expect(padded.length).toBeGreaterThanOrEqual(QUOTE_MIN_TEXT_CHARS);
+  expect(quoteCarriesContent(padded)).toBe(false);
+  const punctuationFile = ["}}", "  end();", padded].join("\n");
+  expect(quoteHasWitness(punctuationFile, padded)).toBe(false);
+  expect(quoteHasWitness(punctuationFile, "end();")).toBe(false);
+  // Un plan qui cite de la ponctuation est refusé avant exécution, sur un chemin
+  // critique comme sur un fichier ordinaire : le gate est le seul juge, et c'est
+  // lui qui rend le refus — le schéma ne connaît pas le fichier cité.
   for (const path of [SCRIPT_FILE, "src/logic.ts"]) {
-    const scenario = {
-      id: "finish",
-      sourceFiles: [path],
-      requirements: [{ sourceFile: path, quote: line }],
-    };
-    expect(() => planWithWitnesses([scenario])).toThrow();
-    const forged = planWithWitnesses([
+    const plan = planWithWitnesses([
       {
         id: "finish",
         sourceFiles: [path],
-        requirements: [{ sourceFile: path, quote: "end(); run();" }],
+        requirements: [{ sourceFile: path, quote: padded }],
       },
     ]);
-    forged.scenarios[0]!.requirements[0]!.quote = line;
-    const segment = contextWith([{ filename: path, patch: `+ ${line}` }]);
-    expect(ungroundedRequirements(forged, segment, policyFor())).toHaveLength(
-      1
-    );
-    expect(refusalOfPlan(forged, segment, policyFor()).code).toBe(
+    const segment = contextWith([{ filename: path, patch: `+ ${padded}` }]);
+    expect(ungroundedRequirements(plan, segment), path).toHaveLength(1);
+    expect(refusalOfPlan(plan, segment, policyFor()).code, path).toBe(
       "REQUIREMENT_UNGROUNDED"
     );
+  }
+});
+
+/**
+ * Le proxy que ce contrat remplace comptait les blancs : une copie exacte de
+ * code sans blanc — un attribut JSX, un appel d'accesseur — ne formait qu'un
+ * jeton et était refusée alors qu'elle fait 27 à 43 caractères et porte des
+ * lettres. Les quatre copies mesurées ci-dessous sont des lignes réelles des
+ * runs 9ee36233, 94e86f2b et 71cb3369 (voir `MEASURED_COPY_REFUSALS`), et
+ * chacune est acceptée comme témoin de son fichier déclaré.
+ */
+const WHITESPACE_FREE_QUOTES = [
+  "formatAmountFr(centsToEuros(counted.totalCents))",
+  "aria-invalid={invalid||undefined}",
+  "disabled={closed||!counted.ok}",
+  'data-cash-state={closed?"cloture":"ouvert"}',
+];
+
+it("accepts an exact whitespace-free quote of a real line", () => {
+  for (const quote of WHITESPACE_FREE_QUOTES) {
+    const label = `${quote.slice(0, 24)}…`;
+    expect(quote, label).not.toMatch(/\s/u);
+    expect(quote.length, label).toBeGreaterThanOrEqual(QUOTE_MIN_TEXT_CHARS);
+    expect(quoteCarriesContent(quote), label).toBe(true);
+    const { plan, scenarioContext } = witnessed(
+      quote,
+      "apps/web/app/page.tsx",
+      "caisse-comptage-juste"
+    );
+    expect(
+      requirementHasWitness(
+        { quote, sourceFile: "apps/web/app/page.tsx" },
+        scenarioContext
+      ),
+      label
+    ).toBe(true);
+    expect(ungroundedRequirements(plan, scenarioContext), label).toEqual([]);
+    expect(
+      validateCoverage(plan, scenarioContext, policyFor(), config).gate,
+      label
+    ).toBe("complete");
+  }
+  // Le cas nommé par l'ancien test : une expression longue et sans blanc, mais
+  // pleine de contenu, est un témoin comme une autre.
+  const finish = "finish(function(){return;});";
+  expect(quoteCarriesContent(finish)).toBe(true);
+  expect(quoteHasWitness(`+ ${finish}`, finish)).toBe(true);
+});
+
+/**
+ * P2 de la revue : la longueur et la lettre seules acceptaient un identifiant
+ * NU — `function` fait huit caractères et porte des lettres —, donc un fichier
+ * qui contient un mot courant couvrait n'importe quelle exigence, y compris sur
+ * un chemin critique. Un témoin doit porter une STRUCTURE de code : au moins
+ * `QUOTE_MIN_STRUCTURE_CHARS` caractère VISIBLE qui ne soit ni lettre ni
+ * chiffre — un opérateur, une ponctuation, le blanc qui sépare deux mots. C'est
+ * ce qui distingue une EXPRESSION d'un identifiant nu.
+ *
+ * Jamais de retour au plancher de jetons par blancs :
+ * `disabled={closed||!counted.ok}` (27 caractères, un seul jeton au sens des
+ * blancs) est une copie exacte qui reste un témoin, et le seuil de structure
+ * vaut UN, pas deux : un seul `=` (`total=17`) ou un seul blanc (`value 12`)
+ * suffit, donc exiger deux caractères rouvrirait le faux refus que ces deux cas
+ * mesurent.
+ */
+it("refuses a bare identifier as a witness, exact or not", () => {
+  // `return`, `true` et `type` sont déjà sous le plancher de longueur ;
+  // `function` (8) et `undefined` (9) le franchissaient : la liste nommée par
+  // la revue est refusée entière.
+  for (const word of ["function", "return", "true", "type", "undefined"]) {
+    expect(quoteCarriesContent(word), `${word}: contenu`).toBe(false);
+    // Le mot est bien dans le fichier, verbatim : c'est le CONTENU qui manque,
+    // pas la présence.
+    const line = `const ${word}Value = compute();`;
+    expect(quoteHasWitness(line, word), `${word}: présence`).toBe(false);
+    expect(
+      requirementHasWitness(
+        { quote: word, sourceFile: "src/logic.ts" },
+        contextWith([{ filename: "src/logic.ts", patch: `+ ${line}` }])
+      ),
+      `${word}: témoin`
+    ).toBe(false);
+  }
+  const file = "src/logic.ts";
+  const line = "export function compute() {";
+  const scenarioContext = contextWith([{ filename: file, patch: `+ ${line}` }]);
+  const plan = planWithWitnesses([
+    {
+      id: "logic",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: "function" }],
+    },
+  ]);
+  expect(ungroundedRequirements(plan, scenarioContext)).toHaveLength(1);
+  const refusal = refusalOfPlan(plan, scenarioContext, policyFor());
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  // Le refus dit la vérité : la citation existe et porte des lettres ; ce qui
+  // manque est la structure de code. Un message qui demande une lettre déjà
+  // présente ferait renvoyer la même citation au planificateur.
+  expect(refusal.message).toBe(
+    `Weak source witness for logic: ${file} (requirement 1). Rejected quote: "function"`
+  );
+  expect(refusal.hint).toContain("code structure");
+  // La ligne qui PORTE le mot reste un témoin : la règle distingue un
+  // identifiant nu d'une expression, elle ne bloque pas le fichier.
+  expect(
+    requirementHasWitness({ quote: line, sourceFile: file }, scenarioContext)
+  ).toBe(true);
+  expect(QUOTE_MIN_STRUCTURE_CHARS).toBe(1);
+  for (const single of ["total=17", "value 12"]) {
+    expect(quoteCarriesContent(single), `${single}: un seul caractère`).toBe(
+      true
+    );
+  }
+  // Les deux ponctuations nommées par la revue restent refusées : sous le
+  // plancher de longueur, elles ne portent aucun mot.
+  for (const punctuation of [");", "}}"]) {
+    expect(quoteCarriesContent(punctuation), punctuation).toBe(false);
+  }
+});
+
+/**
+ * P2 de la revue, suite : la structure comptée était le complémentaire de
+ * `\p{L}\p{N}`, donc les caractères de LIAISON D'IDENTIFIANT — tiret bas,
+ * tiret, point, deux-points, barre oblique — passaient pour de la structure, et
+ * `snake_case_name`, `kebab-case-name`, `__name__` étaient acceptés comme
+ * témoins alors qu'ils ne portent aucune structure de code. Seuls les symboles
+ * qui expriment une structure comptent maintenant : accolades, parenthèses,
+ * crochets, opérateurs, signes égal, point-virgule, chevrons, guillemets
+ * internes, et le blanc entre deux mots. Les copies réelles de
+ * `WHITESPACE_FREE_QUOTES` et `total=17` / `value 12` restent des témoins : la
+ * règle resserrée ne rouvre pas le faux refus déjà fermé.
+ */
+it("refuses an identifier linked by underscores, hyphens, dots, colons or slashes", () => {
+  const linked = [
+    "user_id",
+    "snake_case_name",
+    "__name__",
+    "kebab-case-name",
+    "a.b.c",
+    "config.settings.value",
+    "module:service:handler",
+    "src/utils/helpers/file",
+  ];
+  for (const word of linked) {
+    expect(quoteCarriesContent(word), `${word}: contenu`).toBe(false);
+    // Le mot est dans le fichier, verbatim : la présence suffit pour un témoin
+    // exact, c'est la structure de code absente qui le refuse.
+    const line = `const ${word}Value = compute();`;
+    expect(quoteHasWitness(line, word), `${word}: présence`).toBe(false);
+    const scenarioContext = contextWith([
+      { filename: "src/logic.ts", patch: `+ ${line}` },
+    ]);
+    expect(
+      requirementHasWitness(
+        { quote: word, sourceFile: "src/logic.ts" },
+        scenarioContext
+      ),
+      `${word}: témoin`
+    ).toBe(false);
+    // La ligne qui PORTE l'identifiant reste un témoin entier : la règle
+    // distingue un identifiant nu d'une expression, elle ne bloque pas le
+    // fichier.
+    expect(
+      requirementHasWitness(
+        { quote: line, sourceFile: "src/logic.ts" },
+        scenarioContext
+      ),
+      `${word}: la ligne reste un témoin`
+    ).toBe(true);
+  }
+  // Le refus dit la vérité : la copie existe et porte des lettres ; ce qui
+  // manque est la structure de code.
+  const file = "src/logic.ts";
+  const word = "snake_case_name";
+  const line = `const ${word}Value = compute();`;
+  const plan = planWithWitnesses([
+    {
+      id: "logic",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: word }],
+    },
+  ]);
+  const refusal = refusalOfPlan(
+    plan,
+    contextWith([{ filename: file, patch: `+ ${line}` }]),
+    policyFor()
+  );
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  expect(refusal.message).toBe(
+    `Weak source witness for logic: ${file} (requirement 1). Rejected quote: "snake_case_name"`
+  );
+  expect(refusal.hint).toContain("code structure");
+  // Contre-épreuve : les six copies réelles et les deux plus courtes portent de
+  // la vraie structure, donc restent acceptées.
+  for (const quote of [...WHITESPACE_FREE_QUOTES, "total=17", "value 12"]) {
+    expect(quoteCarriesContent(quote), quote).toBe(true);
   }
 });
 
@@ -573,7 +812,7 @@ const CRITICAL_FILE_LINE =
 
 it("accepts an exact substantial quote on a critical path", () => {
   expect(CRITICAL_FILE_LINE).toHaveLength(129);
-  expect(quoteCarriesContent(CRITICAL_FILE_LINE, true)).toBe(true);
+  expect(quoteCarriesContent(CRITICAL_FILE_LINE)).toBe(true);
   const criticalContext = contextWith([
     { filename: "src/cash.ts", patch: `+ ${CRITICAL_FILE_LINE}` },
   ]);
@@ -584,28 +823,24 @@ it("accepts an exact substantial quote on a critical path", () => {
       requirements: [{ sourceFile: "src/cash.ts", quote: CRITICAL_FILE_LINE }],
     },
   ]);
-  expect(ungroundedRequirements(plan, criticalContext, policyFor())).toEqual(
-    []
-  );
+  expect(ungroundedRequirements(plan, criticalContext)).toEqual([]);
   expect(
     validateCoverage(plan, criticalContext, policyFor(), config).gate
   ).toBe("complete");
   // Le contenu réel du run, dans le même fichier critique, reste témoin.
-  expect(quoteCarriesContent(REFLOWED_QUOTE, true)).toBe(true);
+  expect(quoteCarriesContent(REFLOWED_QUOTE)).toBe(true);
   expect(
     requirementHasWitness(
       { quote: REFLOWED_QUOTE, sourceFile: "src/cash.ts" },
-      reflowedCashContext,
-      policyFor()
+      reflowedCashContext
     )
   ).toBe(true);
 });
 
-it("still refuses padding under the graded content rule", () => {
-  // Le plancher universel fait tout le travail : «        } » se normalise en
-  // « } » (un jeton, un caractère), et sept zéro-largeurs suivis d'une accolade
-  // en « } » aussi. Aucune citation réduite à une accolade ne passe, quel que
-  // soit le fichier.
+it("still refuses padding under the content rule", () => {
+  // Le plancher de longueur fait tout le travail : «        } » se normalise en
+  // « } », et sept zéro-largeurs suivis d'une accolade en « } » aussi. Aucune
+  // citation réduite à une accolade ne passe, quel que soit le fichier.
   expect(quoteCarriesContent("        }")).toBe(false);
   expect(quoteCarriesContent(`${ZWSP.repeat(7)}}`)).toBe(false);
   expect(quoteCarriesContent("        ")).toBe(false);
@@ -632,12 +867,11 @@ it("refuses a quote stitched across the patch and content junction", () => {
   expect(
     requirementHasWitness(
       { quote: stitched, sourceFile: "src/cash.ts" },
-      reflowedCashContext,
-      policyFor()
+      reflowedCashContext
     )
   ).toBe(false);
   expect(
-    ungroundedRequirements(cashPlan(stitched), reflowedCashContext, policyFor())
+    ungroundedRequirements(cashPlan(stitched), reflowedCashContext)
   ).toHaveLength(1);
   expect(
     refusalOfPlan(cashPlan(stitched), reflowedCashContext, policyFor()).code
@@ -663,24 +897,20 @@ it("refuses a quote stitched across the head and base contents", () => {
   expect(
     requirementHasWitness(
       { quote: stitched, sourceFile: "src/cash.ts" },
-      junction,
-      policyFor()
+      junction
     )
   ).toBe(false);
-  expect(
-    ungroundedRequirements(cashPlan(stitched), junction, policyFor())
-  ).toHaveLength(1);
+  expect(ungroundedRequirements(cashPlan(stitched), junction)).toHaveLength(1);
 });
 it("accepts a quote contained in the patch alone", () => {
   const plan = cashPlan("ok: false,");
   expect(
     requirementHasWitness(
       { quote: "ok: false,", sourceFile: "src/cash.ts" },
-      cashPatchOnly,
-      policyFor()
+      cashPatchOnly
     )
   ).toBe(true);
-  expect(ungroundedRequirements(plan, cashPatchOnly, policyFor())).toEqual([]);
+  expect(ungroundedRequirements(plan, cashPatchOnly)).toEqual([]);
   expect(validateCoverage(plan, cashPatchOnly, policyFor(), config).gate).toBe(
     "complete"
   );
@@ -691,15 +921,13 @@ it("accepts a reflowed quote contained in one content segment alone", () => {
   expect(
     requirementHasWitness(
       { quote: REFLOWED_QUOTE, sourceFile: "src/cash.ts" },
-      cashPatchOnly,
-      policyFor()
+      cashPatchOnly
     )
   ).toBe(false);
   expect(
     requirementHasWitness(
       { quote: REFLOWED_QUOTE, sourceFile: "src/cash.ts" },
-      reflowedCashContext,
-      policyFor()
+      reflowedCashContext
     )
   ).toBe(true);
 });
@@ -749,9 +977,7 @@ function pagePlan(quote: string): Plan {
 
 it("still refuses the real quote that invents characters", () => {
   const plan = pagePlan('const suffix = count === 1 ? "s":"":"";');
-  expect(ungroundedRequirements(plan, pageContext, policyFor())).toHaveLength(
-    1
-  );
+  expect(ungroundedRequirements(plan, pageContext)).toHaveLength(1);
   expect(refusalOfPlan(plan, pageContext, policyFor()).code).toBe(
     "REQUIREMENT_UNGROUNDED"
   );
@@ -764,8 +990,7 @@ it("still refuses the real quote that invents characters", () => {
   expect(
     ungroundedRequirements(
       pagePlan('const suffix = count === 1 ? "s" : "";'),
-      pageContext,
-      policyFor()
+      pageContext
     )
   ).toEqual([]);
 });
@@ -789,9 +1014,7 @@ it("names the file whose content carries the reflowed quote", () => {
       requirements: [{ sourceFile: "src/form.ts", quote: REFLOWED_QUOTE }],
     },
   ]);
-  expect(witnessFiles(REFLOWED_QUOTE, misattributed, policyFor())).toEqual([
-    "src/cash.ts",
-  ]);
+  expect(witnessFiles(REFLOWED_QUOTE, misattributed)).toEqual(["src/cash.ts"]);
   const [refusal] = ungroundedPlanRefusals(plan, misattributed, policyFor());
   expect(refusal).toContain("The quote appears verbatim in src/cash.ts");
 });
@@ -835,9 +1058,7 @@ function cashMisattributionPlan(): Plan {
 it("names the faulty requirement, its quote and the changed file that carries it", () => {
   const plan = cashMisattributionPlan();
   // Le gate ne bouge pas : la citation n'existe dans aucun fichier déclaré.
-  expect(
-    ungroundedRequirements(plan, cashMisattribution, policyFor())
-  ).toHaveLength(1);
+  expect(ungroundedRequirements(plan, cashMisattribution)).toHaveLength(1);
   const refusal = refusalOfPlan(plan, cashMisattribution, policyFor());
   expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
   // L'exigence est nommée par son rang dans le scénario, le fichier déclaré et
@@ -913,9 +1134,7 @@ it("repairs an attribution only when another declared file witnesses the quote",
       requirements: [{ sourceFile: "src/empty.ts", quote: REFLOWED_QUOTE }],
     },
   ]);
-  expect(
-    repairRequirementAttribution(attributed, misattributed, policyFor())
-  ).toEqual([
+  expect(repairRequirementAttribution(attributed, misattributed)).toEqual([
     {
       from: "src/empty.ts",
       quote: REFLOWED_QUOTE,
@@ -926,11 +1145,7 @@ it("repairs an attribution only when another declared file witnesses the quote",
   // Témoin dans le fichier attribué : rien à réparer, la comparaison tolérant
   // les blancs reconnaît déjà la citation.
   expect(
-    repairRequirementAttribution(
-      cashPlan(REFLOWED_QUOTE),
-      reflowedCashContext,
-      policyFor()
-    )
+    repairRequirementAttribution(cashPlan(REFLOWED_QUOTE), reflowedCashContext)
   ).toEqual([]);
 });
 
@@ -1081,7 +1296,7 @@ it("asks for substance, not presence, when an exact quote carries no visible con
   const separator = "// ------ --";
   const weak = planWithWitnesses([
     {
-      id: "flow",
+      id: "logic",
       sourceFiles: ["src/a.ts"],
       requirements: [{ sourceFile: "src/a.ts", quote: separator }],
     },
@@ -1411,9 +1626,7 @@ it("refuses a quote stitched from two real lines and proposes real lines instead
   expect(CASH_SPEC_FILE).not.toContain(STITCHED_QUOTE);
   const plan = cashSpecPlan(STITCHED_QUOTE);
   // Le gate n'est pas touché : la citation recousue n'a aucun témoin.
-  expect(
-    ungroundedRequirements(plan, cashSpecContext, policyFor())
-  ).toHaveLength(1);
+  expect(ungroundedRequirements(plan, cashSpecContext)).toHaveLength(1);
   expect(refusalOfPlan(plan, cashSpecContext, policyFor()).code).toBe(
     "REQUIREMENT_UNGROUNDED"
   );
@@ -1426,25 +1639,27 @@ it("refuses a quote stitched from two real lines and proposes real lines instead
   // Au plus deux candidats, chacun une ligne EXACTE du fichier avec son numéro.
   const suggestions = suggestedQuoteLines(
     { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
-    cashSpecContext,
-    policyFor()
+    cashSpecContext
   );
   expect(suggestions.length).toBeGreaterThan(0);
   expect(suggestions.length).toBeLessThanOrEqual(2);
   for (const candidate of suggestions) {
     expect(CASH_SPEC_LINES[candidate.line - 1]).toBe(candidate.text);
     expect(CASH_SPEC_FILE).toContain(candidate.text);
-    expect(quoteCarriesContent(candidate.text, true)).toBe(true);
+    expect(quoteCarriesContent(candidate.text)).toBe(true);
   }
-  // La ligne 47 reprend quatre des huit mots de la citation ; la ligne 55 en
-  // reprend quatre aussi, mais ne forme qu'un seul jeton au contrat de `quote`
-  // (aucun blanc intérieur) : le remède ne propose jamais un fragment que le
-  // plan refuserait.
+  // La ligne 47 reprend quatre des huit mots de la citation, la ligne 55 en
+  // reprend quatre aussi. La 55 ne forme qu'un seul jeton de blanc — aucune
+  // espace intérieure — mais elle porte des lettres : le contrat fondé sur le
+  // contenu l'accepte, là où l'ancien proxy de jetons la refusait et ne
+  // proposait qu'un seul candidat. Le remède ne propose jamais une ligne que le
+  // plan refuserait, et il reste borné à deux.
   expect(suggestions).toEqual([
     { line: 47, text: '  const result = countCash({ "500": "3,5" });' },
+    { line: 55, text: "  expect(result.ok).toBe(false);" },
   ]);
   expect(line).toContain(
-    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify(suggestions[0]!.text)}.`
+    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify(suggestions[0]!.text)}`
   );
 });
 
@@ -1459,14 +1674,14 @@ it("measures the absent-quote suggestion inside the correction budget", () => {
   const before = line.slice(0, line.indexOf(remedy) + remedy.length);
   // Mesure du coût réel : le rang de l'exigence ajoute 16 caractères à
   // l'identité du refus, la localisation de la citation — aucun fichier du diff
-  // ne la porte ici — en ajoute 93, et la suggestion de ligne 132. La ligne
-  // reste loin du budget restant après le préambule fatal (1860) dans la
+  // ne la porte ici — en ajoute 93, et la suggestion de deux lignes 172. La
+  // ligne reste loin du budget restant après le préambule fatal (1860) dans la
   // correction que `model.ts` tronque à 2000 — le cas intégré est mesuré par
   // `unit.test.ts` ("returns real lines to quote instead of an absent quote").
   expect(before).toContain("No source witness for cash");
   expect(before).toHaveLength(236);
-  expect(line).toHaveLength(461);
-  expect(line.length - before.length).toBe(225);
+  expect(line).toHaveLength(501);
+  expect(line.length - before.length).toBe(265);
 });
 
 it("proposes no line when none overlaps the quote", () => {
@@ -1474,8 +1689,7 @@ it("proposes no line when none overlaps the quote", () => {
   expect(
     suggestedQuoteLines(
       { quote: invented, sourceFile: CASH_SPEC_PATH },
-      cashSpecContext,
-      policyFor()
+      cashSpecContext
     )
   ).toEqual([]);
   const [line = ""] = ungroundedPlanRefusals(
@@ -1509,8 +1723,7 @@ it("proposes no line of the cited file when the quote exists in another file", (
   expect(
     suggestedQuoteLines(
       { quote: variant, sourceFile: CASH_SPEC_PATH },
-      elsewhere,
-      policyFor()
+      elsewhere
     ).length
   ).toBeGreaterThan(0);
   const [line = ""] = ungroundedPlanRefusals(
@@ -1543,10 +1756,8 @@ it("reassigns a quote that exists in another file instead of proposing a line", 
     ],
   };
   const requirement = { quote: variant, sourceFile: CASH_SPEC_PATH };
-  expect(
-    suggestedQuoteLines(requirement, elsewhere, policyFor()).length
-  ).toBeGreaterThan(0);
-  expect(absentRequirementRemedy(requirement, elsewhere, policyFor())).toBe(
+  expect(suggestedQuoteLines(requirement, elsewhere).length).toBeGreaterThan(0);
+  expect(absentRequirementRemedy(requirement, elsewhere)).toBe(
     "The quote appears verbatim in src/form.ts; declare that file and attribute the requirement to it."
   );
 });
@@ -1554,11 +1765,20 @@ it("reassigns a quote that exists in another file instead of proposing a line", 
 it("proposes a real line of the cited file when the quote exists nowhere", () => {
   const remedy = absentRequirementRemedy(
     { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
-    cashSpecContext,
-    policyFor()
+    cashSpecContext
   );
+  const candidates = suggestedQuoteLines(
+    { quote: STITCHED_QUOTE, sourceFile: CASH_SPEC_PATH },
+    cashSpecContext
+  );
+  // Chaque ligne citée est celle du fichier, avec son numéro — y compris la
+  // ligne 55, sans blanc intérieur, que le contrat fondé sur le contenu accepte.
+  expect(candidates.length).toBeLessThanOrEqual(2);
+  for (const { line, text } of candidates) {
+    expect(CASH_SPEC_LINES[line - 1]).toBe(text);
+  }
   expect(remedy).toBe(
-    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify('  const result = countCash({ "500": "3,5" });')}.`
+    `Real lines of ${CASH_SPEC_PATH} to quote instead: 47: ${JSON.stringify('  const result = countCash({ "500": "3,5" });')}, 55: ${JSON.stringify("  expect(result.ok).toBe(false);")}.`
   );
 });
 
@@ -1622,14 +1842,12 @@ it("names the two fragments of a stitched quote and their two real lines", () =>
   expect(
     suggestedQuoteLines(
       { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
-      pageTsxContext,
-      policyFor()
+      pageTsxContext
     )
   ).toEqual([]);
   const fragments = stitchedQuoteFragments(
     { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
-    pageTsxContext,
-    policyFor()
+    pageTsxContext
   );
   // Exactement deux fragments, chacun recopié de la citation et retrouvé tel
   // quel sur sa ligne réelle : le premier sur la ligne 61, le second sur la 63.
@@ -1649,7 +1867,7 @@ it("names the two fragments of a stitched quote and their two real lines", () =>
     expect(lines[item.line - 1]).toContain(item.candidate);
     expect(item.candidate).toContain(item.fragment);
     expect(item.candidate.length).toBeLessThanOrEqual(120);
-    expect(quoteCarriesContent(item.candidate, true)).toBe(true);
+    expect(quoteCarriesContent(item.candidate)).toBe(true);
     expect(
       validateCoverage(
         pageTsxPlan(item.candidate),
@@ -1675,11 +1893,7 @@ it("names the two fragments of a stitched quote and their two real lines", () =>
   ]);
   // Le gate n'est pas touché : la citation recousue n'a toujours aucun témoin.
   expect(
-    ungroundedRequirements(
-      pageTsxPlan(STITCHED_JSX_QUOTE),
-      pageTsxContext,
-      policyFor()
-    )
+    ungroundedRequirements(pageTsxPlan(STITCHED_JSX_QUOTE), pageTsxContext)
   ).toHaveLength(1);
   expect(
     refusalOfPlan(pageTsxPlan(STITCHED_JSX_QUOTE), pageTsxContext, policyFor())
@@ -1695,8 +1909,7 @@ it("puts the stitch diagnosis before the generic advice in the refusal", () => {
   );
   const remedy = stitchedQuoteRemedy(
     { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
-    pageTsxContext,
-    policyFor()
+    pageTsxContext
   );
   expect(remedy).toBe(
     `Your quote assembles fragments from different lines: ${JSON.stringify(STITCH_FRAGMENT_A)} is line 61, ${JSON.stringify(STITCH_FRAGMENT_B)} is line 63. Quote one of these real fragments of ${PAGE_TSX_PATH} instead: 61: ${JSON.stringify('disabled={closed} inputMode="decimal" aria-label="Montant d\'espèces attendu" />')}, 63: ${JSON.stringify('value={expected.input} inputMode="numeric" aria-label="Total attendu" aria-invalid={expected.ok?undefined:true} />')}.`
@@ -1717,8 +1930,7 @@ it("puts the stitch diagnosis before the generic advice in the refusal", () => {
   expect(
     absentRequirementRemedy(
       { quote: STITCHED_JSX_QUOTE, sourceFile: PAGE_TSX_PATH },
-      pageTsxContext,
-      policyFor()
+      pageTsxContext
     )
   ).toBe(remedy);
 });
@@ -1732,15 +1944,13 @@ it("falls back when only one fragment of a stitched quote exists", () => {
   expect(
     stitchedQuoteFragments(
       { quote: partial, sourceFile: PAGE_TSX_PATH },
-      pageTsxContext,
-      policyFor()
+      pageTsxContext
     )
   ).toEqual([]);
   expect(
     stitchedQuoteRemedy(
       { quote: partial, sourceFile: PAGE_TSX_PATH },
-      pageTsxContext,
-      policyFor()
+      pageTsxContext
     )
   ).toBe("");
   const [line = ""] = ungroundedPlanRefusals(
@@ -1812,9 +2022,7 @@ it("names the real line and the missing beginning of an amputated quote", () => 
   const plan = countedPlan(COUNTED_TAIL_QUOTE);
   // Le gate ne bouge pas : la copie amputée n'existe nulle part, même à
   // l'espacement près, donc elle reste refusée avant toute exécution.
-  expect(
-    ungroundedRequirements(plan, countedContext, policyFor())
-  ).toHaveLength(1);
+  expect(ungroundedRequirements(plan, countedContext)).toHaveLength(1);
   const refusal = refusalOfPlan(plan, countedContext, policyFor());
   expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
   expect(refusal.message).toBe(
@@ -1838,9 +2046,7 @@ it("names the real line and the missing beginning of an amputated quote", () => 
 
 it("names the real line of a quote truncated at its end", () => {
   const plan = countedPlan(COUNTED_HEAD_QUOTE);
-  expect(
-    ungroundedRequirements(plan, countedContext, policyFor())
-  ).toHaveLength(1);
+  expect(ungroundedRequirements(plan, countedContext)).toHaveLength(1);
   const refusal = refusalOfPlan(plan, countedContext, policyFor());
   expect(refusal.hint).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
   expect(refusal.hint).toContain("its end is missing");
@@ -1863,11 +2069,7 @@ it("names the real line of a quote truncated at its end", () => {
 it("reads the three shapes of an amputated copy on a real line", () => {
   const source = { sourceFile: COUNTED_PAGE_PATH };
   expect(
-    amputatedQuote(
-      { ...source, quote: COUNTED_CLEAN_TAIL },
-      countedContext,
-      policyFor()
-    )
+    amputatedQuote({ ...source, quote: COUNTED_CLEAN_TAIL }, countedContext)
   ).toEqual({
     candidate: COUNTED_LINE_TEXT,
     kind: "start",
@@ -1875,11 +2077,7 @@ it("reads the three shapes of an amputated copy on a real line", () => {
     wholeLine: true,
   });
   expect(
-    amputatedQuote(
-      { ...source, quote: COUNTED_CLEAN_HEAD },
-      countedContext,
-      policyFor()
-    )
+    amputatedQuote({ ...source, quote: COUNTED_CLEAN_HEAD }, countedContext)
   ).toEqual({
     candidate: COUNTED_LINE_TEXT,
     kind: "end",
@@ -1887,11 +2085,7 @@ it("reads the three shapes of an amputated copy on a real line", () => {
     wholeLine: true,
   });
   expect(
-    amputatedQuote(
-      { ...source, quote: COUNTED_INTERIOR_QUOTE },
-      countedContext,
-      policyFor()
-    )
+    amputatedQuote({ ...source, quote: COUNTED_INTERIOR_QUOTE }, countedContext)
   ).toEqual({
     candidate: COUNTED_LINE_TEXT,
     kind: "middle",
@@ -1903,8 +2097,7 @@ it("reads the three shapes of an amputated copy on a real line", () => {
   expect(
     amputatedQuote(
       { ...source, quote: "comptée deux fois la même pièce" },
-      countedContext,
-      policyFor()
+      countedContext
     )
   ).toBeUndefined();
   // Un bord commun trop court pour désigner une ligne ne fait pas un
@@ -1912,8 +2105,7 @@ it("reads the three shapes of an amputated copy on a real line", () => {
   expect(
     amputatedQuote(
       { ...source, quote: "invented change return result;" },
-      countedContext,
-      policyFor()
+      countedContext
     )
   ).toBeUndefined();
 });
@@ -1936,7 +2128,7 @@ const longLineContext: PrContext = contextWith([
 ]);
 it("names a fragment of a line too long to quote whole", () => {
   const requirement = { quote: LONG_LINE_QUOTE, sourceFile: LONG_PAGE_PATH };
-  const amputated = amputatedQuote(requirement, longLineContext, policyFor());
+  const amputated = amputatedQuote(requirement, longLineContext);
   expect(amputated).toBeDefined();
   expect(amputated?.kind).toBe("start");
   expect(amputated?.line).toBe(21);
@@ -1944,11 +2136,7 @@ it("names a fragment of a line too long to quote whole", () => {
   const candidate = amputated?.candidate ?? "";
   expect(candidate.length).toBeLessThan(LONG_LINE.length);
   expect(LONG_LINE).toContain(candidate);
-  const remedy = amputatedQuoteRemedy(
-    requirement,
-    longLineContext,
-    policyFor()
-  );
+  const remedy = amputatedQuoteRemedy(requirement, longLineContext);
   expect(remedy).toContain("too long to quote whole");
   expect(remedy).toContain(JSON.stringify(candidate));
   expect(remedy).not.toContain("whole line from its first character");
@@ -1999,21 +2187,16 @@ it("names the real line and the retyped interpolation of a template literal", ()
     sourceFile: RETYPED_TEMPLATE_PATH,
   };
   // Le gate ne bouge pas : la copie retapée n'a aucun témoin.
-  expect(
-    requirementHasWitness(requirement, retypedTemplateContext, policyFor())
-  ).toBe(false);
+  expect(requirementHasWitness(requirement, retypedTemplateContext)).toBe(
+    false
+  );
   expect(
     ungroundedRequirements(
       retypedTemplatePlan(RETYPED_TEMPLATE_QUOTE),
-      retypedTemplateContext,
-      policyFor()
+      retypedTemplateContext
     )
   ).toHaveLength(1);
-  const divergence = quoteDivergence(
-    requirement,
-    retypedTemplateContext,
-    policyFor()
-  );
+  const divergence = quoteDivergence(requirement, retypedTemplateContext);
   // La ligne réelle est nommée, et les divergences avec elle : la copie s'arrête
   // sur `>` là où la ligne écrit l'espace puis le reste du ternaire.
   expect(divergence).toMatchObject({
@@ -2070,14 +2253,10 @@ it("names the whitespace a retyped interpolation changed, without a false amputa
     quote: RETYPED_TEMPLATE_FULL,
     sourceFile: RETYPED_TEMPLATE_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, retypedTemplateContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    retypedTemplateContext,
-    policyFor()
+  expect(requirementHasWitness(requirement, retypedTemplateContext)).toBe(
+    false
   );
+  const divergence = quoteDivergence(requirement, retypedTemplateContext);
   // La copie atteint la fin de la ligne : seuls les blancs de l'interpolation
   // diffèrent, et c'est ce que le refus doit dire — sa fin ne manque pas. Les
   // trois écarts de blancs sont nommés, pas seulement le premier.
@@ -2158,14 +2337,8 @@ it("names the real line of a retyped typed arrow and quotes it whole", () => {
     quote: RETYPED_ARROW_QUOTE,
     sourceFile: RETYPED_ARROW_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, retypedArrowContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    retypedArrowContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, retypedArrowContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, retypedArrowContext);
   // La copie a retiré TOUS ses blancs, et sa fin recopiée diffère aussi : le
   // refus dit les deux, chaque écart nommé dans l'ordre de la copie.
   expect(divergence).toMatchObject({
@@ -2220,14 +2393,8 @@ it("names the real line of the arrow copy the report shows, cut mid-token", () =
     quote: RETYPED_ARROW_CUT,
     sourceFile: RETYPED_ARROW_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, retypedArrowContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    retypedArrowContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, retypedArrowContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, retypedArrowContext);
   // La coupe ne fait pas taire le diagnostic : la copie est un préfixe de la
   // ligne, donc ses seuls écarts sont ses blancs retirés, et les deux sont dits.
   expect(divergence).toMatchObject({
@@ -2288,14 +2455,8 @@ it("names the characters invented inside a copy of a real line", () => {
     quote: INVENTED_CHAR_QUOTE,
     sourceFile: INVENTED_CHAR_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, inventedCharContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    inventedCharContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, inventedCharContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, inventedCharContext);
   expect(divergence).toMatchObject({
     candidate: INVENTED_CHAR_LINE,
     faults: [{ copy: ',3" });', kind: "invented", real: ',2" });' }],
@@ -2351,14 +2512,8 @@ it("reports both the whitespace and the changed character of a retyped copy", ()
     quote: BOTH_KINDS_QUOTE,
     sourceFile: BOTH_KINDS_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, bothKindsContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    bothKindsContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, bothKindsContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, bothKindsContext);
   // Les DEUX divergences de la copie sont lues, dans l'ordre de la copie : la
   // première ne diffère que par ses blancs, la seconde par son signe.
   expect(divergence).toMatchObject({
@@ -2420,14 +2575,8 @@ it("names the leading delimiter a retyped copy changed", () => {
     quote: LEAD_DELIMITER_QUOTE,
     sourceFile: LEAD_DELIMITER_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, leadDelimiterContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    leadDelimiterContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, leadDelimiterContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, leadDelimiterContext);
   // L'ouverture est lue comme les autres fenêtres : le `(` de la copie face au
   // `[` de la ligne, puis le blanc de la copie.
   expect(divergence).toMatchObject({
@@ -2488,14 +2637,8 @@ it("names the prefix a copy rewrote at a different word offset", () => {
     quote: OFFSET_PREFIX_QUOTE,
     sourceFile: OFFSET_PREFIX_PATH,
   };
-  expect(
-    requirementHasWitness(requirement, offsetPrefixContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    offsetPrefixContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, offsetPrefixContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, offsetPrefixContext);
   // Le préfixe réécrit est lu comme les autres fenêtres, avant le blanc de la
   // suite commune que la copie a retiré autour de son `=`.
   expect(divergence).toMatchObject({
@@ -2549,14 +2692,8 @@ it("proposes a whole-token window when the divergent line is too long to quote w
     sourceFile: LONG_DIVERGENT_PATH,
   };
   expect(LONG_DIVERGENT_LINE.length).toBeGreaterThan(120);
-  expect(
-    requirementHasWitness(requirement, longDivergentContext, policyFor())
-  ).toBe(false);
-  const divergence = quoteDivergence(
-    requirement,
-    longDivergentContext,
-    policyFor()
-  );
+  expect(requirementHasWitness(requirement, longDivergentContext)).toBe(false);
+  const divergence = quoteDivergence(requirement, longDivergentContext);
   expect(divergence?.wholeLine).toBe(false);
   expect(divergence?.line).toBe(51);
   expect(divergence?.kind).toBe("whitespace");
@@ -2668,8 +2805,7 @@ it("stops examining the cited file at the line cap, and still refuses exactly", 
   expect(
     amputatedQuote(
       requirement,
-      boundedContext(CITED_LINE_CAP, CITED_LINE_CAP + 1),
-      policyFor()
+      boundedContext(CITED_LINE_CAP, CITED_LINE_CAP + 1)
     )
   ).toEqual({
     candidate: BOUNDED_TARGET,
@@ -2678,12 +2814,12 @@ it("stops examining the cited file at the line cap, and still refuses exactly", 
     wholeLine: true,
   });
   const beyond = boundedContext(CITED_LINE_CAP + 1, CITED_LINE_CAP + 1);
-  expect(amputatedQuote(requirement, beyond, policyFor())).toBeUndefined();
+  expect(amputatedQuote(requirement, beyond)).toBeUndefined();
   // Le refus reste rendu, non vide et exact : la citation est refusée pour ce
   // qu'elle est — un texte qui n'existe nulle part — et le remède générique
   // nomme la seule réparation légale sans inventer de ligne.
   const plan = boundedPlan([requirement]);
-  expect(ungroundedRequirements(plan, beyond, policyFor())).toHaveLength(1);
+  expect(ungroundedRequirements(plan, beyond)).toHaveLength(1);
   const [refusal = ""] = ungroundedPlanRefusals(plan, beyond, policyFor());
   expect(refusal).toContain(`Rejected quote: ${JSON.stringify(BOUNDED_QUOTE)}`);
   expect(refusal).toContain(UNGROUNDED_ABSENT_REMEDY);
@@ -2720,7 +2856,7 @@ it("caps the citations examined per validation, and still refuses each one", () 
     sourceFile: BOUNDED_PATH,
   }));
   const plan = boundedPlan(requirements);
-  expect(ungroundedRequirements(plan, many, policyFor())).toHaveLength(faulty);
+  expect(ungroundedRequirements(plan, many)).toHaveLength(faulty);
   // Le balayage des 32 premières citations est mesuré, comme le refus des 28
   // suivantes : chaque citation fautive garde son refus, et le plafond ne
   // fabrique aucune réponse vide ni inexacte.
@@ -2755,7 +2891,7 @@ it("caps the fatal half of the same plan at the shared amputation budget", () =>
       sourceFile: BOUNDED_PATH,
     }))
   );
-  expect(ungroundedRequirements(plan, many, policyFor())).toHaveLength(faulty);
+  expect(ungroundedRequirements(plan, many)).toHaveLength(faulty);
   // Le budget de la validation est créé au point d'entrée du gate (voir
   // `planRefusals`, runner.ts) et traverse ses deux moitiés. Le test le remet
   // lui-même à la moitié fatale : c'est ce qui compte le travail engagé par ce
@@ -2813,7 +2949,7 @@ it("caps the fatal half of the same plan at the shared amputation budget", () =>
 it("accepts an exact suffix or interior copy of a real line", () => {
   for (const quote of [COUNTED_CLEAN_TAIL, COUNTED_INTERIOR_QUOTE]) {
     expect(
-      ungroundedRequirements(countedPlan(quote), countedContext, policyFor())
+      ungroundedRequirements(countedPlan(quote), countedContext)
     ).toHaveLength(0);
   }
 });
@@ -2851,11 +2987,7 @@ it("chooses the most balanced verified split", () => {
   // ligne entière est proposée pour chacun, puisqu'elle tient dans la borne.
   expect(SPLIT_LINES.join("\n")).not.toContain(quote);
   expect(
-    stitchedQuoteFragments(
-      { quote, sourceFile: SPLIT_PATH },
-      splitContext,
-      policyFor()
-    )
+    stitchedQuoteFragments({ quote, sourceFile: SPLIT_PATH }, splitContext)
   ).toEqual([
     { candidate: SPLIT_LINES[0], fragment: "alphaone betatwoo", line: 1 },
     { candidate: SPLIT_LINES[1], fragment: "gammathr deltfour", line: 2 },
@@ -2876,11 +3008,7 @@ it("stays silent when both fragments live on one single line", () => {
   expect(line).toContain("zetaonly");
   expect(line).not.toContain(quote);
   expect(
-    stitchedQuoteFragments(
-      { quote, sourceFile: single },
-      singleContext,
-      policyFor()
-    )
+    stitchedQuoteFragments({ quote, sourceFile: single }, singleContext)
   ).toEqual([]);
   const [refusal = ""] = ungroundedPlanRefusals(
     planWithWitnesses([
@@ -2927,24 +3055,23 @@ it("keeps a fragment citable when the next token would overflow the bound", () =
   expect(file.join("\n")).not.toContain(quote);
   expect(tailLine).toHaveLength(149);
   expect(
-    stitchedQuoteFragments({ quote, sourceFile: path }, capContext, policyFor())
+    stitchedQuoteFragments({ quote, sourceFile: path }, capContext)
   ).toEqual([
     { candidate: head, fragment: head, line: 2 },
     { candidate: `${tail} ${"a".repeat(60)}`, fragment: tail, line: 4 },
   ]);
   const [, second] = stitchedQuoteFragments(
     { quote, sourceFile: path },
-    capContext,
-    policyFor()
+    capContext
   );
   // Le candidat reste une portion EXACTE de la ligne, sous la borne, et il
   // passe le contrat de citation du fichier critique.
   expect(second!.candidate.length).toBeLessThanOrEqual(120);
   expect(tailLine).toContain(second!.candidate);
   expect(second!.candidate).toContain(tail);
-  expect(quoteCarriesContent(second!.candidate, true)).toBe(true);
+  expect(quoteCarriesContent(second!.candidate)).toBe(true);
   expect(
-    stitchedQuoteRemedy({ quote, sourceFile: path }, capContext, policyFor())
+    stitchedQuoteRemedy({ quote, sourceFile: path }, capContext)
   ).toContain(`4: ${JSON.stringify(second!.candidate)}`);
 });
 
@@ -2955,8 +3082,7 @@ it("stays silent when the quote and both its fragments are absent", () => {
   expect(
     stitchedQuoteFragments(
       { quote: nowhere, sourceFile: PAGE_TSX_PATH },
-      pageTsxContext,
-      policyFor()
+      pageTsxContext
     )
   ).toEqual([]);
   const [line = ""] = ungroundedPlanRefusals(
@@ -2995,13 +3121,9 @@ it("caps the witness path list and counts the files it omits", () => {
   const changed = contextWith(
     paths.map((filename) => ({ filename, patch: `+ ${quote}` }))
   );
-  expect(witnessFiles(quote, changed, policyFor())).toEqual(paths);
+  expect(witnessFiles(quote, changed)).toEqual(paths);
   expect(
-    absentRequirementRemedy(
-      { quote, sourceFile: "src/cited.ts" },
-      changed,
-      policyFor()
-    )
+    absentRequirementRemedy({ quote, sourceFile: "src/cited.ts" }, changed)
   ).toBe(
     `The quote appears verbatim in ${paths.slice(0, 3).join(", ")} (+5 more); declare that file and attribute the requirement to it.`
   );
@@ -3013,11 +3135,7 @@ it("caps the witness path list and counts the files it omits", () => {
     context: paths.map((path) => ({ content: quote, path, ref: context.sha })),
   };
   expect(
-    absentRequirementRemedy(
-      { quote, sourceFile: "src/cited.ts" },
-      outside,
-      policyFor()
-    )
+    absentRequirementRemedy({ quote, sourceFile: "src/cited.ts" }, outside)
   ).toBe(
     `The quote only appears in ${paths.slice(0, 3).join(", ")} (+5 more), which this PR does not change; quote the changed file instead.`
   );
@@ -3030,13 +3148,9 @@ it("shows one witness path whole rather than a path the planner cannot open", ()
   const many = contextWith(
     paths.map((filename) => ({ filename, patch: `+ ${quote}` }))
   );
-  expect(witnessFiles(quote, many, policyFor())).toEqual(paths);
+  expect(witnessFiles(quote, many)).toEqual(paths);
   expect(
-    absentRequirementRemedy(
-      { quote, sourceFile: "src/cited.ts" },
-      many,
-      policyFor()
-    )
+    absentRequirementRemedy({ quote, sourceFile: "src/cited.ts" }, many)
   ).toBe(
     `The quote appears verbatim in ${longest} (+2 more); declare that file and attribute the requirement to it.`
   );
@@ -3074,8 +3188,7 @@ it("suggests only head-path lines for a file renamed without deletion", () => {
   };
   const suggestions = suggestedQuoteLines(
     { quote: 'countCash({ "500": "3,5" })', sourceFile: newPath },
-    renamed,
-    policyFor()
+    renamed
   );
   expect(suggestions).toEqual([
     { line: 2, text: 'const normalized = countCash({ "500": "3,5" });' },
@@ -3104,8 +3217,7 @@ it("suggests only head-path lines for a file renamed without deletion", () => {
   expect(
     suggestedQuoteLines(
       { quote: 'countCash({ "500": "3,5" })', sourceFile: newPath },
-      unrelated,
-      policyFor()
+      unrelated
     )
   ).toEqual([]);
 });
@@ -3136,7 +3248,7 @@ it("never proposes more than two candidate lines", () => {
   // Quatre lignes franchissent le seuil ; deux sont proposées, dans l'ordre
   // déterministe du critère.
   expect(
-    suggestedQuoteLines({ quote, sourceFile: "src/logic.ts" }, ctx, policyFor())
+    suggestedQuoteLines({ quote, sourceFile: "src/logic.ts" }, ctx)
   ).toEqual([
     { line: 1, text: "const alpha = 1 + offset;" },
     { line: 2, text: "const alpha = 2 + offset;" },
@@ -3145,9 +3257,7 @@ it("never proposes more than two candidate lines", () => {
 
 it("accepts an exact single-line quote from the cited file", () => {
   const plan = cashSpecPlan(CASH_SPEC_LINES[46]!);
-  expect(ungroundedRequirements(plan, cashSpecContext, policyFor())).toEqual(
-    []
-  );
+  expect(ungroundedRequirements(plan, cashSpecContext)).toEqual([]);
   expect(
     validateCoverage(plan, cashSpecContext, policyFor(), config).gate
   ).toBe("complete");
@@ -3167,7 +3277,7 @@ it("accepts a contiguous multi-line quote copied from the cited file", () => {
   // 48 — reste refusé : c'est la jointure qui est fausse, jamais la longueur.
   const skipped = [CASH_SPEC_LINES[46], CASH_SPEC_LINES[48]].join("\n");
   expect(
-    ungroundedRequirements(cashSpecPlan(skipped), cashSpecContext, policyFor())
+    ungroundedRequirements(cashSpecPlan(skipped), cashSpecContext)
   ).toHaveLength(1);
 });
 
@@ -3227,13 +3337,12 @@ it("witnesses a new-content quote from the reconstructed hunks", () => {
   expect(
     requirementHasWitness(
       { quote, sourceFile: RECONSTRUCTED_PATH },
-      reconstructedContext,
-      policyFor()
+      reconstructedContext
     )
   ).toBe(true);
-  expect(
-    ungroundedRequirements(cashPlan(quote), reconstructedContext, policyFor())
-  ).toEqual([]);
+  expect(ungroundedRequirements(cashPlan(quote), reconstructedContext)).toEqual(
+    []
+  );
 });
 
 it("refuses a quote stitched across two reconstructed hunks", () => {
@@ -3247,16 +3356,11 @@ it("refuses a quote stitched across two reconstructed hunks", () => {
   expect(
     requirementHasWitness(
       { quote: stitched, sourceFile: RECONSTRUCTED_PATH },
-      reconstructedContext,
-      policyFor()
+      reconstructedContext
     )
   ).toBe(false);
   expect(
-    ungroundedRequirements(
-      cashPlan(stitched),
-      reconstructedContext,
-      policyFor()
-    )
+    ungroundedRequirements(cashPlan(stitched), reconstructedContext)
   ).toHaveLength(1);
 });
 
@@ -3358,4 +3462,562 @@ it("teaches the character-by-character copy of an expression to the planner", ()
   expect(prompt).toContain(RETYPED_TEMPLATE_PATH);
   expect(prompt).toContain(RETYPED_TEMPLATE_QUOTE);
   expect(prompt).toContain(RETYPED_ARROW_QUOTE);
+});
+
+/**
+ * Le corpus mesuré des refus `REQUIREMENT_UNGROUNDED` rejoué contre la ligne
+ * réelle de chaque copie : `MEASURED_COPY_REFUSALS` (test/fixture.ts) porte la
+ * citation du plan, la ligne du fichier au SHA publié, le rang que le refus
+ * nomme et le verdict du contrat actuel. Deux invariants sont tenus pour chaque
+ * ligne — une copie encore refusée n'a aucun témoin dans le fichier déclaré, et
+ * la ligne réelle en a un : le refus vient de la copie, jamais du gate. Une copie
+ * `a-floor` — exacte, privée de blanc, refusée par l'ancien proxy — est acceptée
+ * et ne bloque plus son run. Quand le refus propose un fragment exact, ce
+ * fragment est un témoin à son tour, sinon la seule réparation offerte au
+ * planificateur serait refusée elle aussi.
+ */
+function proposedFragment(hint: string): string | null {
+  const match = hint.match(/(?:^|\s)\d+: ("(?:[^"\\]|\\.)*")\.$/);
+  if (!match?.[1]) {
+    return null;
+  }
+  try {
+    return JSON.parse(match[1]) as string;
+  } catch {
+    return null;
+  }
+}
+/** Ce que le refus mesuré doit dire de la ligne réelle de cette copie. */
+function measuredRemedy(measured: MeasuredCopyRefusal): string {
+  if (measured.remedy === "names-line") {
+    return `copied from line ${measured.lineNumber} of ${measured.lineFile}`;
+  }
+  if (measured.remedy === "names-other-file") {
+    return `appears verbatim in ${measured.lineFile}`;
+  }
+  return "quote a real line of the declared file instead";
+}
+it("replays every measured ungrounded refusal against the real line", () => {
+  const measuredPolicy = policyFor();
+  let withRealLine = 0;
+  let withProposal = 0;
+  let accepted = 0;
+  let refused = 0;
+  for (const measured of MEASURED_COPY_REFUSALS) {
+    const label = `${measured.runId} requirement ${measured.rank}`;
+    const context =
+      measured.realLine === ""
+        ? contextWith([])
+        : contextWith([
+            lineAt(measured.lineFile, measured.lineNumber, measured.realLine),
+          ]);
+    const requirement = {
+      behavior: "Changed behavior under review",
+      quote: measured.quote,
+      sourceFile: measured.declaredFile,
+    };
+    if (measured.realLine !== "") {
+      withRealLine += 1;
+      expect(
+        requirementHasWitness(
+          { quote: measured.realLine, sourceFile: measured.lineFile },
+          context
+        ),
+        `${label}: la ligne réelle ${measured.lineNumber} n'est pas un témoin`
+      ).toBe(true);
+    }
+    if (measured.outcome === "accepted") {
+      accepted += 1;
+      // La copie exacte que l'ancien plancher de blancs refusait porte du
+      // contenu visible : elle est un témoin, et son exigence ne bloque plus le
+      // run — le plan qui la porte n'a plus aucune exigence sans témoin.
+      expect(quoteCarriesContent(measured.quote), `${label}: contenu`).toBe(
+        true
+      );
+      expect(measured.cause, `${label}: cause mesurée`).toBe("a-floor");
+      expect(
+        requirementHasWitness(requirement, context),
+        `${label}: la copie exacte n'est pas un témoin`
+      ).toBe(true);
+      expect(
+        ungroundedRequirements(
+          planWithWitnesses([
+            {
+              id: measured.scenarioId,
+              sourceFiles: [measured.declaredFile],
+              requirements: [
+                {
+                  sourceFile: measured.declaredFile,
+                  quote: measured.quote,
+                },
+              ],
+            },
+          ]),
+          context
+        ),
+        `${label}: le run meurt encore`
+      ).toEqual([]);
+      continue;
+    }
+    refused += 1;
+    const refusal = ungroundedRequirement(
+      measured.scenarioId,
+      requirement,
+      context,
+      measuredPolicy,
+      measured.rank
+    );
+    expect(
+      requirementHasWitness(requirement, context),
+      `${label}: la copie mesurée a un témoin`
+    ).toBe(false);
+    expect(refusal.code, `${label}: code du refus mesuré`).toBe(
+      "REQUIREMENT_UNGROUNDED"
+    );
+    expect(
+      refusal.message,
+      `${label}: scénario, fichier déclaré et rang mesurés`
+    ).toContain(
+      `for ${measured.scenarioId}: ${measured.declaredFile} (requirement ${measured.rank})`
+    );
+    expect(refusal.hint, `${label}: cause mesurée`).toContain(
+      measuredRemedy(measured)
+    );
+    const proposed = proposedFragment(refusal.hint);
+    if (proposed === null) {
+      continue;
+    }
+    withProposal += 1;
+    expect(
+      requirementHasWitness(
+        { quote: proposed, sourceFile: measured.declaredFile },
+        context
+      ),
+      `${label}: la réparation proposée n'est pas un témoin`
+    ).toBe(true);
+  }
+  expect(MEASURED_COPY_REFUSALS.length).toBe(18);
+  expect(accepted).toBe(4);
+  expect(refused).toBe(14);
+  expect(withRealLine).toBe(17);
+  expect(withProposal).toBe(11);
+});
+
+/**
+ * Les mutations d'une copie exacte, mesurées une par une : changer UN caractère
+ * d'une ligne réelle suffit à la refuser, et le refus vient de l'exactitude —
+ * chaque mutation porte encore assez de contenu visible pour que le plancher ne
+ * soit pas la cause. C'est la mesure du mandat : aucune citation inexacte ne
+ * devient acceptable, quelle que soit la mutation.
+ */
+const EXACT_LINE =
+  "const total=formatAmountFr(centsToEuros(counted.totalCents));";
+const QUOTE_MUTATIONS: { fault: string; quote: string }[] = [
+  {
+    fault: "substitution",
+    quote: "const total=formatAmountEr(centsToEuros(counted.totalCents));",
+  },
+  {
+    fault: "suppression",
+    quote: "const total=formatAmountFr(centsToEuros(counted.totalCents);",
+  },
+  {
+    fault: "insertion",
+    quote: "const total=formatAmountFrr(centsToEuros(counted.totalCents));",
+  },
+  {
+    fault: "casse",
+    quote: "const Total=formatAmountFr(centsToEuros(counted.totalCents));",
+  },
+  {
+    fault: "blanc",
+    quote: "const  total=formatAmountFr(centsToEuros(counted.totalCents));",
+  },
+  {
+    fault: "point médian",
+    quote: "const total=formatAmountFr(centsToEuros(counted·totalCents));",
+  },
+  {
+    fault: "accent grave",
+    quote: "const total=formatAmountFr(centsToèuros(counted.totalCents));",
+  },
+  {
+    fault: "guillemet interne",
+    quote: 'const total=formatAmountFr(centsToEuros(counted."totalCents));',
+  },
+  {
+    fault: "saut de ligne",
+    quote: "const total=formatAmountFr(centsToEuros(counted.\ntotalCents));",
+  },
+];
+
+it("refuses every one-character mutation of an exact quote", () => {
+  const file = "src/cash.ts";
+  const scenarioContext = contextWith([
+    { filename: file, patch: `+ ${EXACT_LINE}` },
+  ]);
+  // La ligne exacte, elle, est un témoin : les mutations refusées le sont pour
+  // leur faute, pas parce que le fichier serait hors du matériel.
+  expect(
+    requirementHasWitness(
+      { quote: EXACT_LINE, sourceFile: file },
+      scenarioContext
+    )
+  ).toBe(true);
+  for (const { fault, quote } of QUOTE_MUTATIONS) {
+    const label = `${fault}: ${JSON.stringify(quote)}`;
+    expect(quote, label).not.toBe(EXACT_LINE);
+    expect(quoteCarriesContent(quote), label).toBe(true);
+    expect(
+      requirementHasWitness({ quote, sourceFile: file }, scenarioContext),
+      label
+    ).toBe(false);
+    const plan = planWithWitnesses([
+      {
+        id: "cash",
+        sourceFiles: [file],
+        requirements: [{ sourceFile: file, quote }],
+      },
+    ]);
+    expect(ungroundedRequirements(plan, scenarioContext), label).toHaveLength(
+      1
+    );
+    expect(refusalOfPlan(plan, scenarioContext, policyFor()).code, label).toBe(
+      "REQUIREMENT_UNGROUNDED"
+    );
+  }
+});
+
+/**
+ * Les bords du plancher de contenu : huit caractères normalisés portant une
+ * lettre ou un chiffre sont un témoin, sept ne le sont pas, et le refus est
+ * celui des deux couches — le schéma pour la longueur, le gate pour le contenu.
+ */
+it("accepts a quote at the content floor and refuses one under it", () => {
+  const file = "src/cash.ts";
+  const floor = "total=17";
+  const under = "total=1";
+  expect(floor).toHaveLength(QUOTE_MIN_TEXT_CHARS);
+  expect(quoteCarriesContent(floor)).toBe(true);
+  expect(quoteCarriesContent(under)).toBe(false);
+  const scenarioContext = contextWith([
+    { filename: file, patch: `+ ${floor}` },
+  ]);
+  expect(
+    requirementHasWitness({ quote: floor, sourceFile: file }, scenarioContext)
+  ).toBe(true);
+  expect(
+    requirementHasWitness({ quote: under, sourceFile: file }, scenarioContext)
+  ).toBe(false);
+  // Le plancher de longueur reste celui du schéma : une citation plus courte
+  // n'entre jamais dans un plan.
+  expect(() =>
+    planWithWitnesses([
+      {
+        id: "cash",
+        sourceFiles: [file],
+        requirements: [{ sourceFile: file, quote: under }],
+      },
+    ])
+  ).toThrow();
+});
+
+/**
+ * Les bords du plafond de citation : le fragment de mille caractères exacts d'une
+ * ligne minifiée est un témoin et entre dans un plan ; la ligne qui en fait mille
+ * un est refusée par le contrat, avant le gate. Aucun plafond n'oblige donc à
+ * citer ce qui ne tient pas.
+ */
+it("accepts a quote at the 1000-character cap and refuses the line above it", () => {
+  const file = "src/bundle.js";
+  const line = `const bundle=${"a".repeat(987)};`;
+  expect(line).toHaveLength(1001);
+  const scenarioContext = contextWith([{ filename: file, patch: `+ ${line}` }]);
+  const fragment = line.slice(0, 1000);
+  expect(
+    requirementHasWitness(
+      { quote: fragment, sourceFile: file },
+      scenarioContext
+    )
+  ).toBe(true);
+  const plan = planWithWitnesses([
+    {
+      id: "bundle",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: fragment }],
+    },
+  ]);
+  expect(ungroundedRequirements(plan, scenarioContext)).toEqual([]);
+  expect(() =>
+    planWithWitnesses([
+      {
+        id: "bundle",
+        sourceFiles: [file],
+        requirements: [{ sourceFile: file, quote: line }],
+      },
+    ])
+  ).toThrow();
+});
+
+/**
+ * Les faux refus sont interdits : toute citation verbatim du matériel fourni est
+ * acceptée. Ce test parcourt un fichier RÉEL du dépôt, ligne par ligne, et
+ * demande chaque ligne comme citation du fichier qui la porte — seules les
+ * lignes sous le plancher documenté (moins de huit caractères normalisés, ou
+ * aucune lettre ni chiffre visible) sont refusées, et jamais une ligne
+ * substantielle.
+ */
+it("accepts every substantial line of a real file as its own witness", () => {
+  const path = "src/schema.ts";
+  const lines = readFileSync(
+    new URL("../src/schema.ts", import.meta.url),
+    "utf8"
+  ).split("\n");
+  const patch = `@@ -1,${lines.length} +1,${lines.length} @@\n${lines
+    .map((line) => `+${line}`)
+    .join("\n")}`;
+  const scenarioContext = contextWith([{ filename: path, patch }]);
+  let accepted = 0;
+  let belowFloor = 0;
+  for (const [index, line] of lines.entries()) {
+    const label = `ligne ${index + 1}: ${JSON.stringify(quoteExcerpt(line))}`;
+    if (quoteCarriesContent(line)) {
+      accepted += 1;
+      expect(
+        requirementHasWitness(
+          { quote: line, sourceFile: path },
+          scenarioContext
+        ),
+        label
+      ).toBe(true);
+      continue;
+    }
+    belowFloor += 1;
+    expect(
+      requirementHasWitness({ quote: line, sourceFile: path }, scenarioContext),
+      label
+    ).toBe(false);
+  }
+  expect(accepted + belowFloor).toBe(lines.length);
+  // Le fichier réel offre des deux : des lignes substantielles acceptées, et des
+  // lignes sous le plancher, refusées par la règle documentée et non par hasard.
+  expect(accepted).toBeGreaterThan(200);
+  expect(belowFloor).toBeGreaterThan(0);
+});
+
+/**
+ * Le matériel numéroté que le planificateur reçoit : les lignes réelles du
+ * contenu après changement, avec le numéro qu'un refus nomme. Chaque copie
+ * mesurée dont la ligne réelle est connue doit retrouver cette ligne, à son
+ * numéro, dans le matériel de son fichier : le planificateur peut recopier ce
+ * que le refus lui demande au lieu de le retaper.
+ */
+it("lists the real line a refusal names in the numbered material", () => {
+  for (const measured of MEASURED_COPY_REFUSALS) {
+    if (measured.realLine === "") {
+      continue;
+    }
+    const label = `${measured.runId} requirement ${measured.rank}`;
+    const material = numberedSourceLines(
+      contextWith([
+        lineAt(measured.lineFile, measured.lineNumber, measured.realLine),
+      ]),
+      100_000
+    );
+    const file = material.find((item) => item.path === measured.lineFile);
+    expect(file, label).toBeDefined();
+    expect(file?.lines, label).toContainEqual({
+      line: measured.lineNumber,
+      text: measured.realLine,
+    });
+  }
+});
+
+it("builds the numbered material from the patch, with the file's own numbers", () => {
+  const material = numberedSourceLines(
+    contextWith([
+      {
+        filename: "src/a.ts",
+        patch:
+          "@@ -10,3 +10,4 @@\n context line\n-removed line\n+added line one\n+added line two\n",
+      },
+      {
+        filename: "src/b.ts",
+        patch: "@@ -1,1 +1,2 @@\n+first line of b\n+second line of b\n",
+      },
+    ]),
+    1_000_000
+  );
+  expect(material).toEqual([
+    {
+      path: "src/a.ts",
+      lines: [
+        { line: 10, text: "context line" },
+        { line: 11, text: "added line one" },
+        { line: 12, text: "added line two" },
+      ],
+    },
+    {
+      path: "src/b.ts",
+      lines: [
+        { line: 1, text: "first line of b" },
+        { line: 2, text: "second line of b" },
+      ],
+    },
+  ]);
+});
+
+/**
+ * Le matériel numéroté reste borné par le budget qu'il reçoit : sa taille
+ * sérialisée ne le dépasse jamais, il se réduit au lieu de faire échouer le
+ * message, et un budget plus large ne perd aucune ligne du patch.
+ */
+it("bounds the numbered material by the budget it is given", () => {
+  const lines = Array.from(
+    { length: 40 },
+    (_, index) => `+line number ${index + 1} carries real code`
+  );
+  const scenarioContext = contextWith([
+    {
+      filename: "src/a.ts",
+      patch: `@@ -1,1 +1,${lines.length} @@\n${lines.join("\n")}`,
+    },
+  ]);
+  const all = numberedSourceLines(scenarioContext, 1_000_000);
+  expect(all[0]?.lines).toHaveLength(lines.length);
+  for (const budget of [10, 100, 200, 400, 800]) {
+    const bounded = numberedSourceLines(scenarioContext, budget);
+    expect(
+      JSON.stringify(bounded).length,
+      `budget ${budget}`
+    ).toBeLessThanOrEqual(budget);
+    const shown = bounded[0]?.lines.length ?? 0;
+    expect(shown, `budget ${budget}`).toBeLessThan(lines.length);
+  }
+  expect(numberedSourceLines(scenarioContext, 10)).toEqual([]);
+});
+
+/**
+ * P2 de la revue : git accepte un guillemet ou un antislash dans un nom de
+ * fichier, que JSON échappe. Le budget comptait la longueur BRUTE du nom, donc
+ * un nom long échappé laissait entrer une ligne de trop et le matériel
+ * sérialisé dépassait le budget reçu — `planPayload` rejetait alors un payload
+ * qui tenait avant l'ajout du matériel. Le coût se mesure sur le chemin
+ * SÉRIALISÉ, ce que la mesure sous le budget du nom échappé prouve.
+ */
+it("charges an escaped filename its serialized length in the line budget", () => {
+  // Un nom court, puis le même diff sous un nom que JSON échappe beaucoup :
+  // 40 guillemets et 40 antislashs ajoutent 82 caractères à la sérialisation.
+  const shortName = "src/a.ts";
+  const escapedName = `src/${'\\"'.repeat(40)}.ts`;
+  expect(escapedName.length).toBeLessThan(JSON.stringify(escapedName).length);
+  const patch =
+    "@@ -1,1 +1,2 @@\n+const first = compute();\n+const second = compute();\n";
+  for (const name of [shortName, escapedName]) {
+    const scenarioContext = contextWith([{ filename: name, patch }]);
+    const all = numberedSourceLines(scenarioContext, 1_000_000);
+    expect(all[0]?.lines, name).toHaveLength(2);
+    // Un caractère de moins que la taille sérialisée réelle : la marge couvre
+    // la structure JSON, donc le nom échappé ne peut plus tenir avec sa ligne.
+    // Compté sur la longueur brute, il y tenait — et le matériel dépassait.
+    const serialized = JSON.stringify(all).length;
+    const bounded = numberedSourceLines(scenarioContext, serialized - 1);
+    expect(
+      JSON.stringify(bounded).length,
+      `${name} sous ${serialized - 1}`
+    ).toBeLessThanOrEqual(serialized - 1);
+  }
+});
+
+const PLAN_PREVIEW: Preview = {
+  evidence: "JSON sha at /version.json",
+  sha: "1".repeat(40),
+  url: "https://preview.example/",
+};
+const PLAN_PAGE: Observation = {
+  snapshot: "",
+  url: "https://preview.example/",
+};
+const PLAN_FIXTURES = { fixtures: {}, roles: [], visuals: [] };
+
+/**
+ * Le message envoyé au planificateur porte le matériel numéroté, et sa taille
+ * reste celle d'avant : le matériel prend la place que la borne de contexte
+ * laisse libre. Un contexte qui sature la borne produit un message qui tient
+ * encore — le run n'est jamais refusé pour un prompt trop lourd à cause du
+ * matériel.
+ */
+it("keeps the planner message inside the context budget with its numbered material", () => {
+  const payload = planPayload(
+    contextWith([
+      {
+        filename: "src/a.ts",
+        patch: "@@ -1,1 +1,2 @@\n+first real line\n+second real line",
+      },
+    ]),
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  expect(payload.sourceLines).toEqual([
+    {
+      path: "src/a.ts",
+      lines: [
+        { line: 1, text: "first real line" },
+        { line: 2, text: "second real line" },
+      ],
+    },
+  ]);
+  // La consigne qui fait recopier le matériel fait partie du prompt envoyé, au
+  // chemin réel du payload : `sourceLines` à la racine (voir
+  // `unit.test.ts`, qui vérifie que tout chemin cité existe dans le message).
+  expect(PLANNER_PROMPT).toContain("`sourceLines`");
+  // Un contexte qui remplit la borne : le matériel se réduit, le message tient.
+  const saturated: PrContext = {
+    ...contextWith([
+      {
+        filename: "src/big.ts",
+        patch: `@@ -1,1 +1,2 @@\n+${"x".repeat(400)}\n+${"y".repeat(400)}`,
+      },
+    ]),
+    context: [
+      {
+        content: "z".repeat(config.QA_CONTEXT_CHARS),
+        path: "src/big.ts",
+        ref: context.sha,
+      },
+    ],
+  };
+  const bounded = planPayload(
+    saturated,
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(
+    config.QA_CONTEXT_CHARS + 30_000
+  );
+  expect(bounded.sourceLines[0]?.lines.length).toBeGreaterThan(0);
+  // La borne reste celle d'avant l'ajout du matériel : un contexte plus lourd
+  // que la borne est refusé, matériel numéroté ou non.
+  expect(() =>
+    planPayload(
+      {
+        ...saturated,
+        context: [
+          {
+            content: "z".repeat(config.QA_CONTEXT_CHARS + 40_000),
+            path: "src/big.ts",
+            ref: context.sha,
+          },
+        ],
+      },
+      PLAN_PREVIEW,
+      PLAN_PAGE,
+      PLAN_FIXTURES,
+      config
+    )
+  ).toThrow();
 });

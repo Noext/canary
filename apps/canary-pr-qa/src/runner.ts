@@ -28,6 +28,7 @@ import {
   contractBudgetRefusals,
   criticalSkipRefused,
   hasWeakWitness,
+  numberedSourceLines,
   type Policy,
   quoteExcerpt,
   type Requirement,
@@ -417,7 +418,7 @@ function namedFatalClass(refusals: QaError[], label: string): FatalClass[] {
  * défauts, et celui-ci ne se répare pas en ajoutant une citation déjà présente.
  */
 const WEAK_UNWITNESSED_REMEDY =
-  "A requirement already cites a listed file, but its exact quote carries no letter or digit to witness that critical file: quote a substantial fragment, or get its skip approved in .canary/qa.json on the trusted base branch.";
+  "A requirement already cites a listed file, but its exact quote carries no visible code content to witness that file: quote a substantial fragment, or get its skip approved in .canary/qa.json on the trusted base branch.";
 /**
  * Remède d'une classe fatale de témoin : elle agrège les citations absentes et
  * les citations exactes mais trop pauvres, dont les remèdes n'ont rien à voir.
@@ -446,14 +447,13 @@ function witnessRemedy(
 function ungroundedRemedy(
   requirement: Requirement,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans
 ): string {
-  if (hasWeakWitness(requirement, context, policy)) {
+  if (hasWeakWitness(requirement, context)) {
     return UNGROUNDED_WEAK_REMEDY;
   }
   return (
-    absentRequirementRemedy(requirement, context, policy, scans).trim() ||
+    absentRequirementRemedy(requirement, context, scans).trim() ||
     UNGROUNDED_ABSENT_REMEDY
   );
 }
@@ -475,7 +475,7 @@ export function coverageFatalClasses(
   scans: AmputationScans
 ): FatalClass[] {
   const classes: FatalClass[] = [];
-  const unwitnessed = unwitnessedSources(candidate, context, policy);
+  const unwitnessed = unwitnessedSources(candidate, context);
   if (unwitnessed.length > 0) {
     classes.push({
       code: "COVERAGE_WITNESS_MISSING",
@@ -498,10 +498,10 @@ export function coverageFatalClasses(
       label: "requirements attributed to a file the scenario does not declare",
     });
   }
-  const ungrounded = ungroundedRequirements(candidate, context, policy);
+  const ungrounded = ungroundedRequirements(candidate, context);
   if (ungrounded.length > 0) {
     const weak = ungrounded.filter((item) =>
-      hasWeakWitness(item.requirement, context, policy)
+      hasWeakWitness(item.requirement, context)
     );
     const hasWeak = weak.length > 0;
     const hasAbsent = weak.length < ungrounded.length;
@@ -516,7 +516,7 @@ export function coverageFatalClasses(
     const faults: FatalFault[] = [];
     const seen = new Set<string>();
     for (const item of ungrounded) {
-      const remedy = ungroundedRemedy(item.requirement, context, policy, scans);
+      const remedy = ungroundedRemedy(item.requirement, context, scans);
       const key = JSON.stringify([item.requirement.quote, remedy]);
       if (seen.has(key)) {
         continue;
@@ -729,6 +729,55 @@ function refusalDiagnostic(
   return diagnostic;
 }
 /**
+ * Le message du planificateur : le contexte figé de la PR, la page de
+ * découverte, le catalogue de fixtures, puis les lignes RÉELLES des fichiers
+ * modifiés numérotées dans le nouveau fichier (voir `numberedSourceLines`). Ce
+ * matériel est ce que le planificateur doit recopier : le numéro qu'un refus
+ * nomme est celui qu'il porte, donc un remède « cite la ligne 368 » se résout
+ * sans retaper la ligne — la cause mesurée des copies altérées (`b-altered`),
+ * y compris sur les runs où le refus nommait déjà la bonne ligne.
+ *
+ * Le matériel numéroté prend la place que la borne de contexte laisse libre,
+ * jamais plus : un PR volumineux garde son run au lieu d'être refusé pour un
+ * prompt trop lourd, et le contrôle de budget reste celui d'avant — le message
+ * ne peut pas être plus long qu'avant l'ajout du matériel.
+ */
+export function planPayload(
+  context: PrContext,
+  preview: Preview,
+  initialPage: Observation,
+  fixtures: {
+    fixtures: Record<string, string>;
+    roles: string[];
+    visuals: string[];
+  },
+  config: Config
+) {
+  const payload = {
+    changedFiles: context.files.map((file) => file.filename),
+    fixtures,
+    initialPage,
+    maxScenarios: config.QA_MAX_SCENARIOS,
+    pr: context,
+    preview,
+    sourceLines: [] as {
+      lines: { line: number; text: string }[];
+      path: string;
+    }[],
+  };
+  const limit = config.QA_CONTEXT_CHARS + 30_000;
+  payload.sourceLines = numberedSourceLines(
+    context,
+    Math.max(0, limit - JSON.stringify(payload).length)
+  );
+  if (JSON.stringify(payload).length > limit) {
+    throw new Error(
+      "PR context exceeds model budget; refusing partial diff analysis"
+    );
+  }
+  return payload;
+}
+/**
  * Une assertion d'absence ne lit pas un élément : elle en constate l'absence,
  * donc une cible qui ne résout rien y est normale. Les autres sont comptées sur
  * la page de découverte avant toute exécution.
@@ -785,10 +834,9 @@ function settlePlan(
   plan: Plan,
   context: PrContext,
   config: Config,
-  runId: string,
-  policy: Policy
+  runId: string
 ) {
-  for (const repair of repairRequirementAttribution(plan, context, policy)) {
+  for (const repair of repairRequirementAttribution(plan, context)) {
     logger.info(
       {
         from: repair.from,
@@ -823,25 +871,14 @@ async function executePlan(
     root,
     canary
   );
-  const payload = {
-    pr: context,
-    changedFiles: context.files.map((file) => file.filename),
-    preview,
-    initialPage,
-    maxScenarios: config.QA_MAX_SCENARIOS,
-    fixtures: await fixtureCatalog(config, context.ref.repo).then((c) => ({
-      roles: Object.keys(c.roles),
-      visuals: Object.keys(c.visuals),
-      fixtures: Object.fromEntries(
-        Object.entries(c.fixtures).map(([name, f]) => [name, f.description])
-      ),
-    })),
-  };
-  if (JSON.stringify(payload).length > config.QA_CONTEXT_CHARS + 30_000) {
-    throw new Error(
-      "PR context exceeds model budget; refusing partial diff analysis"
-    );
-  }
+  const fixtures = await fixtureCatalog(config, context.ref.repo).then((c) => ({
+    roles: Object.keys(c.roles),
+    visuals: Object.keys(c.visuals),
+    fixtures: Object.fromEntries(
+      Object.entries(c.fixtures).map(([name, f]) => [name, f.description])
+    ),
+  }));
+  const payload = planPayload(context, preview, initialPage, fixtures, config);
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });
@@ -862,7 +899,7 @@ async function executePlan(
   );
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
-  settlePlan(result.plan, context, config, result.id, policy);
+  settlePlan(result.plan, context, config, result.id);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,
