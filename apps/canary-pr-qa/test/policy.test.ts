@@ -724,6 +724,85 @@ it("refuses a bare identifier as a witness, exact or not", () => {
 });
 
 /**
+ * P2 de la revue, suite : la structure comptée était le complémentaire de
+ * `\p{L}\p{N}`, donc les caractères de LIAISON D'IDENTIFIANT — tiret bas,
+ * tiret, point, deux-points, barre oblique — passaient pour de la structure, et
+ * `snake_case_name`, `kebab-case-name`, `__name__` étaient acceptés comme
+ * témoins alors qu'ils ne portent aucune structure de code. Seuls les symboles
+ * qui expriment une structure comptent maintenant : accolades, parenthèses,
+ * crochets, opérateurs, signes égal, point-virgule, chevrons, guillemets
+ * internes, et le blanc entre deux mots. Les copies réelles de
+ * `WHITESPACE_FREE_QUOTES` et `total=17` / `value 12` restent des témoins : la
+ * règle resserrée ne rouvre pas le faux refus déjà fermé.
+ */
+it("refuses an identifier linked by underscores, hyphens, dots, colons or slashes", () => {
+  const linked = [
+    "user_id",
+    "snake_case_name",
+    "__name__",
+    "kebab-case-name",
+    "a.b.c",
+    "config.settings.value",
+    "module:service:handler",
+    "src/utils/helpers/file",
+  ];
+  for (const word of linked) {
+    expect(quoteCarriesContent(word), `${word}: contenu`).toBe(false);
+    // Le mot est dans le fichier, verbatim : la présence suffit pour un témoin
+    // exact, c'est la structure de code absente qui le refuse.
+    const line = `const ${word}Value = compute();`;
+    expect(quoteHasWitness(line, word), `${word}: présence`).toBe(false);
+    const scenarioContext = contextWith([
+      { filename: "src/logic.ts", patch: `+ ${line}` },
+    ]);
+    expect(
+      requirementHasWitness(
+        { quote: word, sourceFile: "src/logic.ts" },
+        scenarioContext
+      ),
+      `${word}: témoin`
+    ).toBe(false);
+    // La ligne qui PORTE l'identifiant reste un témoin entier : la règle
+    // distingue un identifiant nu d'une expression, elle ne bloque pas le
+    // fichier.
+    expect(
+      requirementHasWitness(
+        { quote: line, sourceFile: "src/logic.ts" },
+        scenarioContext
+      ),
+      `${word}: la ligne reste un témoin`
+    ).toBe(true);
+  }
+  // Le refus dit la vérité : la copie existe et porte des lettres ; ce qui
+  // manque est la structure de code.
+  const file = "src/logic.ts";
+  const word = "snake_case_name";
+  const line = `const ${word}Value = compute();`;
+  const plan = planWithWitnesses([
+    {
+      id: "logic",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: word }],
+    },
+  ]);
+  const refusal = refusalOfPlan(
+    plan,
+    contextWith([{ filename: file, patch: `+ ${line}` }]),
+    policyFor()
+  );
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  expect(refusal.message).toBe(
+    `Weak source witness for logic: ${file} (requirement 1). Rejected quote: "snake_case_name"`
+  );
+  expect(refusal.hint).toContain("code structure");
+  // Contre-épreuve : les six copies réelles et les deux plus courtes portent de
+  // la vraie structure, donc restent acceptées.
+  for (const quote of [...WHITESPACE_FREE_QUOTES, "total=17", "value 12"]) {
+    expect(quoteCarriesContent(quote), quote).toBe(true);
+  }
+});
+
+/**
  * Cas réel 1 de la revue : la citation exacte et substantielle d'un fichier
  * critique reste un témoin — 129 caractères, puis la citation recollée du run
  * 94e86f2b. Refuser celles-là bloquerait le plan juste, la direction nuisible.

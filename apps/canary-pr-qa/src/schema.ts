@@ -57,10 +57,18 @@ export function normalizeQuoteText(value: string): string {
  * des lettres —, et un fichier qui contient un mot courant couvrirait alors
  * n'importe quelle exigence, y compris sur un chemin critique. Un témoin doit
  * donc porter une STRUCTURE de code : au moins `QUOTE_MIN_STRUCTURE_CHARS`
- * caractère VISIBLE qui ne soit ni lettre ni chiffre — un opérateur, une
- * ponctuation, le blanc qui sépare deux mots. C'est ce qui distingue une
- * EXPRESSION d'un identifiant nu : `total=17`, `value 12` et `if (x) {`
- * passent, `function` non.
+ * caractère VISIBLE d'une liste EXPLICITE — accolades, parenthèses, crochets,
+ * opérateurs, signes égal, point-virgule, chevrons, guillemets internes, ou le
+ * blanc qui sépare deux mots. C'est ce qui distingue une EXPRESSION d'un
+ * identifiant nu : `total=17`, `value 12` et `if (x) {` passent, `function` non.
+ *
+ * La liste est explicite, jamais « tout ce qui n'est ni lettre ni chiffre » :
+ * ce complémentaire comptait les caractères de LIAISON D'IDENTIFIANT — tiret
+ * bas, tiret, point, deux-points, barre oblique —, donc `snake_case_name`,
+ * `kebab-case-name`, `a.b.c`, `a:b` et `a/b` passaient pour des témoins alors
+ * qu'ils ne portent aucune structure de code. Ces cinq caractères sont exclus
+ * du décompte, comme `$` et `#` qui forment eux aussi des identifiants
+ * JavaScript (`$foo`, `#field`).
  *
  * Le seuil de structure vaut UN et non deux : des contrats déjà tenus par la
  * suite acceptent une citation dont c'est le seul caractère de structure —
@@ -86,13 +94,31 @@ export const QUOTE_MIN_TEXT_CHARS = 8;
 /** Lettres ou chiffres visibles exigés d'une citation, quel que soit son fichier. */
 export const QUOTE_MIN_WORD_CHARS = 1;
 /**
- * Caractères de structure de code exigés d'une citation : ni lettre, ni
- * chiffre. Un opérateur, une ponctuation, le blanc qui sépare deux mots.
+ * Caractères de structure de code exigés d'une citation : au moins un symbole
+ * de la liste explicite `STRUCTURE_CHARS`, ou un blanc entre deux mots. Ni
+ * lettre, ni chiffre, ni caractère de liaison d'identifiant.
  */
 export const QUOTE_MIN_STRUCTURE_CHARS = 1;
 const WORD_CHARS = /[\p{L}\p{N}]/gu;
-/** Tout ce qui n'est ni lettre ni chiffre : la structure de code d'une citation. */
-const STRUCTURE_CHARS = /[^\p{L}\p{N}]/gu;
+/**
+ * Symboles qui expriment une STRUCTURE de code : accolades, parenthèses,
+ * crochets, opérateurs, signes égal, point-virgule, chevrons et guillemets
+ * internes. Le tiret bas, le tiret, le point, les deux-points et la barre
+ * oblique en sont exclus : ce sont des caractères de LIAISON d'identifiant
+ * (`snake_case`, `kebab-case`, `a.b.c`, `a:b`, `a/b`), donc les compter
+ * accepterait un identifiant nu comme témoin. `$` et `#` le sont aussi parce
+ * qu'ils forment des identifiants JavaScript (`$foo`, `#field`).
+ */
+const STRUCTURE_CHARS = /[{}()[\]=!<>,;"'`|&?+*%^~]/gu;
+/**
+ * Le blanc qui sépare deux mots : une suite de blancs bordée d'un mot de part
+ * et d'autre. Un blanc voisin d'une ponctuation ne compte pas — c'est la
+ * structure voisine qui porte le témoin —, et les bords sont déjà rognés par
+ * `normalizeQuoteText`. Le mot de gauche est consommé, celui de droite est vu
+ * par une anticipation, donc deux blancs partageant un mot (`a b c`) comptent
+ * chacun.
+ */
+const WORD_SEPARATING_SPACE = /[\p{L}\p{N}]\s+(?=[\p{L}\p{N}])/gu;
 /**
  * Caractères que la pile de rendu ne dessine pas, quelle que soit leur
  * catégorie Unicode : U+00AD, U+200B..U+200F, U+2060..U+206F, U+FE00..U+FE0F,
@@ -112,14 +138,16 @@ function visibleWordChars(value: string): number {
   ).length;
 }
 /**
- * Caractères de structure d'une chaîne qui s'affichent réellement : même
- * compteur que celui des lettres, sur tout ce qui n'est ni lettre ni chiffre,
- * donc un zéro-largeur ne compte pas comme une ponctuation.
+ * Caractères de structure d'une chaîne qui s'affichent réellement : les
+ * symboles de `STRUCTURE_CHARS`, plus un pour chaque blanc qui sépare deux
+ * mots. Un zéro-largeur ne compte pas comme une ponctuation.
  */
 function visibleStructureChars(value: string): number {
-  return (value.match(STRUCTURE_CHARS) ?? []).filter(
+  const symbols = (value.match(STRUCTURE_CHARS) ?? []).filter(
     (char) => !DEFAULT_IGNORABLE.test(char)
   ).length;
+  const separators = (value.match(WORD_SEPARATING_SPACE) ?? []).length;
+  return symbols + separators;
 }
 export function quoteCarriesContent(value: string): boolean {
   const normalized = normalizeQuoteText(value);
