@@ -643,6 +643,119 @@ export function unstableSelectorRefusals(
   return refusals;
 }
 
+/**
+ * Les kinds qui lisent une valeur et la comparent à `expected` : `text` lit un
+ * texte, `value` le contenu d'un champ, `url` l'URL courante, `count` un nombre
+ * d'éléments, `download` un nom de fichier. `visible` et `hidden` lisent une
+ * présence (`actual === true|false`) et `visual` compare des pixels contre une
+ * baseline nommée : leur décision ne dépend pas d'un `expected` manquant.
+ */
+const VALUE_ASSERTION_KINDS = new Set([
+  "text",
+  "value",
+  "url",
+  "count",
+  "download",
+]);
+
+/**
+ * Un `expected` absent ne peut pas être satisfait : `assertionMatches` compare
+ * alors à `undefined` pour `value`, `url`, `count` et `download`
+ * (`actual === undefined`, toujours faux) et à la chaîne `"undefined"` pour
+ * `text`. Le scénario échoue donc à coup sûr, après avoir dépensé toutes ses
+ * étapes navigateur : un plan qui compare à rien ne peut que rater.
+ *
+ * `PlanSchema` exige déjà `expected` pour chaque kind, mais un plan qui
+ * contourne la validation d'entrée — plan rejoué, plan écrit à la main, test,
+ * appel direct à `executeScenario` — n'a pas cette garantie. La règle est donc
+ * posée ici, sur le chemin de LECTURE, et `runner.ts` la rejoue avant la
+ * première étape pour l'aperçu de tête comme pour la préversion de base.
+ *
+ * Deux formes vides ne disent pas la même chose :
+ *
+ * - `text`, `url` et `download` exigent un contenu non vide. La comparaison
+ *   `text` normalise et rogne l'attendu, donc un attendu de blancs se réduit à
+ *   `""` et `includes("")` accepte n'importe quel texte : une assertion qui ne
+ *   prouve rien. Une URL ou un nom de fichier vide n'existe pas. `count` exige
+ *   un entier dans les bornes du schéma, et `0` est une valeur, pas un vide.
+ * - `value` n'exige que la PRÉSENCE. `expected: ""` y est la forme mesurée de
+ *   « le champ est vide » : dans le corpus de 193 runs, 27 assertions de kind
+ *   `value` portent `expected: ""` sur 26 runs, 25 passent, et toutes
+ *   décrivent un champ vierge (comptage d'une pharmacie non hérité d'une
+ *   autre). `actual === ""` compare à quelque chose de précis : refuser le vide
+ *   casserait ces plans réels sans fermer aucun trou.
+ */
+export function missingExpectationRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const offenders: string[] = [];
+    for (const assertion of scenario.assertions) {
+      if (!VALUE_ASSERTION_KINDS.has(assertion.kind)) {
+        continue;
+      }
+      const fault = expectationFault(
+        assertion.kind,
+        assertionExpected(assertion)
+      );
+      if (fault) {
+        offenders.push(
+          `assertion ${assertion.id} (kind ${assertion.kind}) ${fault}`
+        );
+      }
+    }
+    if (offenders.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_EXPECTED_MISSING",
+        `Scenario ${scenario.id} compares to nothing: ${offenders.join(" ; ")}`,
+        'Give each of these assertions the value its requirement produces: text the exact text to match, value the field\'s exact content, url the exact URL, count an integer between 0 and 10000, download the exact filename. kind "value" may keep expected: "" to assert an empty field; for text, url, count and download a missing or blank expected can never be satisfied.'
+      ),
+    });
+  }
+  return refusals;
+}
+/**
+ * Le `expected` tel qu'il est réellement porté par l'assertion, sans supposer
+ * que le schéma l'ait validé : une assertion écrite à la main peut l'omettre.
+ */
+function assertionExpected(assertion: Scenario["assertions"][number]): unknown {
+  return "expected" in assertion ? assertion.expected : undefined;
+}
+/**
+ * Ce qui rend un `expected` inutilisable pour un kind à valeur requise, dit en
+ * une phrase lisible par le planificateur, ou `undefined` quand il est utilisable.
+ */
+function expectationFault(
+  kind: Scenario["assertions"][number]["kind"],
+  expected: unknown
+): string | undefined {
+  if (kind === "count") {
+    if (expected === undefined) {
+      return "has no expected";
+    }
+    return typeof expected === "number" &&
+      Number.isInteger(expected) &&
+      expected >= 0 &&
+      expected <= 10_000
+      ? undefined
+      : `has an expected that is not an integer between 0 and 10000 (${JSON.stringify(expected)})`;
+  }
+  if (typeof expected !== "string") {
+    return expected === undefined
+      ? "has no expected"
+      : `has an expected that is not a string (${JSON.stringify(expected)})`;
+  }
+  if (kind === "value") {
+    return;
+  }
+  return expected.trim() === "" ? "has an empty expected" : undefined;
+}
+
 export function validatePlanEvidence(
   plan: Plan,
   evidence: DiscoveryEvidence

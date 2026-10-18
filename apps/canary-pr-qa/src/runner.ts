@@ -15,6 +15,7 @@ import { GitHub, type PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
+  missingExpectationRefusals,
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
@@ -820,6 +821,13 @@ function planRefusals(
     ...unstableSelectorRefusals(candidate).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
+    // Un plan passé par `PlanSchema` ne peut plus porter ces formes : ce refus
+    // est donc surtout celui du chemin de lecture. Il est rendu ici aussi pour
+    // qu'un plan rejoué ou bâti à la main reçoive le même message nommé que le
+    // planificateur, jamais un diagnostic d'exécution plus tardif.
+    ...missingExpectationRefusals(candidate).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
   ];
 }
 /**
@@ -929,11 +937,16 @@ async function executePlan(
   }
   result.coverage = validateCoverage(result.plan, context, policy, config);
   // Refus rendus au planificateur pendant la planification, rejoués ici : un
-  // plan que le modèle n'a pas corrigé est bloqué, jamais exécuté.
+  // plan que le modèle n'a pas corrigé est bloqué, jamais exécuté. Cette table
+  // est le point de contrôle UNIQUE du chemin de lecture : l'aperçu de tête et
+  // la préversion de base la lisent tous les deux, donc une assertion sans
+  // valeur attendue ne dépense aucune étape navigateur, dans l'un comme dans
+  // l'autre.
   const preExecutionRefusals = new Map(
     [
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
+      ...missingExpectationRefusals(result.plan),
     ].map((item) => [item.scenario.id, item.error])
   );
   await saveReport(root, result, config);

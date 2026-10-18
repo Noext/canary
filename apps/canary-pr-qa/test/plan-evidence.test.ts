@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertionMatches,
   Canary,
   compileAction,
   MODEL_SNAPSHOT_CHARS,
@@ -12,6 +13,7 @@ import {
   ariaLiteralSpellings,
   ariaRoleNameNodes,
   ariaRoleNames,
+  missingExpectationRefusals,
   planEvidenceDiagnostic,
   typographicTargetNote,
   unstableSelectorRefusals,
@@ -169,7 +171,7 @@ function scriptPlan(plan: Plan) {
 }
 
 /** Remplace Canary par une session de découverte scriptée, comme le fait le run réel. */
-function stubCanary(evidence: string) {
+function stubCanary(evidence: string, actual: unknown = true) {
   const labels: string[] = [];
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("fixture-session");
   vi.spyOn(Canary.prototype, "act").mockImplementation(
@@ -179,7 +181,7 @@ function stubCanary(evidence: string) {
         url: "http://fixture/",
         snapshot: ARIA.slice(0, MODEL_SNAPSHOT_CHARS),
         evidence: label === "discover-preview" ? evidence : undefined,
-        actual: label.endsWith("assert") ? true : undefined,
+        actual: label.endsWith("assert") ? actual : undefined,
       };
     }
   );
@@ -1292,5 +1294,335 @@ describe("sélecteur instable refusé avant exécution", () => {
     expect(labels).toEqual(["discover-preview"]);
     expect(plannerFeedback(f)).toHaveLength(1);
     expect(result.outcome).toBe("blocked");
+  });
+});
+
+/**
+ * Le plan réel du run 5c5cfdb6 (PR pharmania/arpilabe-pilotage#17), scénario
+ * `caisse-variance-justification`. L'assertion qui a fait échouer ce run porte
+ * un attendu NON vide : le plan avait écrit 500,00 € là où son propre scénario —
+ * 3 billets de 500,00 € comptés contre 1 240,00 € attendus — produit 260,00 €.
+ * Ces deux chaînes sont recopiées de l'artefact, et c'est leur différence qui
+ * explique l'échec : pas une valeur attendue absente.
+ */
+const VARIANCE_EXPECTED =
+  "Écart de 500,00 € : une justification écrite est obligatoire avant clôture.";
+const VARIANCE_ACTUAL =
+  "Écart de 260,00 € : une justification écrite est obligatoire avant clôture.";
+
+/**
+ * Le plan réel du run, réduit aux assertions du scénario fautif. Les steps et
+ * les exigences ne jouent aucun rôle ici : la règle ne lit que `assertions`.
+ */
+function measuredVariancePlan(): Plan {
+  return {
+    summary: "Un écart non nul bloque la clôture jusqu'à justification écrite",
+    scenarios: [
+      {
+        id: "caisse-variance-justification",
+        assertions: [
+          {
+            id: "s2-units",
+            description: "three 500 euro notes give three counted units",
+            kind: "text",
+            expected: "3 unités comptées",
+            target: { by: "css", value: "[data-counted-units]" },
+            afterStep: "count",
+            verification: "state",
+          },
+          {
+            id: "s2-blocking-message",
+            description:
+              "closing a 500 euro variance without justification is refused",
+            kind: "text",
+            expected: VARIANCE_EXPECTED,
+            target: { by: "css", value: "[data-variance-message]" },
+            afterStep: "close",
+            verification: "state",
+          },
+          {
+            id: "s2-closed-count",
+            description:
+              "the container enters the closed state after justified closure",
+            kind: "count",
+            expected: 1,
+            target: { by: "css", value: "[data-cash-state=cloture]" },
+            afterStep: "justify",
+            verification: "state",
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  } as unknown as Plan;
+}
+
+/**
+ * Scénario d'un seul `assert` sur le nom enregistré, bâti à la main. C'est la
+ * forme qu'un plan rejoué, un plan écrit à la main ou un test atteint SANS
+ * passer par `PlanSchema` : le contrôle de lecture doit donc la couvrir seul.
+ */
+function savedNamePlan(assertion: Record<string, unknown>): Plan {
+  return {
+    summary: "Le nom enregistré est affiché",
+    scenarios: [
+      {
+        id: "saved-name",
+        title: "Le nom enregistré est affiché",
+        kind: "regression",
+        rationale: "Le diff change le nom affiché",
+        sourceFiles: ["src/form.ts"],
+        preconditions: [],
+        steps: [
+          {
+            id: "load",
+            description: "ouvrir la page d'accueil",
+            action: { type: "goto", path: "/" },
+          },
+          {
+            id: "check",
+            description: "vérifier le nom affiché",
+            action: { type: "assert", assertionId: String(assertion.id) },
+          },
+        ],
+        requirements: [
+          {
+            sourceFile: "src/form.ts",
+            quote: "show('Welcome '+name)",
+            behavior: "Le nom enregistré reste affiché",
+          },
+        ],
+        assertions: [assertion],
+      },
+    ],
+    skipped: [],
+  } as unknown as Plan;
+}
+
+/** Assertion de `saved-name`, avec la cible et l'étape que le contrat exige. */
+function savedNameAssertion(
+  kind: string,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    id: `${kind}-saved`,
+    description: "Le nom enregistré est affiché",
+    kind,
+    target: { by: "css", value: "#saved" },
+    afterStep: "load",
+    verification: "state",
+    ...extra,
+  };
+}
+
+/** Un scénario, une assertion : la forme minimale que la règle inspecte. */
+function assertionOnlyPlan(
+  assertions: Record<string, unknown>[],
+  scenarioId = "saved-name"
+): Plan {
+  return {
+    summary: "Le nom enregistré est affiché",
+    scenarios: [{ id: scenarioId, assertions }],
+    skipped: [],
+  } as unknown as Plan;
+}
+
+describe("assertion sans valeur attendue", () => {
+  it("refuse un attendu absent pour les cinq kinds qui comparent à une valeur", () => {
+    for (const kind of ["text", "value", "url", "count", "download"]) {
+      const refusals = missingExpectationRefusals(
+        assertionOnlyPlan([savedNameAssertion(kind)])
+      );
+      expect(refusals, kind).toHaveLength(1);
+      const refusal = refusals[0]!;
+      // Le refus nomme le scénario, l'assertion ET le kind : c'est la forme que
+      // le planificateur reçoit des autres refus (write evidence, sélecteur).
+      expect(refusal.error.code, kind).toBe("PLAN_EXPECTED_MISSING");
+      expect(refusal.error.message, kind).toContain("Scenario saved-name");
+      expect(refusal.error.message, kind).toContain(`assertion ${kind}-saved`);
+      expect(refusal.error.message, kind).toContain(`kind ${kind}`);
+      expect(refusal.error.message, kind).toContain("has no expected");
+      // L'aide dit quoi écrire, et rappelle la seule exception mesurée.
+      expect(refusal.error.hint, kind).toContain('expected: ""');
+      expect(refusal.error.hint, kind).toContain("empty field");
+      expect(refusal.error.hint, kind).toContain("can never be satisfied");
+      expect(refusal.scenario.id, kind).toBe("saved-name");
+    }
+  });
+  it("n'oppose aucun refus aux kinds qui décident sans attendu", () => {
+    // `visible` et `hidden` lisent une présence, `visual` compare des pixels
+    // contre une baseline nommée, `popup` sonde une URL d'événement : aucun ne
+    // dépend d'un `expected` pour trancher.
+    for (const kind of ["visible", "hidden", "visual", "popup"]) {
+      expect(
+        missingExpectationRefusals(
+          assertionOnlyPlan([savedNameAssertion(kind)])
+        ),
+        kind
+      ).toEqual([]);
+    }
+  });
+  it("accepte un attendu présent, même d'un caractère ou de ponctuation seule", () => {
+    // La règle ne juge jamais le CONTENU d'un texte attendu : un seul
+    // caractère, une ponctuation seule ou un chiffre sont des attentes
+    // légitimes, et les refuser rouvrirait un faux refus sur des plans justes.
+    for (const kind of ["text", "value", "url", "download"]) {
+      for (const expected of ["x", "…", "!?—", "0", "  spaced  "]) {
+        expect(
+          missingExpectationRefusals(
+            assertionOnlyPlan([savedNameAssertion(kind, { expected })])
+          ),
+          `${kind}:${expected}`
+        ).toEqual([]);
+      }
+    }
+    for (const expected of [0, 1, 10_000]) {
+      expect(
+        missingExpectationRefusals(
+          assertionOnlyPlan([savedNameAssertion("count", { expected })])
+        ),
+        `count:${expected}`
+      ).toEqual([]);
+    }
+  });
+  it("garde expected vide légal pour value et le refuse pour text", () => {
+    // Les deux sens, mesurés : `value: ""` est l'expression de « le champ est
+    // vide » (27 assertions, 26 runs), et un `text` vide ne compare à rien —
+    // `includes("")` accepte n'importe quelle page.
+    expect(
+      missingExpectationRefusals(
+        assertionOnlyPlan([savedNameAssertion("value", { expected: "" })])
+      )
+    ).toEqual([]);
+    const refused = missingExpectationRefusals(
+      assertionOnlyPlan([savedNameAssertion("text", { expected: "" })])
+    );
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain("kind text");
+    expect(refused[0]?.error.message).toContain("has an empty expected");
+    // Un attendu de blancs se normalise en chaîne vide à la comparaison : il est
+    // refusé comme le vide, pour text, url et download.
+    for (const kind of ["text", "url", "download"]) {
+      for (const expected of [" ", "\n\t", "   \n  "]) {
+        expect(
+          missingExpectationRefusals(
+            assertionOnlyPlan([savedNameAssertion(kind, { expected })])
+          ),
+          `${kind}:${JSON.stringify(expected)}`
+        ).toHaveLength(1);
+      }
+    }
+    // Un attendu non textuel ne peut pas être comparé non plus.
+    expect(
+      missingExpectationRefusals(
+        assertionOnlyPlan([savedNameAssertion("value", { expected: null })])
+      )
+    ).toHaveLength(1);
+  });
+  it("refuse un compte hors des bornes du schéma, jamais un compte de zéro", () => {
+    for (const expected of [1.5, -1, 10_001, "1"]) {
+      expect(
+        missingExpectationRefusals(
+          assertionOnlyPlan([savedNameAssertion("count", { expected })])
+        ),
+        JSON.stringify(expected)
+      ).toHaveLength(1);
+    }
+    expect(
+      missingExpectationRefusals(
+        assertionOnlyPlan([savedNameAssertion("count", { expected: 0 })])
+      )
+    ).toEqual([]);
+  });
+  it("ne refuse pas le plan réel du run 5c5cfdb6, dont l'échec est un montant faux", () => {
+    const plan = measuredVariancePlan();
+    // La règle de présence ne dit rien de ce plan : toutes ses assertions
+    // portent un attendu. Ce test tombe si on la durcit jusqu'à l'attraper.
+    expect(missingExpectationRefusals(plan)).toEqual([]);
+    const assertion = plan.scenarios[0]!.assertions.find(
+      (item) => item.id === "s2-blocking-message"
+    )!;
+    const expected = "expected" in assertion ? assertion.expected : undefined;
+    expect(expected).toBe(VARIANCE_EXPECTED);
+    expect(expected).not.toBe("");
+    // L'échec mesuré vient du montant : 500,00 € attendu, 260,00 € produit. La
+    // comparaison `text` normalise les blancs, donc l'espace insécable de la
+    // page n'y change rien — c'est le chiffre qui diffère.
+    expect(assertionMatches(assertion, VARIANCE_ACTUAL)).toBe(false);
+    expect(assertionMatches(assertion, VARIANCE_EXPECTED)).toBe(true);
+  });
+  it("refuse à l'entrée un attendu vide avec une phrase que le planificateur peut suivre", () => {
+    // `PlanSchema` refuse déjà ces plans ; ce que ce test fixe, c'est le message
+    // rendu au planificateur lors de sa tentative de correction (`model.ts`
+    // renvoie les issues du schéma), et non le « Too small » générique.
+    expect(() =>
+      PlanSchema.parse(
+        savedNamePlan(savedNameAssertion("text", { expected: "" }))
+      )
+    ).toThrow(/expected is required and cannot be blank/);
+    expect(() =>
+      PlanSchema.parse(
+        savedNamePlan(savedNameAssertion("download", { expected: " " }))
+      )
+    ).toThrow(/expected is required and cannot be blank/);
+    // `value: ""` traverse le schéma : c'est la forme légale mesurée.
+    const parsed = PlanSchema.parse(
+      savedNamePlan(savedNameAssertion("value", { expected: "" }))
+    ).scenarios[0]!.assertions[0]!;
+    expect("expected" in parsed ? parsed.expected : undefined).toBe("");
+  });
+});
+
+describe("attendu manquant sur le chemin de lecture", () => {
+  it("bloque le scénario sans dépenser d'étape navigateur, aperçu et base", async () => {
+    const f = await setup();
+    const labels = stubCanary(ARIA);
+    // Plan bâti à la main, donc jamais passé par `PlanSchema` : c'est le plan
+    // qu'un rejeu ou un appel direct peut faire entrer dans le run.
+    scriptPlan(savedNamePlan(savedNameAssertion("text", { expected: "" })));
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      { ...f.config, QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline` }
+    );
+    expect(result.outcome).toBe("blocked");
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome).toBe("blocked");
+    expect(scenario.diagnostic?.code).toBe("PLAN_EXPECTED_MISSING");
+    // Le refus nomme le scénario, l'assertion et le kind.
+    expect(scenario.error).toContain("saved-name");
+    expect(scenario.error).toContain("assertion text-saved");
+    expect(scenario.error).toContain("kind text");
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.artifacts).toEqual([]);
+    // Seule la découverte ouvre le navigateur : le scénario refusé n'exécute rien.
+    expect(labels).toEqual(["discover-preview"]);
+    // La préversion de base lit la même table de refus : le scénario refusé n'y
+    // dépense pas non plus d'étape.
+    expect(result.baseline?.scenarios).toEqual([]);
+    const events = await readFile(
+      join(f.dataDir, result.id, "events.jsonl"),
+      "utf8"
+    );
+    expect(events).toContain('"PLAN_EXPECTED_MISSING"');
+  });
+  it("exécute et accepte un attendu vide de kind value", async () => {
+    const f = await setup({
+      plans: [savedNamePlan(savedNameAssertion("value", { expected: "" }))],
+    });
+    // Le champ est réellement vide : `actual === ""` compare à quelque chose.
+    const labels = stubCanary(ARIA, "");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(labels).toContain("2-assert");
+    // Aucune correction demandée au planificateur : ce plan est juste.
+    expect(
+      f.modelRequests.filter(
+        (request) => (request.messages as unknown[]).length > 2
+      )
+    ).toEqual([]);
   });
 });

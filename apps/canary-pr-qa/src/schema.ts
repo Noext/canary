@@ -185,28 +185,64 @@ const assertionBase = {
   afterStep: text.optional(),
   verification: z.enum(["state", "transition", "persisted"]).default("state"),
 };
+/**
+ * L'attendu d'un kind qui compare à une valeur. Même acceptation que `text`, mais
+ * le refus porte une phrase que le planificateur peut suivre : un `expected`
+ * vide rend l'assertion insatisfiable (ou, pour `text`, satisfaite par
+ * n'importe quelle page puisque `includes("")`), et le message Zod est ce qu'il
+ * reçoit dans sa tentative de correction (`model.ts` renvoie les issues du
+ * schéma). La règle est rejouée à l'exécution par `missingExpectationRefusals`
+ * (plan-evidence.ts), qui porte l'aide complète.
+ */
+const expectedText = z
+  .string()
+  .trim()
+  .min(
+    1,
+    "expected is required and cannot be blank: this kind compares the observed value to it, so an empty expected can never be satisfied (text would match any page)."
+  )
+  .max(2000);
 export const AssertionSchema = z.discriminatedUnion("kind", [
   z
     .object({ ...assertionBase, kind: z.literal("visual"), expected: text })
     .strict(),
   z
-    .object({ ...assertionBase, kind: z.literal("download"), expected: text })
+    .object({
+      ...assertionBase,
+      kind: z.literal("download"),
+      expected: expectedText,
+    })
     .strict(),
   z
     .object({ ...assertionBase, kind: z.literal("popup"), expected: text })
     .strict(),
   z
-    .object({ ...assertionBase, kind: z.literal("text"), expected: text })
+    .object({
+      ...assertionBase,
+      kind: z.literal("text"),
+      expected: expectedText,
+    })
     .strict(),
   z
     .object({
       ...assertionBase,
       kind: z.literal("value"),
+      // Pas de `.min(1)` ici, contrairement aux autres kinds à valeur : `""`
+      // est la forme mesurée de « le champ est vide ». 27 assertions de ce kind
+      // sur 26 runs du corpus portent un attendu vide, 25 passent, et toutes
+      // décrivent un champ vierge (comptage d'une pharmacie non hérité d'une
+      // autre). `actual === ""` compare à quelque chose de précis, donc la
+      // présence de `expected` suffit ; la règle de lecture vit dans
+      // `missingExpectationRefusals` (plan-evidence.ts).
       expected: z.string().max(2000),
     })
     .strict(),
   z
-    .object({ ...assertionBase, kind: z.literal("url"), expected: text })
+    .object({
+      ...assertionBase,
+      kind: z.literal("url"),
+      expected: expectedText,
+    })
     .strict(),
   z
     .object({
