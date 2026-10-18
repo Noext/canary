@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import type { Observation } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
@@ -10,6 +11,7 @@ import {
   amputatedQuoteRemedy,
   amputationScans,
   isDocumentationPath,
+  numberedSourceLines,
   PolicySchema,
   quoteDivergence,
   quoteExcerpt,
@@ -29,10 +31,15 @@ import {
   validateCoverage,
   witnessFiles,
 } from "../src/policy.js";
-import { coverageFatalClasses, planShapeRefusals } from "../src/runner.js";
+import {
+  coverageFatalClasses,
+  planPayload,
+  planShapeRefusals,
+} from "../src/runner.js";
 import {
   type Plan,
   PlanSchema,
+  type Preview,
   QUOTE_MIN_TEXT_CHARS,
   QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
@@ -3644,4 +3651,187 @@ it("accepts every substantial line of a real file as its own witness", () => {
   // lignes sous le plancher, refusées par la règle documentée et non par hasard.
   expect(accepted).toBeGreaterThan(200);
   expect(belowFloor).toBeGreaterThan(0);
+});
+
+/**
+ * Le matériel numéroté que le planificateur reçoit : les lignes réelles du
+ * contenu après changement, avec le numéro qu'un refus nomme. Chaque copie
+ * mesurée dont la ligne réelle est connue doit retrouver cette ligne, à son
+ * numéro, dans le matériel de son fichier : le planificateur peut recopier ce
+ * que le refus lui demande au lieu de le retaper.
+ */
+it("lists the real line a refusal names in the numbered material", () => {
+  for (const measured of MEASURED_COPY_REFUSALS) {
+    if (measured.realLine === "") {
+      continue;
+    }
+    const label = `${measured.runId} requirement ${measured.rank}`;
+    const material = numberedSourceLines(
+      contextWith([
+        lineAt(measured.lineFile, measured.lineNumber, measured.realLine),
+      ]),
+      100_000
+    );
+    const file = material.find((item) => item.path === measured.lineFile);
+    expect(file, label).toBeDefined();
+    expect(file?.lines, label).toContainEqual({
+      line: measured.lineNumber,
+      text: measured.realLine,
+    });
+  }
+});
+
+it("builds the numbered material from the patch, with the file's own numbers", () => {
+  const material = numberedSourceLines(
+    contextWith([
+      {
+        filename: "src/a.ts",
+        patch:
+          "@@ -10,3 +10,4 @@\n context line\n-removed line\n+added line one\n+added line two\n",
+      },
+      {
+        filename: "src/b.ts",
+        patch: "@@ -1,1 +1,2 @@\n+first line of b\n+second line of b\n",
+      },
+    ]),
+    1_000_000
+  );
+  expect(material).toEqual([
+    {
+      path: "src/a.ts",
+      lines: [
+        { line: 10, text: "context line" },
+        { line: 11, text: "added line one" },
+        { line: 12, text: "added line two" },
+      ],
+    },
+    {
+      path: "src/b.ts",
+      lines: [
+        { line: 1, text: "first line of b" },
+        { line: 2, text: "second line of b" },
+      ],
+    },
+  ]);
+});
+
+/**
+ * Le matériel numéroté reste borné par le budget qu'il reçoit : sa taille
+ * sérialisée ne le dépasse jamais, il se réduit au lieu de faire échouer le
+ * message, et un budget plus large ne perd aucune ligne du patch.
+ */
+it("bounds the numbered material by the budget it is given", () => {
+  const lines = Array.from(
+    { length: 40 },
+    (_, index) => `+line number ${index + 1} carries real code`
+  );
+  const scenarioContext = contextWith([
+    {
+      filename: "src/a.ts",
+      patch: `@@ -1,1 +1,${lines.length} @@\n${lines.join("\n")}`,
+    },
+  ]);
+  const all = numberedSourceLines(scenarioContext, 1_000_000);
+  expect(all[0]?.lines).toHaveLength(lines.length);
+  for (const budget of [10, 100, 200, 400, 800]) {
+    const bounded = numberedSourceLines(scenarioContext, budget);
+    expect(
+      JSON.stringify(bounded).length,
+      `budget ${budget}`
+    ).toBeLessThanOrEqual(budget);
+    const shown = bounded[0]?.lines.length ?? 0;
+    expect(shown, `budget ${budget}`).toBeLessThan(lines.length);
+  }
+  expect(numberedSourceLines(scenarioContext, 10)).toEqual([]);
+});
+
+const PLAN_PREVIEW: Preview = {
+  evidence: "JSON sha at /version.json",
+  sha: "1".repeat(40),
+  url: "https://preview.example/",
+};
+const PLAN_PAGE: Observation = {
+  snapshot: "",
+  url: "https://preview.example/",
+};
+const PLAN_FIXTURES = { fixtures: {}, roles: [], visuals: [] };
+
+/**
+ * Le message envoyé au planificateur porte le matériel numéroté, et sa taille
+ * reste celle d'avant : le matériel prend la place que la borne de contexte
+ * laisse libre. Un contexte qui sature la borne produit un message qui tient
+ * encore — le run n'est jamais refusé pour un prompt trop lourd à cause du
+ * matériel.
+ */
+it("keeps the planner message inside the context budget with its numbered material", () => {
+  const payload = planPayload(
+    contextWith([
+      {
+        filename: "src/a.ts",
+        patch: "@@ -1,1 +1,2 @@\n+first real line\n+second real line",
+      },
+    ]),
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  expect(payload.sourceLines).toEqual([
+    {
+      path: "src/a.ts",
+      lines: [
+        { line: 1, text: "first real line" },
+        { line: 2, text: "second real line" },
+      ],
+    },
+  ]);
+  // La consigne qui fait recopier le matériel fait partie du prompt envoyé.
+  expect(PLANNER_PROMPT).toContain("pr.sourceLines");
+  // Un contexte qui remplit la borne : le matériel se réduit, le message tient.
+  const saturated: PrContext = {
+    ...contextWith([
+      {
+        filename: "src/big.ts",
+        patch: `@@ -1,1 +1,2 @@\n+${"x".repeat(400)}\n+${"y".repeat(400)}`,
+      },
+    ]),
+    context: [
+      {
+        content: "z".repeat(config.QA_CONTEXT_CHARS),
+        path: "src/big.ts",
+        ref: context.sha,
+      },
+    ],
+  };
+  const bounded = planPayload(
+    saturated,
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(
+    config.QA_CONTEXT_CHARS + 30_000
+  );
+  expect(bounded.sourceLines[0]?.lines.length).toBeGreaterThan(0);
+  // La borne reste celle d'avant l'ajout du matériel : un contexte plus lourd
+  // que la borne est refusé, matériel numéroté ou non.
+  expect(() =>
+    planPayload(
+      {
+        ...saturated,
+        context: [
+          {
+            content: "z".repeat(config.QA_CONTEXT_CHARS + 40_000),
+            path: "src/big.ts",
+            ref: context.sha,
+          },
+        ],
+      },
+      PLAN_PREVIEW,
+      PLAN_PAGE,
+      PLAN_FIXTURES,
+      config
+    )
+  ).toThrow();
 });

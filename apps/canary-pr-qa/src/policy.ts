@@ -595,6 +595,64 @@ function fileContentLines(
   return lines.slice(0, CITED_LINES_EXAMINED);
 }
 /**
+ * Lignes réelles du contenu après changement, numérotées dans le nouveau
+ * fichier : c'est le matériel que le planificateur reçoit pour RECOPIER au lieu
+ * de retaper (voir `planPayload`, runner.ts). Le numéro est celui que les refus
+ * nomment — la ligne « 368: "..." » d'un remède se retrouve telle quelle ici —,
+ * donc une correction « cite la ligne 368 » se résout sans reconstruire la
+ * ligne. Jamais de texte inventé : chaque ligne vient du patch, sans son
+ * préfixe.
+ *
+ * Borné par le budget que l'appelant peut encore envoyer : au-delà, la ligne
+ * n'est pas montrée et le patch reste la source du planificateur. Le coût d'une
+ * ligne est sa taille sérialisée plus `SOURCE_LINE_COST_CHARS`, celui d'un
+ * fichier la taille de son chemin plus `SOURCE_FILE_COST_CHARS` ; ces marges
+ * couvrent les accolades et les virgules, donc le total sérialisé tient dans le
+ * budget reçu.
+ */
+export function numberedSourceLines(
+  context: PrContext,
+  budget: number
+): { path: string; lines: { line: number; text: string }[] }[] {
+  const files: { path: string; lines: { line: number; text: string }[] }[] = [];
+  let used = 0;
+  for (const file of context.files) {
+    if (!file.patch) {
+      continue;
+    }
+    const cost = file.filename.length + SOURCE_FILE_COST_CHARS;
+    if (used + cost > budget) {
+      continue;
+    }
+    const lines: { line: number; text: string }[] = [];
+    let taken = cost;
+    for (const item of postChangeHunks(file.patch).flat()) {
+      const entry =
+        JSON.stringify({ line: item.line, text: item.text }).length +
+        SOURCE_LINE_COST_CHARS;
+      if (used + taken + entry > budget) {
+        break;
+      }
+      taken += entry;
+      lines.push(item);
+    }
+    if (lines.length === 0) {
+      continue;
+    }
+    used += taken;
+    files.push({ path: file.filename, lines });
+  }
+  return files;
+}
+/**
+ * Marge de coût d'une ligne numérotée, d'un fichier numéroté : la virgule qui
+ * sépare deux entrées, les accolades du tableau, et pour un fichier la taille de
+ * son chemin. Elle surestime volontairement, pour que le matériel tienne
+ * toujours dans la place que `planPayload` lui alloue.
+ */
+const SOURCE_LINE_COST_CHARS = 24;
+const SOURCE_FILE_COST_CHARS = 32;
+/**
  * Lignes réelles du fichier cité à citer à la place d'une citation absente :
  * celles dont le recouvrement de jetons avec la citation est le plus élevé, au
  * plus deux, à un seuil qui écarte une ressemblance de hasard. Chaque candidat
