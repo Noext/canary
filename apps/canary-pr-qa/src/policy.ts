@@ -3,10 +3,10 @@ import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
 import {
-  CRITICAL_QUOTE_MIN_WORD_CHARS,
   normalizeQuoteText,
   type Plan,
   QUOTE_MIN_TEXT_CHARS,
+  QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
   type Scenario,
 } from "./schema.js";
@@ -274,61 +274,54 @@ function quoteAppears(evidence: string, quote: string): boolean {
 /**
  * Vrai si la citation apparaît dans ce segment témoin et porte assez de contenu
  * pour lui servir de preuve. Une citation qui ne porte pas de contenu réel —
- * chaîne vide, blanc, caractères invisibles en bordure, fragment d'un seul
- * jeton — n'a jamais de témoin : `includes` d'un fragment que tout fichier
- * contient ferait passer pour preuve une citation qui ne prouve rien. `critical`
- * ajoute l'exigence d'un fichier critique, où un diff hostile peut planter un
- * fragment sans contenu visible ; la règle de repli et les seuils vivent dans
- * `normalizeQuoteText` et `quoteCarriesContent` (schema.ts), avec le contrat de
- * `quote`.
+ * chaîne vide, blanc, caractères invisibles en bordure, ponctuation seule — n'a
+ * jamais de témoin : `includes` d'un fragment que tout fichier contient ferait
+ * passer pour preuve une citation qui ne prouve rien. La règle de repli et le
+ * seuil de contenu vivent dans `normalizeQuoteText` et `quoteCarriesContent`
+ * (schema.ts), avec le contrat de `quote`.
  */
-export function quoteHasWitness(
-  evidence: string,
-  quote: string,
-  critical = false
-): boolean {
-  return quoteCarriesContent(quote, critical) && quoteAppears(evidence, quote);
+export function quoteHasWitness(evidence: string, quote: string): boolean {
+  return quoteCarriesContent(quote) && quoteAppears(evidence, quote);
 }
 
 /**
  * Vrai si la citation est contenue dans l'un des segments témoins du fichier
- * cité, jamais dans leur recousage, avec le seuil de substance de ce fichier :
- * un chemin critique demande une citation qui porte au moins une lettre ou un
- * chiffre, là où un fichier ordinaire se contente du plancher universel. C'est
- * le seul juge d'acceptation — le schéma Zod applique le plancher universel,
- * celui-ci ajoute le seuil du fichier cité.
+ * cité, jamais dans leur recousage. C'est le seul juge d'acceptation : il
+ * applique à chaque segment la règle de contenu de `quoteCarriesContent`, qui ne
+ * dépend pas du fichier cité — le seuil est le même partout, et le schéma Zod ne
+ * garde que le plancher de longueur.
  */
 export function requirementHasWitness(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): boolean {
-  const critical = isCriticalPath(policy, requirement.sourceFile);
   return requirementEvidence(requirement, context).some((segment) =>
-    quoteHasWitness(segment, requirement.quote, critical)
+    quoteHasWitness(segment, requirement.quote)
   );
 }
 
 /**
  * Vrai si la citation existe pourtant mot pour mot dans un segment témoin du
- * fichier cité, sans porter le contenu visible qu'exige un chemin critique : le
- * défaut est la substance de la citation, pas sa présence. Les refus et leurs
- * classes fatales agrégées s'en servent pour distinguer les deux remèdes —
- * citer un fragment plus substantiel, ou faire approuver le skip — au lieu de
- * demander une citation déjà présente que le planificateur renverrait telle
- * quelle.
+ * fichier cité, sans porter le contenu visible qu'exige une citation : le défaut
+ * est la substance de la citation, pas sa présence. Les refus et leurs classes
+ * fatales agrégées s'en servent pour distinguer les deux remèdes — citer un
+ * fragment plus substantiel, ou faire approuver le skip — au lieu de demander
+ * une citation déjà présente que le planificateur renverrait telle quelle.
+ *
+ * Le schéma Zod ne garde que le plancher de longueur, donc une citation réduite
+ * à de la ponctuation arrive jusqu'ici : c'est ce diagnostic qui rend le refus
+ * exact, là où « no source witness » ferait renvoyer la même citation au
+ * planificateur.
  */
 export function hasWeakWitness(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): boolean {
   return (
-    quoteCarriesContent(requirement.quote) &&
+    !quoteCarriesContent(requirement.quote) &&
     requirementEvidence(requirement, context).some((segment) =>
       quoteAppears(segment, requirement.quote)
-    ) &&
-    isCriticalPath(policy, requirement.sourceFile)
+    )
   );
 }
 
@@ -344,13 +337,13 @@ export const UNGROUNDED_ABSENT_REMEDY =
   "Quote exact source or diff text; page content alone is not a requirement.";
 
 /**
- * Remède d'un témoin exact mais trop pauvre sur un chemin critique, quand la
- * classe fatale agrège plusieurs fichiers : la citation est présente, c'est son
- * contenu qui manque. Le texte reste compact — la classe le partage avec dix
- * autres dans un préambule plafonné à `FATAL_PRELUDE_CHARS` (runner.ts).
+ * Remède d'un témoin exact mais trop pauvre, quand la classe fatale agrège
+ * plusieurs fichiers : la citation est présente, c'est son contenu qui manque.
+ * Le texte reste compact — la classe le partage avec dix autres dans un
+ * préambule plafonné à `FATAL_PRELUDE_CHARS` (runner.ts).
  */
 export const UNGROUNDED_WEAK_REMEDY =
-  "The quote exists in the cited critical file but carries no letter or digit: quote a substantial fragment, or get that file's skip approved in .canary/qa.json on the trusted base branch.";
+  "The quote exists in the cited file but carries no letter or digit of visible content: quote a substantial fragment, or get that file's skip approved in .canary/qa.json on the trusted base branch.";
 
 /**
  * Une exigence dont la citation n'a pas de témoin acceptable : soit elle
@@ -380,17 +373,17 @@ export function ungroundedRequirement(
   scans: AmputationScans = amputationScans()
 ): QaError {
   const fault = `${scenarioId}: ${requirement.sourceFile} (requirement ${rank}). Rejected quote: ${JSON.stringify(quoteExcerpt(requirement.quote))}`;
-  if (hasWeakWitness(requirement, context, policy)) {
+  if (hasWeakWitness(requirement, context)) {
     return new QaError(
       "REQUIREMENT_UNGROUNDED",
       `Weak source witness for ${fault}`,
-      `The quote exists in ${requirement.sourceFile}, a critical file: a witness there must carry at least ${CRITICAL_QUOTE_MIN_WORD_CHARS} letter or digit of visible content, so a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
+      `The quote exists in ${requirement.sourceFile} but carries no letter or digit of visible content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit, so a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
     );
   }
   return new QaError(
     "REQUIREMENT_UNGROUNDED",
     `No source witness for ${fault}`,
-    `${UNGROUNDED_ABSENT_REMEDY} ${witnessLocation(requirement, context, policy, scans)}`
+    `${UNGROUNDED_ABSENT_REMEDY} ${witnessLocation(requirement, context, scans)}`
   );
 }
 
@@ -400,17 +393,13 @@ export function ungroundedRequirement(
  * planificateur où la citation existe réellement quand il l'a attribuée au
  * mauvais fichier.
  */
-export function witnessFiles(
-  quote: string,
-  context: PrContext,
-  policy: Policy
-): string[] {
+export function witnessFiles(quote: string, context: PrContext): string[] {
   const paths = [
     ...context.files.map((file) => file.filename),
     ...context.context.map((item) => item.path),
   ];
   return [...new Set(paths)].filter((path) =>
-    requirementHasWitness({ quote, sourceFile: path }, context, policy)
+    requirementHasWitness({ quote, sourceFile: path }, context)
   );
 }
 
@@ -423,8 +412,7 @@ export function witnessFiles(
  */
 export function repairRequirementAttribution(
   plan: Plan,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): { from: string; quote: string; scenarioId: string; to: string }[] {
   const repairs: {
     from: string;
@@ -434,15 +422,11 @@ export function repairRequirementAttribution(
   }[] = [];
   for (const scenario of plan.scenarios) {
     for (const requirement of scenario.requirements) {
-      if (requirementHasWitness(requirement, context, policy)) {
+      if (requirementHasWitness(requirement, context)) {
         continue;
       }
       const candidates = scenario.sourceFiles.filter((sourceFile) =>
-        requirementHasWitness(
-          { quote: requirement.quote, sourceFile },
-          context,
-          policy
-        )
+        requirementHasWitness({ quote: requirement.quote, sourceFile }, context)
       );
       const [target] = candidates;
       if (candidates.length !== 1 || !target) {
@@ -497,11 +481,10 @@ const NO_CHANGED_FILE_WITNESS =
 function witnessLocation(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans = amputationScans()
 ): string {
   const hint = witnessHint(
-    witnessFiles(requirement.quote, context, policy),
+    witnessFiles(requirement.quote, context),
     context
   ).trim();
   if (hint !== "") {
@@ -510,8 +493,8 @@ function witnessLocation(
   // Le reproche précis de la copie passe avant l'aveu générique : il dit quelle
   // ligne citer, là où l'aveu laisse le planificateur recopier la même copie.
   return (
-    amputatedQuoteRemedy(requirement, context, policy, scans).trim() ||
-    divergentQuoteRemedy(requirement, context, policy, scans).trim() ||
+    amputatedQuoteRemedy(requirement, context, scans).trim() ||
+    divergentQuoteRemedy(requirement, context, scans).trim() ||
     NO_CHANGED_FILE_WITNESS
   );
 }
@@ -622,25 +605,20 @@ function fileContentLines(
  */
 export function suggestedQuoteLines(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): { line: number; text: string }[] {
   const quote = quoteTokenSet(requirement.quote);
   if (quote.size < SUGGESTED_QUOTE_MIN_SHARED_TOKENS) {
     return [];
   }
-  const critical = isCriticalPath(policy, requirement.sourceFile);
   const candidates = new Map<
     string,
     { line: number; ratio: number; shared: number; text: string }
   >();
   for (const { line, text } of fileContentLines(requirement, context)) {
-    // Un candidat qui ne franchirait pas le contrat de citation de ce fichier
-    // serait un remède que le gate refuserait : il n'est jamais proposé.
-    if (
-      text.length > SUGGESTED_QUOTE_MAX_CHARS ||
-      !quoteCarriesContent(text, critical)
-    ) {
+    // Un candidat qui ne franchirait pas le contrat de citation serait un remède
+    // que le gate refuserait : il n'est jamais proposé.
+    if (text.length > SUGGESTED_QUOTE_MAX_CHARS || !quoteCarriesContent(text)) {
       continue;
     }
     const tokens = quoteTokenSet(text);
@@ -681,10 +659,9 @@ export function suggestedQuoteLines(
  */
 export function quoteSuggestion(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): string {
-  const candidates = suggestedQuoteLines(requirement, context, policy);
+  const candidates = suggestedQuoteLines(requirement, context);
   if (candidates.length === 0) {
     return "";
   }
@@ -851,15 +828,8 @@ function windowBounds(
  * franchit le contrat — une suggestion que le gate refuserait ne dirigerait le
  * planificateur nulle part.
  */
-function quoteableFragment(
-  line: string,
-  fragment: string,
-  critical: boolean
-): string {
-  if (
-    line.length <= SUGGESTED_QUOTE_MAX_CHARS &&
-    quoteCarriesContent(line, critical)
-  ) {
+function quoteableFragment(line: string, fragment: string): string {
+  if (line.length <= SUGGESTED_QUOTE_MAX_CHARS && quoteCarriesContent(line)) {
     return line;
   }
   const at = line.indexOf(fragment);
@@ -877,7 +847,7 @@ function quoteableFragment(
     (tokens[high] as LineToken).end
   );
   return window.length <= SUGGESTED_QUOTE_MAX_CHARS &&
-    quoteCarriesContent(window, critical)
+    quoteCarriesContent(window)
     ? window
     : "";
 }
@@ -903,10 +873,8 @@ function quoteableFragment(
  */
 export function stitchedQuoteFragments(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): StitchedFragment[] {
-  const critical = isCriticalPath(policy, requirement.sourceFile);
   const lines = fileContentLines(requirement, context);
   let best: { fragments: StitchedFragment[]; shortest: number } | undefined;
   for (const { head, tail, shortest } of whitespaceSplits(requirement.quote)) {
@@ -921,8 +889,8 @@ export function stitchedQuoteFragments(
       continue;
     }
     const [headLine, tailLine] = pair;
-    const headCandidate = quoteableFragment(headLine.text, head, critical);
-    const tailCandidate = quoteableFragment(tailLine.text, tail, critical);
+    const headCandidate = quoteableFragment(headLine.text, head);
+    const tailCandidate = quoteableFragment(tailLine.text, tail);
     if (!(headCandidate && tailCandidate)) {
       continue;
     }
@@ -950,10 +918,9 @@ export function stitchedQuoteFragments(
  */
 export function stitchedQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): string {
-  const fragments = stitchedQuoteFragments(requirement, context, policy);
+  const fragments = stitchedQuoteFragments(requirement, context);
   const [head, tail] = fragments;
   if (!(head && tail)) {
     return "";
@@ -1191,10 +1158,9 @@ function lineAmputation(
 export function amputatedQuote(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans = amputationScans()
 ): AmputatedQuote | undefined {
-  return quoteCopyScan(requirement, context, policy, scans)?.amputation;
+  return quoteCopyScan(requirement, context, scans)?.amputation;
 }
 /**
  * L'endroit où la copie refusée s'écarte de la ligne réelle dont elle est
@@ -1212,10 +1178,9 @@ export function amputatedQuote(
 export function quoteDivergence(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans = amputationScans()
 ): QuoteDivergence | undefined {
-  return quoteCopyScan(requirement, context, policy, scans)?.divergence;
+  return quoteCopyScan(requirement, context, scans)?.divergence;
 }
 /**
  * Le balayage partagé, payé une fois par citation examinée : ses deux verdicts
@@ -1226,11 +1191,9 @@ export function quoteDivergence(
 function quoteCopyScan(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans
 ): QuoteCopyScan | undefined {
-  const critical = isCriticalPath(policy, requirement.sourceFile);
-  if (!quoteCarriesContent(requirement.quote, critical)) {
+  if (!quoteCarriesContent(requirement.quote)) {
     return;
   }
   const key = amputationScanKey(requirement);
@@ -1241,7 +1204,7 @@ function quoteCopyScan(
     return;
   }
   scans.remaining -= 1;
-  const verdict = scanQuoteCopy(requirement, context, policy, critical);
+  const verdict = scanQuoteCopy(requirement, context);
   scans.found.set(key, verdict);
   return verdict;
 }
@@ -1255,30 +1218,22 @@ function quoteCopyScan(
  */
 function scanQuoteCopy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  policy: Policy,
-  critical: boolean
+  context: PrContext
 ): QuoteCopyScan | undefined {
-  if (stitchedQuoteFragments(requirement, context, policy).length > 0) {
+  if (stitchedQuoteFragments(requirement, context).length > 0) {
     return;
   }
   const lines = fileContentLines(requirement, context);
   const copy = requirement.quote;
   const copyWords = lineWords(copy);
-  const match = scanAmputation(lines, amputationProbe(copy), critical);
+  const match = scanAmputation(lines, amputationProbe(copy));
   const words = match ? lineWords(match.line.text) : [];
   const run = match ? longestWordRun(copyWords, words) : undefined;
   const confirmed =
     match && amputationConfirmed(match.quote, run, words) ? match : undefined;
   const divergence = confirmed
-    ? lineDivergence(
-        copy,
-        copyWords,
-        confirmed.line.text,
-        confirmed.line.line,
-        critical
-      )
-    : scanDivergence(lines, copy, copyWords, critical);
+    ? lineDivergence(copy, copyWords, confirmed.line.text, confirmed.line.line)
+    : scanDivergence(lines, copy, copyWords);
   return confirmed || divergence
     ? { amputation: confirmed?.quote, divergence }
     : undefined;
@@ -1291,8 +1246,7 @@ interface AmputationMatch {
 /** Le balayage d'amputation, payé une fois par citation examinée. */
 function scanAmputation(
   lines: PostChangeLine[],
-  probe: AmputationProbe,
-  critical: boolean
+  probe: AmputationProbe
 ): AmputationMatch | undefined {
   let best: AmputationMatch | undefined;
   let longest = 0;
@@ -1305,11 +1259,7 @@ function scanAmputation(
     if (best && longest >= score) {
       continue;
     }
-    const candidate = quoteableFragment(
-      item.text,
-      amputation.fragment,
-      critical
-    );
+    const candidate = quoteableFragment(item.text, amputation.fragment);
     if (candidate === "") {
       continue;
     }
@@ -1342,10 +1292,9 @@ function scanAmputation(
 export function amputatedQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans = amputationScans()
 ): string {
-  const scan = quoteCopyScan(requirement, context, policy, scans);
+  const scan = quoteCopyScan(requirement, context, scans);
   const amputated = scan?.amputation;
   if (!amputated) {
     return "";
@@ -1608,8 +1557,7 @@ function lineDivergence(
   copy: string,
   copyWords: LineWord[],
   text: string,
-  line: number,
-  critical: boolean
+  line: number
 ): QuoteDivergence | undefined {
   if (quoteAppears(text, copy)) {
     return;
@@ -1644,8 +1592,7 @@ function lineDivergence(
     return;
   }
   const candidate =
-    quoteableFragment(text, first.real, critical) ||
-    quoteableFragment(text, closest, critical);
+    quoteableFragment(text, first.real) || quoteableFragment(text, closest);
   if (candidate === "") {
     return;
   }
@@ -1668,13 +1615,12 @@ function lineDivergence(
 function scanDivergence(
   lines: PostChangeLine[],
   copy: string,
-  copyWords: LineWord[],
-  critical: boolean
+  copyWords: LineWord[]
 ): QuoteDivergence | undefined {
   let best: QuoteDivergence | undefined;
   let longest = 0;
   for (const { line, text } of lines) {
-    const divergence = lineDivergence(copy, copyWords, text, line, critical);
+    const divergence = lineDivergence(copy, copyWords, text, line);
     if (!divergence) {
       continue;
     }
@@ -1730,10 +1676,9 @@ function divergenceFault(divergence: QuoteDivergence): string {
 export function divergentQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans = amputationScans()
 ): string {
-  const divergence = quoteDivergence(requirement, context, policy, scans);
+  const divergence = quoteDivergence(requirement, context, scans);
   if (!divergence) {
     return "";
   }
@@ -1767,10 +1712,9 @@ export function divergentQuoteRemedy(
 export function absentRequirementRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
-  policy: Policy,
   scans: AmputationScans = amputationScans()
 ): string {
-  const found = witnessFiles(requirement.quote, context, policy);
+  const found = witnessFiles(requirement.quote, context);
   if (found.length > 0) {
     return witnessHint(found, context).trim();
   }
@@ -1778,10 +1722,10 @@ export function absentRequirementRemedy(
     return "";
   }
   return (
-    stitchedQuoteRemedy(requirement, context, policy).trim() ||
-    amputatedQuoteRemedy(requirement, context, policy, scans).trim() ||
-    divergentQuoteRemedy(requirement, context, policy, scans).trim() ||
-    quoteSuggestion(requirement, context, policy).trim()
+    stitchedQuoteRemedy(requirement, context).trim() ||
+    amputatedQuoteRemedy(requirement, context, scans).trim() ||
+    divergentQuoteRemedy(requirement, context, scans).trim() ||
+    quoteSuggestion(requirement, context).trim()
   );
 }
 
@@ -1794,12 +1738,11 @@ export function absentRequirementRemedy(
  */
 export function ungroundedRequirements(
   plan: Plan,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): { rank: number; requirement: Requirement; scenarioId: string }[] {
   return plan.scenarios.flatMap((scenario) =>
     scenario.requirements.flatMap((requirement, index) =>
-      requirementHasWitness(requirement, context, policy)
+      requirementHasWitness(requirement, context)
         ? []
         : [{ rank: index + 1, requirement, scenarioId: scenario.id }]
     )
@@ -1843,7 +1786,7 @@ export function ungroundedPlanRefusals(
   policy: Policy,
   scans: AmputationScans = amputationScans()
 ): string[] {
-  return ungroundedRequirements(plan, context, policy).map(
+  return ungroundedRequirements(plan, context).map(
     ({ rank, requirement, scenarioId }) => {
       const error = ungroundedRequirement(
         scenarioId,
@@ -1856,7 +1799,7 @@ export function ungroundedPlanRefusals(
       // La citation existe ailleurs : le remède est l'attribution à l'autre
       // fichier, déjà porté par le conseil de l'exigence, et proposer aussi une
       // ligne de ce fichier-ci serait du bruit.
-      const found = witnessFiles(requirement.quote, context, policy);
+      const found = witnessFiles(requirement.quote, context);
       // Le budget épuisé écarte aussi les deux autres remèdes détaillés : ils
       // balaient le fichier cité pour la même citation, et le refus générique
       // suffit à la nommer sans travailler plus loin.
@@ -1867,19 +1810,19 @@ export function ungroundedPlanRefusals(
       // l'amputation d'aucune ligne : la suggestion de ligne les répéterait mot
       // pour mot, et elle ne doit jamais masquer ce qui diffère réellement.
       const amputated = detailed
-        ? amputatedQuoteRemedy(requirement, context, policy, scans).trim()
+        ? amputatedQuoteRemedy(requirement, context, scans).trim()
         : "";
       const divergent =
         detailed && amputated === ""
-          ? divergentQuoteRemedy(requirement, context, policy, scans).trim()
+          ? divergentQuoteRemedy(requirement, context, scans).trim()
           : "";
       const stitched =
         detailed && amputated === "" && divergent === ""
-          ? stitchedQuoteRemedy(requirement, context, policy).trim()
+          ? stitchedQuoteRemedy(requirement, context).trim()
           : "";
       const suggestion =
         detailed && amputated === "" && divergent === "" && stitched === ""
-          ? quoteSuggestion(requirement, context, policy)
+          ? quoteSuggestion(requirement, context)
           : "";
       const remedy = stitched
         ? `${stitched} ${error.hint}`
@@ -1902,11 +1845,10 @@ export function ungroundedPlanRefusals(
 function coverWitnessedSourceFiles(
   covered: Set<string>,
   scenario: Scenario,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): void {
   for (const requirement of scenario.requirements) {
-    if (requirementHasWitness(requirement, context, policy)) {
+    if (requirementHasWitness(requirement, context)) {
       covered.add(requirement.sourceFile);
     }
   }
@@ -1938,7 +1880,7 @@ export function unwitnessedRequirement(
   if (!inDiff) {
     hint = `This PR does not change ${file}, so it cannot be listed in skipped: drop it from sourceFiles and quote a changed file instead.`;
   } else if (weak) {
-    hint = `A requirement already cites ${file}, but its exact quote carries no letter or digit to witness this critical file: quote a substantial fragment of ${file}${criticalSkipRefused(policy, file) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`;
+    hint = `A requirement already cites ${file}, but its exact quote carries no letter or digit to witness this file: quote a substantial fragment of ${file}${criticalSkipRefused(policy, file) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`;
   } else if (criticalSkipRefused(policy, file)) {
     hint = `Add a requirement whose quote exists verbatim in ${file}; this critical file cannot be dropped from sourceFiles without an approved skip in .canary/qa.json on the trusted base branch.`;
   } else {
@@ -1954,19 +1896,17 @@ export function unwitnessedRequirement(
 /**
  * Vrai si le scénario déclare `file` sans le témoigner alors qu'une de ses
  * exigences vise ce fichier et y porte une citation exacte, trop pauvre pour
- * témoigner sur ce chemin critique : le fichier reste sans témoin, mais le
- * remède porte sur la substance de la citation, pas sur son existence.
+ * témoigner : le fichier reste sans témoin, mais le remède porte sur la
+ * substance de la citation, pas sur son existence.
  */
 function weakWitnessForFile(
   scenario: Scenario,
   file: string,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): boolean {
   return scenario.requirements.some(
     (requirement) =>
-      requirement.sourceFile === file &&
-      hasWeakWitness(requirement, context, policy)
+      requirement.sourceFile === file && hasWeakWitness(requirement, context)
   );
 }
 
@@ -1977,19 +1917,18 @@ function weakWitnessForFile(
  */
 export function unwitnessedSources(
   plan: Plan,
-  context: PrContext,
-  policy: Policy
+  context: PrContext
 ): { file: string; scenarioId: string; weak: boolean }[] {
   const covered = new Set<string>();
   const entries: { file: string; scenarioId: string; weak: boolean }[] = [];
   for (const scenario of plan.scenarios) {
-    coverWitnessedSourceFiles(covered, scenario, context, policy);
+    coverWitnessedSourceFiles(covered, scenario, context);
     for (const file of scenario.sourceFiles) {
       if (!covered.has(file)) {
         entries.push({
           file,
           scenarioId: scenario.id,
-          weak: weakWitnessForFile(scenario, file, context, policy),
+          weak: weakWitnessForFile(scenario, file, context),
         });
       }
     }
@@ -2008,18 +1947,16 @@ export function unwitnessedPlanRefusals(
   policy: Policy
 ): string[] {
   const changed = new Set(context.files.map((file) => file.filename));
-  return unwitnessedSources(plan, context, policy).map(
-    ({ file, scenarioId, weak }) => {
-      const error = unwitnessedRequirement(
-        scenarioId,
-        file,
-        policy,
-        changed.has(file),
-        weak
-      );
-      return `${error.message}. ${error.hint}`;
-    }
-  );
+  return unwitnessedSources(plan, context).map(({ file, scenarioId, weak }) => {
+    const error = unwitnessedRequirement(
+      scenarioId,
+      file,
+      policy,
+      changed.has(file),
+      weak
+    );
+    return `${error.message}. ${error.hint}`;
+  });
 }
 
 /**
@@ -2160,7 +2097,7 @@ export function validateCoverage(
       throw budget;
     }
     for (const [index, requirement] of scenario.requirements.entries()) {
-      if (!requirementHasWitness(requirement, context, policy)) {
+      if (!requirementHasWitness(requirement, context)) {
         throw ungroundedRequirement(
           scenario.id,
           requirement,
@@ -2170,7 +2107,7 @@ export function validateCoverage(
         );
       }
     }
-    coverWitnessedSourceFiles(covered, scenario, context, policy);
+    coverWitnessedSourceFiles(covered, scenario, context);
     const unwitnessed = scenario.sourceFiles.find((file) => !covered.has(file));
     if (unwitnessed !== undefined) {
       throw unwitnessedRequirement(

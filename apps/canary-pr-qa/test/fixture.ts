@@ -627,3 +627,358 @@ export async function fixture(
       }),
   };
 }
+
+/**
+ * Copie de citation refusée par `REQUIREMENT_UNGROUNDED`, mesurée sur un run
+ * réel du fork : le rapport complet est conservé dans `qa-data/<runId>`, et
+ * `quote` comme `realLine` sont les octets d'origine — la ligne vient du fichier
+ * au SHA publié par le run, donc le cas se rejoue sans réseau. Le corpus est la
+ * mesure du lot O (PR pharmania/arpilabe-pilotage#17, SHA 814b6713) et des lots
+ * G à K, dont les refus remontent au 14 octobre 2026.
+ *
+ * Chaque entrée est vérifiée contre l'artefact du run — le scénario, le rang,
+ * le fichier déclaré et la citation du plan, octet pour octet — et la ligne
+ * réelle est confirmée par les refus eux-mêmes quand le gate la nomme, ou par
+ * les citations acceptées d'autres runs quand elle y apparaît mot pour mot.
+ */
+export interface MeasuredCopyRefusal {
+  /**
+   * Répartition mesurée de la cause : `a-floor` une copie EXACTE refusée par
+   * l'ancien plancher de contenu, qui comptait les blancs — le proxy est retiré
+   * du contrat, donc ces copies sont acceptées depuis ; `b-altered` et
+   * `b-invented` une copie altérée ou inventée par le planificateur ;
+   * `c-misattributed` un texte exact attribué à un fichier qui ne le porte pas ;
+   * `d-stitched` deux fragments recousus.
+   */
+  cause:
+    | "a-floor"
+    | "b-altered"
+    | "b-invented"
+    | "c-misattributed"
+    | "d-stitched";
+  /** Fichier que le plan déclarait pour cette citation. */
+  declaredFile: string;
+  /** Ce que la copie change par rapport à `realLine`, mesuré caractère à caractère. */
+  fault: string;
+  /** Fichier qui porte réellement `realLine`. */
+  lineFile: string;
+  /** Numéro de `realLine` dans `lineFile` ; 0 quand aucune ligne ne la porte. */
+  lineNumber: number;
+  measuredAt: string;
+  /**
+   * Verdict du contrat actuel sur cette copie mesurée : `accepted` quand elle
+   * est exacte et porte une lettre ou un chiffre visibles — les quatre copies
+   * `a-floor` —, `refused` quand elle est altérée, inventée, recousue ou
+   * attribuée à un fichier qui ne la porte pas.
+   */
+  outcome: "accepted" | "refused";
+  /** La citation telle que le plan la portait, octet pour octet. */
+  quote: string;
+  /** Rang de l'exigence dans le scénario, celui que le refus nomme. */
+  rank: number;
+  /** La ligne réelle, octet pour octet. Vide quand le texte cité n'existe nulle part. */
+  realLine: string;
+  /**
+   * Ce que le refus MESURÉ disait de la ligne — trace du run d'origine, puisque
+   * une copie `accepted` n'est plus refusée : `names-line` la ligne réelle et son
+   * numéro, `names-other-file` le fichier qui porte la citation exacte,
+   * `generic` aucun des deux.
+   */
+  remedy: "names-line" | "names-other-file" | "generic";
+  /** Run d'origine du refus — le rapport et son diagnostic y sont conservés. */
+  runId: string;
+  scenarioId: string;
+}
+export const MEASURED_COPY_REFUSALS: MeasuredCopyRefusal[] = [
+  {
+    runId: "9ee36233-f353-41ff-a2ea-ca175b150a5b",
+    measuredAt: "2026-10-14T09:46:00.114Z",
+    scenarioId: "cash-cents-no-float-drift",
+    rank: 2,
+    declaredFile: "packages/domain/src/__tests__/cash.spec.ts",
+    lineFile: "packages/domain/src/__tests__/cash.spec.ts",
+    lineNumber: 0,
+    realLine: "",
+    quote: "expect(total(result)).toBe(170);",
+    cause: "b-invented",
+    outcome: "refused",
+    remedy: "generic",
+    fault:
+      "aucune ligne du fichier ne porte ce texte : la valeur attendue est inventée",
+  },
+  {
+    runId: "9ee36233-f353-41ff-a2ea-ca175b150a5b",
+    measuredAt: "2026-10-14T09:46:00.114Z",
+    scenarioId: "cash-cents-no-float-drift",
+    rank: 4,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 389,
+    realLine:
+      '        <div className="relative overflow-hidden rounded-2xl bg-[#08086f] p-5 text-white"><div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-[#912cff]/45"/><p className="relative text-sm text-white/60">Total compté</p><p className="relative mt-2 text-2xl font-bold">{counted.ok?formatAmountFr(centsToEuros(counted.totalCents)):"—"}</p><div className="relative my-4 border-t border-white/10"/><p className="relative text-sm text-white/60">Écart, compté − attendu</p><p className="relative mt-2 text-2xl font-bold">{variance===null?"—":formatAmountFr(centsToEuros(variance))}</p></div>',
+    quote: "formatAmountFr(centsToEuros(counted.totalCents))",
+    cause: "a-floor",
+    outcome: "accepted",
+    remedy: "generic",
+    fault:
+      "la copie est exacte mais d'un seul jeton : sous le plancher de contenu, donc sans témoin",
+  },
+  {
+    runId: "9ee36233-f353-41ff-a2ea-ca175b150a5b",
+    measuredAt: "2026-10-14T09:46:00.114Z",
+    scenarioId: "cash-cents-no-float-drift",
+    rank: 5,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `{counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` et s'arrête au milieu de la ligne`,
+  },
+  {
+    runId: "36926219-c46c-4431-9f45-8419a919b758",
+    measuredAt: "2026-10-14T12:14:15.334Z",
+    scenarioId: "cash-balance-close-lock",
+    rank: 3,
+    declaredFile: "packages/domain/src/cash.ts",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\``,
+    cause: "c-misattributed",
+    outcome: "refused",
+    remedy: "names-other-file",
+    fault:
+      "citation exacte de la ligne, attribuée à un fichier qui ne la porte pas",
+  },
+  {
+    runId: "94e86f2b-9fc5-4916-884a-70576bdf131f",
+    measuredAt: "2026-10-15T15:54:31.372Z",
+    scenarioId: "s3-quantite-decimale-refusee",
+    rank: 4,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 372,
+    realLine: `          <Input value={session.quantities[String(d.cents)]??""} onChange={e=>setQuantity(d.cents,e.target.value)} disabled={closed} inputMode="numeric" aria-label={\`Quantité · \${d.label}\`} aria-invalid={invalid||undefined} className="h-10 rounded-lg bg-[#fbfcff] text-right font-semibold"/>`,
+    quote: "aria-invalid={invalid||undefined}",
+    cause: "a-floor",
+    outcome: "accepted",
+    remedy: "generic",
+    fault:
+      "la copie est exacte mais d'un seul jeton : sous le plancher de contenu, donc sans témoin",
+  },
+  {
+    runId: "94e86f2b-9fc5-4916-884a-70576bdf131f",
+    measuredAt: "2026-10-15T15:54:31.372Z",
+    scenarioId: "s3-quantite-decimale-refusee",
+    rank: 5,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 386,
+    realLine:
+      '        <div className="mt-6 flex flex-wrap items-center justify-between gap-3"><span role="status" className="text-sm font-semibold text-[#16865b]">{message}</span><Button onClick={close} disabled={closed||!counted.ok} className="h-11 rounded-xl bg-[#08086f] px-5 hover:bg-[#24249a]">Clôturer la session</Button></div>',
+    quote: "disabled={closed||!counted.ok}",
+    cause: "a-floor",
+    outcome: "accepted",
+    remedy: "generic",
+    fault:
+      "la copie est exacte mais d'un seul jeton : sous le plancher de contenu, donc sans témoin",
+  },
+  {
+    runId: "71cb3369-cd3b-4fc0-a18d-7c5e1579f0f0",
+    measuredAt: "2026-10-15T16:06:16.122Z",
+    scenarioId: "caisse-comptage-juste-cloture",
+    rank: 3,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 356,
+    realLine:
+      '  return <div className="mx-auto max-w-6xl space-y-5" data-cash-state={closed?"cloture":"ouvert"}>',
+    quote: 'data-cash-state={closed?"cloture":"ouvert"}',
+    cause: "a-floor",
+    outcome: "accepted",
+    remedy: "generic",
+    fault:
+      "la copie est exacte mais d'un seul jeton : sous le plancher de contenu, donc sans témoin",
+  },
+  {
+    runId: "71cb3369-cd3b-4fc0-a18d-7c5e1579f0f0",
+    measuredAt: "2026-10-15T16:06:16.122Z",
+    scenarioId: "caisse-comptage-juste-cloture",
+    rank: 8,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` après le premier \`?\\"s\\":\\"\\"\``,
+  },
+  {
+    runId: "c7d46e91-7a30-4f79-aae9-e6fd88a63228",
+    measuredAt: "2026-10-15T22:20:42.728Z",
+    scenarioId: "caisse-quantite-decimale-refusee",
+    rank: 1,
+    declaredFile: "packages/domain/src/__tests__/cash.spec.ts",
+    lineFile: "packages/domain/src/__tests__/cash.spec.ts",
+    lineNumber: 56,
+    realLine: '    expect(countCash({ "200": "abc" }).ok).toBe(false);',
+    quote: 'expect(countCash({ "500": "3,5" }).ok).toBe(false);',
+    cause: "b-invented",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la ligne attendue n'existe pas : la plus proche porte \`\\"200\\"\`: \`\\"abc\\"\` ; le refus propose une autre assertion`,
+  },
+  {
+    runId: "973cf40f-d087-480a-a5bc-1bf9b77aa336",
+    measuredAt: "2026-10-15T22:37:43.239Z",
+    scenarioId: "cash-decimal-quantity-refused",
+    rank: 2,
+    declaredFile: "packages/domain/src/__tests__/cash.spec.ts",
+    lineFile: "packages/domain/src/__tests__/cash.spec.ts",
+    lineNumber: 56,
+    realLine: '    expect(countCash({ "200": "abc" }).ok).toBe(false);',
+    quote: 'expect(countCash({ "500": "3,5" }).ok).toBe(false);',
+    cause: "b-invented",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la ligne attendue n'existe pas : la plus proche porte \`\\"200\\"\`: \`\\"abc\\"\` ; le refus propose une autre assertion`,
+  },
+  {
+    runId: "925abf20-34f6-4be8-88f2-56f9b544ed50",
+    measuredAt: "2026-10-16T01:26:05.921Z",
+    scenarioId: "caisse-montant-attendu-illisible",
+    rank: 1,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 378,
+    realLine:
+      '            <Input value={session.expected} onChange={e=>onChange({expected:e.target.value})} disabled={closed} inputMode="decimal" aria-label="Montant d’espèces attendu" aria-invalid={expected.ok?undefined:true} className="mt-2 h-11 rounded-xl bg-[#fbfcff] font-semibold"/>',
+    quote: 'inputMode="decimal" aria-invalid={expected.ok?undefined:true}',
+    cause: "d-stitched",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie recoud deux fragments de la même ligne en sautant \`aria-label=\\"Montant d’espèces attendu\\"\``,
+  },
+  {
+    runId: "2c0ce681-a024-4443-8f86-dff0830cded9",
+    measuredAt: "2026-10-16T01:59:09.407Z",
+    scenarioId: "cash-count-balanced-closure",
+    rank: 4,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 354,
+    realLine: `  const close=()=>{if(!counted.ok){setMessage("Quantité illisible : corrigez la ligne signalée avant de clôturer.");return}if(expectedCents===null){setMessage("Montant d’espèces attendu manquant ou illisible.");return}if(closure?.blocking){setMessage(\`Écart de \${formatAmountFr(centsToEuros(closure.varianceCents))} : une justification écrite est obligatoire avant clôture.\`);return}onChange({closedAt:new Date().toISOString()});setMessage("Session clôturée : le comptage est verrouillé.")};`,
+    quote:
+      'onChange({closedAt:new Date().toISOString()});setMessage("Session clôturée : le comptage est verrouillé.");',
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie écrit \`\\");\` là où la ligne écrit \`\\")};\``,
+  },
+  {
+    runId: "2f0511fd-3085-434d-a67b-457cf9e8845c",
+    measuredAt: "2026-10-16T08:14:39.228Z",
+    scenarioId: "caisse-comptage-juste-et-cloture",
+    rank: 5,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` ; elle laisse aussi de côté le début et la fin de la ligne`,
+  },
+  {
+    runId: "f328177b-efd8-4b75-b3cb-14810d32692a",
+    measuredAt: "2026-10-16T11:39:12.184Z",
+    scenarioId: "pieces-unites-sans-derive",
+    rank: 3,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` ; elle commence à \`unité\`, donc son début est manquant`,
+  },
+  {
+    runId: "0f8d8cd5-483a-4dc4-a133-edbe8445f509",
+    measuredAt: "2026-10-16T20:52:45.427Z",
+    scenarioId: "cash-exact-count-close-reopen",
+    rank: 7,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` après le premier \`?\\"s\\":\\"\\"\``,
+  },
+  {
+    runId: "7eef87d4-5030-464f-919b-e9667312aa8e",
+    measuredAt: "2026-10-16T21:04:00.597Z",
+    scenarioId: "caisse-comptage-par-pharmacie",
+    rank: 1,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 76,
+    realLine:
+      "  const updateCash=(patch:Partial<CashSession>)=>setCashByPharmacy(sessions=>({...sessions,[pharmacyCode]:{...(sessions[pharmacyCode]??emptyCashSession),...patch}}));",
+    quote:
+      "const updateCash=(patch:Partial<CashSession>)=>setCashByPharmacy(sessions=>({...sessions,[pharmacyCode]:{...(sessions[pharmacyCode]??emptyCashSession),...patch}});",
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "generic",
+    fault: "la copie perd une `)` de la ligne ; le refus ne nomme aucune ligne",
+  },
+  {
+    runId: "2f899cb1-cd1c-42e5-a49d-b47a7e65e1d0",
+    measuredAt: "2026-10-17T22:11:54.110Z",
+    scenarioId: "caisse-comptage-juste",
+    rank: 3,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` après le premier \`?\\"s\\":\\"\\"\``,
+  },
+  {
+    runId: "049d7efb-a764-4d1c-b817-c06653f39c8d",
+    measuredAt: "2026-10-17T22:19:50.072Z",
+    scenarioId: "caisse-comptage-juste-et-cloture",
+    rank: 3,
+    declaredFile: "apps/web/app/page.tsx",
+    lineFile: "apps/web/app/page.tsx",
+    lineNumber: 368,
+    realLine: `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`,
+    quote: `{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":"":""}\`:"—"}`,
+    cause: "b-altered",
+    outcome: "refused",
+    remedy: "names-line",
+    fault: `la copie insère \`:\\"\\"\` dans les DEUX ternaires de la ligne`,
+  },
+];
+/**
+ * Patch minimal qui place `text` à la ligne `line` du nouveau fichier : c'est le
+ * matériel hors ligne de la ligne réelle mesurée, pour rejouer une copie refusée
+ * et vérifier que le gate accepte la ligne qu'elle a ratée.
+ */
+export function lineAt(file: string, line: number, text: string) {
+  return { filename: file, patch: `@@ -${line},1 +${line},1 @@\n+${text}` };
+}

@@ -2994,21 +2994,17 @@ describe("runner false-green regressions", () => {
     const contract = structuredClone(plan);
     contract.scenarios[0]!.sourceFiles = ["src/form.ts", "src/legacy.tsx"];
     contract.scenarios[0]!.requirements[0]!.sourceFile = "src/legacy.tsx";
-    const repairs = repairRequirementAttribution(
-      contract,
-      {
-        ...context,
-        files: [
-          ...context.files,
-          {
-            filename: "src/legacy.tsx",
-            patch: "- <p>Work in progress</p>",
-            status: "modified",
-          },
-        ],
-      },
-      policyFor()
-    );
+    const repairs = repairRequirementAttribution(contract, {
+      ...context,
+      files: [
+        ...context.files,
+        {
+          filename: "src/legacy.tsx",
+          patch: "- <p>Work in progress</p>",
+          status: "modified",
+        },
+      ],
+    });
     expect(repairs).toEqual([
       {
         from: "src/legacy.tsx",
