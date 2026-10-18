@@ -3463,6 +3463,32 @@ it("teaches the character-by-character copy of an expression to the planner", ()
   expect(prompt).toContain(RETYPED_TEMPLATE_QUOTE);
   expect(prompt).toContain(RETYPED_ARROW_QUOTE);
 });
+it("asks the planner to derive a number from the material instead of assuming it", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Le défaut mesuré du run 5c5cfdb6 : un attendu de 500,00 € écrit d'avance
+  // alors que le scénario compte 3 billets de 500,00 € contre 1 240,00 €
+  // attendus, soit 260,00 €. La consigne exige les opérandes et leur résultat
+  // dans la description de l'assertion, et le nombre calculé dans `expected`.
+  expect(prompt).toMatch(
+    /must be the one your own scenario produces, never the one you assumed/i
+  );
+  expect(prompt).toMatch(
+    /write the operands and their result into the assertion description/i
+  );
+  expect(prompt).toMatch(/expected amount, counted total, variance/i);
+  // Le cas réel est enseigné avec ses deux montants : le montant supposé du
+  // plan et le montant que son propre scénario produit.
+  expect(prompt).toContain(
+    "Écart de 500,00 € : une justification écrite est obligatoire avant clôture."
+  );
+  expect(prompt).toMatch(
+    /3 billets de 500,00 € against an expected amount of 1 240,00 €/i
+  );
+  expect(prompt).toMatch(/a 260,00 € variance/i);
+  // La règle ne pousse jamais à affaiblir l'assertion quand le matériel ne
+  // permet pas de calculer : elle interdit d'inventer un nombre.
+  expect(prompt).toMatch(/do not invent one and do not weaken the assertion/i);
+});
 
 /**
  * Le corpus mesuré des refus `REQUIREMENT_UNGROUNDED` rejoué contre la ligne
