@@ -164,12 +164,22 @@ async function performStep(
       repo
     );
   }
+  // Un clic d'établissement dont la cible est absente n'a rien fait : l'état
+  // qu'il visait était déjà en place. L'étape reste dans le contrat joué, elle
+  // est marquée sautée pour que le rapport dise ce qui s'est réellement passé.
+  const skipped =
+    action.type === "click" &&
+    action.ifPresent === true &&
+    observation.actual === false;
   result.steps.push({
     index,
     stepId: step.id,
-    reason: step.description,
+    reason: skipped
+      ? `${step.description} — skipped: the target is absent, so the state it establishes is already in place`
+      : step.description,
     action,
     ok: true,
+    ...(skipped ? { skipped: true } : {}),
     observation: JSON.stringify(observation),
   });
 }
@@ -409,12 +419,20 @@ async function driveScenario(
       if (step.action.type !== "observe") {
         result.contract?.completedSteps.push(step.id);
       }
+      const played = result.steps.at(-1);
+      let stepOutcome = "ok";
+      if (result.outcome === "failed") {
+        stepOutcome = "failed";
+      }
+      if (played?.skipped === true) {
+        stepOutcome = "skipped";
+      }
       await record({
         phase: "execution",
         scenarioId: result.scenario.id,
         step: index,
         action: step.action.type,
-        outcome: result.outcome === "failed" ? "failed" : "ok",
+        outcome: stepOutcome,
         durationMs: Date.now() - started,
       });
     } catch (error) {

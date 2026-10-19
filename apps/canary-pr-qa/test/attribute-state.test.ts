@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary, MODEL_SNAPSHOT_CHARS } from "../src/canary.js";
 import { Model } from "../src/model.js";
 import { attributeValueRefusals } from "../src/plan-evidence.js";
+import { reportMarkdown } from "../src/report.js";
 import { runQa } from "../src/runner.js";
-import { type Plan, PlanSchema } from "../src/schema.js";
+import { ActionSchema, type Plan, PlanSchema } from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
@@ -917,4 +918,409 @@ describe("état de la caisse hérité d'un run antérieur", () => {
       "TRANSITION_NOT_OBSERVED"
     );
   });
+});
+
+/**
+ * Page où le contrôle d'établissement n'existe QUE dans l'état qui le demande :
+ * « Réouvrir le comptage » pendant que la caisse est fermée, « Clôturer la
+ * session » pendant qu'elle est ouverte. C'est la forme mesurée dans les
+ * artefacts du lot R et la seule qui rende l'établissement nécessaire : sur une
+ * caisse déjà ouverte, le bouton de réouverture est absent et un `click` nu
+ * bloquerait le scénario en TARGET_NOT_FOUND.
+ */
+function statefulPage(initial: CashState) {
+  let state: CashState = initial;
+  let view: "pilotage" | "cash" = "pilotage";
+  const absent = (label: string) =>
+    new Error(
+      `Timeout 30000ms exceeded. Call log: - waiting for locator('role=button[name="${label}"]')`
+    );
+  const snapshot = () => {
+    const stateControl =
+      state === "ouvert"
+        ? '\n    - button "Clôturer la session" [ref=e6]'
+        : '\n    - button "Réouvrir le comptage" [ref=e7]';
+    const controls =
+      view === "pilotage"
+        ? '    - button "Pilotage" [ref=e3]\n    - button "Caisse et Coffre" [ref=e4]'
+        : `    - button "Caisse et Coffre" [ref=e4]${stateControl}`;
+    const text =
+      state === "ouvert"
+        ? "Session en cours"
+        : "Session clôturée : le comptage est verrouillé.";
+    return `- main [ref=e1]:\n  - navigation [ref=e2]:\n${controls}\n  - heading "Caisse et Coffre" [ref=e5]\n  - status [ref=e8]: ${text}`;
+  };
+  const read = (script: string): unknown => {
+    for (const wanted of ["ouvert", "cloture"] as const) {
+      if (script.includes(`[data-cash-state="${wanted}"]`)) {
+        return view === "cash" && state === wanted;
+      }
+    }
+    if (script.includes("status")) {
+      return state === "ouvert"
+        ? "Session en cours"
+        : "Session clôturée : le comptage est verrouillé.";
+    }
+    return "Caisse et Coffre";
+  };
+  vi.spyOn(Canary.prototype, "start").mockResolvedValue("stateful-session");
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_id: string, label: string, raw: string) => {
+      const script = raw.replace(/\\/g, "");
+      // Un clic d'établissement attend la cible avant de cliquer ; sa cible
+      // absente est donc une étape sautée (`actual = false`), pas une erreur.
+      const establishing = script.includes('waitFor({ state: "visible"');
+      let actual: unknown =
+        label === "discover-preview" ? undefined : read(script);
+      if (script.includes("page.goto(")) {
+        view = "pilotage";
+      }
+      if (script.includes("Caisse et Coffre")) {
+        view = "cash";
+      }
+      if (view === "cash" && script.includes("Réouvrir le comptage")) {
+        if (state === "ouvert") {
+          if (!establishing) {
+            throw absent("Réouvrir le comptage");
+          }
+          actual = false;
+        } else {
+          state = "ouvert";
+          actual = establishing ? true : actual;
+        }
+      }
+      if (view === "cash" && script.includes("Clôturer la session")) {
+        if (state === "cloture") {
+          throw absent("Clôturer la session");
+        }
+        state = "cloture";
+      }
+      return {
+        url: "http://fixture/",
+        snapshot: snapshot().slice(0, MODEL_SNAPSHOT_CHARS),
+        evidence: label === "discover-preview" ? snapshot() : undefined,
+        actual,
+      };
+    }
+  );
+  vi.spyOn(Canary.prototype, "end").mockResolvedValue([
+    "video.webm",
+    "trace.zip",
+  ]);
+}
+
+/**
+ * Le plan du correctif : l'étape de réouverture ÉTABLIT l'état ouvert et porte
+ * `ifPresent`, l'assertion la suit avec `verification: state`, et la transition
+ * est réservée à la clôture, qui déplace réellement la valeur.
+ */
+function statefulPlan(): Plan {
+  return {
+    summary:
+      "La réouverture établit la session ouverte, la clôture la verrouille",
+    scenarios: [
+      {
+        id: "etablit-puis-cloture",
+        title:
+          "La réouverture établit la session ouverte, la clôture la verrouille",
+        kind: "happy_path",
+        rationale:
+          "La réouverture débloque la saisie, la clôture la reverrouille",
+        sourceFiles: ["src/form.ts"],
+        preconditions: [],
+        steps: [
+          {
+            id: "goto",
+            description: "ouvrir l'application",
+            action: { type: "goto", path: "/" },
+          },
+          {
+            id: "open-cash",
+            description: "ouvrir la vue Caisse et Coffre",
+            action: {
+              type: "click",
+              locator: {
+                by: "role",
+                value: "button",
+                name: "Caisse et Coffre",
+              },
+            },
+          },
+          {
+            id: "reopen",
+            description: "réouvrir le comptage pour établir la session ouverte",
+            action: {
+              type: "click",
+              locator: {
+                by: "role",
+                value: "button",
+                name: "Réouvrir le comptage",
+              },
+              ifPresent: true,
+            },
+          },
+          {
+            id: "assert-open",
+            description:
+              "la session est ouverte, établie par l'étape précédente",
+            action: { type: "assert", assertionId: "etabli-ouvert" },
+          },
+          {
+            id: "close",
+            description: "clôturer la session établie",
+            action: {
+              type: "click",
+              locator: {
+                by: "role",
+                value: "button",
+                name: "Clôturer la session",
+              },
+            },
+          },
+          {
+            id: "assert-closed",
+            description: "la vue passe à l'état clôturé",
+            action: { type: "assert", assertionId: "etabli-cloture" },
+          },
+        ],
+        requirements: witness,
+        assertions: [
+          {
+            id: "etabli-ouvert",
+            description: "La vue porte l\u2019état ouvert après la réouverture",
+            kind: "visible",
+            target: { by: "css", value: '[data-cash-state="ouvert"]' },
+            afterStep: "reopen",
+            verification: "state",
+          },
+          {
+            id: "etabli-cloture",
+            description: "La vue porte l\u2019état clôturé après la clôture",
+            kind: "visible",
+            target: { by: "css", value: '[data-cash-state="cloture"]' },
+            afterStep: "close",
+            verification: "transition",
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  };
+}
+
+describe("établissement d'état tolérant : click(ifPresent)", () => {
+  for (const state of ["cloture", "ouvert"] as const) {
+    it(`donne passed depuis une caisse ${{ cloture: "fermée", ouvert: "déjà ouverte" }[state]}`, async () => {
+      const f = await setup({ plans: [PlanSchema.parse(statefulPlan())] });
+      statefulPage(state);
+      const result = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        f.config
+      );
+      expect(result.outcome, result.scenarios[0]?.error ?? "").toBe("passed");
+      expect(result.scenarios[0]?.outcome).toBe("passed");
+      const reopen = result.scenarios[0]?.steps.find(
+        (step) => step.stepId === "reopen"
+      );
+      // Caisse fermée : le contrôle existe, l'étape l'a joué. Caisse ouverte :
+      // le contrôle est absent, l'étape est sautée et le rapport le dit.
+      expect(reopen?.skipped === true).toBe(state === "ouvert");
+      const assertions = result.scenarios[0]?.assertions ?? [];
+      expect(assertions.every((item) => item.passed)).toBe(true);
+    });
+  }
+
+  it("donne le MÊME verdict à deux exécutions consécutives, quel que soit ce que la première laisse", async () => {
+    // Le premier run laisse la caisse dans l'état où son scénario l'a mise : le
+    // second démarre donc de l'autre côté, et l'étape d'établissement y est
+    // jouée au lieu d'être sautée (ou l'inverse). Le verdict, lui, ne bouge pas
+    // — c'est exactement ce que l'état hérité faisait varier avant le correctif.
+    for (const state of ["cloture", "ouvert"] as const) {
+      const f = await setup({ plans: [PlanSchema.parse(statefulPlan())] });
+      statefulPage(state);
+      const first = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        f.config
+      );
+      const second = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        f.config
+      );
+      expect(
+        first.outcome,
+        `${state}: ${first.scenarios[0]?.error ?? ""}`
+      ).toBe("passed");
+      expect(
+        second.outcome,
+        `${state}: ${second.scenarios[0]?.error ?? ""}`
+      ).toBe("passed");
+      expect(second.scenarios[0]?.outcome).toBe(first.scenarios[0]?.outcome);
+    }
+  });
+
+  it("nomme l'étape sautée dans le rapport publié, sans la présenter comme jouée", async () => {
+    const f = await setup({ plans: [PlanSchema.parse(statefulPlan())] });
+    statefulPage("ouvert");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome, result.scenarios[0]?.error ?? "").toBe("passed");
+    const report = reportMarkdown(result);
+    expect(report).toContain(
+      "step `reopen` skipped — its target was absent, so the state it establishes was already in place"
+    );
+  });
+
+  it("n'attribue aucune transition à une étape sautée : les deux valeurs sont identiques", async () => {
+    // Une étape qui n'a pas eu lieu ne prouve aucun déplacement : sa baseline
+    // vaut la valeur observée, et `transition` échoue en TRANSITION_NOT_OBSERVED
+    // plutôt que de passer pour une preuve.
+    const plan = statefulPlan();
+    plan.scenarios[0]!.assertions[0]!.verification = "transition";
+    const f = await setup({ plans: [PlanSchema.parse(plan)] });
+    statefulPage("ouvert");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("failed");
+    expect(result.scenarios[0]?.diagnostic?.code).toBe(
+      "TRANSITION_NOT_OBSERVED"
+    );
+    expect(
+      result.scenarios[0]?.steps.find((s) => s.stepId === "reopen")?.skipped
+    ).toBe(true);
+  });
+
+  it("refuse ifPresent sur une action autre qu'un click", () => {
+    expect(() =>
+      ActionSchema.parse({
+        type: "fill",
+        locator: { by: "label", value: "Quantité · Billet de 500 €" },
+        value: "2",
+        ifPresent: true,
+      })
+    ).toThrow();
+    expect(() =>
+      ActionSchema.parse({
+        type: "select",
+        locator: { by: "label", value: "Devise" },
+        value: "EUR",
+        ifPresent: true,
+      })
+    ).toThrow();
+    expect(
+      ActionSchema.parse({
+        type: "click",
+        locator: { by: "role", value: "button", name: "Réouvrir le comptage" },
+        ifPresent: true,
+      })
+    ).toEqual({
+      type: "click",
+      locator: { by: "role", value: "button", name: "Réouvrir le comptage" },
+      ifPresent: true,
+    });
+  });
+});
+
+/**
+ * Le scénario `comptage-juste-cloture` du run 1b49d751, recopié de l'artefact,
+ * corrigé de la seule façon qui établit son état : le clic de réouverture porte
+ * `ifPresent`, l'assertion « ouvert » le suit en `state`, et les deux assertions
+ * du retour à l'ouvert sont dans la même forme. Les saisies, la clôture et les
+ * messages sont ceux du plan mesuré.
+ */
+function correctedScenarioOne(): Plan {
+  const base = assumedStatePlan();
+  const scenario = base.scenarios[0]!;
+  return {
+    ...base,
+    summary: "Le comptage juste clôture puis réouvre la session",
+    scenarios: [
+      {
+        ...scenario,
+        steps: scenario.steps.flatMap((step) =>
+          step.id === "open-cash"
+            ? [
+                step,
+                {
+                  id: "etablir-ouvert",
+                  description:
+                    "réouvrir le comptage pour établir la session ouverte",
+                  action: {
+                    type: "click" as const,
+                    locator: {
+                      by: "role" as const,
+                      value: "button",
+                      name: "Réouvrir le comptage",
+                    },
+                    ifPresent: true,
+                  },
+                },
+              ]
+            : [step]
+        ),
+        assertions: scenario.assertions.map((assertion) => {
+          const { expected: _expected, ...rest } =
+            assertion as typeof assertion & {
+              expected?: unknown;
+            };
+          if (assertion.id === "etat-cloture") {
+            // La clôture déplace réellement la valeur depuis l'état ouvert que
+            // la réouverture vient d'établir : elle garde sa transition, mais
+            // vise la valeur de l'attribut par présence au lieu de la lire.
+            return {
+              ...rest,
+              kind: "visible" as const,
+              target: {
+                by: "css" as const,
+                value: '[data-cash-state="cloture"]',
+              },
+              afterStep: "close",
+              verification: "transition" as const,
+            };
+          }
+          if (assertion.id === "message-cloture") {
+            return assertion;
+          }
+          return {
+            ...rest,
+            kind: "visible" as const,
+            target: { by: "css" as const, value: '[data-cash-state="ouvert"]' },
+            // L'assertion d'avant-saisie suit l'étape qui établit l'état ; celle
+            // du retour à l'ouvert suit la réouverture du plan mesuré.
+            afterStep:
+              assertion.id === "retour-ouvert" ? "reopen" : "etablir-ouvert",
+            verification: "state" as const,
+          };
+        }),
+      },
+    ],
+  };
+}
+
+describe("rejeu du scénario 1 du run 1b49d751, corrigé", () => {
+  for (const state of ["cloture", "ouvert"] as const) {
+    it(`passe depuis une caisse ${{ cloture: "fermée", ouvert: "déjà ouverte" }[state]}`, async () => {
+      const f = await setup({
+        plans: [PlanSchema.parse(correctedScenarioOne())],
+      });
+      statefulPage(state);
+      const result = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        f.config
+      );
+      expect(result.outcome, result.scenarios[0]?.error ?? "").toBe("passed");
+      expect(result.scenarios[0]?.outcome).toBe("passed");
+      // Aucune assertion du scénario mesuré n'est perdue : les quatre sont là,
+      // et celle de l'état ouvert vient après l'étape qui l'établit.
+      expect(result.scenarios[0]?.assertions).toHaveLength(4);
+      expect(
+        result.scenarios[0]?.steps.find(
+          (step) => step.stepId === "etablir-ouvert"
+        )?.skipped === true
+      ).toBe(state === "ouvert");
+    });
+  }
 });

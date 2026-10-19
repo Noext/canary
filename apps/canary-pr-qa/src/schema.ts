@@ -261,7 +261,21 @@ export const ActionSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("popup"), locator, assertionId: text }).strict(),
   z.object({ type: z.literal("goto"), path: text }).strict(),
-  z.object({ type: z.literal("click"), locator }).strict(),
+  z
+    .object({
+      type: z.literal("click"),
+      locator,
+      /**
+       * Clic d'ÉTABLISSEMENT d'un état : si la cible est absente, l'étape est
+       * sautée au lieu d'échouer, parce que cette absence prouve que l'état
+       * visé est déjà en place (le bouton « Réouvrir le comptage » n'existe que
+       * caisse fermée). Un clic métier n'utilise jamais cette option : là, une
+       * cible absente est un défaut et doit rester un échec. Les autres actions
+       * n'acceptent pas la clé, leurs objets étant `strict`.
+       */
+      ifPresent: z.boolean().optional(),
+    })
+    .strict(),
   z
     .object({ type: z.literal("fill"), locator, value: z.string().max(2000) })
     .strict(),
@@ -484,6 +498,12 @@ export interface StepResult {
   observation: string;
   ok: boolean;
   reason: string;
+  /**
+   * Clic `ifPresent` dont la cible était absente : l'étape n'a rien fait parce
+   * que l'état qu'elle établit était déjà là. Ce n'est ni une réussite
+   * silencieuse ni un échec, et le rapport le dit.
+   */
+  skipped?: boolean;
   /** Étape du contrat jouée ici : l'hôte exécute le plan, il ne l'interprète pas. */
   stepId?: string;
 }

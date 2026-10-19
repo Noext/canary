@@ -695,6 +695,18 @@ provenanceUrls.push(actual);
 if (!actual.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Popup left approved origin");
 await popup.close();`
     )};`;
+  } else if (action.type === "click" && action.ifPresent) {
+    // Établissement d'état : l'absence de la cible est une information, pas un
+    // échec. Le délai court ne sert qu'à laisser la vue se stabiliser ; s'il
+    // expire, l'étape est sautée et `actual` le dit. Un clic qui échoue une
+    // fois la cible visible reste une erreur, elle.
+    command = `await ${locatorRun(
+      action.locator,
+      `let present = false;
+try { await locator.waitFor({ state: "visible", timeout: 1500 }); present = true; } catch { present = false; }
+if (present) await locator.click({ timeout: 10000 });
+actual = present;`
+    )};`;
   } else if (action.type === "assert") {
     command = compileAssertion(action, assertion);
   } else if (action.type !== "observe") {

@@ -36,6 +36,16 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
         : [];
     })
   );
+  // Une étape sautée est une information : le rapport publié nomme l'étape qui
+  // n'a rien eu à faire, plutôt que de la laisser identique à une étape jouée.
+  const skippedSteps = result.scenarios.flatMap((item) =>
+    item.steps
+      .filter((step) => step.skipped)
+      .map(
+        (step) =>
+          `- ${clean(item.scenario.title)}: step \`${clean(step.stepId ?? String(step.index))}\` skipped — its target was absent, so the state it establishes was already in place`
+      )
+  );
   return [
     "<!-- canary-pr-qa -->",
     "## Canary autonomous PR QA",
@@ -57,6 +67,7 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
         (item) => `- ${clean(item.scenario.title)}: ${clean(item.error ?? "")}`
       ),
     ...substitutions,
+    ...skippedSteps,
     ...(result.plan?.skipped.map(
       (item) =>
         `- Not browser-tested: \`${clean(item.sourceFile)}\` — ${clean(item.reason)}`
