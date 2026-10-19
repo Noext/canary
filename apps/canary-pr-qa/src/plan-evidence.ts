@@ -644,12 +644,44 @@ export function unstableSelectorRefusals(
 }
 
 /**
- * Sélecteur CSS réduit à UN test d'attribut : `[data-etat]` ou
- * `[data-etat="valeur"]`. C'est la forme que prend un état exposé par un
- * attribut, et donc la cible d'une assertion qui vise une VALEUR d'attribut.
+ * Sélecteur CSS réduit à UN test d'attribut : `[data-etat]`,
+ * `[data-etat="valeur"]`, `[aria-expanded="true"]`. C'est la forme que prend un
+ * état exposé par un attribut, et donc la cible d'une assertion qui vise une
+ * VALEUR d'attribut. Le nom de l'attribut est capturé : toutes les formes ne
+ * portent pas un état (voir `carriesStateValue`).
  */
 const ATTRIBUTE_SELECTOR =
-  /^\[\s*[a-zA-Z_][-\w]*\s*(?:=\s*(?:"[^"]*"|'[^']*'))?\s*\]$/;
+  /^\[\s*([a-zA-Z_][-\w]*)\s*(?:=\s*(?:"[^"]*"|'[^']*'))?\s*\]$/;
+
+/**
+ * Attributs ARIA dont la valeur est un ÉTAT fermé de l'élément (`true`,
+ * `false`, `mixed`, `page`). Les autres attributs nomment ou décrivent
+ * l'élément : `[role="status"]` est une cible dont le texte visible EST le
+ * contenu, et `text` y lit `ok` correctement ; `[aria-label="next"]` porte un
+ * nom, pas un état.
+ */
+const ARIA_STATE_ATTRIBUTES = new Set([
+  "aria-busy",
+  "aria-checked",
+  "aria-current",
+  "aria-disabled",
+  "aria-expanded",
+  "aria-hidden",
+  "aria-invalid",
+  "aria-pressed",
+  "aria-selected",
+]);
+
+/**
+ * L'attribut porte-t-il un état, c'est-à-dire une valeur en jeton que l'élément
+ * n'affiche pas ? `data-*` : l'application y met l'état qu'elle expose. Une
+ * assertion `text` sur un sélecteur d'attribut qui ne porte pas d'état n'est
+ * donc jamais fautive par sa seule syntaxe.
+ */
+function carriesStateValue(name: string): boolean {
+  const attribute = name.toLowerCase();
+  return attribute.startsWith("data-") || ARIA_STATE_ATTRIBUTES.has(attribute);
+}
 
 /**
  * Forme d'un JETON d'identifiant : un seul mot, minuscules ASCII, chiffres,
@@ -679,6 +711,11 @@ const IDENTIFIER_TOKEN = /^[a-z][a-z0-9_-]*$/;
  * retire donc rien à ce qui passe, et il remplace un échec d'assertion — ou un
  * `inputValue` qui lève — par un message qui nomme la voie correcte.
  *
+ * Le refus est restreint aux attributs qui PORTENT un état (`data-*` et les
+ * attributs ARIA d'état), pas à la forme syntaxique du sélecteur : `[role="\
+ * status"]` est une cible légitime dont le texte visible est le contenu, et
+ * une assertion `text` y attendant `ok` est correcte.
+ *
  * La voie correcte existe déjà et n'exige aucune extension du schéma : viser
  * `[data-etat="ouvert"]` avec kind `visible` (ou `count` valant 1) prouve
  * l'attribut, et viser le conteneur avec le texte qu'il affiche le prouve aussi.
@@ -694,7 +731,8 @@ function attributeValueFault(
     return;
   }
   const selector = target.value.trim();
-  if (!ATTRIBUTE_SELECTOR.test(selector)) {
+  const attribute = ATTRIBUTE_SELECTOR.exec(selector)?.[1];
+  if (!(attribute && carriesStateValue(attribute))) {
     return;
   }
   const expected = assertionExpected(assertion);
@@ -720,7 +758,7 @@ export function attributeValueRefusals(
       error: new QaError(
         "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
         `Scenario ${scenario.id} expects an attribute's value from a selector that renders text: ${offenders.join(" ; ")}`,
-        'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-cash-state="ouvert"] with kind "visible" (or kind "count" expecting 1); to prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert after that step.'
+        'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-cash-state="ouvert"] with kind "visible" (or kind "count" expecting 1) and keep verification "state" with afterStep set to the step that established it; "transition" fails whenever the state was already the expected one, because the baseline and the observed value are then identical. Reserve "transition" for a step that genuinely moves the value, such as closing a session that was open. To prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert state after that step.'
       ),
     });
   }

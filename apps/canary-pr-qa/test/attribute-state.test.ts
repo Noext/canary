@@ -383,7 +383,7 @@ function establishesOpenPlan(): Plan {
             kind: "visible",
             target: { by: "css", value: '[data-cash-state="ouvert"]' },
             afterStep: "reopen",
-            verification: "transition",
+            verification: "state",
           },
           {
             id: "etabli-cloture",
@@ -392,7 +392,7 @@ function establishesOpenPlan(): Plan {
             kind: "visible",
             target: { by: "css", value: '[data-cash-state="cloture"]' },
             afterStep: "close",
-            verification: "state",
+            verification: "transition",
           },
         ],
       },
@@ -693,6 +693,59 @@ describe("valeur d'attribut visée par une assertion de texte", () => {
       expect(refusals(plan)).toEqual([]);
     }
   });
+
+  it('accepte [role="status"] attendant "ok" : le texte visible EST le contenu', () => {
+    // La règle est restreinte aux attributs qui PORTENT un état : un sélecteur
+    // de rôle est une cible légitime, et son texte visible est son contenu.
+    const plan = assumedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: [
+          {
+            id: "state-ouvert",
+            description: "Le statut affiche ok",
+            kind: "text",
+            expected: "ok",
+            target: { by: "css", value: '[role="status"]' },
+            afterStep: "open-cash",
+            verification: "state",
+          },
+        ],
+        steps: scenario.steps.filter((step) =>
+          ["goto", "open-cash", "check-open"].includes(step.id)
+        ),
+      },
+    ];
+    expect(refusals(plan)).toEqual([]);
+  });
+
+  it("refuse la même lecture sur un attribut ARIA d'état", () => {
+    const plan = assumedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: [
+          {
+            id: "state-ouvert",
+            description: "Le panneau est déplié",
+            kind: "text",
+            expected: "true",
+            target: { by: "css", value: "[aria-expanded]" },
+            afterStep: "open-cash",
+            verification: "state",
+          },
+        ],
+        steps: scenario.steps.filter((step) =>
+          ["goto", "open-cash", "check-open"].includes(step.id)
+        ),
+      },
+    ];
+    expect(refusals(plan)).toHaveLength(1);
+    expect(refusals(plan)[0]?.error.message).toContain("[aria-expanded]");
+  });
 });
 
 describe("état de la caisse hérité d'un run antérieur", () => {
@@ -775,8 +828,17 @@ describe("état de la caisse hérité d'un run antérieur", () => {
       (item) => item.id === "etabli-ouvert"
     );
     expect(opened?.passed).toBe(true);
-    expect(opened?.baseline).toBe(false);
+    // Vérifiée en `state`, l'assertion d'établissement ne capture pas de
+    // baseline : elle prouve l'état atteint, pas un déplacement.
+    expect(opened?.baseline).toBeUndefined();
     expect(opened?.actual).toBe(true);
+    // La transition est réservée à la clôture, qui déplace réellement la valeur.
+    const closed = result.scenarios[0]?.assertions.find(
+      (item) => item.id === "etabli-cloture"
+    );
+    expect(closed?.passed).toBe(true);
+    expect(closed?.baseline).toBe(false);
+    expect(closed?.actual).toBe(true);
   });
 
   it("donne le même verdict à deux exécutions consécutives sur la même preview", async () => {
@@ -824,5 +886,35 @@ describe("état de la caisse hérité d'un run antérieur", () => {
       ).toBe("passed");
       expect(result.scenarios[0]?.outcome, state).toBe("passed");
     }
+  });
+
+  it("accepte verification state sur une caisse déjà ouverte, là où transition échouerait", async () => {
+    // L'étape d'établissement ne déplace la valeur que si l'état était
+    // l'autre. Vérifiée en `transition`, elle échoue donc en
+    // TRANSITION_NOT_OBSERVED quand la caisse est déjà ouverte ; vérifiée en
+    // `state`, elle passe dans les deux configurations.
+    const open = await setup();
+    cashPage("ouvert");
+    scriptPlan(PlanSchema.parse(establishesOpenPlan()));
+    const openRun = await runQa(
+      { prUrl: PR_URL, previewUrl: open.baseUrl },
+      open.config
+    );
+    expect(openRun.outcome, openRun.scenarios[0]?.error ?? "").toBe("passed");
+
+    vi.restoreAllMocks();
+    const asTransition = establishesOpenPlan();
+    asTransition.scenarios[0]!.assertions[0]!.verification = "transition";
+    const strict = await setup();
+    cashPage("ouvert");
+    scriptPlan(PlanSchema.parse(asTransition));
+    const strictRun = await runQa(
+      { prUrl: PR_URL, previewUrl: strict.baseUrl },
+      strict.config
+    );
+    expect(strictRun.outcome).toBe("failed");
+    expect(strictRun.scenarios[0]?.diagnostic?.code).toBe(
+      "TRANSITION_NOT_OBSERVED"
+    );
   });
 });
