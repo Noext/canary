@@ -19,6 +19,7 @@ import {
 import {
   loadConfig,
   MAX_OUTPUT_TOKENS_PER_CALL,
+  MIN_OUTPUT_TOKENS_PER_CALL,
   validatePreviewUrl,
 } from "../src/config.js";
 import { diagnose, QaError } from "../src/diagnostics.js";
@@ -2644,8 +2645,12 @@ describe("runner false-green regressions", () => {
   it("borne la sortie demandée par appel, quelle que soit la borne du plan", async () => {
     // Le plafond par appel est le plus petit de la borne de l'appelant et de
     // QA_CALL_MAX_TOKENS, et c'est ce chiffre-là qui part au fournisseur : le
-    // run ne peut plus demander 400 000 tokens de sortie par appel.
-    const wide = await setup({ env: { QA_PLAN_MAX_TOKENS: "400000" } });
+    // run ne peut plus demander 400 000 tokens de sortie par appel. L'enveloppe
+    // est rélevée pour que ces deux envois tiennent — un plafond par appel ne
+    // sert que sous une enveloppe qui couvre l'entrée plus ce plafond.
+    const wide = await setup({
+      env: { QA_PLAN_MAX_TOKENS: "400000", QA_RUN_MAX_TOKENS: "1000000" },
+    });
     fakeBrowser();
     const capped = await runQa(
       { prUrl: PR_URL, previewUrl: wide.baseUrl },
@@ -2656,7 +2661,11 @@ describe("runner false-green regressions", () => {
     expect(wide.modelRequests[0]?.max_tokens).toBe(MAX_OUTPUT_TOKENS_PER_CALL);
 
     const tighter = await setup({
-      env: { QA_PLAN_MAX_TOKENS: "400000", QA_CALL_MAX_TOKENS: "4096" },
+      env: {
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "1000000",
+        QA_CALL_MAX_TOKENS: "16384",
+      },
     });
     fakeBrowser();
     const lowered = await runQa(
@@ -2665,23 +2674,59 @@ describe("runner false-green regressions", () => {
     );
     expect(lowered.outcome).toBe("passed");
     expect(lowered.usage?.retries).toBe(0);
-    expect(tighter.modelRequests[0]?.max_tokens).toBe(4096);
+    expect(tighter.modelRequests[0]?.max_tokens).toBe(16_384);
   }, 60_000);
-  it("refuse un plafond de sortie nul plutôt que de le lire comme illimité", () => {
+  it("refuse un plafond de sortie nul ou sous le plancher mesuré", () => {
     // 0 n'est pas « pas de plafond » : c'est l'absence de borne sur un envoi qui
-    // a brûlé l'enveloppe du run 1eb26f8c. Le refus est explicite au chargement.
+    // a brûlé l'enveloppe du run 1eb26f8c. Une valeur sous le plancher est
+    // refusée pour la même raison positive : le plus gros plan mesuré du lot Q
+    // (8 scénarios, 39 761 octets, environ 11 400 tokens à 3,5 octets par token)
+    // ne tient plus dedans. Le refus est explicite au chargement, jamais
+    // découvert par un plan tronqué.
     expect(() => loadConfig({ QA_CALL_MAX_TOKENS: "0" })).toThrow();
-    expect(loadConfig({ QA_CALL_MAX_TOKENS: "4096" }).QA_CALL_MAX_TOKENS).toBe(
-      4096
-    );
+    expect(() =>
+      loadConfig({ QA_CALL_MAX_TOKENS: String(MIN_OUTPUT_TOKENS_PER_CALL - 1) })
+    ).toThrow();
+    expect(
+      loadConfig({
+        QA_CALL_MAX_TOKENS: String(MIN_OUTPUT_TOKENS_PER_CALL),
+      }).QA_CALL_MAX_TOKENS
+    ).toBe(MIN_OUTPUT_TOKENS_PER_CALL);
     expect(loadConfig({}).QA_CALL_MAX_TOKENS).toBe(MAX_OUTPUT_TOKENS_PER_CALL);
+  });
+  it("épingle le plafond par appel sur le lot Q mesuré, pas sur lui-même", () => {
+    // Ce n'est pas une mesure du plafond, c'est une décision de dimensionnement
+    // adossée à une mesure : l'endpoint ne stocke pas sa `completion_tokens`, la
+    // sortie d'un appel se déduit d'un total rapporté moins l'entrée, et le
+    // chiffre choisi est un choix justifié par la distribution du lot Q. Il est
+    // figé ici en littéral pour qu'un retour à 32 768 — qui tronque 10 des 37
+    // appels mesurés — ne passe plus la suite en silence.
+    expect(MAX_OUTPUT_TOKENS_PER_CALL).toBe(98_304);
+    expect(MIN_OUTPUT_TOKENS_PER_CALL).toBe(16_384);
+    // Le plus gros plan du lot Q : 8 scénarios, 39 761 octets de JSON, 109 666
+    // tokens comptés pour un seul appel, dont au plus 50 061 de sortie sous
+    // l'entrée la plus défavorable (238 420 octets à quatre octets par token).
+    // Le défaut couvre ce pire cas avec plus de 95 % de marge.
+    const largestPlanTokens = 109_666;
+    const smallestInputTokens = 59_605;
+    expect(largestPlanTokens - smallestInputTokens).toBe(50_061);
+    expect(
+      MAX_OUTPUT_TOKENS_PER_CALL / (largestPlanTokens - smallestInputTokens)
+    ).toBeGreaterThan(1.95);
+    // Le plancher, lui, ne porte que ce JSON : sous 16 384, même un plan de
+    // 39 761 octets ne tient plus à 3,5 octets par token.
+    expect(39_761 / 3.5).toBeLessThan(MIN_OUTPUT_TOKENS_PER_CALL);
   });
   it("traite une sortie au-delà de la borne comme inutilisable et la rejoue une fois", async () => {
     // Un endpoint qui ignore le champ de limite répond un plan complet en
     // annonçant plus de tokens de sortie que la borne : la dépense que la borne
     // refusait de payer n'est pas acceptée, elle est rejouée une seule fois.
     const f = await setup({
-      env: { QA_CALL_MAX_TOKENS: "4096" },
+      env: {
+        QA_CALL_MAX_TOKENS: "16384",
+        QA_PLAN_MAX_TOKENS: "32768",
+        QA_RUN_MAX_TOKENS: "1000000",
+      },
       modelOverBound: 1,
     });
     fakeBrowser();
@@ -2703,7 +2748,11 @@ describe("runner false-green regressions", () => {
   }, 40_000);
   it("garde fatal un second dépassement de la borne, en la nommant", async () => {
     const f = await setup({
-      env: { QA_CALL_MAX_TOKENS: "4096" },
+      env: {
+        QA_CALL_MAX_TOKENS: "16384",
+        QA_PLAN_MAX_TOKENS: "32768",
+        QA_RUN_MAX_TOKENS: "1000000",
+      },
       modelOverBound: 2,
     });
     fakeBrowser();
@@ -2715,7 +2764,7 @@ describe("runner false-green regressions", () => {
     expect(result.diagnostic?.code).toBe("MODEL_OUTPUT_INCOMPLETE");
     expect(result.diagnostic?.message).toContain("(after 1 retry)");
     expect(result.diagnostic?.message).toContain(
-      "The endpoint reported 5096 output tokens for a 4096-token bound."
+      "The endpoint reported 17384 output tokens for a 16384-token bound."
     );
     expect(result.usage?.retries).toBe(1);
     expect(result.usage?.calls).toBe(2);
