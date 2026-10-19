@@ -2722,45 +2722,75 @@ describe("runner false-green regressions", () => {
     expect(f.modelRequests).toHaveLength(2);
   }, 40_000);
   it("rejoue le run dont un seul appel épuisait l'enveloppe", async () => {
-    // Forme mesurée du run 1eb26f8c : aucun usage rapporté, une borne de plan
-    // énorme, et une enveloppe à peine plus du double. Sans plafond par appel,
-    // l'appel compte la borne entière (393 216 plus l'entrée), la reprise de ce
-    // contenu inexploitable ne tient plus, et le run bloque sur le budget au
-    // lieu de rejouer. Avec le plafond, la reprise tient dans la même enveloppe.
+    // Forme mesurée du run 1eb26f8c (lot Q, PR#17, 58 s, aucun scénario) : aucun
+    // usage rapporté, borne de plan 393 216, enveloppe 1 000 000. Le premier
+    // appel était compté à l'entrée estimée plus le plafond entier — 512 618
+    // tokens sur les 1 000 000 de l'enveloppe —, la reprise de ce contenu
+    // inexploitable ne tenait plus dans ce qui restait, et le run bloquait sur
+    // le budget au lieu de rejouer. Le compteur suit maintenant ce que la
+    // réponse a livré : la reprise part, même sans plafond par appel serré.
     const burnedEnv = {
       OPENAI_STREAM: "false" as const,
       QA_PLAN_MAX_TOKENS: "393216",
       QA_RUN_MAX_TOKENS: "700000",
     };
-    const capped = await setup({ env: burnedEnv, modelIncomplete: 1 });
-    fakeBrowser();
-    const replayed = await runQa(
-      { prUrl: PR_URL, previewUrl: capped.baseUrl },
-      capped.config
-    );
-    expect(replayed.outcome).toBe("passed");
-    expect(replayed.usage?.retries).toBe(1);
-    expect(replayed.usage?.estimated).toBe(true);
-    expect(replayed.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
-    expect(capped.modelRequests).toHaveLength(2);
-
     const unbounded = await setup({
       env: { ...burnedEnv, ...WIDE_CALL },
       modelIncomplete: 1,
     });
     fakeBrowser();
-    const blocked = await runQa(
+    const replayed = await runQa(
       { prUrl: PR_URL, previewUrl: unbounded.baseUrl },
       unbounded.config
     );
-    // Le même envoi, plafond relevé au-delà de la borne du plan — le
-    // comportement d'avant cette borne : le premier appel consomme l'enveloppe
-    // et la reprise n'est jamais envoyée.
+    expect(replayed.outcome).toBe("passed");
+    expect(replayed.usage?.retries).toBe(1);
+    expect(replayed.usage?.calls).toBe(2);
+    expect(replayed.usage?.estimated).toBe(true);
+    expect(replayed.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
+    expect(unbounded.modelRequests).toHaveLength(2);
+    // Mesure : ce que le premier appel a débité reste sous la réservation de son
+    // envoi — l'entrée estimée plus le plafond de plan, 393 216 —, qui est
+    // exactement ce que l'ancienne comptabilité inscrivait comme débit. La
+    // reprise est admise parce que l'enveloppe couvre cette mesure plus la
+    // réservation, pas parce que la réservation serait ignorée.
+    const firstSend = sentReservation(unbounded.modelRequests[0]!);
+    expect(replayed.usage?.tokens ?? 0).toBeLessThan(firstSend);
+    expect(firstSend).toBeGreaterThan(393_216);
+
+    // Le plafond par appel reste ce qui fait tenir ce run sous une enveloppe
+    // plus serrée : la même reprise passe à 98 304, et la borne du plan seule
+    // n'aurait même pas laissé partir le premier envoi.
+    const capped = await setup({
+      env: { ...burnedEnv, QA_RUN_MAX_TOKENS: "300000" },
+      modelIncomplete: 1,
+    });
+    fakeBrowser();
+    const bounded = await runQa(
+      { prUrl: PR_URL, previewUrl: capped.baseUrl },
+      capped.config
+    );
+    expect(bounded.outcome).toBe("passed");
+    expect(bounded.usage?.retries).toBe(1);
+    expect(capped.modelRequests).toHaveLength(2);
+    expect(sentReservation(capped.modelRequests[0]!)).toBeLessThan(
+      sentReservation(unbounded.modelRequests[0]!)
+    );
+
+    const refused = await setup({
+      env: { ...burnedEnv, ...WIDE_CALL, QA_RUN_MAX_TOKENS: "300000" },
+      modelIncomplete: 1,
+    });
+    fakeBrowser();
+    const blocked = await runQa(
+      { prUrl: PR_URL, previewUrl: refused.baseUrl },
+      refused.config
+    );
     expect(blocked.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
-    expect(blocked.usage?.calls).toBe(1);
+    expect(blocked.usage?.calls).toBe(0);
     expect(blocked.usage?.retries).toBe(0);
-    expect(unbounded.modelRequests).toHaveLength(1);
-  }, 60_000);
+    expect(refused.modelRequests).toHaveLength(0);
+  }, 90_000);
   it.each([
     401, 500,
   ])("never replays a content failure the endpoint answers with HTTP %i", async (status) => {

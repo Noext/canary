@@ -16,7 +16,17 @@ interface ReportedUsage {
 
 /** Réponse de `chat/completions` dans la forme non streamée, quel que soit le mode de transport. */
 interface ModelResponse {
-  choices?: { finish_reason?: string; message?: { content?: string } }[];
+  choices?: {
+    finish_reason?: string;
+    message?: { content?: string; reasoning_content?: string };
+  }[];
+  /**
+   * Caractères que le transport a assemblés pour cette réponse, contenu et
+   * raisonnement compris. Ce n'est pas un champ de l'endpoint : c'est notre
+   * propre mesure, posée par `completion`, et le seul chiffre dont dispose
+   * `deliveredOutputTokens` quand le provider ne compte pas sa sortie.
+   */
+  deliveredChars?: number;
   usage?: ReportedUsage;
 }
 
@@ -175,7 +185,8 @@ function measuredCount(value: number | undefined): number | undefined {
  * refusait de payer. Elle est traitée comme inutilisable
  * (`MODEL_OUTPUT_INCOMPLETE`, reprise unique comprise) au lieu d'être acceptée.
  * Un endpoint qui n'annonce pas de `completion_tokens` échappe à cette mesure —
- * son `finish_reason: "length"` et le plafond transmis restent la mesure.
+ * son `finish_reason: "length"` et la borne transmise restent ce qui juge la
+ * réponse, jamais ce qui la comptabilise (voir `deliveredOutputTokens`).
  */
 function exceededOutputBound(
   response: ModelResponse,
@@ -183,6 +194,34 @@ function exceededOutputBound(
 ): number | undefined {
   const reported = measuredCount(response.usage?.completion_tokens);
   return reported !== undefined && reported > maxTokens ? reported : undefined;
+}
+
+/**
+ * Caractères par token pour la sortie qu'un endpoint ne compte pas : la même
+ * mesure que la réserve crédible d'une tentative perdue
+ * (`credibleReservation`), pour qu'une réponse chiffrée sur ce qu'elle a livré
+ * et une tentative perdue le soient de la même façon.
+ */
+const DELIVERED_CHARS_PER_TOKEN = 3;
+
+/**
+ * Sortie qu'un appel non chiffré par l'endpoint a réellement livrée, en tokens.
+ *
+ * Ce n'est jamais le plafond configuré : compter `outputBound` pour une réponse
+ * qui a livré quelques dizaines de caractères impute au run une dépense qu'il
+ * n'a pas faite. Mesure du run 1eb26f8c (lot Q) : un seul appel, aucun `usage`
+ * rapporté, un compte de 512 618 tokens — les 393 216 du plafond de plan plus
+ * l'entrée estimée, exactement — sur une enveloppe de 1 000 000, soit 51 % du
+ * budget du run pour 22,9 s de planification et aucun scénario. La reprise du
+ * contenu inexploitable ne tenait plus dans ce qui restait et le run a été
+ * bloqué en `RUN_BUDGET_EXCEEDED`.
+ */
+function deliveredOutputTokens(
+  response: ModelResponse,
+  content: string | undefined
+): number {
+  const chars = response.deliveredChars ?? content?.length ?? 0;
+  return Math.ceil(chars / DELIVERED_CHARS_PER_TOKEN);
 }
 
 /**
@@ -243,8 +282,10 @@ export class Model {
      * Borne de sortie de chaque envoi : la borne de l'appelant, ramenée au
      * plafond d'un seul appel (`QA_CALL_MAX_TOKENS`). C'est ce chiffre qui part
      * au fournisseur, qui réserve l'enveloppe du run et qui juge la réponse —
-     * un appel ne peut donc plus engager une part du budget total que le run ne
-     * pourrait pas rejouer.
+     * un appel ne peut donc pas engager une part du budget total que le run ne
+     * pourrait pas rejouer. Ce n'est en revanche jamais le débit compté d'une
+     * réponse : ce qui est consommé se lit dans l'usage rapporté, et à défaut
+     * dans ce que le transport a livré (`deliveredOutputTokens`).
      */
     const outputBound = Math.min(maxTokens, this.config.QA_CALL_MAX_TOKENS);
     const messages = [
@@ -294,10 +335,16 @@ export class Model {
       );
       const reportedInput = measuredCount(response.usage?.prompt_tokens);
       const reportedOutput = measuredCount(response.usage?.completion_tokens);
-      // Sans mesure positive, ce sont nos bornes qui chiffrent l'appel : la
-      // borne de l'entrée et la sortie maximale autorisée.
+      const choice = response.choices?.[0];
+      const content = choice?.message?.content;
+      const finishReason = choice?.finish_reason;
+      // Sans mesure positive, nos bornes chiffrent ce qui est vérifiable : la
+      // borne de l'entrée pour ce qui a été envoyé, et la mesure de ce que le
+      // transport a livré en sortie. Le plafond de l'appel, lui, n'est jamais un
+      // débit : c'est ce qui a été autorisé, pas ce qui a été dépensé.
       const inputTokens = reportedInput ?? this.inputTokenBound(messages);
-      const outputTokens = reportedOutput ?? outputBound;
+      const outputTokens =
+        reportedOutput ?? deliveredOutputTokens(response, content);
       // Un total annoncé chiffre l'appel à sa hauteur, même quand l'endpoint
       // n'expose aucune des deux parts : un endpoint qui annonce 900 000 tokens
       // ne peut pas être compté comme s'il en avait consommé 745.
@@ -325,9 +372,6 @@ export class Model {
       );
       modelCalls.inc({ model: this.config.OPENAI_MODEL, outcome: "response" });
       checkBudget();
-      const choice = response.choices?.[0];
-      const content = choice?.message?.content;
-      const finishReason = choice?.finish_reason;
       const overBound = exceededOutputBound(response, outputBound);
       if (!content || finishReason === "length" || overBound !== undefined) {
         // Une génération coupée par sa propre borne n'offre rien à corriger :
@@ -591,7 +635,8 @@ export class Model {
       return worst;
     }
     const inputTokens = reportedInput ?? this.inputTokenBound(messages);
-    const outputTokens = reportedOutput ?? Math.ceil(deliveredChars / 3);
+    const outputTokens =
+      reportedOutput ?? Math.ceil(deliveredChars / DELIVERED_CHARS_PER_TOKEN);
     // Ce que nous chiffrons reste plafonné par le pire cas de la tentative
     // admise : l'enveloppe qui couvrait cet appel couvre notre propre borne.
     const counted = this.countedUsage(
@@ -795,7 +840,16 @@ export class Model {
     const url = `${this.config.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`;
     if (!stream) {
       const { text } = await fetchText(url, init, timeout);
-      return JSON.parse(text) as ModelResponse;
+      const response = JSON.parse(text) as ModelResponse;
+      // Le raisonnement arrive dans le même champ de limite en non streamé aussi :
+      // le compter ici évite de sous-estimer la sortie d'un appel sans `usage`.
+      const reasoning = response.choices?.[0]?.message?.reasoning_content;
+      return {
+        ...response,
+        deliveredChars:
+          (response.choices?.[0]?.message?.content?.length ?? 0) +
+          (reasoning?.length ?? 0),
+      };
     }
     let state = emptyChatStream;
     await fetchSse(
@@ -845,6 +899,7 @@ export class Model {
           message: { content: state.content },
         },
       ],
+      deliveredChars: state.content.length + state.reasoningChars,
       usage: state.usage,
     };
   }
