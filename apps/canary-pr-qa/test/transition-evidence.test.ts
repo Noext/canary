@@ -234,3 +234,19 @@ it("teaches the two readable forms and when a transition is provable", () => {
     /\[role="status"\] is a region whose visible text IS its content, so kind "text" on it is fine/i
   );
 });
+
+it("limits ifPresent to an establishing step and names its two consequences", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // L'option rend un clic tolérant à l'absence, ce qui est vrai seulement pour
+  // une étape qui établit un état : sur une action métier, elle masquerait un
+  // vrai défaut. Son étape sautée ne démontre pas de transition.
+  expect(prompt).toMatch(
+    /Declare that establishing click with "ifPresent": true on the click action/i
+  );
+  expect(prompt).toMatch(
+    /Use "ifPresent" ONLY on such an establishing step, never on a business action that must happen/i
+  );
+  expect(prompt).toMatch(
+    /A skipped establishing step cannot demonstrate a transition/i
+  );
+});
