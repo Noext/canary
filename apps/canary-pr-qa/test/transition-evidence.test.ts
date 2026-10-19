@@ -217,3 +217,20 @@ it("teaches that a text assertion never reads an attribute value", () => {
   );
   expect(prompt).toMatch(/put the "ouvert" assertion AFTER that step/i);
 });
+
+it("teaches the two readable forms and when a transition is provable", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Sonde P3 : une étape d'établissement vérifiée en `transition` échoue en
+  // TRANSITION_NOT_OBSERVED quand l'état est déjà le bon. Sonde P5 : la règle
+  // ne doit pas confondre un sélecteur d'attribut d'état avec un rôle dont le
+  // texte visible est le contenu.
+  expect(prompt).toMatch(
+    /put the "ouvert" assertion AFTER that step, with verification "state" on the step that established it/i
+  );
+  expect(prompt).toMatch(
+    /verification "transition" is only for a step that genuinely moves the value/i
+  );
+  expect(prompt).toMatch(
+    /\[role="status"\] is a region whose visible text IS its content, so kind "text" on it is fine/i
+  );
+});
