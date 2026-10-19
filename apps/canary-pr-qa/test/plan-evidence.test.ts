@@ -1298,6 +1298,226 @@ describe("sélecteur instable refusé avant exécution", () => {
 });
 
 /**
+ * Le scénario du run 93cd4991 (`comptage-juste-cloture`), réduit à sa forme
+ * fautive : l'assertion du total compté lit `aside > div`, le sélecteur
+ * structurel qui a résolu 4 éléments et bloqué les 4 scénarios du run en strict
+ * mode. L'identifiant d'assertion est celui de l'artefact.
+ */
+function structuralPlan(selector = "aside > div"): Plan {
+  const base = readOnlyPlan({ by: "css", value: selector });
+  const scenario = base.scenarios[0]!;
+  return {
+    ...base,
+    scenarios: [
+      {
+        ...scenario,
+        id: "comptage-juste-cloture",
+        steps: scenario.steps.map((step) =>
+          step.id === "check-heading"
+            ? {
+                ...step,
+                id: "check-total",
+                description: "vérifier le total compté",
+                action: {
+                  type: "assert" as const,
+                  assertionId: "total-compte",
+                },
+              }
+            : step
+        ),
+        assertions: [
+          {
+            ...scenario.assertions[0]!,
+            id: "total-compte",
+            description: "Le total compté est affiché : 1 240,00 €",
+            kind: "text",
+            expected: "1 240,00 €",
+            target: { by: "css", value: selector },
+            afterStep: "load",
+            verification: "state",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** La même assertion une fois la cible nommée : `#saved` porte l'élément. */
+function namedPlan(): Plan {
+  const base = PlanSchema.parse(structuralPlan("#saved"));
+  const scenario = base.scenarios[0]!;
+  const { expected: _expected, ...presence } = scenario.assertions[0] as {
+    expected?: unknown;
+  };
+  const assertion = {
+    ...presence,
+    kind: "visible" as const,
+  } as (typeof scenario.assertions)[number];
+  return {
+    ...base,
+    scenarios: [{ ...scenario, assertions: [assertion] }],
+  };
+}
+
+describe("sélecteur structurel : une position ne nomme pas un élément", () => {
+  const refusals = (value: string) =>
+    unstableSelectorRefusals(
+      PlanSchema.parse(readOnlyPlan({ by: "css", value }))
+    );
+  it("refuse aside > div du run 93cd4991 et rend le message exact", () => {
+    const refused = unstableSelectorRefusals(
+      PlanSchema.parse(structuralPlan())
+    );
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    expect(refused[0]?.error.message).toBe(
+      'Scenario comptage-juste-cloture targets an element with a CSS selector built from a structural path (aside > div, child combinator >: it names a position instead of an element, so it matches several elements by construction): load (assertion total-compte) → css="aside > div"'
+    );
+    expect(refused[0]?.error.hint).toContain(
+      "it resolves several elements by construction"
+    );
+  });
+  it("refuse chacun des quatre combinateurs et nomme celui qui est en cause", () => {
+    const measured = [
+      ["aside > div", "child combinator >"],
+      ["header h1", "descendant combinator (a space)"],
+      ["aside + div", "adjacent-sibling combinator +"],
+      ["aside ~ div", "general-sibling combinator ~"],
+    ] as const;
+    for (const [value, combinator] of measured) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message).toContain(`${combinator}:`);
+      expect(refused[0]?.error.message).toContain(
+        `css=${JSON.stringify(value)}`
+      );
+    }
+  });
+  it("refuse la même position sur un attribut qui ne nomme rien", () => {
+    // La forme mesurée du corpus : une présence ([data-cash-state]) puis un
+    // chemin positionnel. L'attribut seul n'est pas une ancre.
+    const refused = refusals(
+      "[data-cash-state] aside > div:first-child > p:nth-of-type(2)"
+    );
+    expect(refused).toHaveLength(1);
+    // La cible stable est déductible du matériel : le conteneur que le plan
+    // nomme déjà, [data-cash-state].
+    expect(refused[0]?.error.message).toContain(
+      "the plan already names [data-cash-state] in it, target that container instead"
+    );
+  });
+  it("nomme l'étape d'action fautive, pas seulement son identifiant", () => {
+    const plan = PlanSchema.parse(structuralPlan());
+    const scenario = plan.scenarios[0]!;
+    const stepPlan: Plan = {
+      ...plan,
+      scenarios: [
+        {
+          ...scenario,
+          steps: [
+            {
+              id: "count-500",
+              description: "compter 2 billets de 500 €",
+              action: {
+                type: "fill",
+                locator: { by: "css", value: "aside > div" },
+                value: "2",
+              },
+            },
+            ...scenario.steps,
+          ],
+        },
+      ],
+    };
+    const refused = unstableSelectorRefusals(stepPlan);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain(
+      'count-500 → css="aside > div"'
+    );
+  });
+  it("refuse une alternative positionnelle d'une liste de sélecteurs", () => {
+    // Une liste est lue alternative par alternative : `#saved` nomme son
+    // élément, `aside > div` n'en nomme aucun, et Playwright résout l'union
+    // des deux, donc le strict mode tombe sur la seconde.
+    const refused = refusals("#saved, aside > div");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain("aside > div");
+    expect(refused[0]?.error.message).toContain("child combinator >");
+  });
+  it("refuse une pseudo-classe positionnelle sans combinateur", () => {
+    // Le prompt et le catalogue du dashboard annoncent :nth-of-type comme une
+    // position : le contrôle doit la refuser sans qu'un combinateur la porte.
+    for (const value of [
+      "div:nth-of-type(2)",
+      "li:first-child",
+      "td:nth-child(3)",
+    ]) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message).toContain("positional pseudo-class");
+    }
+  });
+  it("n'oppose aucun refus à une liste dont chaque alternative nomme son élément", () => {
+    for (const value of [
+      "#saved, #total",
+      '[data-testid="total"], [role="status"]',
+      'li:first-child[id="saved"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("n'oppose aucun refus à une cible qui nomme son élément", () => {
+    // Non-régression : id, attribut qui porte une valeur, rôle+nom, data-*
+    // stable et forme de seule présence restent acceptés, combinateur ou non.
+    for (const value of [
+      "#saved > span",
+      '[data-testid="total"] > span',
+      'header [data-canary-preview="pr"]',
+      'label:has(input[aria-label="Quantité · Billet de 500 €"]) > span:nth-of-type(2)',
+      'input[inputmode="numeric"]:disabled',
+      '[role="status"]',
+      '[data-cash-state="cloture"]',
+      "[data-cash-state]",
+      "#saved",
+      "div",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("bloque le scénario structurel non corrigé avant toute étape navigateur", async () => {
+    const f = await setup({ plans: [PlanSchema.parse(structuralPlan())] });
+    const labels = stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome).toBe("blocked");
+    expect(scenario.diagnostic?.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    expect(scenario.error).toContain("aside > div");
+    // Refusé AVANT exécution : aucune étape navigateur, aucun artefact.
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.artifacts).toEqual([]);
+    expect(labels).toEqual(["discover-preview"]);
+  });
+  it("exécute la même assertion une fois la cible nommée", async () => {
+    const f = await setup({ plans: [namedPlan()] });
+    const labels = stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome, result.scenarios[0]?.error ?? "").toBe("passed");
+    expect(labels).toEqual([
+      "discover-preview",
+      "open-preview",
+      "1-goto",
+      "2-assert",
+    ]);
+  });
+});
+
+/**
  * Le plan réel du run 5c5cfdb6 (PR pharmania/arpilabe-pilotage#17), scénario
  * `caisse-variance-justification`. L'assertion qui a fait échouer ce run porte
  * un attendu NON vide : le plan avait écrit 500,00 € là où son propre scénario —

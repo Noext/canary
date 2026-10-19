@@ -5,7 +5,10 @@ import {
   typographicVariants,
 } from "./canary.js";
 import { QaError } from "./diagnostics.js";
-import { unstableSelectorReason } from "./plan-selector.js";
+import {
+  structuralSelectorReason,
+  unstableSelectorReason,
+} from "./plan-selector.js";
 import {
   type EstablishingClickFault,
   establishingClickFault,
@@ -596,11 +599,11 @@ function isAssertionStep(
 }
 
 /**
- * Refus rendus au planificateur pour une cible CSS construite sur une classe ou
- * une couleur (`plan-selector.ts` porte la règle) : un refus par scénario, qui
- * nomme l'étape, la cible et ce qu'il faut viser à la place. `runner.ts` les
- * rejoue après l'appel modèle, pour qu'un plan non corrigé soit bloqué avant
- * exécution.
+ * Refus rendus au planificateur pour une cible CSS construite sur une classe,
+ * une couleur ou une position (`plan-selector.ts` porte les deux règles) : un
+ * refus par scénario, qui nomme l'étape, la cible et ce qu'il faut viser à la
+ * place. `runner.ts` les rejoue après l'appel modèle, pour qu'un plan non
+ * corrigé soit bloqué avant exécution.
  */
 export function unstableSelectorRefusals(
   plan: Plan
@@ -626,7 +629,9 @@ export function unstableSelectorRefusals(
           : []
       ),
     ].flatMap((target) => {
-      const reason = unstableSelectorReason(target.locator);
+      const reason =
+        unstableSelectorReason(target.locator) ??
+        structuralSelectorReason(target.locator);
       return reason === undefined ? [] : [{ ...target, reason }];
     });
     if (targets.length === 0) {
@@ -642,7 +647,7 @@ export function unstableSelectorRefusals(
               `${target.reason}: ${target.label} → ${describeTarget(target.locator)}`
           )
           .join(" ; ")}`,
-        'Target what the discovery snapshot shows instead: a role with its accessible name, an id, or a stable attribute the source defines. To prove an absence, use kind "hidden" or a count of 0 on a selector the page still carries. A class name or a color read in the source is not a stable target.'
+        'Target what the discovery snapshot shows instead: a role with its accessible name, an id, or a stable attribute the source defines. To prove an absence, use kind "hidden" or a count of 0 on a selector the page still carries. A class name or a color read in the source is not a stable target. A path built from combinators (">", a space, "+", "~") names a position instead of an element: it resolves several elements by construction as soon as two of them sit there, and Playwright then refuses the step in strict mode (a measured plan used aside > div, which resolved to 4 elements and blocked 4 scenarios of run 93cd4991). Name the element, or target the container the plan already names when the assertion only needs the text that container displays.'
       ),
     });
   }

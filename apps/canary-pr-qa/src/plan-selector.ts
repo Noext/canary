@@ -270,22 +270,32 @@ function declarationColor(text: string): string | undefined {
 }
 
 /**
+ * Les sélecteurs CSS d'un locator, moteur retiré : `css=aside > div` et
+ * `role=button >> aside > div` rendent `aside > div`. `role=`, `text=` et les
+ * autres moteurs Playwright ne sont pas des sélecteurs CSS — un point y est du
+ * texte —, seul `css=` en annonce. Un segment `css=` est rendu sans son moteur,
+ * pour qu'un contrôle puisse lire le sélecteur lui-même.
+ */
+function cssSelectors(value: string): string[] {
+  return selectorChain(value).flatMap((segment) => {
+    const engine = ENGINE.exec(segment);
+    if (engine && (engine[1] ?? "").toLowerCase() !== "css") {
+      return [];
+    }
+    return [engine ? segment.slice(engine[0].length) : segment];
+  });
+}
+
+/**
  * Ce qu'un locator CSS doit à une classe ou à une couleur, `undefined` quand il
  * n'en dépend pas. Chaque segment de la chaîne est analysé : `role=button >> .foo`
- * porte un sélecteur CSS dans son second segment. `role=`, `text=` et les autres
- * moteurs Playwright ne sont pas des sélecteurs CSS — un point y est du texte —,
- * seul `css=` en annonce.
+ * porte un sélecteur CSS dans son second segment (voir `cssSelectors`).
  */
 export function unstableSelectorReason(locator: Locator): string | undefined {
   if (locator.by !== "css") {
     return;
   }
-  for (const segment of selectorChain(locator.value)) {
-    const engine = ENGINE.exec(segment);
-    if (engine && (engine[1] ?? "").toLowerCase() !== "css") {
-      continue;
-    }
-    const css = engine ? segment.slice(engine[0].length) : segment;
+  for (const css of cssSelectors(locator.value)) {
     // Un point n'est une classe que hors chaînes littérales et hors crochets —
     // sinon `[data-file=report.png]` serait une classe.
     const className = CLASS_NAME.exec(outsideBrackets(selectorCode(css)))?.[0];
@@ -300,6 +310,233 @@ export function unstableSelectorReason(locator: Locator): string | undefined {
       if (color) {
         return `a color value (${color})`;
       }
+    }
+  }
+  return;
+}
+
+/**
+ * Ce qu'un sélecteur CSS doit à une POSITION plutôt qu'à un nom. Un combinateur
+ * (`>`, `+`, `~`, l'espace descendant) relie des composés sans nommer l'élément
+ * visé, et une pseudo-classe positionnelle (`:nth-of-type(2)`, `:first-child`)
+ * désigne le même endroit d'une liste : le sélecteur décrit OÙ l'élément se
+ * trouve, pas l'élément. Playwright le refuse alors en strict mode dès que deux
+ * éléments occupent cet endroit, ce qui arrive par construction et non par
+ * accident.
+ *
+ * Mesuré sur les artefacts de production conservés (189 runs au plan conservé,
+ * 1 050 scénarios, 3 027 cibles CSS) : 101 cibles de cette forme sont refusées,
+ * dont 90 appartenaient à des scénarios qui passaient, 2 à des scénarios en
+ * échec et 9 à des scénarios bloqués. `aside > div` en résolvait 4 et a bloqué
+ * les 4 scénarios qui l'utilisaient (run 93cd4991, « strict mode violation :
+ * resolved to 4 elements »).
+ *
+ * Une cible qui NOMME son élément — un `#id`, un attribut qui porte une valeur —
+ * n'est pas refusée : le chemin qui la rejoint n'est qu'un contexte. Une liste
+ * de sélecteurs (`a, b`) est lue alternative par alternative : une alternative
+ * positionnelle rend la liste ambiguë même si une autre nomme son élément.
+ *
+ * La règle est indépendante du modèle et de l'instantané de découverte, comme
+ * celle des classes et des couleurs, pour que le plan soit refusé AVANT la
+ * première étape navigateur.
+ */
+
+/** Où en est la lecture d'un composé : profondeur de bloc, chaîne ouverte, échappement. */
+interface OutlineState {
+  depth: number;
+  escaped: boolean;
+  quote?: string;
+}
+
+/**
+ * Un caractère du composé, remplacé par `x` quand il appartient à une chaîne
+ * littérale, à un bloc `[...]` ou à un groupe `(...)`, et rendu tel quel
+ * sinon. Le remplacement n'est jamais un espace, sinon
+ * `input[inputmode="numeric"]` deviendrait un descendant de `input`. Le
+ * crochet et la parenthèse ouvrants restent lisibles pour que le nom d'une
+ * pseudo-classe reste adjacent à sa parenthèse : `div:nth-of-type(2)` se lit
+ * `div:nth-of-type(xx)`, qui porte bien `:nth-of-type`.
+ */
+function outlineStep(state: OutlineState, char: string): string {
+  if (state.quote) {
+    if (state.escaped) {
+      state.escaped = false;
+    } else if (char === "\\") {
+      state.escaped = true;
+    } else if (char === state.quote) {
+      state.quote = undefined;
+    }
+    return "x";
+  }
+  if (char === '"' || char === "'") {
+    state.quote = char;
+    return "x";
+  }
+  if (char === "[" || char === "(") {
+    state.depth += 1;
+    return char;
+  }
+  if (char === "]" || char === ")") {
+    state.depth = Math.max(0, state.depth - 1);
+    return char;
+  }
+  return state.depth > 0 ? "x" : char;
+}
+
+/** Le composé ramené à sa structure : voir `outlineStep`. */
+function positionalOutline(segment: string): string {
+  const state: OutlineState = { depth: 0, escaped: false };
+  let outline = "";
+  for (const char of segment) {
+    outline += outlineStep(state, char);
+  }
+  return outline;
+}
+
+/**
+ * Les pseudo-classes qui sélectionnent une POSITION dans une liste : elles
+ * nomment un rang, jamais l'élément, donc plusieurs éléments peuvent le porter
+ * (`div:nth-of-type(2)` en désigne un par conteneur). `:has(...)` et les
+ * pseudo-classes d'état (`:disabled`, `:checked`) n'en font pas partie.
+ */
+const POSITIONAL_PSEUDO_CLASS =
+  /:(?:nth-of-type|nth-last-of-type|nth-child|nth-last-child|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type)\b/i;
+
+/**
+ * La position que le composé exprime, nommée pour le message, ou `undefined`.
+ * La pseudo-classe est citée en premier parce qu'elle est la cause la plus
+ * précise ; le combinateur la suit.
+ */
+function positionalReason(outline: string): string | undefined {
+  const pseudo = POSITIONAL_PSEUDO_CLASS.exec(outline)?.[0];
+  if (pseudo) {
+    return `positional pseudo-class ${pseudo}`;
+  }
+  const symbol = /[>+~]/.exec(outline)?.[0];
+  if (symbol === ">") {
+    return "child combinator >";
+  }
+  if (symbol === "+") {
+    return "adjacent-sibling combinator +";
+  }
+  if (symbol === "~") {
+    return "general-sibling combinator ~";
+  }
+  return /\S\s+\S/.test(outline)
+    ? "descendant combinator (a space)"
+    : undefined;
+}
+
+/**
+ * Les alternatives d'une liste de sélecteurs CSS (`a, b`), séparées par une
+ * virgule de premier niveau : une virgule dans `[data-x="a,b"]` ou dans
+ * `:not(a, b)` appartient à sa valeur ou à son groupe. Chaque alternative est
+ * sélectionnée indépendamment, sinon une alternative qui nomme son élément
+ * blanchirait une alternative positionnelle de la même liste.
+ */
+function commaAlternatives(css: string): string[] {
+  const alternatives: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: string | undefined;
+  for (let index = 0; index < css.length; index += 1) {
+    const char = css[index] as string;
+    if (char === "\\") {
+      current += css.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === "," && depth === 0) {
+      alternatives.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  alternatives.push(current);
+  return alternatives
+    .map((alternative) => alternative.trim())
+    .filter((alternative) => alternative.length > 0);
+}
+
+/** Attribut qui porte une valeur : `[data-testid="total"]`. Il nomme un élément. */
+const ATTRIBUTE_WITH_VALUE =
+  /^\[\s*[a-zA-Z_][-\w]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*\]$/;
+
+/** Attribut de seule présence : `[data-cash-state]`. Il prouve une présence, il ne nomme rien. */
+const ATTRIBUTE_PRESENCE = /^\[\s*[a-zA-Z_][-\w]*\s*\]$/;
+
+/**
+ * Les composés qui NOMMENT l'élément : un `#id` et un attribut qui porte une
+ * valeur. Le plan qui en porte un n'est pas refusé par cette règle : il désigne
+ * l'élément, et le chemin qui le rejoint n'est qu'un contexte. `#saved > span`
+ * reste donc accepté, comme les sélecteurs `[aria-label="…"]` et
+ * `[data-testid="…"]` d'un chemin plus long.
+ *
+ * Un attribut de seule présence n'est pas une ancre : `[data-cash-state] aside >
+ * div` ne contient que des présences, et c'est exactement la forme mesurée.
+ */
+function namingAnchors(segment: string): {
+  id?: string;
+  valued: string[];
+  presence: string[];
+} {
+  const anchors: { id?: string; valued: string[]; presence: string[] } = {
+    valued: [],
+    presence: [],
+  };
+  // Un `#` n'est un id que hors chaînes littérales et hors crochets : `#abc`
+  // dans `[href="#abc"]` est une valeur, et `url(#abc)` une référence.
+  for (const match of outsideBrackets(selectorCode(segment)).matchAll(
+    /#([A-Za-z_][\w-]*)/g
+  )) {
+    anchors.id ??= match[1];
+  }
+  for (const block of bracketBlocks(segment)) {
+    if (ATTRIBUTE_WITH_VALUE.test(block)) {
+      anchors.valued.push(block);
+    } else if (ATTRIBUTE_PRESENCE.test(block)) {
+      anchors.presence.push(block);
+    }
+  }
+  return anchors;
+}
+
+/**
+ * Ce qu'un locator CSS doit à une position, `undefined` quand il nomme son
+ * élément. `aside > div` et `div:nth-of-type(2)` sont refusés ; `#saved > span`,
+ * `[data-testid="total"] > span`, `[role="status"]` et
+ * `[data-cash-state="cloture"]` ne le sont pas.
+ *
+ * La raison cite le composé fautif et, quand le plan y nomme déjà un conteneur
+ * (`[data-cash-state]`), la cible stable qu'il peut viser à la place.
+ */
+export function structuralSelectorReason(locator: Locator): string | undefined {
+  if (locator.by !== "css") {
+    return;
+  }
+  for (const css of cssSelectors(locator.value)) {
+    for (const alternative of commaAlternatives(css)) {
+      const position = positionalReason(positionalOutline(alternative));
+      if (!position) {
+        continue;
+      }
+      const anchors = namingAnchors(alternative);
+      if (anchors.id || anchors.valued.length > 0) {
+        continue;
+      }
+      const container = anchors.presence[0];
+      return `a structural path (${alternative}, ${position}: it names a position instead of an element, so it matches several elements by construction${container ? `; the plan already names ${container} in it, target that container instead` : ""})`;
     }
   }
   return;

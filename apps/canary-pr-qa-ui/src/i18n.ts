@@ -67,7 +67,7 @@ export const errorMessages: Record<string, string | undefined> = {
   PLAN_SCENARIO_ID_RESERVED:
     "Le plan réutilise l’identifiant réservé à la découverte : ce scénario ne peut pas être exécuté.",
   PLAN_SELECTOR_UNSTABLE:
-    "Le scénario cible un élément avec un sélecteur CSS dérivé d’une classe ou d’une couleur lue dans la source : cette cible ne survit pas au rendu.",
+    "Le scénario cible un élément avec un sélecteur CSS dérivé d’une classe, d’une couleur lue dans la source ou d’une position (`aside > div`, `header h1`, `div:nth-of-type(2)`) : cette cible ne nomme aucun élément, elle en désigne un endroit, et plusieurs éléments peuvent s’y trouver.",
   PLAN_SKIP_OUTSIDE_DIFF:
     "Le plan ignore un fichier que cette pull request ne modifie pas.",
   PLAN_SOURCE_OUTSIDE_DIFF:
@@ -725,7 +725,7 @@ export const runAdvice: Record<string, string> = {
   PLAN_SCENARIO_ID_RESERVED:
     "Relancez le test : l’identifiant `_discovery` est réservé au relevé de découverte et ne peut pas nommer un scénario.",
   PLAN_SELECTOR_UNSTABLE:
-    "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source — puis relancez.",
+    "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source — jamais une position (`>`, espace, `+`, `~`, `:nth-of-type`), puis relancez.",
   PLAN_SKIP_OUTSIDE_DIFF:
     "Relancez le test : le planificateur ne peut ignorer qu’un fichier modifié par la PR, jamais un fichier de contexte inchangé.",
   PLAN_SOURCE_OUTSIDE_DIFF:
