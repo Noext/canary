@@ -15,6 +15,7 @@ import { GitHub, type PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
+  attributeValueRefusals,
   missingExpectationRefusals,
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
@@ -821,6 +822,9 @@ function planRefusals(
     ...unstableSelectorRefusals(candidate).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
+    ...attributeValueRefusals(candidate).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
     // Un plan passé par `PlanSchema` ne peut plus porter ces formes : ce refus
     // est donc surtout celui du chemin de lecture. Il est rendu ici aussi pour
     // qu'un plan rejoué ou bâti à la main reçoive le même message nommé que le
@@ -946,6 +950,7 @@ async function executePlan(
     [
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
+      ...attributeValueRefusals(result.plan),
       ...missingExpectationRefusals(result.plan),
     ].map((item) => [item.scenario.id, item.error])
   );

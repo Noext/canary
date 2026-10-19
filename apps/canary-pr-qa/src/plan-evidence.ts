@@ -644,6 +644,90 @@ export function unstableSelectorRefusals(
 }
 
 /**
+ * Sélecteur CSS réduit à UN test d'attribut : `[data-etat]` ou
+ * `[data-etat="valeur"]`. C'est la forme que prend un état exposé par un
+ * attribut, et donc la cible d'une assertion qui vise une VALEUR d'attribut.
+ */
+const ATTRIBUTE_SELECTOR =
+  /^\[\s*[a-zA-Z_][-\w]*\s*(?:=\s*(?:"[^"]*"|'[^']*'))?\s*\]$/;
+
+/**
+ * Forme d'un JETON d'identifiant : un seul mot, minuscules ASCII, chiffres,
+ * `_` ou `-`. Une valeur d'attribut est écrite ainsi (`ouvert`, `cloture`,
+ * `pr`). Un libellé visible, lui, est de la prose : espaces, accents,
+ * majuscules, montants et ponctuation. Les deux ne se confondent donc pas, et
+ * c'est cette distinction que le refus ci-dessous exploite.
+ */
+const IDENTIFIER_TOKEN = /^[a-z][a-z0-9_-]*$/;
+
+/**
+ * Refus d'une assertion qui lit un sélecteur d'attribut comme s'il rendait la
+ * valeur de l'attribut. `text` lit `innerText` et `value` lit `inputValue` de
+ * l'ÉLÉMENT visé : sur `[data-etat]`, l'élément est le conteneur de la vue, donc
+ * `innerText` rend toute la vue et jamais `ouvert` ; `inputValue` lève sur un
+ * conteneur. Un attendu en jeton d'identifiant est exactement la valeur qu'un
+ * attribut porte, jamais le texte qu'un conteneur affiche.
+ *
+ * Forme mesurée, sur 157 runs et 992 scénarios conservés du corpus (13 au 19
+ * oct. 2026) : 22 assertions de cette forme, dont AUCUNE ne passe — les 3 rouges
+ * du run 1b49d751 (`text` sur `[data-cash-state]` attendant `ouvert`/`cloture`,
+ * mesurés sur une page qui affichait « Session en cours »), 4 autres du même run
+ * interceptées par la première assertion fautive, et 15 `value` du run edb32e58
+ * bloqué sur `inputValue` ("Node is not an <input>"). Aucune des assertions qui passent avec ce sélecteur
+ * ne porte un attendu en jeton : elles attendent le texte visible de la vue
+ * (« Session en cours », « Comptage verrouillé », « 1 240,00 € »). Le refus ne
+ * retire donc rien à ce qui passe, et il remplace un échec d'assertion — ou un
+ * `inputValue` qui lève — par un message qui nomme la voie correcte.
+ *
+ * La voie correcte existe déjà et n'exige aucune extension du schéma : viser
+ * `[data-etat="ouvert"]` avec kind `visible` (ou `count` valant 1) prouve
+ * l'attribut, et viser le conteneur avec le texte qu'il affiche le prouve aussi.
+ */
+function attributeValueFault(
+  assertion: Scenario["assertions"][number]
+): string | undefined {
+  const target = assertion.target;
+  if (assertion.kind !== "text" && assertion.kind !== "value") {
+    return;
+  }
+  if (!(target && target.by === "css")) {
+    return;
+  }
+  const selector = target.value.trim();
+  if (!ATTRIBUTE_SELECTOR.test(selector)) {
+    return;
+  }
+  const expected = assertionExpected(assertion);
+  if (!(typeof expected === "string" && IDENTIFIER_TOKEN.test(expected))) {
+    return;
+  }
+  return `assertion ${assertion.id} (after ${assertion.afterStep ?? "no step"}, kind ${assertion.kind}) reads ${selector} for ${JSON.stringify(expected)}`;
+}
+
+export function attributeValueRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const offenders = scenario.assertions
+      .map((assertion) => attributeValueFault(assertion))
+      .filter((fault): fault is string => fault !== undefined);
+    if (offenders.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
+        `Scenario ${scenario.id} expects an attribute's value from a selector that renders text: ${offenders.join(" ; ")}`,
+        'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-cash-state="ouvert"] with kind "visible" (or kind "count" expecting 1); to prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert after that step.'
+      ),
+    });
+  }
+  return refusals;
+}
+
+/**
  * Les kinds dont la décision passe par `expected` : `text` lit un texte,
  * `value` le contenu d'un champ, `url` l'URL courante, `count` un nombre
  * d'éléments, `download` un nom de fichier, `popup` l'URL de la fenêtre
