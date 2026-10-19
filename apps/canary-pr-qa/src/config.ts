@@ -6,6 +6,24 @@ import { QaError } from "./diagnostics.js";
 import { ModelIdSchema } from "./model-catalog.js";
 import { isValidPreviewHost } from "./preview-hosts.js";
 
+/**
+ * Plafond de sortie d'un seul appel modèle, en tokens : le plus grand chiffre de
+ * sortie qu'un envoi peut demander. Il ne remplace pas la borne de l'appelant
+ * (`QA_PLAN_MAX_TOKENS`, `QA_DOCTOR_MAX_TOKENS`) : il la ramène, et c'est ce
+ * chiffre-là qui part au fournisseur, qui réserve l'enveloppe du run et qui juge
+ * la réponse.
+ *
+ * La valeur est le maximum historique de `QA_PLAN_MAX_TOKENS` avant que le
+ * plafond du plan ne soit relevé à 1 000 000. Mesure du run 1eb26f8c (lot Q) :
+ * un seul appel, aucun `usage` rapporté par l'endpoint, donc compté à la borne
+ * configurée (393 216) plus l'entrée estimée (119 402), soit 512 618 tokens sur
+ * une enveloppe de 1 000 000. La reprise du contenu inexploitable ne tenait plus
+ * dans ce qui restait : l'admission a refusé l'envoi, et le run a été bloqué en
+ * `RUN_BUDGET_EXCEEDED` sans plan ni scénario. À 32 768, le même appel coûte
+ * 152 170 tokens et quatre envois tiennent encore dans cette enveloppe.
+ */
+export const MAX_OUTPUT_TOKENS_PER_CALL = 32_768;
+
 const envSchema = z.object({
   QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
   QA_WEBHOOK_MAX_RUNS_PER_HOUR: z.coerce
@@ -105,6 +123,21 @@ const envSchema = z.object({
     .min(128)
     .max(1_000_000)
     .default(1024),
+  /**
+   * Plafond de sortie d'un appel, appliqué à chaque envoi par `Model.json`.
+   * Une valeur plus basse resserre la dépense d'un appel ; la relever est un
+   * choix explicite, et le plafond du plan ne peut plus la contourner.
+   *
+   * 0 est refusé, jamais lu comme « illimité » : c'est l'absence de borne sur un
+   * envoi qui a brûlé l'enveloppe du run 1eb26f8c, et un plafond désactivé ne se
+   * verrait qu'au moment où le run bloque sur son budget total.
+   */
+  QA_CALL_MAX_TOKENS: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .max(1_000_000)
+    .default(MAX_OUTPUT_TOKENS_PER_CALL),
   QA_STEP_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(120).default(30),
   QA_MODEL_TIMEOUT_SECONDS: z.coerce
     .number()

@@ -170,6 +170,22 @@ function measuredCount(value: number | undefined): number | undefined {
 }
 
 /**
+ * Sortie que l'endpoint a lui-même chiffrée au-delà de la borne transmise : le
+ * champ de limite a été ignoré, donc la réponse est exactement ce que la borne
+ * refusait de payer. Elle est traitée comme inutilisable
+ * (`MODEL_OUTPUT_INCOMPLETE`, reprise unique comprise) au lieu d'être acceptée.
+ * Un endpoint qui n'annonce pas de `completion_tokens` échappe à cette mesure —
+ * son `finish_reason: "length"` et le plafond transmis restent la mesure.
+ */
+function exceededOutputBound(
+  response: ModelResponse,
+  maxTokens: number
+): number | undefined {
+  const reported = measuredCount(response.usage?.completion_tokens);
+  return reported !== undefined && reported > maxTokens ? reported : undefined;
+}
+
+/**
  * Caractères de la réponse fautive conservés dans le diagnostic. Borné, sans le
  * prompt et passé par `redact` : l'extrait sert à distinguer une troncature
  * d'une dérive, jamais à recopier une réponse entière dans un rapport.
@@ -192,6 +208,23 @@ function responseExcerpt(
   return ` Response excerpt (${safe.length} characters, finish_reason=${finishReason ?? "none"}): ${JSON.stringify(excerpt)}${safe.length > excerpt.length ? " [truncated]" : ""}`;
 }
 
+/**
+ * Message d'une génération inutilisable : la coupure observée (`finishReason`,
+ * nombre de caractères) et, quand l'endpoint a ignoré la borne, la sortie qu'il a
+ * lui-même annoncée — de quoi distinguer un provider qui coupe d'un provider qui
+ * ignore le champ de limite.
+ */
+function unusableOutputMessage(
+  content: string,
+  finishReason: string | undefined,
+  overBound: number | undefined,
+  maxTokens: number,
+  config: Config
+): string {
+  const ignored = ` The endpoint reported ${overBound} output tokens for a ${maxTokens}-token bound.`;
+  return `AI returned an empty or truncated response.${overBound === undefined ? "" : ignored}${responseExcerpt(content, finishReason, config)}`;
+}
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -206,6 +239,14 @@ export class Model {
   ): Promise<T> {
     assertProvider(this.config);
     runModelConfig(this.config);
+    /**
+     * Borne de sortie de chaque envoi : la borne de l'appelant, ramenée au
+     * plafond d'un seul appel (`QA_CALL_MAX_TOKENS`). C'est ce chiffre qui part
+     * au fournisseur, qui réserve l'enveloppe du run et qui juge la réponse —
+     * un appel ne peut donc plus engager une part du budget total que le run ne
+     * pourrait pas rejouer.
+     */
+    const outputBound = Math.min(maxTokens, this.config.QA_CALL_MAX_TOKENS);
     const messages = [
       {
         role: "system",
@@ -236,7 +277,7 @@ export class Model {
       if (prepaid) {
         prepaid = false;
       } else {
-        this.claim(messages, maxTokens);
+        this.claim(messages, outputBound);
       }
       const started = Date.now();
       const response = await traced(
@@ -245,7 +286,7 @@ export class Model {
           model: this.config.OPENAI_MODEL,
           runId: runScope.getStore()?.id ?? "doctor",
         },
-        () => this.completionWithRetries(messages, maxTokens)
+        () => this.completionWithRetries(messages, outputBound)
       );
       modelLatency.observe(
         { model: this.config.OPENAI_MODEL },
@@ -256,7 +297,7 @@ export class Model {
       // Sans mesure positive, ce sont nos bornes qui chiffrent l'appel : la
       // borne de l'entrée et la sortie maximale autorisée.
       const inputTokens = reportedInput ?? this.inputTokenBound(messages);
-      const outputTokens = reportedOutput ?? maxTokens;
+      const outputTokens = reportedOutput ?? outputBound;
       // Un total annoncé chiffre l'appel à sa hauteur, même quand l'endpoint
       // n'expose aucune des deux parts : un endpoint qui annonce 900 000 tokens
       // ne peut pas être compté comme s'il en avait consommé 745.
@@ -287,18 +328,27 @@ export class Model {
       const choice = response.choices?.[0];
       const content = choice?.message?.content;
       const finishReason = choice?.finish_reason;
-      if (!content || finishReason === "length") {
+      const overBound = exceededOutputBound(response, outputBound);
+      if (!content || finishReason === "length" || overBound !== undefined) {
         // Une génération coupée par sa propre borne n'offre rien à corriger :
         // la reprise repose le même prompt, une seule fois, et l'échec remonte
-        // tel quel quand elle n'est plus permise.
+        // tel quel quand elle n'est plus permise. Une réponse qui annonce plus
+        // de tokens de sortie que la borne demandée est traitée de même : c'est
+        // ce que la borne refusait de payer, pas un plan à accepter.
         await this.replayUnusableContent(
           new QaError(
             "MODEL_OUTPUT_INCOMPLETE",
-            `AI returned an empty or truncated response.${responseExcerpt(content ?? "", finishReason, this.config)}`,
-            "Check model compatibility and QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
+            unusableOutputMessage(
+              content ?? "",
+              finishReason,
+              overBound,
+              outputBound,
+              this.config
+            ),
+            "Check model compatibility and QA_CALL_MAX_TOKENS / QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
           ),
           messages,
-          maxTokens,
+          outputBound,
           contentRetries
         );
         contentRetries += 1;
@@ -340,7 +390,7 @@ export class Model {
               `Validation: ${validation}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
             ),
             messages,
-            maxTokens,
+            outputBound,
             contentRetries
           );
           contentRetries += 1;
@@ -697,6 +747,10 @@ export class Model {
 
   /**
    * Une génération complète, streamée par défaut.
+   *
+   * `maxTokens` est déjà la borne d'un seul appel, ramenée au plafond
+   * `QA_CALL_MAX_TOKENS` par `json` : c'est elle qui part dans le champ de limite
+   * du fournisseur, pour que la dépense soit évitée et pas seulement constatée.
    *
    * Le streaming n'est pas un confort : une réponse non streamée n'envoie aucun octet avant le
    * dernier token, et le proxy devant l'endpoint coupe alors la requête (Cloudflare répond 524

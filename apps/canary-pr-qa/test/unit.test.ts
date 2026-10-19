@@ -16,7 +16,11 @@ import {
   typographicCodepoints,
   typographicVariants,
 } from "../src/canary.js";
-import { loadConfig, validatePreviewUrl } from "../src/config.js";
+import {
+  loadConfig,
+  MAX_OUTPUT_TOKENS_PER_CALL,
+  validatePreviewUrl,
+} from "../src/config.js";
 import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, type PrContext, parsePrUrl } from "../src/github.js";
 import { mayRetry, PLANNER_PROMPT, transportCode } from "../src/model.js";
@@ -58,6 +62,13 @@ import {
 const close: (() => Promise<void>)[] = [];
 /** Politique par défaut : `src/` est critique, aucun skip n'est approuvé. */
 const policyFor = () => PolicySchema.parse({ version: 1 });
+/**
+ * Enveloppe d'un appel volontairement énorme. Les tests qui mesurent la réserve
+ * d'un seul envoi, et non le plafond par appel, relèvent explicitement
+ * `QA_CALL_MAX_TOKENS` : la constante du produit est un défaut, jamais un
+ * maximum.
+ */
+const WIDE_CALL = { QA_CALL_MAX_TOKENS: "400000" } as const;
 
 /**
  * Les réservations budgétaires déposées avant chaque tentative modèle : le
@@ -2630,6 +2641,126 @@ describe("runner false-green regressions", () => {
     expect(result.diagnostic?.message).not.toContain("retry");
     expect(f.modelRequests).toHaveLength(1);
   }, 40_000);
+  it("borne la sortie demandée par appel, quelle que soit la borne du plan", async () => {
+    // Le plafond par appel est le plus petit de la borne de l'appelant et de
+    // QA_CALL_MAX_TOKENS, et c'est ce chiffre-là qui part au fournisseur : le
+    // run ne peut plus demander 400 000 tokens de sortie par appel.
+    const wide = await setup({ env: { QA_PLAN_MAX_TOKENS: "400000" } });
+    fakeBrowser();
+    const capped = await runQa(
+      { prUrl: PR_URL, previewUrl: wide.baseUrl },
+      wide.config
+    );
+    expect(capped.outcome).toBe("passed");
+    expect(capped.usage?.retries).toBe(0);
+    expect(wide.modelRequests[0]?.max_tokens).toBe(MAX_OUTPUT_TOKENS_PER_CALL);
+
+    const tighter = await setup({
+      env: { QA_PLAN_MAX_TOKENS: "400000", QA_CALL_MAX_TOKENS: "4096" },
+    });
+    fakeBrowser();
+    const lowered = await runQa(
+      { prUrl: PR_URL, previewUrl: tighter.baseUrl },
+      tighter.config
+    );
+    expect(lowered.outcome).toBe("passed");
+    expect(lowered.usage?.retries).toBe(0);
+    expect(tighter.modelRequests[0]?.max_tokens).toBe(4096);
+  }, 60_000);
+  it("refuse un plafond de sortie nul plutôt que de le lire comme illimité", () => {
+    // 0 n'est pas « pas de plafond » : c'est l'absence de borne sur un envoi qui
+    // a brûlé l'enveloppe du run 1eb26f8c. Le refus est explicite au chargement.
+    expect(() => loadConfig({ QA_CALL_MAX_TOKENS: "0" })).toThrow();
+    expect(loadConfig({ QA_CALL_MAX_TOKENS: "4096" }).QA_CALL_MAX_TOKENS).toBe(
+      4096
+    );
+    expect(loadConfig({}).QA_CALL_MAX_TOKENS).toBe(MAX_OUTPUT_TOKENS_PER_CALL);
+  });
+  it("traite une sortie au-delà de la borne comme inutilisable et la rejoue une fois", async () => {
+    // Un endpoint qui ignore le champ de limite répond un plan complet en
+    // annonçant plus de tokens de sortie que la borne : la dépense que la borne
+    // refusait de payer n'est pas acceptée, elle est rejouée une seule fois.
+    const f = await setup({
+      env: { QA_CALL_MAX_TOKENS: "4096" },
+      modelOverBound: 1,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(2);
+    expect(f.modelRequests).toHaveLength(2);
+    const events = await readFile(
+      join(f.dataDir, result.id, "events.jsonl"),
+      "utf8"
+    );
+    expect(events).toContain(
+      '"retry":{"attempt":1,"max":1,"code":"MODEL_OUTPUT_INCOMPLETE"}'
+    );
+  }, 40_000);
+  it("garde fatal un second dépassement de la borne, en la nommant", async () => {
+    const f = await setup({
+      env: { QA_CALL_MAX_TOKENS: "4096" },
+      modelOverBound: 2,
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("MODEL_OUTPUT_INCOMPLETE");
+    expect(result.diagnostic?.message).toContain("(after 1 retry)");
+    expect(result.diagnostic?.message).toContain(
+      "The endpoint reported 5096 output tokens for a 4096-token bound."
+    );
+    expect(result.usage?.retries).toBe(1);
+    expect(result.usage?.calls).toBe(2);
+    expect(f.modelRequests).toHaveLength(2);
+  }, 40_000);
+  it("rejoue le run dont un seul appel épuisait l'enveloppe", async () => {
+    // Forme mesurée du run 1eb26f8c : aucun usage rapporté, une borne de plan
+    // énorme, et une enveloppe à peine plus du double. Sans plafond par appel,
+    // l'appel compte la borne entière (393 216 plus l'entrée), la reprise de ce
+    // contenu inexploitable ne tient plus, et le run bloque sur le budget au
+    // lieu de rejouer. Avec le plafond, la reprise tient dans la même enveloppe.
+    const burnedEnv = {
+      OPENAI_STREAM: "false" as const,
+      QA_PLAN_MAX_TOKENS: "393216",
+      QA_RUN_MAX_TOKENS: "700000",
+    };
+    const capped = await setup({ env: burnedEnv, modelIncomplete: 1 });
+    fakeBrowser();
+    const replayed = await runQa(
+      { prUrl: PR_URL, previewUrl: capped.baseUrl },
+      capped.config
+    );
+    expect(replayed.outcome).toBe("passed");
+    expect(replayed.usage?.retries).toBe(1);
+    expect(replayed.usage?.estimated).toBe(true);
+    expect(replayed.diagnostic?.code).not.toBe("RUN_BUDGET_EXCEEDED");
+    expect(capped.modelRequests).toHaveLength(2);
+
+    const unbounded = await setup({
+      env: { ...burnedEnv, ...WIDE_CALL },
+      modelIncomplete: 1,
+    });
+    fakeBrowser();
+    const blocked = await runQa(
+      { prUrl: PR_URL, previewUrl: unbounded.baseUrl },
+      unbounded.config
+    );
+    // Le même envoi, plafond relevé au-delà de la borne du plan — le
+    // comportement d'avant cette borne : le premier appel consomme l'enveloppe
+    // et la reprise n'est jamais envoyée.
+    expect(blocked.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    expect(blocked.usage?.calls).toBe(1);
+    expect(blocked.usage?.retries).toBe(0);
+    expect(unbounded.modelRequests).toHaveLength(1);
+  }, 60_000);
   it.each([
     401, 500,
   ])("never replays a content failure the endpoint answers with HTTP %i", async (status) => {
@@ -2812,6 +2943,7 @@ describe("runner false-green regressions", () => {
     refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
     const f = await setup({
       env: {
+        ...WIDE_CALL,
         QA_MODEL_RETRIES: "1",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "500000",
@@ -2864,6 +2996,7 @@ describe("runner false-green regressions", () => {
     refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
     const f = await setup({
       env: {
+        ...WIDE_CALL,
         QA_MODEL_RETRIES: "1",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "1000000",
@@ -2900,6 +3033,7 @@ describe("runner false-green regressions", () => {
     refused.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
     const f = await setup({
       env: {
+        ...WIDE_CALL,
         QA_MODEL_RETRIES: "1",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "700000",
@@ -2934,7 +3068,11 @@ describe("runner false-green regressions", () => {
   }, 40_000);
   it("refuses the first attempt a run envelope cannot cover, without sending it", async () => {
     const f = await setup({
-      env: { QA_PLAN_MAX_TOKENS: "400000", QA_RUN_MAX_TOKENS: "100000" },
+      env: {
+        ...WIDE_CALL,
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "100000",
+      },
     });
     fakeBrowser();
     const request = vi.spyOn(globalThis, "fetch");

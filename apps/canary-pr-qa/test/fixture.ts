@@ -91,7 +91,12 @@ export function json(res: ServerResponse, value: unknown, status = 200) {
  * Réponse `text/event-stream` : deltas partiels (dont un delta de raisonnement), usage final
  * puis `[DONE]`. Le contenu est coupé sur une frontière sûre pour forcer un vrai recollage.
  */
-export function sse(res: ServerResponse, text: string, finishReason = "stop") {
+export function sse(
+  res: ServerResponse,
+  text: string,
+  finishReason = "stop",
+  completionTokens = 7
+) {
   res.writeHead(200, {
     "Cache-Control": "no-store",
     "Content-Type": "text/event-stream",
@@ -115,7 +120,11 @@ export function sse(res: ServerResponse, text: string, finishReason = "stop") {
   res.write(
     `data: ${JSON.stringify({
       choices: [{ delta: {}, finish_reason: finishReason, index: 0 }],
-      usage: { completion_tokens: 7, prompt_tokens: 11, total_tokens: 18 },
+      usage: {
+        completion_tokens: completionTokens,
+        prompt_tokens: 11,
+        total_tokens: 11 + completionTokens,
+      },
     })}\n\n`
   );
   res.end("data: [DONE]\n\n");
@@ -192,6 +201,12 @@ export async function fixture(
     modelUnreadable?: number;
     /** Contenu servi à la place du plan d'une réponse illisible. */
     unreadableContent?: string;
+    /**
+     * Nombre de réponses de plan dont l'usage annonce une sortie au-delà de la
+     * borne transmise (`max_tokens` + 1000) : un endpoint qui ignore le champ de
+     * limite.
+     */
+    modelOverBound?: number;
     /** Statut HTTP servi par `chat/completions` au lieu d'une réponse de plan. */
     completionsStatus?: number;
     /** Variables d'environnement ajoutées à la configuration du fixture. */
@@ -209,6 +224,7 @@ export async function fixture(
   let modelTruncations = options.modelTruncations ?? 0;
   let modelIncomplete = options.modelIncomplete ?? 0;
   let modelUnreadable = options.modelUnreadable ?? 0;
+  let modelOverBound = options.modelOverBound ?? 0;
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) =>
       json(res, { error: String(error) }, 500)
@@ -479,9 +495,17 @@ export async function fixture(
       let value: unknown;
       let raw: string | undefined;
       let finishReason = "stop";
+      /** Usage annoncé au-delà de la borne transmise, pour un endpoint qui l'ignore. */
+      let reportedOutput: number | undefined;
       if (messages[0]?.content.startsWith("You are a connection diagnostic")) {
         value = { ok: true };
       } else if (messages[0]?.content.startsWith("You plan")) {
+        if (modelOverBound > 0) {
+          modelOverBound -= 1;
+          // Le champ de limite est ignoré : la réponse est complète, mais son
+          // usage annonce une sortie plus lourde que la borne demandée.
+          reportedOutput = Number(payload.max_tokens) + 1000;
+        }
         if (modelUnreadable > 0) {
           modelUnreadable -= 1;
           // Réponse complète mais hors schéma : le contenu n'est pas du JSON.
@@ -536,7 +560,7 @@ export async function fixture(
           res.end();
           return;
         }
-        sse(res, text, finishReason);
+        sse(res, text, finishReason, reportedOutput ?? 7);
         return;
       }
       json(res, {
@@ -546,6 +570,15 @@ export async function fixture(
             finish_reason: finishReason,
           },
         ],
+        ...(reportedOutput === undefined
+          ? {}
+          : {
+              usage: {
+                completion_tokens: reportedOutput,
+                prompt_tokens: 11,
+                total_tokens: 11 + reportedOutput,
+              },
+            }),
       });
       return;
     }
