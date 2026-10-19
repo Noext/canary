@@ -804,3 +804,103 @@ it("finds the existing bot report beyond 100 human comments and updates it", asy
     false
   );
 });
+/**
+ * Lot T : la correction contrainte. Le tour de correction d'une citation refusée
+ * ne demande plus au modèle de RECOPIER le plan — la boucle mesurée du run
+ * 9add286d ne convergeait pas : deux appels payés, et la ligne exacte pourtant
+ * sous les yeux — mais de choisir un INDICE parmi des portions réelles : le gate écrit le
+ * texte, donc la boucle ne peut plus reproduire l'altération qu'elle corrige.
+ */
+function quotePickAnswer() {
+  return z.object({
+    picks: z.array(
+      z.object({
+        candidate: z.number().int().positive(),
+        requirement: z.number().int().positive(),
+        scenario: z.string().min(1),
+      })
+    ),
+  });
+}
+function constrainedFor(answer: ReturnType<typeof quotePickAnswer>) {
+  return {
+    answer,
+    message: 'Pick a candidate: answer only {"picks":[{"scenario":…}]}',
+    resolve: (picked: unknown) => {
+      const parsed = answer.safeParse(picked);
+      const [pick] = parsed.success ? parsed.data.picks : [];
+      return pick && pick.candidate === 1 ? { quote: "reelle" } : undefined;
+    },
+  };
+}
+it("resolves a refused value by a constrained answer instead of asking for its text again", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const bodies: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((async (
+    _url: unknown,
+    init?: { body?: string }
+  ) => {
+    bodies.push(String(init?.body ?? ""));
+    const usage = { completion_tokens: 5, prompt_tokens: 10, total_tokens: 15 };
+    return bodies.length === 1
+      ? completeStream('{"quote":"altere"}', usage)
+      : completeStream(
+          '{"picks":[{"scenario":"caisse","requirement":2,"candidate":1}]}',
+          usage
+        );
+  }) as unknown as typeof fetch);
+  const answer = quotePickAnswer();
+  const value = await new Model({
+    ...f.config,
+    QA_MODEL_RETRIES: 0,
+  }).json("You plan", {}, z.object({ quote: z.string() }), 1000, (candidate) =>
+    candidate.quote === "reelle" ? undefined : constrainedFor(answer)
+  );
+  // La valeur rendue est celle que `resolve` a écrite, jamais l'indice reçu.
+  expect(value).toEqual({ quote: "reelle" });
+  expect(bodies).toHaveLength(2);
+  // Le tour de correction porte la question contrainte, donc plus de plan à
+  // recopier : c'est ce qui ferme la boucle qui ne convergeait pas.
+  expect(bodies[1]).toContain("Pick a candidate");
+  expect(bodies[1]).toContain("picks");
+});
+it("keeps the refused value when the constrained answer resolves nothing", async () => {
+  const answer = quotePickAnswer();
+  for (const reply of [
+    '{"picks":[{"scenario":"caisse","requirement":2,"candidate":9}]}',
+    '{"picks":[]}',
+    "not json",
+  ]) {
+    const f = await fixture();
+    cleanup.push(f.close);
+    const bodies: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((async (
+      _url: unknown,
+      init?: { body?: string }
+    ) => {
+      bodies.push(String(init?.body ?? ""));
+      const usage = {
+        completion_tokens: 5,
+        prompt_tokens: 10,
+        total_tokens: 15,
+      };
+      return bodies.length === 1
+        ? completeStream('{"quote":"altere"}', usage)
+        : completeStream(reply, usage);
+    }) as unknown as typeof fetch);
+    // Le plan refusé repart tel quel : le message fatal reste exactement celui
+    // d'aujourd'hui, et aucun troisième appel n'est payé pour le retenter.
+    await expect(
+      new Model({ ...f.config, QA_MODEL_RETRIES: 0 }).json(
+        "You plan",
+        {},
+        z.object({ quote: z.string() }),
+        1000,
+        (candidate) =>
+          candidate.quote === "reelle" ? undefined : constrainedFor(answer)
+      )
+    ).resolves.toEqual({ quote: "altere" });
+    expect(bodies).toHaveLength(2);
+  }
+});
