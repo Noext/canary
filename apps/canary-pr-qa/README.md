@@ -199,6 +199,10 @@ reste un échec — et aucune autre action ne l'accepte. Une étape sautée ne p
 pas démontrer de transition : sa baseline est relevée avant un clic qui n'a pas
 eu lieu, donc les deux valeurs sont identiques. C'est pourquoi l'assertion qui
 suit une étape d'établissement se vérifie en `state`.
+Ce contrat est vérifié avant exécution : un plan qui place `ifPresent` après la
+première action métier (`fill`, `select`, `check`, `press`), ou qui ne rattache
+aucune assertion à ce clic (`afterStep` = l'étape du clic), est refusé avec un
+message qui nomme le scénario, l'étape et la raison.
 Une assertion `visual` compare le screenshot de sa cible à une image PNG
 **de confiance**, déclarée dans `visuals` du catalogue. La tolérance maximale est
 0,1, réglable via `visualTolerance` ; la taille doit correspondre. Ces images ne

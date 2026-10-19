@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary, MODEL_SNAPSHOT_CHARS } from "../src/canary.js";
 import { Model } from "../src/model.js";
-import { attributeValueRefusals } from "../src/plan-evidence.js";
+import {
+  attributeValueRefusals,
+  ifPresentRefusals,
+} from "../src/plan-evidence.js";
 import { reportMarkdown } from "../src/report.js";
 import { runQa } from "../src/runner.js";
 import { ActionSchema, type Plan, PlanSchema } from "../src/schema.js";
@@ -839,6 +842,78 @@ describe("valeur d'attribut visée par une assertion de texte", () => {
     expect(refusals(plan)).toHaveLength(1);
     expect(refusals(plan)[0]?.error.message).toContain("[data-state]");
   });
+
+  /**
+   * L'énumération fermée du refus, en `text` comme en `value` : seuls les
+   * attributs d'état nommés sont refusés, et tout autre attribut est accepté —
+   * c'est la règle, pas la forme du sélecteur, qui décide.
+   */
+  function planReading(selector: string, kind: "text" | "value"): Plan {
+    const plan = assumedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: [
+          {
+            id: "state-ouvert",
+            description: "La cible sélectionnée rend un jeton",
+            kind,
+            expected: "open",
+            target: { by: "css" as const, value: selector },
+            afterStep: "open-cash",
+            verification: "state" as const,
+          },
+        ],
+        steps: scenario.steps.filter((step) =>
+          ["goto", "open-cash", "check-open"].includes(step.id)
+        ),
+      },
+    ];
+    return plan;
+  }
+
+  it("refuse chacun des neuf attributs d'état nommés, quel que soit le kind", () => {
+    for (const attribute of [
+      "aria-checked",
+      "aria-current",
+      "aria-disabled",
+      "aria-expanded",
+      "aria-hidden",
+      "aria-invalid",
+      "aria-pressed",
+      "aria-selected",
+      "data-state",
+    ]) {
+      for (const kind of ["text", "value"] as const) {
+        const refused = refusals(planReading(`[${attribute}]`, kind));
+        expect(refused, `${attribute} ${kind}`).toHaveLength(1);
+        expect(refused[0]?.error.message).toContain(`[${attribute}]`);
+      }
+    }
+  });
+
+  it("accepte tout attribut hors de l'énumération, en text comme en value", () => {
+    // `data-whatever` est le cas qui tranche : avec une règle fondée sur le
+    // préfixe `data-`, il serait refusé. Aucun attribut de cette liste ne porte
+    // un état : ils nomment l'élément ou décrivent son type.
+    for (const selector of [
+      '[name="state"]',
+      '[id="state"]',
+      '[class="state"]',
+      '[type="text"]',
+      '[role="status"]',
+      '[data-testid="status"]',
+      '[data-whatever="x"]',
+    ]) {
+      for (const kind of ["text", "value"] as const) {
+        expect(
+          refusals(planReading(selector, kind)),
+          `${selector} ${kind}`
+        ).toEqual([]);
+      }
+    }
+  });
 });
 
 describe("état de la caisse hérité d'un run antérieur", () => {
@@ -1415,4 +1490,63 @@ describe("rejeu du scénario 1 du run 1b49d751, corrigé", () => {
       ).toBe(state === "ouvert");
     });
   }
+});
+
+/**
+ * Contrat de `click(ifPresent)` : le drapeau n'est permis que sur une étape
+ * d'établissement, et cette qualité se vérifie sur la structure du scénario. Un
+ * clic métier tolérant se sauterait en silence : c'est le faux vert que le
+ * finding P1 du 2026-10-19 décrivait.
+ */
+function ifPresentPlan(stepId: string): Plan {
+  const plan = correctedScenarioOne();
+  const step = plan.scenarios[0]!.steps.find((item) => item.id === stepId)!;
+  (step.action as { ifPresent?: boolean }).ifPresent = true;
+  return plan;
+}
+
+describe("contrat exécutable de click(ifPresent)", () => {
+  it("accepte le clic d'établissement placé avant la première action métier", () => {
+    // Le correctif mesuré : `etablir-ouvert` suit l'ouverture de la vue, précède
+    // les saisies, et l'assertion `avant-saisie` lui est rattachée.
+    expect(() => PlanSchema.parse(correctedScenarioOne())).not.toThrow();
+  });
+
+  it("refuse ifPresent sur un clic métier, en nommant le scénario, l'étape et la raison", () => {
+    // `close` vient APRÈS les saisies : il déplace la donnée du scénario. Une
+    // cible absente y est un défaut, jamais un saut légitime.
+    expect(() => PlanSchema.parse(ifPresentPlan("close"))).toThrow(
+      /Scenario comptage-juste-cloture step close: ifPresent is only for an establishing step placed before the first business action, but this click comes after fill-500 \(fill\)/
+    );
+  });
+
+  it("refuse ifPresent sans assertion rattachée à l'étape, et nomme l'étape", () => {
+    const plan = statefulPlan();
+    plan.scenarios[0]!.assertions[0]!.afterStep = "open-cash";
+    expect(() => PlanSchema.parse(plan)).toThrow(
+      /Scenario etablit-puis-cloture step reopen: ifPresent skips the step when its target is absent, so an assertion must verify the state it establishes: no assertion has afterStep reopen/
+    );
+  });
+
+  it("rejoue le refus avant exécution, sans dépenser une étape navigateur", async () => {
+    // Chemin de lecture : un plan qui contourne `PlanSchema` — rejoué, écrit à la
+    // main — reçoit le même refus nommé avant la première étape.
+    const plan = ifPresentPlan("close");
+    const refused = ifPresentRefusals(plan);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.code).toBe("PLAN_IF_PRESENT_NOT_ESTABLISHING");
+    const f = await setup();
+    cashPage("cloture");
+    scriptPlan(plan);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    const scenario = result.scenarios[0]!;
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.diagnostic?.code).toBe("PLAN_IF_PRESENT_NOT_ESTABLISHING");
+    expect(scenario.error).toContain("comptage-juste-cloture");
+    expect(scenario.error).toContain("step close");
+  });
 });

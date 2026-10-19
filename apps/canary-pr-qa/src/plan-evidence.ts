@@ -6,7 +6,13 @@ import {
 } from "./canary.js";
 import { QaError } from "./diagnostics.js";
 import { unstableSelectorReason } from "./plan-selector.js";
-import type { Locator, Plan, Scenario } from "./schema.js";
+import {
+  type EstablishingClickFault,
+  establishingClickFault,
+  type Locator,
+  type Plan,
+  type Scenario,
+} from "./schema.js";
 
 /**
  * Contrôle d'évidence du plan : juste après la planification, l'instantané
@@ -654,14 +660,27 @@ const ATTRIBUTE_SELECTOR =
   /^\[\s*([a-zA-Z_][-\w]*)\s*(?:=\s*(?:"[^"]*"|'[^']*'))?\s*\]$/;
 
 /**
- * Attributs ARIA dont la valeur est un ÉTAT fermé de l'élément (`true`,
- * `false`, `mixed`, `page`). Les autres attributs nomment ou décrivent
- * l'élément : `[role="status"]` est une cible dont le texte visible EST le
- * contenu, et `text` y lit `ok` correctement ; `[aria-label="next"]` porte un
- * nom, pas un état.
+ * RÈGLE : la liste ci-dessous est l'ÉNUMÉRATION FERMÉE des attributs qui
+ * portent un état — une valeur en jeton que l'élément n'affiche pas. Elle est
+ * écrite en toutes lettres, sans préfixe ni motif : un attribut absent de cette
+ * liste est accepté, y compris `name`, `id`, `class`, `type`, `role`,
+ * `data-testid` et tout autre `data-*`. Aucune heuristique sur le nom ne décide
+ * du sens d'un sélecteur.
+ *
+ * Les huit ARIA d'état portent `true`, `false`, `mixed`, `page` ou une valeur
+ * courante ; `data-state` est le même contrat pour une vue qui n'utilise pas
+ * ARIA. `data-cash-state` y figure parce que c'est la forme RÉELLE mesurée : sur
+ * 157 runs et 992 scénarios du corpus, les 22 assertions `text`/`value` qui la
+ * visent ne passent aucune (voir `attributeValueFault`). Un attribut de la
+ * liste est donc refusé par son NOM explicite, pas parce qu'il commence par
+ * `data-`.
+ *
+ * Mesuré, en `text` et en `value` : les huit ARIA d'état, `data-state` et
+ * `data-cash-state` refusés ; `[name="state"]`, `[id="state"]`, `[class="state"]`,
+ * `[type="text"]`, `[role="status"]`, `[data-testid="status"]` et
+ * `[data-whatever="x"]` acceptés.
  */
-const ARIA_STATE_ATTRIBUTES = new Set([
-  "aria-busy",
+const STATE_ATTRIBUTES = new Set([
   "aria-checked",
   "aria-current",
   "aria-disabled",
@@ -670,37 +689,18 @@ const ARIA_STATE_ATTRIBUTES = new Set([
   "aria-invalid",
   "aria-pressed",
   "aria-selected",
+  "data-cash-state",
+  "data-state",
 ]);
 
 /**
- * Crochets de SÉLECTION écrits en `data-*` : ils nomment l'élément pour le
- * désigner dans un test, ils ne portent aucun état de l'application. L'assertion
- * qui les vise lit le contenu de l'élément, comme pour `[name]`, `[id]`, `[class]`
- * ou `[role]` : `[data-testid="status"]` attendant `ready` est correct et ne doit
- * pas être refusé, alors que ce même `data-` préfixe porte l'état ailleurs.
- */
-const SELECTOR_HOOK_ATTRIBUTES = new Set([
-  "data-automation-id",
-  "data-cy",
-  "data-qa",
-  "data-test",
-  "data-test-id",
-  "data-testid",
-]);
-
-/**
- * L'attribut porte-t-il un état, c'est-à-dire une valeur en jeton que l'élément
- * n'affiche pas ? `data-*` : l'application y met l'état qu'elle expose, sauf les
- * crochets de sélection qui ne font que nommer l'élément. Une assertion `text`
- * sur un sélecteur d'attribut qui ne porte pas d'état n'est donc jamais fautive
- * par sa seule syntaxe.
+ * L'attribut fait-il partie de l'énumération fermée `STATE_ATTRIBUTES` ? C'est
+ * la seule question posée : un attribut qui n'y est pas ne porte pas d'état, et
+ * une assertion `text` ou `value` sur un sélecteur d'attribut hors liste n'est
+ * jamais fautive par sa seule syntaxe.
  */
 function carriesStateValue(name: string): boolean {
-  const attribute = name.toLowerCase();
-  if (SELECTOR_HOOK_ATTRIBUTES.has(attribute)) {
-    return false;
-  }
-  return attribute.startsWith("data-") || ARIA_STATE_ATTRIBUTES.has(attribute);
+  return STATE_ATTRIBUTES.has(name.toLowerCase());
 }
 
 /**
@@ -731,13 +731,14 @@ const IDENTIFIER_TOKEN = /^[a-z][a-z0-9_-]*$/;
  * retire donc rien à ce qui passe, et il remplace un échec d'assertion — ou un
  * `inputValue` qui lève — par un message qui nomme la voie correcte.
  *
- * Le refus est restreint aux attributs qui PORTENT un état (`data-*` et les
- * attributs ARIA d'état), pas à la forme syntaxique du sélecteur : `[role="\
- * status"]` est une cible légitime dont le texte visible est le contenu, et
- * une assertion `text` y attendant `ok` est correcte. `[name="state"]`,
- * `[id="state"]` et `[data-testid="status"]` nomment l'ÉLÉMENT : `kind "value"`
- * y lit `inputValue` du champ visé, et `kind "text"` le contenu de l'élément, si
- * bien qu'aucun des deux ne peut lire la valeur d'un attribut par accident.
+ * Le refus est restreint à l'énumération FERMÉE `STATE_ATTRIBUTES`, jamais à la
+ * forme syntaxique du sélecteur ni au préfixe du nom : `[role="status"]` est
+ * une cible légitime dont le texte visible est le contenu, et une assertion
+ * `text` y attendant `ok` est correcte. `[name="state"]`, `[id="state"]`,
+ * `[class="state"]`, `[type="text"]`, `[data-testid="status"]` et tout autre
+ * `data-*` hors liste nomment l'ÉLÉMENT : `kind "value"` y lit `inputValue` du
+ * champ visé, et `kind "text"` le contenu de l'élément, si bien qu'aucun des
+ * deux ne peut lire la valeur d'un attribut par accident.
  *
  * La voie correcte existe déjà et n'exige aucune extension du schéma : viser
  * `[data-etat="ouvert"]` avec kind `visible` (ou `count` valant 1) prouve
@@ -782,6 +783,39 @@ export function attributeValueRefusals(
         "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
         `Scenario ${scenario.id} expects an attribute's value from a selector that renders text: ${offenders.join(" ; ")}`,
         'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-cash-state="ouvert"] with kind "visible" (or kind "count" expecting 1) and keep verification "state" with afterStep set to the step that established it; "transition" fails whenever the state was already the expected one, because the baseline and the observed value are then identical. Reserve "transition" for a step that genuinely moves the value, such as closing a session that was open. To prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert state after that step.'
+      ),
+    });
+  }
+  return refusals;
+}
+
+/**
+ * Rejeu du contrat de `click.ifPresent` (voir `establishingClickFault` dans
+ * `schema.ts` pour la règle et ses deux conditions). `PlanSchema` refuse déjà
+ * ces formes, donc ce refus est surtout celui du chemin de LECTURE : un plan
+ * rejoué, écrit à la main ou rendu par un modèle hors schéma reçoit le même
+ * message nommé — scénario, étape, raison — au lieu d'être exécuté et de sauter
+ * en silence un clic obligatoire. `runner.ts` le rejoue avant la première étape
+ * navigateur, pour l'aperçu de tête comme pour la préversion de base.
+ */
+export function ifPresentRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const offenders = scenario.steps
+      .map((_step, index) => establishingClickFault(scenario, index))
+      .filter((fault): fault is EstablishingClickFault => fault !== undefined)
+      .map((fault) => `step ${fault.stepId}: ${fault.reason}`);
+    if (offenders.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_IF_PRESENT_NOT_ESTABLISHING",
+        `Scenario ${scenario.id} uses click(ifPresent) outside an establishing step: ${offenders.join(" ; ")}`,
+        'Keep "ifPresent": true only on a click that establishes a state the scenario depends on: place it before the first business action (fill, select, check, press) and attach an assertion to that step (afterStep set to the click, verification "state"), so a skipped click cannot pass unnoticed. A business action keeps a plain click: an absent target there is a defect and has to stay a failure. If the scenario no longer needs the establishing step, remove the flag.'
       ),
     });
   }

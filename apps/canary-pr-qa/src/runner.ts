@@ -16,6 +16,7 @@ import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
   attributeValueRefusals,
+  ifPresentRefusals,
   missingExpectationRefusals,
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
@@ -832,6 +833,12 @@ function planRefusals(
     ...missingExpectationRefusals(candidate).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
+    // Même raison que ci-dessus : `PlanSchema` refuse déjà un `click(ifPresent)`
+    // hors du préfixe d'établissement ou sans assertion rattachée, et le rejeu
+    // donne au plan lu le même message nommé.
+    ...ifPresentRefusals(candidate).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
   ];
 }
 /**
@@ -952,6 +959,7 @@ async function executePlan(
       ...unstableSelectorRefusals(result.plan),
       ...attributeValueRefusals(result.plan),
       ...missingExpectationRefusals(result.plan),
+      ...ifPresentRefusals(result.plan),
     ].map((item) => [item.scenario.id, item.error])
   );
   await saveReport(root, result, config);
