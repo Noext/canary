@@ -195,3 +195,25 @@ it("states the three verification semantics to the planner", () => {
     /use state with afterStep set to the interaction step/i
   );
 });
+
+it("teaches that a text assertion never reads an attribute value", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Défaut mesuré du run 1b49d751 : `text` sur `[data-cash-state]` attendant
+  // « ouvert », alors que `innerText` de ce conteneur rend toute la vue et que
+  // l'attribut n'y figure jamais. La consigne nomme la lecture réelle, la voie
+  // correcte (présence sur la valeur de l'attribut, ou texte visible) et
+  // l'établissement de l'état par une étape observable.
+  expect(prompt).toMatch(
+    /kind "text" reads the visible text INSIDE the target \(innerText\), never one of its attributes/i
+  );
+  expect(prompt).toMatch(
+    /Never plan kind "value" on an element that is not an input/i
+  );
+  expect(prompt).toMatch(
+    /\[data-cash-state="ouvert"\] with kind "visible", or kind "count" expecting 1/i
+  );
+  expect(prompt).toMatch(
+    /must ESTABLISH that state with an observable step before asserting it/i
+  );
+  expect(prompt).toMatch(/put the "ouvert" assertion AFTER that step/i);
+});
