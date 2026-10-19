@@ -5,6 +5,7 @@ import type { GitHub, PrContext } from "./github.js";
 import {
   normalizeQuoteText,
   type Plan,
+  QUOTE_MAX_CHARS,
   QUOTE_MIN_TEXT_CHARS,
   QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
@@ -1243,6 +1244,116 @@ export function quoteDivergence(
   scans: AmputationScans = amputationScans()
 ): QuoteDivergence | undefined {
   return quoteCopyScan(requirement, context, scans)?.divergence;
+}
+/**
+ * Candidats réels d'une citation refusée : les portions EXACTES du fichier cité
+ * que le planificateur peut citer à la place, avec leur numéro de ligne. C'est
+ * le matériel de la correction contrainte (voir `quotePickCorrection`,
+ * runner.ts) : le planificateur choisit un indice, le gate écrit le texte, donc
+ * la boucle de correction ne peut plus reproduire l'altération qu'elle corrige.
+ *
+ * Quatre sources, dans cet ordre : l'endroit où la copie s'écarte de sa ligne
+ * (`quoteDivergence`), la ligne dont elle est une amputation
+ * (`amputatedQuote`), les lignes qui recouvrent le plus ses jetons
+ * (`suggestedQuoteLines`), et — seulement quand les trois premières se taisent —
+ * la ligne dont les mots sont exactement les siens (`wordAlignedFragment`).
+ * Chaque candidat est vérifié comme témoin du fichier cité avant d'être proposé
+ * — un candidat que le gate refuserait ne dirigerait le planificateur nulle part
+ * — et la liste est dédoublonnée sur son texte normalisé, donc deux diagnostics
+ * qui nomment la même portion n'en font qu'un.
+ */
+export function quoteResolutionCandidates(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  scans: AmputationScans = amputationScans()
+): { line: number; text: string }[] {
+  const scan = quoteCopyScan(requirement, context, scans);
+  const found: { line: number; text: string }[] = [];
+  const seen = new Set<string>();
+  const offer = (line: number, text: string) => {
+    const key = normalizeQuoteText(text);
+    if (seen.has(key) || text.length > QUOTE_MAX_CHARS) {
+      return;
+    }
+    if (
+      !requirementHasWitness(
+        { quote: text, sourceFile: requirement.sourceFile },
+        context
+      )
+    ) {
+      return;
+    }
+    seen.add(key);
+    found.push({ line, text });
+  };
+  if (scan?.divergence) {
+    offer(scan.divergence.line, scan.divergence.candidate);
+  }
+  if (scan?.amputation) {
+    offer(scan.amputation.line, scan.amputation.candidate);
+  }
+  for (const item of suggestedQuoteLines(requirement, context)) {
+    offer(item.line, item.text);
+  }
+  if (found.length === 0) {
+    // Dernier recours borné : la copie dont les MOTS sont ceux d'une ligne, et
+    // où seule une ponctuation diffère. L'alignement de `quoteDivergence`
+    // compare des mots, donc une parenthèse perdue ne s'y voit pas, et la ligne
+    // peut dépasser la borne de suggestion — c'est le cas mesuré 7eef87d4, où
+    // la copie perd une `)` finale. Le candidat reste une portion EXACTE de la
+    // ligne, alignée sur ses jetons entiers, donc un témoin que le gate
+    // acceptera.
+    for (const item of fileContentLines(requirement, context)) {
+      const fragment = wordAlignedFragment(item.text, requirement.quote);
+      if (fragment !== "") {
+        offer(item.line, fragment);
+        break;
+      }
+    }
+  }
+  return found.slice(0, QUOTE_RESOLUTION_CANDIDATE_LIMIT);
+}
+/**
+ * Nombre maximal de candidats par citation fautive : au-delà, le choix noie la
+ * correction, et le message contraint — tronqué à 2000 caractères par
+ * `model.ts` — n'a plus la place de les nommer tous.
+ */
+const QUOTE_RESOLUTION_CANDIDATE_LIMIT = 4;
+/**
+ * Le fragment réel qui porte TOUS les mots de la copie, aligné sur des jetons
+ * entiers, quand seul un caractère de ponctuation les distingue : la copie
+ * 7eef87d4 perd une `)`, donc ses mots sont exactement ceux de sa ligne et aucun
+ * diagnostic par mots ne peut la situer. Vide dès qu'un mot de la copie manque
+ * à la suite commune — le fragment ne couvrirait alors qu'une partie de ce que
+ * la copie voulait dire — ou quand la fenêtre n'est pas citable.
+ */
+function wordAlignedFragment(line: string, quote: string): string {
+  const copyWords = lineWords(quote);
+  if (copyWords.length < SUGGESTED_QUOTE_MIN_SHARED_TOKENS) {
+    return "";
+  }
+  const words = lineWords(line);
+  const run = longestWordRun(copyWords, words);
+  if (!run || run.length < copyWords.length) {
+    return "";
+  }
+  const tokens = lineTokens(line);
+  const covering = coveringTokens(
+    tokens,
+    (words[run.line] as LineWord).start,
+    (words[run.line + run.length - 1] as LineWord).end
+  );
+  if (!covering) {
+    return "";
+  }
+  const [low, high] = windowBounds(tokens, ...covering);
+  const window = line.slice(
+    (tokens[low] as LineToken).start,
+    (tokens[high] as LineToken).end
+  );
+  return quoteCarriesContent(window) && window.length <= QUOTE_MAX_CHARS
+    ? window
+    : "";
 }
 /**
  * Le balayage partagé, payé une fois par citation examinée : ses deux verdicts
