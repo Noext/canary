@@ -16,6 +16,7 @@ import {
   quoteDivergence,
   quoteExcerpt,
   quoteHasWitness,
+  quoteResolutionCandidates,
   repairRequirementAttribution,
   requirementEvidence,
   requirementHasWitness,
@@ -35,6 +36,7 @@ import {
   coverageFatalClasses,
   planPayload,
   planShapeRefusals,
+  quotePickCorrection,
 } from "../src/runner.js";
 import {
   type Plan,
@@ -3622,11 +3624,11 @@ it("replays every measured ungrounded refusal against the real line", () => {
       `${label}: la réparation proposée n'est pas un témoin`
     ).toBe(true);
   }
-  expect(MEASURED_COPY_REFUSALS.length).toBe(18);
+  expect(MEASURED_COPY_REFUSALS.length).toBe(20);
   expect(accepted).toBe(4);
-  expect(refused).toBe(14);
-  expect(withRealLine).toBe(17);
-  expect(withProposal).toBe(11);
+  expect(refused).toBe(16);
+  expect(withRealLine).toBe(19);
+  expect(withProposal).toBe(13);
 });
 
 /**
@@ -4046,4 +4048,290 @@ it("keeps the planner message inside the context budget with its numbered materi
       config
     )
   ).toThrow();
+});
+
+/**
+ * Lot T, run 9add286d : la correction contrainte. Sa mesure est que la boucle de
+ * correction ne converge pas quand elle demande de RECOPIER le plan — l'appel de
+ * correction est payé et le run s'achève sur la copie altérée, alors que la
+ * ligne exacte est dans le matériel et que le refus la nomme. Quand la citation est le seul
+ * défaut du plan, le gate énumère donc les portions réelles du fichier cité, le
+ * planificateur choisit un INDICE, et le gate écrit le texte. Ces tests tiennent
+ * les deux bornes : aucune copie refusée n'est acceptée, et tout ce qui est
+ * proposé au choix est un témoin.
+ */
+function measuredContextOf(measured: MeasuredCopyRefusal): PrContext {
+  return measured.realLine === ""
+    ? contextWith([])
+    : contextWith([
+        lineAt(measured.lineFile, measured.lineNumber, measured.realLine),
+      ]);
+}
+/**
+ * Le plan mesuré réduit à ses exigences : une citation témoin du fichier déclaré
+ * quand la ligne réelle y est (c'est le cas de tous les scénarios mesurés dont
+ * la copie est une altération), puis la copie refusée. Sans ce témoin, la classe
+ * `COVERAGE_WITNESS_MISSING` s'ajouterait au refus et la correction contrainte
+ * ne serait pas posée — ce qui est justement l'un des plateaux mesurés.
+ */
+function measuredPlanOf(measured: MeasuredCopyRefusal): Plan {
+  const witness =
+    measured.lineFile === measured.declaredFile ? measured.realLine : "";
+  return planWithWitnesses([
+    {
+      id: measured.scenarioId,
+      sourceFiles: [measured.declaredFile],
+      requirements: [
+        ...(witness === ""
+          ? []
+          : [{ sourceFile: measured.declaredFile, quote: witness }]),
+        { sourceFile: measured.declaredFile, quote: measured.quote },
+      ],
+    },
+  ]);
+}
+const MEASURED_NINE_ADD = MEASURED_COPY_REFUSALS.find((measured) =>
+  measured.runId.startsWith("9add286d")
+) as MeasuredCopyRefusal;
+it("replays the corpus with a pick, and only ever offers real witnesses", () => {
+  let resolvable = 0;
+  const plateaus: string[] = [];
+  let refusedCopies = 0;
+  for (const measured of MEASURED_COPY_REFUSALS) {
+    if (measured.outcome !== "refused") {
+      continue;
+    }
+    refusedCopies += 1;
+    const label = `${measured.runId} requirement ${measured.rank}`;
+    const context = measuredContextOf(measured);
+    // Le gate ne bouge pas : la copie refusée reste sans témoin, quel que soit
+    // le nombre de candidats que la correction peut offrir.
+    expect(
+      ungroundedRequirements(measuredPlanOf(measured), context).length,
+      label
+    ).toBeGreaterThan(0);
+    for (const candidate of quoteResolutionCandidates(
+      { quote: measured.quote, sourceFile: measured.declaredFile },
+      context
+    )) {
+      expect(
+        requirementHasWitness(
+          { quote: candidate.text, sourceFile: measured.declaredFile },
+          context
+        ),
+        `${label}: le candidat ${JSON.stringify(candidate.text)} n'est pas un témoin`
+      ).toBe(true);
+    }
+    if (
+      quotePickCorrection(
+        measuredPlanOf(measured),
+        policyFor(),
+        context,
+        config
+      )
+    ) {
+      resolvable += 1;
+    } else {
+      plateaus.push(label);
+    }
+  }
+  // Le chiffre mesuré du lot T : 14 des 16 copies refusées du corpus reçoivent
+  // une correction par indice. Les deux plateaux sont nommés, jamais arrondis :
+  // `9ee36233 requirement 2` est une citation INVENTÉE pour laquelle le corpus
+  // ne conserve aucune ligne réelle (`realLine` vide, donc aucun contexte
+  // hors ligne à proposer) ; `36926219 requirement 3` est une citation EXACTE
+  // attribuée à un autre fichier, que `repairRequirementAttribution` répare déjà
+  // sans rien demander au planificateur. Ce test tombe si un plateau devient
+  // résolvable ou l'inverse.
+  expect(refusedCopies).toBe(16);
+  expect(resolvable).toBe(14);
+  expect(plateaus).toEqual([
+    "9ee36233-f353-41ff-a2ea-ca175b150a5b requirement 2",
+    "36926219-c46c-4431-9f45-8419a919b758 requirement 3",
+  ]);
+});
+it("accepts every verbatim fragment of the measured line, down to eight characters", () => {
+  const context = measuredContextOf(MEASURED_NINE_ADD);
+  // Le préfixe de 56 caractères est EXACTEMENT ce que la copie du run 9add286d
+  // reproduit avant d'insérer `:""` : s'arrêter trois caractères plus tôt était
+  // un témoin, et le gate ne peut pas le refuser.
+  const prefix = MEASURED_NINE_ADD.quote.slice(0, 56);
+  expect(MEASURED_NINE_ADD.realLine).toContain(prefix);
+  expect(
+    requirementHasWitness(
+      { quote: prefix, sourceFile: MEASURED_NINE_ADD.declaredFile },
+      context
+    )
+  ).toBe(true);
+  // La même copie une fois son invention retirée — trois caractères de moins —
+  // est un témoin : c'est le correctif minimal que le gate reconnaît.
+  expect(
+    requirementHasWitness(
+      {
+        quote: `${prefix}}`,
+        sourceFile: MEASURED_NINE_ADD.declaredFile,
+      },
+      context
+    )
+  ).toBe(true);
+  // Un préfixe court reste un témoin dès qu'il porte du contenu visible : huit
+  // caractères de cette ligne suffisent.
+  const short = MEASURED_NINE_ADD.quote.slice(0, 8);
+  expect(short.length).toBe(8);
+  expect(
+    requirementHasWitness(
+      { quote: short, sourceFile: MEASURED_NINE_ADD.declaredFile },
+      context
+    )
+  ).toBe(true);
+});
+it("resolves the measured copy by pick and leaves the refused plan intact", () => {
+  const context = measuredContextOf(MEASURED_NINE_ADD);
+  const plan = measuredPlanOf(MEASURED_NINE_ADD);
+  const correction = quotePickCorrection(
+    plan,
+    policyFor(),
+    context,
+    config,
+    MEASURED_NINE_ADD.runId
+  );
+  expect(correction).toBeDefined();
+  const candidates = quoteResolutionCandidates(
+    {
+      quote: MEASURED_NINE_ADD.quote,
+      sourceFile: MEASURED_NINE_ADD.declaredFile,
+    },
+    context
+  );
+  const [candidate] = candidates;
+  // La question ne demande aucun texte : elle nomme le scénario, le rang, et les
+  // portions exactes avec leur indice.
+  expect(correction?.message).toContain('"picks"');
+  expect(correction?.message).toContain(MEASURED_NINE_ADD.scenarioId);
+  expect(correction?.message).toContain(JSON.stringify(candidate?.text));
+  const resolved = correction?.resolve({
+    picks: [
+      {
+        candidate: 1,
+        requirement: MEASURED_NINE_ADD.rank,
+        scenario: MEASURED_NINE_ADD.scenarioId,
+      },
+    ],
+  }) as Plan | undefined;
+  expect(
+    resolved?.scenarios[0]?.requirements[MEASURED_NINE_ADD.rank - 1]?.quote
+  ).toBe(candidate?.text);
+  // Le plan refusé reste intact : une correction qui ne converge pas laisse à
+  // l'appelant le plan exact qu'il avait refusé, donc son message exact.
+  expect(
+    plan.scenarios[0]?.requirements[MEASURED_NINE_ADD.rank - 1]?.quote
+  ).toBe(MEASURED_NINE_ADD.quote);
+  expect(ungroundedRequirements(resolved as Plan, context)).toEqual([]);
+  expect(() =>
+    validateCoverage(resolved as Plan, context, policyFor(), config)
+  ).not.toThrow();
+});
+it("keeps the refusal of today when a pick does not resolve the citation", () => {
+  const context = measuredContextOf(MEASURED_NINE_ADD);
+  const correction = quotePickCorrection(
+    measuredPlanOf(MEASURED_NINE_ADD),
+    policyFor(),
+    context,
+    config
+  );
+  for (const answer of [
+    {
+      picks: [
+        {
+          candidate: 99,
+          requirement: MEASURED_NINE_ADD.rank,
+          scenario: MEASURED_NINE_ADD.scenarioId,
+        },
+      ],
+    },
+    { picks: [{ candidate: 1, requirement: 1, scenario: "autre-scenario" }] },
+    { picks: [] },
+    {},
+  ]) {
+    expect(correction?.resolve(answer)).toBeUndefined();
+  }
+});
+it("stays on today's refusal when no real candidate can be offered", () => {
+  // Une copie sans aucun recouvrement avec le fichier cité ne donne pas un seul
+  // candidat : la correction contrainte n'est pas posée, et le refus reste
+  // entier — c'est la plateau mesuré des copies inventées.
+  const junk = "zzzz{{{zzzz";
+  const context = measuredContextOf(MEASURED_NINE_ADD);
+  expect(
+    quoteResolutionCandidates(
+      { quote: junk, sourceFile: MEASURED_NINE_ADD.declaredFile },
+      context
+    )
+  ).toEqual([]);
+  const plan = planWithWitnesses([
+    {
+      id: MEASURED_NINE_ADD.scenarioId,
+      sourceFiles: [MEASURED_NINE_ADD.declaredFile],
+      requirements: [
+        {
+          sourceFile: MEASURED_NINE_ADD.declaredFile,
+          quote: MEASURED_NINE_ADD.realLine,
+        },
+        { sourceFile: MEASURED_NINE_ADD.declaredFile, quote: junk },
+      ],
+    },
+  ]);
+  expect(ungroundedRequirements(plan, context)).toHaveLength(1);
+  expect(
+    quotePickCorrection(plan, policyFor(), context, config)
+  ).toBeUndefined();
+  expect(ungroundedPlanRefusals(plan, context, policyFor())).toHaveLength(1);
+});
+it("does not pose a pick while another defect remains in the plan", () => {
+  // La citation n'est pas le seul défaut — ici une exigence attribuée à un
+  // fichier que le scénario ne déclare pas : le planificateur reçoit le refus
+  // d'aujourd'hui, entier, et non une question sur sa citation.
+  const context = measuredContextOf(MEASURED_NINE_ADD);
+  const bare = measuredPlanOf(MEASURED_NINE_ADD);
+  const plan = PlanSchema.parse({
+    ...bare,
+    scenarios: [
+      {
+        ...bare.scenarios[0],
+        requirements: [
+          ...(bare.scenarios[0]?.requirements.slice(0, 1) ?? []),
+          {
+            behavior: "b",
+            quote: MEASURED_NINE_ADD.quote,
+            sourceFile: "packages/domain/src/cash.ts",
+          },
+        ],
+      },
+    ],
+  });
+  expect(
+    undeclaredSourcePlanRefusals(plan, context).length +
+      ungroundedPlanRefusals(plan, context, policyFor()).length
+  ).toBeGreaterThan(0);
+  expect(
+    quotePickCorrection(plan, policyFor(), context, config)
+  ).toBeUndefined();
+});
+it("bounds a fragment's end in the planner prompt without forbidding it", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Le cas mesuré du lot T : la copie s'arrête dans l'expression, puis la
+  // referme. La consigne dit que s'arrêter au milieu d'une expression est un
+  // témoin, et que refermer ce que la copie laisse ouvert est le défaut.
+  expect(prompt).toMatch(/Your copy may STOP anywhere inside a listed line/i);
+  expect(prompt).toMatch(/never close the expression your copy leaves open/i);
+  expect(prompt).toMatch(
+    /never add a bracket, a semicolon or a ternary branch to make the fragment look complete/i
+  );
+  // Le contre-exemple porte le fichier, le numéro de ligne et l'invention.
+  expect(prompt).toContain("line 368");
+  expect(prompt).toContain('inserted `:""`');
+  // La règle ne contredit pas le gate : un préfixe verbatim reste un témoin.
+  expect(prompt).toMatch(
+    /stopping three characters earlier was an exact witness/i
+  );
 });

@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
+import { z } from "zod";
 import {
   Canary,
   compileAction,
@@ -12,7 +13,7 @@ import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import { fixtureCatalog } from "./fixtures.js";
 import { GitHub, type PrContext } from "./github.js";
-import { Model, PLANNER_PROMPT } from "./model.js";
+import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
   attributeValueRefusals,
@@ -35,6 +36,7 @@ import {
   numberedSourceLines,
   type Policy,
   quoteExcerpt,
+  quoteResolutionCandidates,
   type Requirement,
   repairRequirementAttribution,
   requirementSourceRefusal,
@@ -798,12 +800,41 @@ function planRefusals(
   candidate: Plan,
   policy: Policy,
   context: PrContext,
-  config: Config
+  config: Config,
+  scans: AmputationScans = amputationScans()
 ): string[] {
-  const scans = amputationScans();
-  const shape = planShapeRefusals(candidate, context, config);
+  const parts = planRefusalParts(candidate, policy, context, config, scans);
   return [
-    ...fatalPrelude([
+    ...fatalPrelude(parts.fatal),
+    ...parts.before,
+    ...parts.ungrounded,
+    ...parts.after,
+  ];
+}
+/**
+ * Les refus d'un plan candidat, séparés par ce que la correction contrainte a le
+ * droit de traiter : les classes fatales, les refus qui précèdent la citation
+ * dans le message d'aujourd'hui, les refus de citation eux-mêmes, puis les
+ * refus de lecture. `planRefusals` les recompose dans cet ordre, donc le message
+ * rendu au planificateur est inchangé ; `quotePickCorrection` lit la même
+ * décomposition pour savoir si la citation est le SEUL défaut du plan — la
+ * condition de la correction par indice.
+ */
+function planRefusalParts(
+  candidate: Plan,
+  policy: Policy,
+  context: PrContext,
+  config: Config,
+  scans: AmputationScans
+): {
+  fatal: FatalClass[];
+  before: string[];
+  ungrounded: string[];
+  after: string[];
+} {
+  const shape = planShapeRefusals(candidate, context, config);
+  return {
+    fatal: [
       ...coverageFatalClasses(candidate, context, policy, scans),
       ...contextFatalClasses(candidate, context),
       ...namedFatalClass(
@@ -811,39 +842,245 @@ function planRefusals(
         "scenarios that cannot complete within QA_MAX_STEPS"
       ),
       ...shape,
-    ]),
-    ...unwitnessedPlanRefusals(candidate, context, policy),
-    ...undeclaredSourcePlanRefusals(candidate, context),
-    ...shape.map(
-      (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
-    ),
-    ...ungroundedPlanRefusals(candidate, context, policy, scans),
-    ...writeEvidenceRefusals(candidate, policy).map(
-      (item) => `${item.error.message}. ${item.error.hint}`
-    ),
-    ...unstableSelectorRefusals(candidate).map(
-      (item) => `${item.error.message}. ${item.error.hint}`
-    ),
-    ...attributeValueRefusals(candidate).map(
-      (item) => `${item.error.message}. ${item.error.hint}`
-    ),
-    ...stateTargetReadRefusals(candidate).map(
-      (item) => `${item.error.message}. ${item.error.hint}`
-    ),
-    // Un plan passé par `PlanSchema` ne peut plus porter ces formes : ce refus
-    // est donc surtout celui du chemin de lecture. Il est rendu ici aussi pour
-    // qu'un plan rejoué ou bâti à la main reçoive le même message nommé que le
-    // planificateur, jamais un diagnostic d'exécution plus tardif.
-    ...missingExpectationRefusals(candidate).map(
-      (item) => `${item.error.message}. ${item.error.hint}`
-    ),
-    // Même raison que ci-dessus : `PlanSchema` refuse déjà un `click(ifPresent)`
-    // hors du préfixe d'établissement ou sans assertion rattachée, et le rejeu
-    // donne au plan lu le même message nommé.
-    ...ifPresentRefusals(candidate).map(
-      (item) => `${item.error.message}. ${item.error.hint}`
-    ),
-  ];
+    ],
+    before: [
+      ...unwitnessedPlanRefusals(candidate, context, policy),
+      ...undeclaredSourcePlanRefusals(candidate, context),
+      ...shape.map(
+        (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
+      ),
+    ],
+    ungrounded: ungroundedPlanRefusals(candidate, context, policy, scans),
+    after: [
+      ...writeEvidenceRefusals(candidate, policy).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+      ...unstableSelectorRefusals(candidate).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+      ...attributeValueRefusals(candidate).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+      ...stateTargetReadRefusals(candidate).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+      // Un plan passé par `PlanSchema` ne peut plus porter ces formes : ce refus
+      // est donc surtout celui du chemin de lecture. Il est rendu ici aussi pour
+      // qu'un plan rejoué ou bâti à la main reçoive le même message nommé que le
+      // planificateur, jamais un diagnostic d'exécution plus tardif.
+      ...missingExpectationRefusals(candidate).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+      // Même raison que ci-dessus : `PlanSchema` refuse déjà un `click(ifPresent)`
+      // hors du préfixe d'établissement ou sans assertion rattachée, et le rejeu
+      // donne au plan lu le même message nommé.
+      ...ifPresentRefusals(candidate).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+    ],
+  };
+}
+/**
+ * Réponse attendue d'une correction contrainte : un indice de candidat par
+ * citation fautive, désigné par le couple (scénario, rang de l'exigence). Aucun
+ * texte, donc aucune recopie — c'est ce qui rend la correction incapable de
+ * reproduire l'altération qu'elle corrige.
+ */
+const QUOTE_PICK_ANSWER = z.object({
+  picks: z
+    .array(
+      z.object({
+        scenario: z.string().min(1),
+        requirement: z.number().int().positive(),
+        candidate: z.number().int().positive(),
+      })
+    )
+    .min(1),
+});
+/**
+ * Budget du message contraint, en caractères. `model.ts` tronque une correction
+ * à 2000 : ce budget reste sous cette borne pour qu'aucun candidat annoncé ne
+ * soit coupé, et une liste qui n'y tient pas abandonne la correction contrainte
+ * au lieu de poser une question incomplète.
+ */
+const QUOTE_PICK_MESSAGE_CHARS = 1900;
+const QUOTE_PICK_HEADER =
+  'The plan has no other defect, so do not return the plan. Answer ONLY this JSON: {"picks":[{"scenario":"<scenario id>","requirement":<rank>,"candidate":<index>}]}, with exactly one pick for each requirement listed below. Each candidate is an exact portion of the cited file: the gate writes its text as that requirement\'s quote, so pick the fragment that proves the behavior you described. A quote must never be retyped.';
+interface QuoteOffer {
+  candidates: { line: number; text: string }[];
+  rank: number;
+  requirement: Requirement;
+  scenarioId: string;
+}
+function quoteOfferHeader(offer: QuoteOffer): string {
+  return `\n- ${offer.scenarioId}: ${offer.requirement.sourceFile} requirement ${offer.rank}`;
+}
+/**
+ * Le message contraint : les citations fautives, leurs candidats réels et
+ * l'indice de chacun. Construit sous `QUOTE_PICK_MESSAGE_CHARS` ; une citation
+ * qui n'obtient aucun candidat dans le budget rend une chaîne vide, que
+ * l'appelant traduit en refus d'aujourd'hui — jamais une question partielle à
+ * laquelle le planificateur ne pourrait pas répondre.
+ */
+function quotePickMessage(offers: QuoteOffer[]): string {
+  const headers = offers.map(quoteOfferHeader);
+  let budget =
+    QUOTE_PICK_MESSAGE_CHARS -
+    QUOTE_PICK_HEADER.length -
+    headers.join("").length;
+  if (budget <= 0) {
+    return "";
+  }
+  const blocks: string[] = [];
+  for (const [index, offer] of offers.entries()) {
+    // La place restante garde la tête des citations qui suivent : aucune ne
+    // doit arriver sans un seul candidat.
+    const available = budget - headers.slice(index + 1).join("").length;
+    if (available <= 0) {
+      return "";
+    }
+    const shown: string[] = [];
+    let used = 0;
+    for (const candidate of offer.candidates) {
+      const line = `\n  ${shown.length + 1}: ${JSON.stringify(candidate.text)}`;
+      if (used + line.length > available) {
+        break;
+      }
+      used += line.length;
+      shown.push(line);
+    }
+    if (shown.length === 0) {
+      return "";
+    }
+    budget -= used;
+    blocks.push((headers[index] as string) + shown.join(""));
+  }
+  return QUOTE_PICK_HEADER + blocks.join("");
+}
+/**
+ * Longueur du préfixe sha256 qui identifie une citation résolue dans le
+ * journal. Assez long pour recouper la même citation entre deux runs, jamais
+ * assez pour en retrouver le texte.
+ */
+const QUOTE_FINGERPRINT_CHARS = 16;
+/**
+ * Métadonnées journalisables d'une citation résolue. La citation elle-même
+ * n'est JAMAIS journalisée : elle est recopiée du dépôt testé, donc elle peut
+ * porter un secret que ce dépôt y a laissé et que `redact` ne connaît pas —
+ * seules sa taille, son nombre de lignes et son empreinte vont au journal.
+ */
+function quoteLogFields(text: string) {
+  return {
+    quoteChars: text.length,
+    quoteFingerprint: createHash("sha256")
+      .update(text)
+      .digest("hex")
+      .slice(0, QUOTE_FINGERPRINT_CHARS),
+    quoteLines: text.split("\n").length,
+  };
+}
+/**
+ * Écrit les citations choisies dans une copie du plan refusé : la valeur rendue
+ * porte des textes réels du fichier cité, jamais un indice, et le plan d'origine
+ * n'est pas modifié — une correction qui ne converge pas laisse donc au
+ * appelant le plan exact qu'il avait refusé, et donc son message.
+ */
+function applyQuotePicks(
+  candidate: Plan,
+  offers: QuoteOffer[],
+  answer: z.infer<typeof QUOTE_PICK_ANSWER>,
+  runId?: string
+): Plan | undefined {
+  const resolved = structuredClone(candidate);
+  for (const offer of offers) {
+    const pick = answer.picks.find(
+      (item) =>
+        item.scenario === offer.scenarioId && item.requirement === offer.rank
+    );
+    const chosen = pick ? offer.candidates[pick.candidate - 1] : undefined;
+    const target = resolved.scenarios.find(
+      (scenario) => scenario.id === offer.scenarioId
+    )?.requirements[offer.rank - 1];
+    if (!(pick && chosen && target)) {
+      return;
+    }
+    target.quote = chosen.text;
+    logger.info(
+      {
+        line: chosen.line,
+        ...quoteLogFields(chosen.text),
+        requirement: offer.rank,
+        runId,
+        scenario: offer.scenarioId,
+        sourceFile: offer.requirement.sourceFile,
+      },
+      "Requirement quote resolved by pick"
+    );
+  }
+  return resolved;
+}
+/**
+ * Correction contrainte d'une citation refusée. Le défaut mesuré du run
+ * 9add286d n'est pas un faux refus : la copie reproduit 56 caractères de la
+ * ligne 368, puis insère `:""` avant l'accolade qui ferme l'interpolation et
+ * s'arrête là. Le run a payé son appel de correction (`usage.calls` 2,
+ * `retries` 0) et s'achève sur cette copie altérée, alors que la ligne exacte
+ * était dans le matériel et que le refus la nommait. La boucle ne converge donc
+ * pas en demandant au modèle de RECOPIER ; elle converge si le gate écrit le
+ * texte lui-même et ne demande plus qu'un indice.
+ *
+ * La correction contrainte n'est posée que si elle est sûre : la citation est
+ * le SEUL défaut du plan (aucune classe fatale d'une autre famille, aucun refus
+ * de scénario ni de lecture), chaque citation fautive a au moins un candidat
+ * réel et vérifié comme témoin, et la liste tient dans le message. Sinon
+ * `undefined` : l'appelant rend le refus d'aujourd'hui, mot pour mot.
+ */
+export function quotePickCorrection(
+  candidate: Plan,
+  policy: Policy,
+  context: PrContext,
+  config: Config,
+  runId?: string,
+  scans: AmputationScans = amputationScans()
+): ConstrainedCorrection<Plan> | undefined {
+  const parts = planRefusalParts(candidate, policy, context, config, scans);
+  if (parts.before.length > 0 || parts.after.length > 0) {
+    return;
+  }
+  if (
+    parts.fatal.length === 0 ||
+    parts.fatal.some((item) => item.code !== "REQUIREMENT_UNGROUNDED")
+  ) {
+    return;
+  }
+  const offers: QuoteOffer[] = ungroundedRequirements(candidate, context).map(
+    (fault) => ({
+      candidates: quoteResolutionCandidates(fault.requirement, context, scans),
+      rank: fault.rank,
+      requirement: fault.requirement,
+      scenarioId: fault.scenarioId,
+    })
+  );
+  if (
+    offers.length === 0 ||
+    offers.some((offer) => offer.candidates.length === 0)
+  ) {
+    return;
+  }
+  const message = quotePickMessage(offers);
+  if (message === "") {
+    return;
+  }
+  return {
+    answer: QUOTE_PICK_ANSWER,
+    message,
+    resolve: (answer) => {
+      const parsed = QUOTE_PICK_ANSWER.safeParse(answer);
+      return parsed.success
+        ? applyQuotePicks(candidate, offers, parsed.data, runId)
+        : undefined;
+    },
+  };
 }
 /**
  * Après la planification : une citation réelle attribuée au mauvais fichier est
@@ -914,10 +1151,25 @@ async function executePlan(
       // Le planificateur reçoit les refus et dispose d'une tentative de
       // correction, au lieu de faire échouer le run sur une citation recopiée
       // de mémoire ou attribuée au mauvais fichier.
-      const messages = planRefusals(candidate, policy, context, config);
-      return messages.length
-        ? `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
-        : undefined;
+      const scans = amputationScans();
+      const messages = planRefusals(candidate, policy, context, config, scans);
+      if (messages.length === 0) {
+        return;
+      }
+      // Quand la citation est le seul défaut du plan, la correction contrainte
+      // remplace la réécriture complète : le modèle choisit un indice, le gate
+      // écrit le texte. Sans candidat sûr, le refus d'aujourd'hui, mot pour mot.
+      return (
+        quotePickCorrection(
+          candidate,
+          policy,
+          context,
+          config,
+          result.id,
+          scans
+        ) ??
+        `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
+      );
     }
   );
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne

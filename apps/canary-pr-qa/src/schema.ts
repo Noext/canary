@@ -149,6 +149,12 @@ function visibleStructureChars(value: string): number {
   const separators = (value.match(WORD_SEPARATING_SPACE) ?? []).length;
   return symbols + separators;
 }
+/**
+ * Plafond de longueur d'une citation, en caractères. Le schéma le pose et le
+ * gate le relit : un candidat de correction plus long serait un inconnu pour le
+ * schéma, donc aucun remède ni aucune correction contrainte ne le propose.
+ */
+export const QUOTE_MAX_CHARS = 1000;
 export function quoteCarriesContent(value: string): boolean {
   const normalized = normalizeQuoteText(value);
   return (
@@ -167,7 +173,7 @@ const quote = z
   // (`QUOTE_MIN_STRUCTURE_CHARS`) — et c'est lui le seul juge d'acceptation
   // (voir `quoteCarriesContent`).
   .min(QUOTE_MIN_TEXT_CHARS)
-  .max(1000);
+  .max(QUOTE_MAX_CHARS);
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),
   z
