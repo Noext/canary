@@ -1519,6 +1519,53 @@ describe("sélecteur structurel : une position ne nomme pas un élément", () =>
       );
     }
   });
+  it("refuse le même chemin écrit dans une pseudo-classe fonctionnelle", () => {
+    // Un argument de pseudo-classe à sélecteur fait partie du même chemin :
+    // `:is(aside > div)` sélectionne exactement l'ensemble que `aside > div`,
+    // donc masquer la parenthèse blanchirait une cible que la règle refuse.
+    const refusedForms = [
+      [":is(aside > div)", "aside > div", "child combinator >"],
+      [
+        ":where(div:nth-child(2))",
+        "div:nth-child(2)",
+        "positional pseudo-class :nth-child",
+      ],
+      ["div:not(aside + div)", "aside + div", "adjacent-sibling combinator +"],
+      ["div:has(aside ~ div)", "aside ~ div", "general-sibling combinator ~"],
+      ["label:is(aside > span)", "aside > span", "child combinator >"],
+      [
+        "div:has(li:nth-child(2))",
+        "li:nth-child(2)",
+        "positional pseudo-class :nth-child",
+      ],
+      [":is(#saved, aside > div)", "aside > div", "child combinator >"],
+      ["#saved:has(aside > div)", "aside > div", "child combinator >"],
+      ["div:not(:is(aside > span))", "aside > span", "child combinator >"],
+    ] as const;
+    for (const [value, path, position] of refusedForms) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        `structural path (${path}, ${position}: it names a position instead of an element`
+      );
+    }
+  });
+  it("n'oppose aucun refus à une pseudo-classe fonctionnelle sans chemin", () => {
+    // `:not([disabled])` et `:has(label)` ne portent aucune position, et un
+    // argument qui nomme son élément est aussi unique que l'élément nommé.
+    for (const value of [
+      "input:not([disabled])",
+      "button:not([disabled])",
+      "label:has(label)",
+      'label:has(input[aria-label="Quantité · Billet de 500 €"])',
+      "div:is(#saved)",
+      'div:where(#saved, [data-testid="total"])',
+      "div:is(aside > #saved)",
+      "div:not(#saved)",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
   it("bloque le scénario structurel non corrigé avant toute étape navigateur", async () => {
     const f = await setup({ plans: [PlanSchema.parse(structuralPlan())] });
     const labels = stubCanary(ARIA);

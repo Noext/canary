@@ -337,6 +337,12 @@ export function unstableSelectorReason(locator: Locator): string | undefined {
  * parce qu'un conteneur stable ne rend pas ses descendants uniques. Une liste de
  * sélecteurs (`a, b`) est lue alternative par alternative : une alternative
  * positionnelle rend la liste ambiguë même si une autre nomme son élément.
+ * La lecture descend dans les arguments des pseudo-classes fonctionnelles qui
+ * prennent un sélecteur (`:not`, `:is`, `:where`, `:has`, `:nth-child(An+B of
+ * S)`, `:nth-of-type`) : un chemin écrit là désigne la même position que dans
+ * le composé qui le porte, donc `:is(aside > div)` est refusé comme
+ * `aside > div`. Un argument sans chemin (`:not([disabled])`, `:has(label)`)
+ * ne change rien.
  *
  * La règle est indépendante du modèle et de l'instantané de découverte, comme
  * celle des classes et des couleurs, pour que le plan soit refusé AVANT la
@@ -471,6 +477,73 @@ function commaAlternatives(css: string): string[] {
     .filter((alternative) => alternative.length > 0);
 }
 
+/**
+ * Les pseudo-classes fonctionnelles dont l'argument EST un sélecteur : ce que
+ * l'argument sélectionne fait partie du même chemin que le composé qui le
+ * porte. `:has(label)` et `:not([disabled])` en font partie sans écrire aucun
+ * chemin, et n'opposent donc aucun refus.
+ */
+const SELECTOR_ARGUMENT_PSEUDO_CLASS =
+  /:(not|is|where|matches|has|nth-child|nth-last-child|nth-of-type|nth-last-of-type)\(/gi;
+
+/** Les `:nth-*`, dont l'argument est `An+B [of S]` : seul `S` est un sélecteur. */
+const NTH_ARGUMENT_PSEUDO_CLASS = /^nth-/i;
+
+/** L'index de la parenthèse qui ferme celle ouverte à `open`, ou `-1`. */
+function closingParenthesis(code: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < code.length; index += 1) {
+    const char = code[index];
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+/** Le sélecteur `S` d'un argument `An+B of S`, ou `undefined` sans clause `of`. */
+function nthOfSelector(argument: string): string | undefined {
+  const match = /(?:^|\s)of\s+/i.exec(selectorCode(argument));
+  return match ? argument.slice(match.index + match[0].length) : undefined;
+}
+
+/**
+ * Les sélecteurs passés en argument à une pseudo-classe fonctionnelle, dans
+ * l'ordre du texte. Le sélecteur est lu sur son `selectorCode`, donc une
+ * parenthèse entre guillemets n'en ouvre aucune, et un argument imbriqué est
+ * laissé à l'appel récursif plutôt que relu ici.
+ */
+function selectorArguments(selector: string): string[] {
+  const code = selectorCode(selector);
+  const pattern = new RegExp(SELECTOR_ARGUMENT_PSEUDO_CLASS.source, "gi");
+  const arguments_: string[] = [];
+  let match = pattern.exec(code);
+  while (match) {
+    const open = match.index + match[0].length - 1;
+    const close = closingParenthesis(code, open);
+    if (close < 0) {
+      break;
+    }
+    const argument = selector.slice(open + 1, close);
+    if (NTH_ARGUMENT_PSEUDO_CLASS.test(match[1] ?? "")) {
+      const ofSelector = nthOfSelector(argument);
+      if (ofSelector !== undefined) {
+        arguments_.push(ofSelector);
+      }
+    } else {
+      arguments_.push(argument);
+    }
+    pattern.lastIndex = close + 1;
+    match = pattern.exec(code);
+  }
+  return arguments_;
+}
+
 /** Attribut qui porte une valeur : `[data-testid="total"]`. Il nomme un élément. */
 const ATTRIBUTE_WITH_VALUE =
   /^\[\s*[a-zA-Z_][-\w]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*\]$/;
@@ -572,15 +645,46 @@ function namesItsElement(compound: string): boolean {
   );
 }
 
+/** Un chemin positionnel refusé : la position qu'il exprime, et le sélecteur qui l'écrit. */
+interface PositionalPath {
+  path: string;
+  position: string;
+}
+
+/**
+ * Le premier chemin positionnel de l'alternative, à quelque profondeur qu'il
+ * soit écrit, ou `undefined` quand elle se contente de nommer son élément. Un
+ * argument de pseudo-classe fonctionnelle est lu comme une alternative à part
+ * entière, parce qu'il fait partie du même chemin : `:is(aside > div)` ne
+ * sélectionne pas un élément plus unique que `aside > div`.
+ */
+function positionalPath(alternative: string): PositionalPath | undefined {
+  const position = positionalReason(positionalOutline(alternative));
+  if (position && !namesItsElement(selectedCompound(alternative))) {
+    return { path: alternative, position };
+  }
+  for (const argument of selectorArguments(alternative)) {
+    for (const nested of commaAlternatives(argument)) {
+      const path = positionalPath(nested);
+      if (path) {
+        return path;
+      }
+    }
+  }
+  return;
+}
+
 /**
  * Ce qu'un locator CSS doit à une position, `undefined` quand il nomme son
  * élément. `aside > div`, `div:nth-of-type(2)`, `#saved > span` et
  * `[data-testid="total"] > span` sont refusés ; `div > #saved`,
  * `li:first-child[id="saved"]`, `[role="status"]` et
  * `[data-cash-state="cloture"]` ne le sont pas : l'ancre doit désigner
- * l'élément que le sélecteur SÉLECTIONNE, pas l'un de ses ancêtres.
+ * l'élément que le sélecteur SÉLECTIONNE, pas l'un de ses ancêtres. Le chemin
+ * est cherché à toute profondeur, donc `:is(aside > div)` et
+ * `div:has(li:nth-child(2))` sont refusés pour la même raison.
  *
- * La raison cite le composé fautif et, quand le plan y nomme déjà un conteneur
+ * La raison cite le chemin fautif et, quand le plan y nomme déjà un conteneur
  * (`[data-cash-state]`), la cible stable qu'il peut viser à la place.
  */
 export function structuralSelectorReason(locator: Locator): string | undefined {
@@ -589,15 +693,12 @@ export function structuralSelectorReason(locator: Locator): string | undefined {
   }
   for (const css of cssSelectors(locator.value)) {
     for (const alternative of commaAlternatives(css)) {
-      const position = positionalReason(positionalOutline(alternative));
-      if (!position) {
+      const found = positionalPath(alternative);
+      if (!found) {
         continue;
       }
-      if (namesItsElement(selectedCompound(alternative))) {
-        continue;
-      }
-      const container = presenceAttributes(alternative)[0];
-      return `a structural path (${alternative}, ${position}: it names a position instead of an element, so it matches several elements by construction${container ? `; the plan already names ${container} in it, target that container instead` : ""})`;
+      const container = presenceAttributes(found.path)[0];
+      return `a structural path (${found.path}, ${found.position}: it names a position instead of an element, so it matches several elements by construction${container ? `; the plan already names ${container} in it, target that container instead` : ""})`;
     }
   }
   return;
