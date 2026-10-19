@@ -643,6 +643,126 @@ export function unstableSelectorRefusals(
   return refusals;
 }
 
+/**
+ * Les kinds dont la décision passe par `expected` : `text` lit un texte,
+ * `value` le contenu d'un champ, `url` l'URL courante, `count` un nombre
+ * d'éléments, `download` un nom de fichier, `popup` l'URL de la fenêtre
+ * ouverte (comparée par `actual === assertion.expected`, comme `url`), et
+ * `visual` le NOM de la baseline de confiance, que `compareVisual` cherche dans
+ * le catalogue de fixtures. Seuls `visible` et `hidden` lisent une simple
+ * présence (`actual === true|false`) et se passent donc d'attendu.
+ */
+const VALUE_ASSERTION_KINDS = new Set([
+  "text",
+  "value",
+  "url",
+  "count",
+  "download",
+  "popup",
+  "visual",
+]);
+
+/**
+ * Un `expected` absent ne peut pas être satisfait : `assertionMatches` compare
+ * alors à `undefined` pour `value`, `url`, `popup`, `count` et `download`
+ * (`actual === undefined`, toujours faux) et à la chaîne `"undefined"` pour
+ * `text`. `visual` ne compare pas à l'attendu mais le passe comme nom de
+ * baseline à `compareVisual`, qui lève « Trusted visual baseline undefined is
+ * not configured ». Le scénario échoue donc à coup sûr, après avoir dépensé
+ * toutes ses étapes navigateur : un plan qui compare à rien ne peut que rater.
+ *
+ * `PlanSchema` exige déjà `expected` pour chaque kind, mais un plan qui
+ * contourne la validation d'entrée — plan rejoué, plan écrit à la main, test,
+ * appel direct à `executeScenario` — n'a pas cette garantie. La règle est donc
+ * posée ici, sur le chemin de LECTURE, et `runner.ts` la rejoue avant la
+ * première étape pour l'aperçu de tête comme pour la préversion de base.
+ *
+ * Deux formes vides ne disent pas la même chose :
+ *
+ * - `text`, `url`, `download`, `popup` et `visual` exigent un contenu non vide.
+ *   La comparaison `text` normalise et rogne l'attendu, donc un attendu de
+ *   blancs se réduit à `""` et `includes("")` accepte n'importe quel texte :
+ *   une assertion qui ne prouve rien. Une URL, un nom de fichier, une URL de
+ *   popup ou un nom de baseline vide n'existe pas. `count` exige un entier dans
+ *   les bornes du schéma, et `0` est une valeur, pas un vide.
+ * - `value` n'exige que la PRÉSENCE. `expected: ""` y est la forme mesurée de
+ *   « le champ est vide » : dans le corpus de 193 runs, 27 assertions de kind
+ *   `value` portent `expected: ""` sur 26 runs, 25 passent, et toutes
+ *   décrivent un champ vierge (comptage d'une pharmacie non hérité d'une
+ *   autre). `actual === ""` compare à quelque chose de précis : refuser le vide
+ *   casserait ces plans réels sans fermer aucun trou.
+ */
+export function missingExpectationRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const offenders: string[] = [];
+    for (const assertion of scenario.assertions) {
+      if (!VALUE_ASSERTION_KINDS.has(assertion.kind)) {
+        continue;
+      }
+      const fault = expectationFault(
+        assertion.kind,
+        assertionExpected(assertion)
+      );
+      if (fault) {
+        offenders.push(
+          `assertion ${assertion.id} (kind ${assertion.kind}) ${fault}`
+        );
+      }
+    }
+    if (offenders.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_EXPECTED_MISSING",
+        `Scenario ${scenario.id} compares to nothing: ${offenders.join(" ; ")}`,
+        'Give each of these assertions the value its requirement produces: text the exact text to match, value the field\'s exact content, url the exact URL, count an integer between 0 and 10000, download the exact filename, popup the exact popup URL, visual the name of a trusted baseline from the fixture catalog. kind "value" may keep expected: "" to assert an empty field; for text, url, count, download, popup and visual a missing or blank expected can never be satisfied.'
+      ),
+    });
+  }
+  return refusals;
+}
+/**
+ * Le `expected` tel qu'il est réellement porté par l'assertion, sans supposer
+ * que le schéma l'ait validé : une assertion écrite à la main peut l'omettre.
+ */
+function assertionExpected(assertion: Scenario["assertions"][number]): unknown {
+  return "expected" in assertion ? assertion.expected : undefined;
+}
+/**
+ * Ce qui rend un `expected` inutilisable pour un kind à valeur requise, dit en
+ * une phrase lisible par le planificateur, ou `undefined` quand il est utilisable.
+ */
+function expectationFault(
+  kind: Scenario["assertions"][number]["kind"],
+  expected: unknown
+): string | undefined {
+  if (kind === "count") {
+    if (expected === undefined) {
+      return "has no expected";
+    }
+    return typeof expected === "number" &&
+      Number.isInteger(expected) &&
+      expected >= 0 &&
+      expected <= 10_000
+      ? undefined
+      : `has an expected that is not an integer between 0 and 10000 (${JSON.stringify(expected)})`;
+  }
+  if (typeof expected !== "string") {
+    return expected === undefined
+      ? "has no expected"
+      : `has an expected that is not a string (${JSON.stringify(expected)})`;
+  }
+  if (kind === "value") {
+    return;
+  }
+  return expected.trim() === "" ? "has an empty expected" : undefined;
+}
+
 export function validatePlanEvidence(
   plan: Plan,
   evidence: DiscoveryEvidence
