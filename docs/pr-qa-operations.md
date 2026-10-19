@@ -88,6 +88,15 @@ Les fichiers natifs `results.json` de chaque session ne sont pas le `result.json
 agrégé. Les profils/sessions natives sont purgés après export réussi. Les captures
 provisoires du doctor sont supprimées après vérification, même en cas d'erreur.
 
+Un run bloqué en `RUN_BUDGET_EXCEEDED` après un seul appel n'a pas forcément
+consommé ce qu'il déclare : quand l'endpoint ne rapporte aucun `usage`, le client
+compte l'appel à la borne de sortie demandée. Le plafond `QA_CALL_MAX_TOKENS`
+(32768 par défaut, 0 refusé) borne cette dépense par appel et part au fournisseur
+comme limite de sortie ; il sert aussi de mesure quand l'endpoint l'ignore, une
+réponse annonçant davantage de tokens de sortie étant traitée comme
+`MODEL_OUTPUT_INCOMPLETE` avec sa reprise unique. Le plafond du run
+(`QA_RUN_MAX_TOKENS`, `QA_RUN_MAX_COST_USD`) reste appliqué par-dessus.
+
 Les artefacts HTTP nécessitent un utilisateur autorisé sur le dépôt du run, ou un
 lien signé valable 5 minutes. `ARTIFACT_PUBLIC` n'active pas la lecture anonyme
 dans le serveur SQL. Le rapport principal, le rapport de session Canary de chaque
