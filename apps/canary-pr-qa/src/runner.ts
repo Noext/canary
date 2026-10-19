@@ -21,6 +21,7 @@ import {
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
+  stateTargetReadRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "./plan-evidence.js";
@@ -826,6 +827,9 @@ function planRefusals(
     ...attributeValueRefusals(candidate).map(
       (item) => `${item.error.message}. ${item.error.hint}`
     ),
+    ...stateTargetReadRefusals(candidate).map(
+      (item) => `${item.error.message}. ${item.error.hint}`
+    ),
     // Un plan passé par `PlanSchema` ne peut plus porter ces formes : ce refus
     // est donc surtout celui du chemin de lecture. Il est rendu ici aussi pour
     // qu'un plan rejoué ou bâti à la main reçoive le même message nommé que le
@@ -958,6 +962,7 @@ async function executePlan(
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
       ...attributeValueRefusals(result.plan),
+      ...stateTargetReadRefusals(result.plan),
       ...missingExpectationRefusals(result.plan),
       ...ifPresentRefusals(result.plan),
     ].map((item) => [item.scenario.id, item.error])

@@ -70,6 +70,8 @@ export const errorMessages: Record<string, string | undefined> = {
     "Le scénario cible un élément avec un sélecteur CSS dérivé d’une classe, d’une couleur lue dans la source ou d’une position (`aside > div`, `header h1`, `div:nth-of-type(2)`) : cette cible ne nomme aucun élément, elle en désigne un endroit, et plusieurs éléments peuvent s’y trouver.",
   PLAN_SKIP_OUTSIDE_DIFF:
     "Le plan ignore un fichier que cette pull request ne modifie pas.",
+  PLAN_STATE_TARGET_READ_AS_TEXT:
+    'Le scénario lit le texte ou la valeur d’un élément sélectionné par une valeur d’état (`[data-cash-state="cloture"]`) : cet élément n’existe que dans cet état, donc la lecture échoue sur un délai quand le scénario ne l’a pas atteint, sans jamais dire quel texte était attendu.',
   PLAN_SOURCE_OUTSIDE_DIFF:
     "Le plan cite un fichier que cette pull request ne modifie pas.",
   PLAN_TOO_MANY_SCENARIOS:
@@ -726,6 +728,8 @@ export const runAdvice: Record<string, string> = {
     "Relancez le test : l’identifiant `_discovery` est réservé au relevé de découverte et ne peut pas nommer un scénario.",
   PLAN_SELECTOR_UNSTABLE:
     "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source — jamais une position (`>`, espace, `+`, `~`, `:nth-of-type`), puis relancez.",
+  PLAN_STATE_TARGET_READ_AS_TEXT:
+    'Prouvez l’état par sa présence (`[data-cash-state="cloture"]` avec `kind: visible`, ou `kind: count` valant 1) et lisez le texte affiché sur le sélecteur qui le porte (`[data-cash-state]`, `[role="status"]` ou l’élément qui l’affiche), puis relancez.',
   PLAN_SKIP_OUTSIDE_DIFF:
     "Relancez le test : le planificateur ne peut ignorer qu’un fichier modifié par la PR, jamais un fichier de contexte inchangé.",
   PLAN_SOURCE_OUTSIDE_DIFF:

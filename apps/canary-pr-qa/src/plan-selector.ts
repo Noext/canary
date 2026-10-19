@@ -128,7 +128,7 @@ function outsideBrackets(code: string): string {
  * et une couleur se lisent, y compris dans la forme observée
  * `p[class*="text-[#b42318]"]`.
  */
-function bracketBlocks(selector: string): string[] {
+export function bracketBlocks(selector: string): string[] {
   const blocks: string[] = [];
   let quote: string | undefined;
   let start = -1;
@@ -276,7 +276,7 @@ function declarationColor(text: string): string | undefined {
  * texte —, seul `css=` en annonce. Un segment `css=` est rendu sans son moteur,
  * pour qu'un contrôle puisse lire le sélecteur lui-même.
  */
-function cssSelectors(value: string): string[] {
+export function cssSelectors(value: string): string[] {
   return selectorChain(value).flatMap((segment) => {
     const engine = ENGINE.exec(segment);
     if (engine && (engine[1] ?? "").toLowerCase() !== "css") {

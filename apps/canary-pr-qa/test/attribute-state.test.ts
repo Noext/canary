@@ -4,6 +4,7 @@ import { Model } from "../src/model.js";
 import {
   attributeValueRefusals,
   ifPresentRefusals,
+  stateTargetReadRefusals,
 } from "../src/plan-evidence.js";
 import { reportMarkdown } from "../src/report.js";
 import { runQa } from "../src/runner.js";
@@ -913,6 +914,369 @@ describe("valeur d'attribut visée par une assertion de texte", () => {
         ).toEqual([]);
       }
     }
+  });
+});
+
+/**
+ * Le scénario `cash-balanced-closure` du run 76f7b2a9, recopié de l'artefact :
+ * mêmes étapes, mêmes identifiants, mêmes attendus. Six étapes passent, puis
+ * l'assertion `a1_message` lit le texte de `[data-cash-state="cloture"]`, un
+ * élément qui n'existe que dans l'état clôturé, et le run bloque après
+ * « Timeout 5000ms exceeded » sans avoir rien lu du texte.
+ */
+function pinnedStatePlan(): Plan {
+  return {
+    summary:
+      "Comptage juste de 1 240,00 € : total, statut, puis clôture verrouillée",
+    scenarios: [
+      {
+        id: "cash-balanced-closure",
+        title: "Le comptage juste clôture la session",
+        kind: "happy_path",
+        rationale: "La clôture sans écart verrouille la session",
+        sourceFiles: ["src/form.ts"],
+        preconditions: [],
+        steps: [
+          {
+            id: "open",
+            description: "ouvrir l'application",
+            action: { type: "goto", path: "/" },
+          },
+          {
+            id: "nav-cash",
+            description: "ouvrir la vue Caisse et Coffre",
+            action: {
+              type: "click",
+              locator: {
+                by: "role",
+                value: "button",
+                name: "Caisse et Coffre",
+              },
+            },
+          },
+          {
+            id: "q20",
+            description: "compter 2 pièces de 20 €",
+            action: {
+              type: "fill",
+              locator: {
+                by: "role",
+                value: "textbox",
+                name: "Quantité · Billet de 20 €",
+              },
+              value: "2",
+            },
+          },
+          {
+            id: "check-status",
+            description: "vérifier le statut du comptage",
+            action: { type: "assert", assertionId: "a1_status" },
+          },
+          {
+            id: "close",
+            description: "clôturer la session",
+            action: {
+              type: "click",
+              locator: {
+                by: "role",
+                value: "button",
+                name: "Clôturer la session",
+              },
+            },
+          },
+          {
+            id: "check-closed",
+            description: "la vue porte l'état clôturé",
+            action: { type: "assert", assertionId: "a1_cloture" },
+          },
+          {
+            id: "check-message",
+            description: "le message de clôture annonce le verrouillage",
+            action: { type: "assert", assertionId: "a1_message" },
+          },
+        ],
+        requirements: witness,
+        assertions: [
+          {
+            id: "a1_status",
+            description:
+              "L'écart compté − attendu vaut 0 : le statut devient « Comptage juste »",
+            kind: "text",
+            expected: "Comptage juste",
+            target: { by: "css", value: "[data-cash-state]" },
+            afterStep: "q20",
+            verification: "transition",
+          },
+          {
+            id: "a1_cloture",
+            description:
+              'La session est clôturée : la vue porte data-cash-state="cloture"',
+            kind: "visible",
+            target: { by: "css", value: '[data-cash-state="cloture"]' },
+            afterStep: "close",
+            verification: "state",
+          },
+          {
+            id: "a1_message",
+            description: "Le message de clôture annonce le verrouillage",
+            kind: "text",
+            expected: "Session clôturée : le comptage est verrouillé.",
+            target: { by: "css", value: '[data-cash-state="cloture"]' },
+            afterStep: "close",
+            verification: "transition",
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  };
+}
+
+describe("cible sélectionnée par une valeur d'état, lue comme du texte", () => {
+  const refusals = (plan: Plan) =>
+    stateTargetReadRefusals(PlanSchema.parse(plan));
+  const withTarget = (plan: Plan, value: string): Plan => {
+    const scenario = plan.scenarios[0]!;
+    return {
+      ...plan,
+      scenarios: [
+        {
+          ...scenario,
+          assertions: scenario.assertions.map((assertion) =>
+            assertion.id === "a1_message"
+              ? { ...assertion, target: { by: "css" as const, value } }
+              : assertion
+          ),
+        },
+      ],
+    };
+  };
+
+  it("refuse l'assertion mesurée du run 76f7b2a9 et rend le message exact", () => {
+    const refused = refusals(pinnedStatePlan());
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.code).toBe("PLAN_STATE_TARGET_READ_AS_TEXT");
+    expect(refused[0]?.error.message).toBe(
+      'Scenario cash-balanced-closure reads an element selected by a state value as if it carried text: assertion a1_message (after close, kind text) reads [data-cash-state="cloture"], an element that exists only while that state holds and expects "Session clôturée : le comptage est verrouillé."'
+    );
+    // Le remède nomme les deux voies : la présence sur la valeur d'état, et le
+    // texte de la vue sur le sélecteur qui le porte.
+    expect(refused[0]?.error.hint).toContain('kind "visible"');
+    expect(refused[0]?.error.hint).toContain('[role="status"]');
+  });
+
+  it("refuse la même lecture en kind value", () => {
+    const plan = pinnedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: scenario.assertions.map((assertion) =>
+          assertion.id === "a1_message"
+            ? {
+                ...assertion,
+                kind: "value" as const,
+                expected: "Session clôturée : le comptage est verrouillé.",
+              }
+            : assertion
+        ),
+      },
+    ];
+    const refused = refusals(plan);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain("kind value");
+  });
+
+  it("ne double pas le refus d'un attendu qui EST la valeur de l'attribut", () => {
+    // Un attendu en jeton sur la valeur épinglée est refusé par la règle de la
+    // valeur d'attribut, plus précise : elle dit que `text` ne rend jamais la
+    // valeur d'un attribut. Le refus n'est pas répété sous une seconde forme
+    // dans le canal de correction du planificateur.
+    const plan = pinnedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: scenario.assertions.map((assertion) =>
+          assertion.id === "a1_message"
+            ? { ...assertion, kind: "value" as const, expected: "cloture" }
+            : assertion
+        ),
+      },
+    ];
+    const parsed = PlanSchema.parse(plan);
+    expect(stateTargetReadRefusals(parsed)).toEqual([]);
+    expect(attributeValueRefusals(parsed)).toHaveLength(1);
+  });
+
+  it("refuse la valeur épinglée quelle que soit son écriture", () => {
+    // Le guillemet, l'opérateur et la casse du nom ne changent pas le sens :
+    // chacune de ces formes ne sélectionne l'élément que TANT QUE la valeur
+    // tient, donc la lecture reste conditionnelle à l'état. La couverture des
+    // combinateurs est le troisième cas mesuré par la vérification : lire `p`
+    // dans le conteneur épinglé est aussi conditionnel que lire le conteneur.
+    for (const value of [
+      "[data-cash-state=cloture]",
+      '[data-cash-state^="clot"]',
+      '[data-cash-state$="ture"]',
+      '[data-cash-state*="clot"]',
+      '[data-cash-state~="cloture"]',
+      '[data-cash-state|="cloture"]',
+      '[DATA-CASH-STATE="cloture"]',
+      '[data-cash-state="cloture"] p',
+      'css=[data-cash-state="cloture"]',
+    ]) {
+      const refused = refusals(withTarget(pinnedStatePlan(), value));
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.code).toBe("PLAN_STATE_TARGET_READ_AS_TEXT");
+      expect(refused[0]?.error.message).toContain(value);
+    }
+  });
+
+  it("refuse encore la lecture de texte sur la valeur ouverte", () => {
+    const refused = refusals(
+      withTarget(pinnedStatePlan(), '[data-cash-state="ouvert"]')
+    );
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain('[data-cash-state="ouvert"]');
+  });
+
+  it("n'oppose aucun refus à une cible qui nomme son élément", () => {
+    // 0 faux refus sur les formes qui nomment : la valeur épinglée est le seul
+    // déclencheur, et la présence seule reste la voie de remède.
+    for (const value of [
+      "#saved",
+      '[data-testid="status"]',
+      '[name="state"]',
+      '[role="status"]',
+      "[data-cash-state]",
+      "aside[data-cash-state] p",
+    ]) {
+      expect(refusals(withTarget(pinnedStatePlan(), value)), value).toEqual([]);
+    }
+    const base = pinnedStatePlan();
+    const roleTarget: Plan = {
+      ...base,
+      scenarios: [
+        {
+          ...base.scenarios[0]!,
+          assertions: base.scenarios[0]!.assertions.map((assertion) =>
+            assertion.id === "a1_message"
+              ? {
+                  ...assertion,
+                  target: {
+                    by: "role" as const,
+                    value: "status",
+                    name: "État",
+                  },
+                }
+              : assertion
+          ),
+        },
+      ],
+    };
+    expect(refusals(roleTarget)).toEqual([]);
+  });
+
+  it("n'oppose aucun refus au texte de la vue, ni à une preuve de présence", () => {
+    // Non-régression : la forme de seule présence `[data-cash-state]` sélectionne
+    // le conteneur dans tous les états, donc lire son texte lit le texte de la
+    // vue — 885 assertions passantes du corpus le font. La présence sur la
+    // valeur épinglée est la preuve correcte de l'état.
+    for (const assertion of [
+      {
+        kind: "text" as const,
+        expected: "Session en cours",
+        target: { by: "css" as const, value: "[data-cash-state]" },
+      },
+      {
+        kind: "text" as const,
+        expected: "1 240,00 €",
+        target: { by: "css" as const, value: "[data-cash-state]" },
+      },
+      {
+        kind: "visible" as const,
+        target: { by: "css" as const, value: '[data-cash-state="cloture"]' },
+      },
+      {
+        kind: "count" as const,
+        expected: 1,
+        target: { by: "css" as const, value: '[data-cash-state="ouvert"]' },
+      },
+      {
+        kind: "text" as const,
+        expected: "Session clôturée : le comptage est verrouillé.",
+        target: { by: "css" as const, value: '[role="status"]' },
+      },
+      {
+        kind: "text" as const,
+        expected: "ready",
+        target: { by: "css" as const, value: '[data-testid="status"]' },
+      },
+      {
+        kind: "text" as const,
+        expected: "Pilotage",
+        target: { by: "role" as const, value: "heading", name: "Pilotage" },
+      },
+    ]) {
+      const plan = pinnedStatePlan();
+      const scenario = plan.scenarios[0]!;
+      // `visible` ne porte pas d'attendu : celui de l'assertion de base ne doit
+      // pas survivre à la fusion, et le schéma refuse la clé.
+      const { expected: _expected, ...presence } = scenario.assertions[0]! as {
+        expected?: unknown;
+      };
+      const named = {
+        id: "a1_view",
+        description: "La vue affiche l'état attendu",
+        afterStep: "q20",
+        ...assertion,
+      };
+      const merged = (
+        "expected" in (assertion as Record<string, unknown>)
+          ? { ...scenario.assertions[0]!, ...named }
+          : { ...presence, ...named }
+      ) as (typeof scenario.assertions)[number];
+      plan.scenarios = [
+        {
+          ...scenario,
+          steps: scenario.steps
+            .filter((step) =>
+              ["open", "nav-cash", "q20", "check-status"].includes(step.id)
+            )
+            .map((step) =>
+              step.id === "check-status"
+                ? {
+                    ...step,
+                    action: { type: "assert" as const, assertionId: "a1_view" },
+                  }
+                : step
+            ),
+          assertions: [merged],
+        },
+      ];
+      expect(refusals(plan), JSON.stringify(assertion)).toEqual([]);
+    }
+  });
+
+  it("rejoue l'ordre du run 76f7b2a9 et refuse AVANT toute étape navigateur", async () => {
+    const f = await setup();
+    cashPage("ouvert");
+    scriptPlan(PlanSchema.parse(pinnedStatePlan()));
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    const scenario = result.scenarios[0]!;
+    expect(scenario.diagnostic?.code).toBe("PLAN_STATE_TARGET_READ_AS_TEXT");
+    expect(scenario.error).toContain("cash-balanced-closure");
+    expect(scenario.error).toContain('[data-cash-state="cloture"]');
+    // Le scénario refusé ne dépense aucune étape : les 6 étapes qui passaient
+    // dans le run mesuré ne sont plus jouées, et le refus ne dépend pas de la
+    // page.
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.artifacts).toEqual([]);
   });
 });
 

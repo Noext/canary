@@ -6,6 +6,8 @@ import {
 } from "./canary.js";
 import { QaError } from "./diagnostics.js";
 import {
+  bracketBlocks,
+  cssSelectors,
   structuralSelectorReason,
   unstableSelectorReason,
 } from "./plan-selector.js";
@@ -655,14 +657,16 @@ export function unstableSelectorRefusals(
 }
 
 /**
- * Sélecteur CSS réduit à UN test d'attribut : `[data-etat]`,
- * `[data-etat="valeur"]`, `[aria-expanded="true"]`. C'est la forme que prend un
- * état exposé par un attribut, et donc la cible d'une assertion qui vise une
- * VALEUR d'attribut. Le nom de l'attribut est capturé : toutes les formes ne
- * portent pas un état (voir `carriesStateValue`).
+ * UN test d'attribut d'un sélecteur CSS : `[data-etat]`, `[data-etat="valeur"]`,
+ * `[aria-expanded=true]`, `[data-etat^="clot"]`. En HTML le nom d'attribut est
+ * insensible à la casse, l'opérateur peut être `=`, `^=`, `$=`, `*=`, `~=` ou
+ * `|=`, et la valeur peut être écrite sans guillemets : reconnaître un attribut
+ * d'état ne dépend donc ni du guillemet, ni de l'opérateur, ni de la casse du
+ * nom. Le nom est capturé, et l'opérateur dit si une VALEUR est épinglée :
+ * `[data-etat]` seul prouve une présence.
  */
-const ATTRIBUTE_SELECTOR =
-  /^\[\s*([a-zA-Z_][-\w]*)\s*(?:=\s*(?:"[^"]*"|'[^']*'))?\s*\]$/;
+const ATTRIBUTE_TEST =
+  /^\[\s*([a-zA-Z_][-\w]*)\s*(?:([*^$~|]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+)))?\s*\]$/;
 
 /**
  * RÈGLE : la liste ci-dessous est l'ÉNUMÉRATION FERMÉE des attributs qui
@@ -706,6 +710,38 @@ const STATE_ATTRIBUTES = new Set([
  */
 function carriesStateValue(name: string): boolean {
   return STATE_ATTRIBUTES.has(name.toLowerCase());
+}
+
+/**
+ * Le premier test d'attribut d'ÉTAT d'un sélecteur CSS, moteur et combinateurs
+ * compris : `[data-cash-state="cloture"] p` et `css=[data-cash-state=cloture]`
+ * en portent un, et l'élément que le test sélectionne n'existe alors que TANT
+ * QUE la valeur épinglée tient. `value` est absente quand le test ne porte pas
+ * de valeur — la forme de seule présence, qui sélectionne le conteneur dans
+ * tous les états. `undefined` quand aucun test d'état n'apparaît, ou quand le
+ * locator n'est pas CSS.
+ */
+function stateAttributeTarget(
+  locator: Locator
+): { block: string; attribute: string; value?: string } | undefined {
+  if (locator.by !== "css") {
+    return;
+  }
+  for (const css of cssSelectors(locator.value)) {
+    for (const block of bracketBlocks(css)) {
+      const match = ATTRIBUTE_TEST.exec(block);
+      const attribute = match?.[1];
+      if (!(attribute && carriesStateValue(attribute))) {
+        continue;
+      }
+      const value =
+        match?.[2] === undefined
+          ? undefined
+          : (match[3] ?? match[4] ?? match[5]);
+      return { block, attribute, value };
+    }
+  }
+  return;
 }
 
 /**
@@ -760,8 +796,8 @@ function attributeValueFault(
     return;
   }
   const selector = target.value.trim();
-  const attribute = ATTRIBUTE_SELECTOR.exec(selector)?.[1];
-  if (!(attribute && carriesStateValue(attribute))) {
+  const state = stateAttributeTarget(target);
+  if (!state) {
     return;
   }
   const expected = assertionExpected(assertion);
@@ -788,6 +824,88 @@ export function attributeValueRefusals(
         "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
         `Scenario ${scenario.id} expects an attribute's value from a selector that renders text: ${offenders.join(" ; ")}`,
         'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-cash-state="ouvert"] with kind "visible" (or kind "count" expecting 1) and keep verification "state" with afterStep set to the step that established it; "transition" fails whenever the state was already the expected one, because the baseline and the observed value are then identical. Reserve "transition" for a step that genuinely moves the value, such as closing a session that was open. To prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert state after that step.'
+      ),
+    });
+  }
+  return refusals;
+}
+
+/**
+ * Ce qu'une assertion de `text` ou `value` doit à un élément SÉLECTIONNÉ PAR UNE
+ * VALEUR D'ÉTAT, `undefined` quand elle ne lit pas un tel élément.
+ * `[data-cash-state="cloture"]` ne désigne un élément que TANT QUE la session
+ * est clôturée : lire son texte rend la lecture conditionnelle à l'état, si
+ * bien qu'un scénario qui n'a pas atteint l'état échoue sur un délai qui ne dit
+ * rien du texte attendu. La reconnaissance est indépendante du guillemet, de
+ * l'opérateur (`^=`, `$=`, `*=`, `~=`, `|=`) et de la casse du nom (voir
+ * `stateAttributeTarget`), et couvre les combinateurs : lire `p` DANS
+ * `[data-cash-state="cloture"]` est aussi conditionnel que lire le conteneur.
+ *
+ * Forme mesurée du run 76f7b2a9 (`cash-balanced-closure`, 8 étapes, 6 passées) :
+ * `text` attendant « Session clôturée : le comptage est verrouillé. » sur
+ * `[data-cash-state="cloture"]`, bloqué après 5 000 ms à `innerText` sur un
+ * sélecteur qui ne résolvait rien. Sur les artefacts de production conservés
+ * (189 runs au plan conservé, 1 050 scénarios), 489 assertions `text`/`value`
+ * visent un attribut d'état épinglé : 449 passent, 39 sont bloquées, 1 échoue.
+ *
+ * La règle ne vise PAS la forme de seule présence `[data-cash-state]`, qui
+ * sélectionne le conteneur de la vue quel que soit l'état : lire son texte lit
+ * le texte de la vue, ce que 924 assertions du même corpus font — 885 passent,
+ * 9 échouent, 30 sont bloquées. Elle ne vise que la valeur épinglée, qui rend
+ * l'existence de l'élément conditionnelle à l'état. Le remède est dans la
+ * règle ci-dessus : prouver l'état par présence (`visible` ou `count`) et lire
+ * le texte de la vue sur le sélecteur qui le porte.
+ */
+function stateTargetReadFault(
+  assertion: Scenario["assertions"][number]
+): string | undefined {
+  const target = assertion.target;
+  if (assertion.kind !== "text" && assertion.kind !== "value") {
+    return;
+  }
+  if (!(target && target.by === "css")) {
+    return;
+  }
+  // Une lecture d'attribut d'état avec un attendu en jeton a déjà son refus,
+  // plus précis : il dit que `text` ne rend jamais la valeur d'un attribut. Le
+  // message n'est pas répété au planificateur sous une seconde forme.
+  if (attributeValueFault(assertion) !== undefined) {
+    return;
+  }
+  const state = stateAttributeTarget(target);
+  if (state?.value === undefined) {
+    return;
+  }
+  const selector = target.value.trim();
+  const expected = assertionExpected(assertion);
+  const expectation =
+    expected === undefined ? "" : ` and expects ${JSON.stringify(expected)}`;
+  return `assertion ${assertion.id} (after ${assertion.afterStep ?? "no step"}, kind ${assertion.kind}) reads ${selector}, an element that exists only while that state holds${expectation}`;
+}
+
+/**
+ * Refus des assertions qui lisent un élément sélectionné par une valeur d'état
+ * (voir `stateTargetReadFault`). Même forme que les refus voisins : un refus par
+ * scénario, nommant l'assertion, le sélecteur, l'attendu et la voie correcte, et
+ * `runner.ts` le rejoue avant la première étape navigateur.
+ */
+export function stateTargetReadRefusals(
+  plan: Plan
+): { error: QaError; scenario: Scenario }[] {
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const offenders = scenario.assertions
+      .map((assertion) => stateTargetReadFault(assertion))
+      .filter((fault): fault is string => fault !== undefined);
+    if (offenders.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_STATE_TARGET_READ_AS_TEXT",
+        `Scenario ${scenario.id} reads an element selected by a state value as if it carried text: ${offenders.join(" ; ")}`,
+        'An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (measured: run 76f7b2a9 waited 5000 ms for [data-cash-state="cloture"] at innerText). Prove the state by presence instead — [data-cash-state="cloture"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-cash-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value.'
       ),
     });
   }
