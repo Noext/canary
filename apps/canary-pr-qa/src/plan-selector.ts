@@ -332,17 +332,22 @@ export function unstableSelectorReason(locator: Locator): string | undefined {
  * resolved to 4 elements »).
  *
  * Une cible qui NOMME l'élément qu'elle SÉLECTIONNE — un `#id`, un attribut qui
- * porte une valeur, écrits sur le dernier composé — n'est pas refusée : le
- * chemin qui la rejoint n'est qu'un contexte. Nommer un ancêtre ne suffit pas,
- * parce qu'un conteneur stable ne rend pas ses descendants uniques. Une liste de
- * sélecteurs (`a, b`) est lue alternative par alternative : une alternative
- * positionnelle rend la liste ambiguë même si une autre nomme son élément.
- * La lecture descend dans les arguments des pseudo-classes fonctionnelles qui
- * prennent un sélecteur (`:not`, `:is`, `:where`, `:has`, `:nth-child(An+B of
- * S)`, `:nth-of-type`) : un chemin écrit là désigne la même position que dans
- * le composé qui le porte, donc `:is(aside > div)` est refusé comme
- * `aside > div`. Un argument sans chemin (`:not([disabled])`, `:has(label)`)
- * ne change rien.
+ * porte une valeur quel que soit son opérateur (`=`, `^=`, `$=`, `*=`, `~=`,
+ * `|=`), écrits sur le dernier composé — n'est pas refusée : le chemin qui la
+ * rejoint n'est qu'un contexte. Nommer un ancêtre ne suffit pas, parce qu'un
+ * conteneur stable ne rend pas ses descendants uniques. Une ancre écrite dans
+ * un `:is()` ou un `:where()` de ce composé compte aussi : ces pseudo-classes
+ * restreignent l'élément qu'elles qualifient, donc `section > div:is(#saved)`
+ * sélectionne `#saved`. `:has()` et `:not()` n'en sont pas — l'un décrit un
+ * descendant, l'autre exclut l'élément —, et leurs arguments restent hors de
+ * l'exemption. Une liste de sélecteurs (`a, b`) est lue alternative par
+ * alternative : une alternative positionnelle rend la liste ambiguë même si une
+ * autre nomme son élément. La lecture descend dans les arguments des
+ * pseudo-classes fonctionnelles qui prennent un sélecteur (`:not`, `:is`,
+ * `:where`, `:has`, `:nth-child(An+B of S)`, `:nth-of-type`) : un chemin écrit
+ * là désigne la même position que dans le composé qui le porte, donc
+ * `:is(aside > div)` est refusé comme `aside > div`. Un argument sans chemin
+ * (`:not([disabled])`, `:has(label)`) ne change rien.
  *
  * La règle est indépendante du modèle et de l'instantané de découverte, comme
  * celle des classes et des couleurs, pour que le plan soit refusé AVANT la
@@ -544,9 +549,13 @@ function selectorArguments(selector: string): string[] {
   return arguments_;
 }
 
-/** Attribut qui porte une valeur : `[data-testid="total"]`. Il nomme un élément. */
+/**
+ * Attribut qui porte une valeur, quel que soit son opérateur (`=`, `^=`, `$=`,
+ * `*=`, `~=`, `|=`) : `[data-testid="total"]` et `a[href$=".pdf"]` nomment
+ * l'élément aussi précisément l'un que l'autre.
+ */
 const ATTRIBUTE_WITH_VALUE =
-  /^\[\s*[a-zA-Z_][-\w]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*\]$/;
+  /^\[\s*[a-zA-Z_][-\w]*\s*[*^$~|]?=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*\]$/;
 
 /** Attribut de seule présence : `[data-cash-state]`. Il prouve une présence, il ne nomme rien. */
 const ATTRIBUTE_PRESENCE = /^\[\s*[a-zA-Z_][-\w]*\s*\]$/;
@@ -622,11 +631,55 @@ function ownAttributeBlocks(compound: string): string[] {
 }
 
 /**
+ * Pseudo-classes dont l'argument restreint l'élément du composé lui-même :
+ * `:is()`, `:where()` et son alias `:matches()`. Un `:has()` décrit un
+ * descendant et un `:not()` exclut l'élément, donc ni l'un ni l'autre ne nomme
+ * ce que le composé sélectionne.
+ */
+const IDENTITY_PSEUDO_CLASS = /^:(?:is|where|matches)\(/i;
+
+/**
+ * Les listes de sélecteurs écrites par un `:is()` ou un `:where()` DU COMPOSÉ.
+ * Elles sont lues sur `selectorCode`, donc une parenthèse entre guillemets n'en
+ * ouvre aucune, et un groupe écrit plus profond — `:has(:is(#saved))`,
+ * `:not(:where(#saved))` — n'est pas rendu : il parle d'un autre élément.
+ */
+function identityArguments(compound: string): string[] {
+  const code = selectorCode(compound);
+  const arguments_: string[] = [];
+  let depth = 0;
+  let index = 0;
+  while (index < code.length) {
+    const char = code[index] as string;
+    if (char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === ":" && depth === 0) {
+      const identity = IDENTITY_PSEUDO_CLASS.exec(code.slice(index));
+      if (identity) {
+        const open = index + identity[0].length - 1;
+        const close = closingParenthesis(code, open);
+        if (close < 0) {
+          break;
+        }
+        arguments_.push(compound.slice(open + 1, close));
+        index = close + 1;
+        continue;
+      }
+    }
+    index += 1;
+  }
+  return arguments_;
+}
+
+/**
  * Le composé nomme-t-il l'ÉLÉMENT QU'IL SÉLECTIONNE ? Un `#id` et un attribut
  * qui porte une valeur le nomment, à condition d'être écrits sur ce composé :
  * un `#id` dans `[href="#abc"]`, dans `:has(#saved)` ou dans `:not(#x)` désigne
  * autre chose que l'élément visé, et un attribut écrit dans `:has(...)` décrit
- * un descendant.
+ * un descendant. Une ancre écrite dans un `:is()` ou un `:where()` du composé le
+ * nomme aussi, parce que l'argument restreint ce même élément.
  *
  * Un ancêtre nommé ne suffit pas : `#saved > span` sélectionne TOUS les `span`
  * de `#saved`, `[data-testid="total"] > span` tous ceux de `[data-testid="total"]`,
@@ -640,8 +693,19 @@ function namesItsElement(compound: string): boolean {
   if (/#[A-Za-z_][\w-]*/.test(positionalOutline(compound))) {
     return true;
   }
-  return ownAttributeBlocks(compound).some((block) =>
-    ATTRIBUTE_WITH_VALUE.test(block)
+  if (
+    ownAttributeBlocks(compound).some((block) =>
+      ATTRIBUTE_WITH_VALUE.test(block)
+    )
+  ) {
+    return true;
+  }
+  // `:is()` et `:where()` filtrent l'élément du composé : une alternative qui
+  // nomme le sien nomme donc celui-là (`section > div:is(#saved)`).
+  return identityArguments(compound).some((argument) =>
+    commaAlternatives(argument).some((alternative) =>
+      namesItsElement(selectedCompound(alternative))
+    )
   );
 }
 

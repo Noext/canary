@@ -1519,6 +1519,52 @@ describe("sélecteur structurel : une position ne nomme pas un élément", () =>
       );
     }
   });
+  it("n'oppose aucun refus à un attribut qui porte une valeur, quel que soit son opérateur", () => {
+    // `ATTRIBUTE_WITH_VALUE` ne lisait que `=` : un attribut valué par `^=`,
+    // `$=`, `*=`, `~=` ou `|=` sur le composé sélectionné n'était pas une
+    // ancre, donc la cible était refusée alors qu'elle nomme son élément.
+    for (const value of [
+      'form > a[href$=".pdf"]',
+      'section > [data-testid^="save"]',
+      'section > [data-testid$="total"]',
+      'section > [data-testid*="tot"]',
+      'section > [data-state~="open"]',
+      'section > [lang|="fr"]',
+      'section > [data-testid="total"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("n'oppose aucun refus à une ancre écrite dans :is() ou :where()", () => {
+    // `:is()` et `:where()` restreignent l'élément du composé : une ancre dans
+    // leur argument nomme la cible, alors que `positionalOutline` masque la
+    // parenthèse et que `:has()`/`:not()` ne disent rien de cet élément.
+    for (const value of [
+      "section > div:is(#saved)",
+      'main > :where([data-testid="total"])',
+      'main > div:is([data-testid="total"])',
+      "section > div:matches(#saved)",
+      "section > div:is(#saved, #total)",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("refuse la même ancre dans :has() ou :not(), qui parlent d'un autre élément", () => {
+    // Contrepartie de l'exemption : `:has()` décrit un descendant et `:not()`
+    // exclut l'élément, donc l'ancre qu'ils portent ne nomme pas la cible.
+    for (const value of [
+      "section > div:has(#saved)",
+      "section > div:not(#saved)",
+      'section > div:has([data-testid="total"])',
+      "section > div:not(:is(#saved))",
+    ]) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        "names a position instead of an element"
+      );
+    }
+  });
   it("refuse le même chemin écrit dans une pseudo-classe fonctionnelle", () => {
     // Un argument de pseudo-classe à sélecteur fait partie du même chemin :
     // `:is(aside > div)` sélectionne exactement l'ensemble que `aside > div`,
