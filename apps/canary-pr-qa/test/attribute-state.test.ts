@@ -1141,6 +1141,38 @@ describe("cible sélectionnée par une valeur d'état, lue comme du texte", () =
     expect(refused[0]?.error.message).toContain('[data-cash-state="ouvert"]');
   });
 
+  it("refuse une lecture dont la valeur épinglée se cache derrière une présence", () => {
+    // Le sélecteur examine TOUS ses attributs d'état : s'arrêter au premier
+    // test reconnu laisserait passer la forme du finding, où la présence
+    // précède la valeur qui rend l'élément conditionnel.
+    for (const value of [
+      "[data-state] button[aria-expanded=true]",
+      '[data-cash-state] p[aria-pressed="true"]',
+      '[aria-hidden="false"] [data-state] p[aria-selected=true]',
+    ]) {
+      const refused = refusals(withTarget(pinnedStatePlan(), value));
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.code, value).toBe(
+        "PLAN_STATE_TARGET_READ_AS_TEXT"
+      );
+      expect(refused[0]?.error.message, value).toContain(value);
+    }
+  });
+
+  it("n'oppose aucun refus à la présence d'état suivie d'un attribut qui n'en porte pas", () => {
+    // Non-régression de la mesure : la présence seule sélectionne le conteneur
+    // dans tous les états, donc lire son texte lit le texte de la vue. Un
+    // attribut valué qui ne porte pas d'état (`[aria-label="…"]`) ne change
+    // rien à cette lecture.
+    for (const value of [
+      "[data-state] button",
+      "[data-cash-state] aside p",
+      '[data-cash-state] input[aria-label="Montant d’espèces attendu"]',
+    ]) {
+      expect(refusals(withTarget(pinnedStatePlan(), value)), value).toEqual([]);
+    }
+  });
+
   it("n'oppose aucun refus à une cible qui nomme son élément", () => {
     // 0 faux refus sur les formes qui nomment : la valeur épinglée est le seul
     // déclencheur, et la présence seule reste la voie de remède.

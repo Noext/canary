@@ -331,9 +331,11 @@ export function unstableSelectorReason(locator: Locator): string | undefined {
  * les 4 scénarios qui l'utilisaient (run 93cd4991, « strict mode violation :
  * resolved to 4 elements »).
  *
- * Une cible qui NOMME son élément — un `#id`, un attribut qui porte une valeur —
- * n'est pas refusée : le chemin qui la rejoint n'est qu'un contexte. Une liste
- * de sélecteurs (`a, b`) est lue alternative par alternative : une alternative
+ * Une cible qui NOMME l'élément qu'elle SÉLECTIONNE — un `#id`, un attribut qui
+ * porte une valeur, écrits sur le dernier composé — n'est pas refusée : le
+ * chemin qui la rejoint n'est qu'un contexte. Nommer un ancêtre ne suffit pas,
+ * parce qu'un conteneur stable ne rend pas ses descendants uniques. Une liste de
+ * sélecteurs (`a, b`) est lue alternative par alternative : une alternative
  * positionnelle rend la liste ambiguë même si une autre nomme son élément.
  *
  * La règle est indépendante du modèle et de l'instantané de découverte, comme
@@ -477,46 +479,106 @@ const ATTRIBUTE_WITH_VALUE =
 const ATTRIBUTE_PRESENCE = /^\[\s*[a-zA-Z_][-\w]*\s*\]$/;
 
 /**
- * Les composés qui NOMMENT l'élément : un `#id` et un attribut qui porte une
- * valeur. Le plan qui en porte un n'est pas refusé par cette règle : il désigne
- * l'élément, et le chemin qui le rejoint n'est qu'un contexte. `#saved > span`
- * reste donc accepté, comme les sélecteurs `[aria-label="…"]` et
- * `[data-testid="…"]` d'un chemin plus long.
- *
- * Un attribut de seule présence n'est pas une ancre : `[data-cash-state] aside >
- * div` ne contient que des présences, et c'est exactement la forme mesurée.
+ * Les attributs de seule PRÉSENCE d'une alternative : `[data-cash-state]`
+ * prouve une présence, il ne nomme aucun élément. Ils servent au message, qui
+ * propose le conteneur que le plan nomme déjà, jamais à l'exemption.
  */
-function namingAnchors(segment: string): {
-  id?: string;
-  valued: string[];
-  presence: string[];
-} {
-  const anchors: { id?: string; valued: string[]; presence: string[] } = {
-    valued: [],
-    presence: [],
-  };
-  // Un `#` n'est un id que hors chaînes littérales et hors crochets : `#abc`
-  // dans `[href="#abc"]` est une valeur, et `url(#abc)` une référence.
-  for (const match of outsideBrackets(selectorCode(segment)).matchAll(
-    /#([A-Za-z_][\w-]*)/g
-  )) {
-    anchors.id ??= match[1];
-  }
-  for (const block of bracketBlocks(segment)) {
-    if (ATTRIBUTE_WITH_VALUE.test(block)) {
-      anchors.valued.push(block);
-    } else if (ATTRIBUTE_PRESENCE.test(block)) {
-      anchors.presence.push(block);
+function presenceAttributes(alternative: string): string[] {
+  return bracketBlocks(alternative).filter((block) =>
+    ATTRIBUTE_PRESENCE.test(block)
+  );
+}
+
+/**
+ * Le composé que l'alternative SÉLECTIONNE : le dernier, une fois les
+ * combinateurs de premier niveau retirés (`#saved > span` sélectionne `span`).
+ * `positionalOutline` fournit le masque — chaînes littérales, crochets et
+ * groupes parenthésés rendus opaques — et sa longueur est celle de
+ * l'alternative, donc les deux index coïncident. Un `>`, un `+`, un `~` ou un
+ * blanc de premier niveau ouvre le composé suivant ; un caractère échappé
+ * appartient à son identifiant (`p.class\ name` ne contient pas de descendant).
+ */
+function selectedCompound(alternative: string): string {
+  const outline = positionalOutline(alternative);
+  let start = 0;
+  for (let index = 0; index < outline.length; index += 1) {
+    // Un antislash lisible dans le contour est de premier niveau : le caractère
+    // qu'il échappe appartient à son identifiant, jamais à un combinateur.
+    if (outline[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (/[>+~\s]/.test(outline[index] as string)) {
+      start = index + 1;
     }
   }
-  return anchors;
+  return alternative.slice(start);
+}
+
+/**
+ * Les blocs `[...]` écrits SUR le composé, hors crochets imbriqués et hors
+ * groupes parenthésés : un attribut dans `:has([data-testid="x"])` décrit un
+ * descendant, donc il ne nomme pas l'élément sélectionné. Le composé est lu sur
+ * son `positionalOutline`, où chaînes et contenu sont masqués à longueur
+ * constante : il ne reste que la structure, et un bloc de premier niveau se
+ * reconnaît à son crochet ouvert à profondeur zéro.
+ */
+function ownAttributeBlocks(compound: string): string[] {
+  const outline = positionalOutline(compound);
+  const blocks: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let index = 0; index < outline.length; index += 1) {
+    const char = outline[index];
+    if (char === "[") {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+      if (char === "]" && depth === 0 && start >= 0) {
+        blocks.push(compound.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Le composé nomme-t-il l'ÉLÉMENT QU'IL SÉLECTIONNE ? Un `#id` et un attribut
+ * qui porte une valeur le nomment, à condition d'être écrits sur ce composé :
+ * un `#id` dans `[href="#abc"]`, dans `:has(#saved)` ou dans `:not(#x)` désigne
+ * autre chose que l'élément visé, et un attribut écrit dans `:has(...)` décrit
+ * un descendant.
+ *
+ * Un ancêtre nommé ne suffit pas : `#saved > span` sélectionne TOUS les `span`
+ * de `#saved`, `[data-testid="total"] > span` tous ceux de `[data-testid="total"]`,
+ * et Playwright les refuse en strict mode dès que deux existent. C'est la même
+ * ambiguïté que `aside > div`, avec un conteneur stable devant.
+ */
+function namesItsElement(compound: string): boolean {
+  // Un `#` n'est un id que hors chaînes littérales, hors crochets et hors
+  // groupes parenthésés : `#abc` dans `[href="#abc"]` est une valeur,
+  // `url(#abc)` une référence, `:has(#abc)` un descendant.
+  if (/#[A-Za-z_][\w-]*/.test(positionalOutline(compound))) {
+    return true;
+  }
+  return ownAttributeBlocks(compound).some((block) =>
+    ATTRIBUTE_WITH_VALUE.test(block)
+  );
 }
 
 /**
  * Ce qu'un locator CSS doit à une position, `undefined` quand il nomme son
- * élément. `aside > div` et `div:nth-of-type(2)` sont refusés ; `#saved > span`,
- * `[data-testid="total"] > span`, `[role="status"]` et
- * `[data-cash-state="cloture"]` ne le sont pas.
+ * élément. `aside > div`, `div:nth-of-type(2)`, `#saved > span` et
+ * `[data-testid="total"] > span` sont refusés ; `div > #saved`,
+ * `li:first-child[id="saved"]`, `[role="status"]` et
+ * `[data-cash-state="cloture"]` ne le sont pas : l'ancre doit désigner
+ * l'élément que le sélecteur SÉLECTIONNE, pas l'un de ses ancêtres.
  *
  * La raison cite le composé fautif et, quand le plan y nomme déjà un conteneur
  * (`[data-cash-state]`), la cible stable qu'il peut viser à la place.
@@ -531,11 +593,10 @@ export function structuralSelectorReason(locator: Locator): string | undefined {
       if (!position) {
         continue;
       }
-      const anchors = namingAnchors(alternative);
-      if (anchors.id || anchors.valued.length > 0) {
+      if (namesItsElement(selectedCompound(alternative))) {
         continue;
       }
-      const container = anchors.presence[0];
+      const container = presenceAttributes(alternative)[0];
       return `a structural path (${alternative}, ${position}: it names a position instead of an element, so it matches several elements by construction${container ? `; the plan already names ${container} in it, target that container instead` : ""})`;
     }
   }

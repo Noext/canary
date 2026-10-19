@@ -1233,7 +1233,7 @@ describe("sélecteur construit sur une classe ou une couleur", () => {
       "text=Save.now",
       "label=Save.now",
       "input",
-      "#saved > span",
+      "div > #saved",
     ]) {
       expect(refusals(value), value).toEqual([]);
     }
@@ -1470,10 +1470,8 @@ describe("sélecteur structurel : une position ne nomme pas un élément", () =>
     // Non-régression : id, attribut qui porte une valeur, rôle+nom, data-*
     // stable et forme de seule présence restent acceptés, combinateur ou non.
     for (const value of [
-      "#saved > span",
-      '[data-testid="total"] > span',
       'header [data-canary-preview="pr"]',
-      'label:has(input[aria-label="Quantité · Billet de 500 €"]) > span:nth-of-type(2)',
+      "div > #saved",
       'input[inputmode="numeric"]:disabled',
       '[role="status"]',
       '[data-cash-state="cloture"]',
@@ -1482,6 +1480,43 @@ describe("sélecteur structurel : une position ne nomme pas un élément", () =>
       "div",
     ]) {
       expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("refuse un chemin dont seul l'ANCÊTRE est nommé", () => {
+    // L'ancre doit désigner l'élément SÉLECTIONNÉ : `span` reste `span` sous un
+    // conteneur stable, donc Playwright le refuse en strict mode dès qu'il y en
+    // a deux. Chaque forme porte une ancre, aucune ne nomme sa cible.
+    const refusedForms = [
+      ["#saved > span", "child combinator >"],
+      ['[data-testid="total"] > span', "child combinator >"],
+      [
+        'label:has(input[aria-label="Quantité · Billet de 500 €"]) > span:nth-of-type(2)',
+        "positional pseudo-class :nth-of-type",
+      ],
+      ["#saved span", "descendant combinator (a space)"],
+      ["#saved + div", "adjacent-sibling combinator +"],
+    ] as const;
+    for (const [value, position] of refusedForms) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        `structural path (${value}, ${position}: it names a position instead of an element`
+      );
+    }
+  });
+  it("refuse une ancre écrite dans :has(), qui nomme un descendant", () => {
+    // `#saved > div:has(#total)` sélectionne le `div` qui CONTIENT `#total` :
+    // l'id y décrit un descendant, pas le `div` visé, et le conteneur stable
+    // `#saved` ne le rend pas unique pour autant.
+    for (const value of [
+      "#saved > div:has(#total)",
+      '#saved > div:has([data-testid="total"])',
+    ]) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        "names a position instead of an element"
+      );
     }
   });
   it("bloque le scénario structurel non corrigé avant toute étape navigateur", async () => {

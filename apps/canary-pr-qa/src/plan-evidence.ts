@@ -713,13 +713,20 @@ function carriesStateValue(name: string): boolean {
 }
 
 /**
- * Le premier test d'attribut d'ÉTAT d'un sélecteur CSS, moteur et combinateurs
+ * Le test d'attribut d'ÉTAT qu'un sélecteur CSS porte, moteur et combinateurs
  * compris : `[data-cash-state="cloture"] p` et `css=[data-cash-state=cloture]`
  * en portent un, et l'élément que le test sélectionne n'existe alors que TANT
  * QUE la valeur épinglée tient. `value` est absente quand le test ne porte pas
  * de valeur — la forme de seule présence, qui sélectionne le conteneur dans
  * tous les états. `undefined` quand aucun test d'état n'apparaît, ou quand le
  * locator n'est pas CSS.
+ *
+ * TOUS les tests d'état du sélecteur sont examinés, et une valeur épinglée
+ * l'emporte sur une présence : `[data-state] button[aria-expanded=true]`
+ * sélectionne un bouton qui n'existe que déplié, si bien que s'arrêter au
+ * premier test reconnu — la présence `[data-state]` — laisserait passer
+ * exactement la lecture conditionnelle que la règle refuse. La présence n'est
+ * rendue que si le sélecteur n'épingle aucune valeur.
  */
 function stateAttributeTarget(
   locator: Locator
@@ -727,6 +734,7 @@ function stateAttributeTarget(
   if (locator.by !== "css") {
     return;
   }
+  let presence: { block: string; attribute: string } | undefined;
   for (const css of cssSelectors(locator.value)) {
     for (const block of bracketBlocks(css)) {
       const match = ATTRIBUTE_TEST.exec(block);
@@ -734,14 +742,15 @@ function stateAttributeTarget(
       if (!(attribute && carriesStateValue(attribute))) {
         continue;
       }
-      const value =
-        match?.[2] === undefined
-          ? undefined
-          : (match[3] ?? match[4] ?? match[5]);
+      if (match[2] === undefined) {
+        presence ??= { block, attribute };
+        continue;
+      }
+      const value = match[3] ?? match[4] ?? match[5];
       return { block, attribute, value };
     }
   }
-  return;
+  return presence;
 }
 
 /**
@@ -840,6 +849,9 @@ export function attributeValueRefusals(
  * l'opérateur (`^=`, `$=`, `*=`, `~=`, `|=`) et de la casse du nom (voir
  * `stateAttributeTarget`), et couvre les combinateurs : lire `p` DANS
  * `[data-cash-state="cloture"]` est aussi conditionnel que lire le conteneur.
+ * Un sélecteur qui MÊLE une présence et une valeur —
+ * `[data-state] button[aria-expanded=true]` — est donc refusé : la présence
+ * n'efface pas la valeur épinglée qui rend le bouton conditionnel.
  *
  * Forme mesurée du run 76f7b2a9 (`cash-balanced-closure`, 8 étapes, 6 passées) :
  * `text` attendant « Session clôturée : le comptage est verrouillé. » sur
@@ -852,9 +864,10 @@ export function attributeValueRefusals(
  * sélectionne le conteneur de la vue quel que soit l'état : lire son texte lit
  * le texte de la vue, ce que 924 assertions du même corpus font — 885 passent,
  * 9 échouent, 30 sont bloquées. Elle ne vise que la valeur épinglée, qui rend
- * l'existence de l'élément conditionnelle à l'état. Le remède est dans la
- * règle ci-dessus : prouver l'état par présence (`visible` ou `count`) et lire
- * le texte de la vue sur le sélecteur qui le porte.
+ * l'existence de l'élément conditionnelle à l'état, et elle la vise PARTOUT
+ * dans le sélecteur. Le remède est dans la règle ci-dessus : prouver l'état par
+ * présence (`visible` ou `count`) et lire le texte de la vue sur le sélecteur
+ * qui le porte.
  */
 function stateTargetReadFault(
   assertion: Scenario["assertions"][number]
