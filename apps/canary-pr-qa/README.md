@@ -190,7 +190,10 @@ Les actions `download` et `popup` attendent réellement l'événement, vérifien
 respectivement le nom du téléchargement sans erreur et l'URL de la popup.
 Un `click` porte `ifPresent: true` quand il sert uniquement à ÉTABLIR un état
 dont le scénario dépend : si le contrôle est absent, l'état visé est déjà en
-place, l'étape est sautée et le rapport la nomme comme sautée. Cette option ne
+place, l'étape est sautée et le rapport la nomme comme sautée. Absent signifie
+qu'aucun élément ne correspond au locator : un contrôle présent mais jamais
+visible, un nom accessible ambigu ou deux éléments correspondants restent des
+échecs visibles, jamais un saut silencieux. Cette option ne
 s'applique jamais à une action métier qui doit avoir lieu — une cible absente y
 reste un échec — et aucune autre action ne l'accepte. Une étape sautée ne peut
 pas démontrer de transition : sa baseline est relevée avant un clic qui n'a pas

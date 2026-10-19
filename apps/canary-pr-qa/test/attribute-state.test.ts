@@ -747,6 +747,98 @@ describe("valeur d'attribut visée par une assertion de texte", () => {
     expect(refusals(plan)).toHaveLength(1);
     expect(refusals(plan)[0]?.error.message).toContain("[aria-expanded]");
   });
+
+  it("accepte un champ sélectionné par son nom, son id ou son type : il lit SA valeur", () => {
+    // `[name="state"]`, `[id="state"]`, `[type="text"]` sélectionnent
+    // l'ÉLÉMENT : `kind "value"` y lit `inputValue` du champ visé, qui est
+    // exactement l'attendu. Aucun de ces attributs ne porte un état, donc
+    // aucun n'entre dans le champ du refus.
+    for (const selector of [
+      '[name="state"]',
+      '[id="state"]',
+      '[type="text"]',
+    ]) {
+      const plan = assumedStatePlan();
+      const scenario = plan.scenarios[0]!;
+      plan.scenarios = [
+        {
+          ...scenario,
+          assertions: [
+            {
+              id: "state-ouvert",
+              description: "Le champ d'état contient open",
+              kind: "value",
+              expected: "open",
+              target: { by: "css", value: selector },
+              afterStep: "open-cash",
+              verification: "state",
+            },
+          ],
+          steps: scenario.steps.filter((step) =>
+            ["goto", "open-cash", "check-open"].includes(step.id)
+          ),
+        },
+      ];
+      expect(refusals(plan), selector).toEqual([]);
+    }
+  });
+
+  it('accepte [data-testid="status"] attendant "ready" : un crochet de sélection nomme l’élément', () => {
+    // `data-testid` est un `data-*`, mais il nomme l'élément au lieu de porter
+    // l'état de l'application : l'attendu en jeton est le TEXTE affiché, lu par
+    // `innerText` sur l'élément lui-même. Le refus ne vise que les attributs qui
+    // portent réellement un état.
+    const plan = assumedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: [
+          {
+            id: "state-ouvert",
+            description: "Le statut de la page affiche ready",
+            kind: "text",
+            expected: "ready",
+            target: { by: "css", value: '[data-testid="status"]' },
+            afterStep: "open-cash",
+            verification: "state",
+          },
+        ],
+        steps: scenario.steps.filter((step) =>
+          ["goto", "open-cash", "check-open"].includes(step.id)
+        ),
+      },
+    ];
+    expect(refusals(plan)).toEqual([]);
+  });
+
+  it("refuse encore la lecture d'un crochet data- qui porte un état", () => {
+    // Le pendant de l'acceptation ci-dessus : la même forme sur un attribut qui
+    // porte l'état de la vue reste refusée, crochet de sélection ou non.
+    const plan = assumedStatePlan();
+    const scenario = plan.scenarios[0]!;
+    plan.scenarios = [
+      {
+        ...scenario,
+        assertions: [
+          {
+            id: "state-ouvert",
+            description: "L'état de la caisse est ouvert",
+            kind: "text",
+            expected: "ouvert",
+            target: { by: "css", value: "[data-state]" },
+            afterStep: "open-cash",
+            verification: "state",
+          },
+        ],
+        steps: scenario.steps.filter((step) =>
+          ["goto", "open-cash", "check-open"].includes(step.id)
+        ),
+      },
+    ];
+    expect(refusals(plan)).toHaveLength(1);
+    expect(refusals(plan)[0]?.error.message).toContain("[data-state]");
+  });
 });
 
 describe("état de la caisse hérité d'un run antérieur", () => {

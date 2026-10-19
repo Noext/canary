@@ -697,16 +697,24 @@ await popup.close();`
     )};`;
   } else if (action.type === "click" && action.ifPresent) {
     // Établissement d'état : l'absence de la cible est une information, pas un
-    // échec. Le délai court ne sert qu'à laisser la vue se stabiliser ; s'il
-    // expire, l'étape est sautée et `actual` le dit. Un clic qui échoue une
-    // fois la cible visible reste une erreur, elle.
-    command = `await ${locatorRun(
-      action.locator,
-      `let present = false;
-try { await locator.waitFor({ state: "visible", timeout: 1500 }); present = true; } catch { present = false; }
-if (present) await locator.click({ timeout: 10000 });
-actual = present;`
-    )};`;
+    // échec. Un délai n'est une ABSENCE que si plus rien ne correspond au
+    // locator : `count` mesure alors zéro élément, et l'étape est sautée.
+    // Un contrôle présent mais jamais visible, une ambiguïté de nom accessible
+    // ou plusieurs éléments correspondants restent des erreurs visibles, sinon
+    // une étape réellement nécessaire disparaîtrait en silence. L'attente et le
+    // clic gardent le délai d'un clic ordinaire (10 s) et passent par le même
+    // repli de locator, pour qu'un contrôle qui apparaît après 1,5 s soit
+    // cliqué et non déduit absent.
+    command = `let present = false;
+try {
+  await ${locatorRun(action.locator, 'await locator.waitFor({ state: "visible", timeout: 10000 });')};
+  present = true;
+} catch (error) {
+  if (!/Timeout \\d+ms exceeded/.test(String(error))) throw error;
+  if ((await ${locatorCount(action.locator)}) !== 0) throw error;
+}
+if (present) await ${locatorRun(action.locator, "await locator.click({ timeout: 10000 });")};
+actual = present;`;
   } else if (action.type === "assert") {
     command = compileAssertion(action, assertion);
   } else if (action.type !== "observe") {

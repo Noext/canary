@@ -673,13 +673,33 @@ const ARIA_STATE_ATTRIBUTES = new Set([
 ]);
 
 /**
+ * Crochets de SÉLECTION écrits en `data-*` : ils nomment l'élément pour le
+ * désigner dans un test, ils ne portent aucun état de l'application. L'assertion
+ * qui les vise lit le contenu de l'élément, comme pour `[name]`, `[id]`, `[class]`
+ * ou `[role]` : `[data-testid="status"]` attendant `ready` est correct et ne doit
+ * pas être refusé, alors que ce même `data-` préfixe porte l'état ailleurs.
+ */
+const SELECTOR_HOOK_ATTRIBUTES = new Set([
+  "data-automation-id",
+  "data-cy",
+  "data-qa",
+  "data-test",
+  "data-test-id",
+  "data-testid",
+]);
+
+/**
  * L'attribut porte-t-il un état, c'est-à-dire une valeur en jeton que l'élément
- * n'affiche pas ? `data-*` : l'application y met l'état qu'elle expose. Une
- * assertion `text` sur un sélecteur d'attribut qui ne porte pas d'état n'est
- * donc jamais fautive par sa seule syntaxe.
+ * n'affiche pas ? `data-*` : l'application y met l'état qu'elle expose, sauf les
+ * crochets de sélection qui ne font que nommer l'élément. Une assertion `text`
+ * sur un sélecteur d'attribut qui ne porte pas d'état n'est donc jamais fautive
+ * par sa seule syntaxe.
  */
 function carriesStateValue(name: string): boolean {
   const attribute = name.toLowerCase();
+  if (SELECTOR_HOOK_ATTRIBUTES.has(attribute)) {
+    return false;
+  }
   return attribute.startsWith("data-") || ARIA_STATE_ATTRIBUTES.has(attribute);
 }
 
@@ -714,7 +734,10 @@ const IDENTIFIER_TOKEN = /^[a-z][a-z0-9_-]*$/;
  * Le refus est restreint aux attributs qui PORTENT un état (`data-*` et les
  * attributs ARIA d'état), pas à la forme syntaxique du sélecteur : `[role="\
  * status"]` est une cible légitime dont le texte visible est le contenu, et
- * une assertion `text` y attendant `ok` est correcte.
+ * une assertion `text` y attendant `ok` est correcte. `[name="state"]`,
+ * `[id="state"]` et `[data-testid="status"]` nomment l'ÉLÉMENT : `kind "value"`
+ * y lit `inputValue` du champ visé, et `kind "text"` le contenu de l'élément, si
+ * bien qu'aucun des deux ne peut lire la valeur d'un attribut par accident.
  *
  * La voie correcte existe déjà et n'exige aucune extension du schéma : viser
  * `[data-etat="ouvert"]` avec kind `visible` (ou `count` valant 1) prouve
