@@ -128,7 +128,7 @@ function outsideBrackets(code: string): string {
  * et une couleur se lisent, y compris dans la forme observée
  * `p[class*="text-[#b42318]"]`.
  */
-function bracketBlocks(selector: string): string[] {
+export function bracketBlocks(selector: string): string[] {
   const blocks: string[] = [];
   let quote: string | undefined;
   let start = -1;
@@ -270,22 +270,32 @@ function declarationColor(text: string): string | undefined {
 }
 
 /**
+ * Les sélecteurs CSS d'un locator, moteur retiré : `css=aside > div` et
+ * `role=button >> aside > div` rendent `aside > div`. `role=`, `text=` et les
+ * autres moteurs Playwright ne sont pas des sélecteurs CSS — un point y est du
+ * texte —, seul `css=` en annonce. Un segment `css=` est rendu sans son moteur,
+ * pour qu'un contrôle puisse lire le sélecteur lui-même.
+ */
+export function cssSelectors(value: string): string[] {
+  return selectorChain(value).flatMap((segment) => {
+    const engine = ENGINE.exec(segment);
+    if (engine && (engine[1] ?? "").toLowerCase() !== "css") {
+      return [];
+    }
+    return [engine ? segment.slice(engine[0].length) : segment];
+  });
+}
+
+/**
  * Ce qu'un locator CSS doit à une classe ou à une couleur, `undefined` quand il
  * n'en dépend pas. Chaque segment de la chaîne est analysé : `role=button >> .foo`
- * porte un sélecteur CSS dans son second segment. `role=`, `text=` et les autres
- * moteurs Playwright ne sont pas des sélecteurs CSS — un point y est du texte —,
- * seul `css=` en annonce.
+ * porte un sélecteur CSS dans son second segment (voir `cssSelectors`).
  */
 export function unstableSelectorReason(locator: Locator): string | undefined {
   if (locator.by !== "css") {
     return;
   }
-  for (const segment of selectorChain(locator.value)) {
-    const engine = ENGINE.exec(segment);
-    if (engine && (engine[1] ?? "").toLowerCase() !== "css") {
-      continue;
-    }
-    const css = engine ? segment.slice(engine[0].length) : segment;
+  for (const css of cssSelectors(locator.value)) {
     // Un point n'est une classe que hors chaînes littérales et hors crochets —
     // sinon `[data-file=report.png]` serait une classe.
     const className = CLASS_NAME.exec(outsideBrackets(selectorCode(css)))?.[0];
@@ -300,6 +310,459 @@ export function unstableSelectorReason(locator: Locator): string | undefined {
       if (color) {
         return `a color value (${color})`;
       }
+    }
+  }
+  return;
+}
+
+/**
+ * Ce qu'un sélecteur CSS doit à une POSITION plutôt qu'à un nom. Un combinateur
+ * (`>`, `+`, `~`, l'espace descendant) relie des composés sans nommer l'élément
+ * visé, et une pseudo-classe positionnelle (`:nth-of-type(2)`, `:first-child`)
+ * désigne le même endroit d'une liste : le sélecteur décrit OÙ l'élément se
+ * trouve, pas l'élément. Playwright le refuse alors en strict mode dès que deux
+ * éléments occupent cet endroit, ce qui arrive par construction et non par
+ * accident.
+ *
+ * Mesuré sur les artefacts de production conservés (189 runs au plan conservé,
+ * 1 050 scénarios, 3 027 cibles CSS) : 101 cibles de cette forme sont refusées,
+ * dont 90 appartenaient à des scénarios qui passaient, 2 à des scénarios en
+ * échec et 9 à des scénarios bloqués. `aside > div` en résolvait 4 et a bloqué
+ * les 4 scénarios qui l'utilisaient (run 93cd4991, « strict mode violation :
+ * resolved to 4 elements »).
+ *
+ * Une cible qui NOMME l'élément qu'elle SÉLECTIONNE — un `#id`, un attribut qui
+ * porte une valeur quel que soit son opérateur (`=`, `^=`, `$=`, `*=`, `~=`,
+ * `|=`), écrits sur le dernier composé — n'est pas refusée : le chemin qui la
+ * rejoint n'est qu'un contexte. Nommer un ancêtre ne suffit pas, parce qu'un
+ * conteneur stable ne rend pas ses descendants uniques. Une ancre écrite dans
+ * un `:is()` ou un `:where()` de ce composé compte aussi : ces pseudo-classes
+ * restreignent l'élément qu'elles qualifient, donc `section > div:is(#saved)`
+ * sélectionne `#saved`. `:has()` et `:not()` n'en sont pas — l'un décrit un
+ * descendant, l'autre exclut l'élément —, et leurs arguments restent hors de
+ * l'exemption. Une liste de sélecteurs (`a, b`) est lue alternative par
+ * alternative : une alternative positionnelle rend la liste ambiguë même si une
+ * autre nomme son élément. La lecture descend dans les arguments des
+ * pseudo-classes fonctionnelles qui prennent un sélecteur (`:not`, `:is`,
+ * `:where`, `:has`, `:nth-child(An+B of S)`, `:nth-of-type`) : un chemin écrit
+ * là désigne la même position que dans le composé qui le porte, donc
+ * `:is(aside > div)` est refusé comme `aside > div`. Un argument sans chemin
+ * (`:not([disabled])`, `:has(label)`) ne change rien.
+ *
+ * La règle est indépendante du modèle et de l'instantané de découverte, comme
+ * celle des classes et des couleurs, pour que le plan soit refusé AVANT la
+ * première étape navigateur.
+ */
+
+/** Où en est la lecture d'un composé : profondeur de bloc, chaîne ouverte, échappement. */
+interface OutlineState {
+  depth: number;
+  escaped: boolean;
+  quote?: string;
+}
+
+/**
+ * Un caractère du composé, remplacé par `x` quand il appartient à une chaîne
+ * littérale, à un bloc `[...]` ou à un groupe `(...)`, et rendu tel quel
+ * sinon. Le remplacement n'est jamais un espace, sinon
+ * `input[inputmode="numeric"]` deviendrait un descendant de `input`. Le
+ * crochet et la parenthèse ouvrants restent lisibles pour que le nom d'une
+ * pseudo-classe reste adjacent à sa parenthèse : `div:nth-of-type(2)` se lit
+ * `div:nth-of-type(xx)`, qui porte bien `:nth-of-type`.
+ */
+function outlineStep(state: OutlineState, char: string): string {
+  if (state.quote) {
+    if (state.escaped) {
+      state.escaped = false;
+    } else if (char === "\\") {
+      state.escaped = true;
+    } else if (char === state.quote) {
+      state.quote = undefined;
+    }
+    return "x";
+  }
+  if (char === '"' || char === "'") {
+    state.quote = char;
+    return "x";
+  }
+  if (char === "[" || char === "(") {
+    state.depth += 1;
+    return char;
+  }
+  if (char === "]" || char === ")") {
+    state.depth = Math.max(0, state.depth - 1);
+    return char;
+  }
+  return state.depth > 0 ? "x" : char;
+}
+
+/** Le composé ramené à sa structure : voir `outlineStep`. */
+function positionalOutline(segment: string): string {
+  const state: OutlineState = { depth: 0, escaped: false };
+  let outline = "";
+  for (const char of segment) {
+    outline += outlineStep(state, char);
+  }
+  return outline;
+}
+
+/**
+ * Les pseudo-classes qui sélectionnent une POSITION dans une liste : elles
+ * nomment un rang, jamais l'élément, donc plusieurs éléments peuvent le porter
+ * (`div:nth-of-type(2)` en désigne un par conteneur). `:has(...)` et les
+ * pseudo-classes d'état (`:disabled`, `:checked`) n'en font pas partie.
+ */
+const POSITIONAL_PSEUDO_CLASS =
+  /:(?:nth-of-type|nth-last-of-type|nth-child|nth-last-child|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type)\b/i;
+
+/**
+ * La position que le composé exprime, nommée pour le message, ou `undefined`.
+ * La pseudo-classe est citée en premier parce qu'elle est la cause la plus
+ * précise ; le combinateur la suit.
+ */
+function positionalReason(outline: string): string | undefined {
+  const pseudo = POSITIONAL_PSEUDO_CLASS.exec(outline)?.[0];
+  if (pseudo) {
+    return `positional pseudo-class ${pseudo}`;
+  }
+  const symbol = /[>+~]/.exec(outline)?.[0];
+  if (symbol === ">") {
+    return "child combinator >";
+  }
+  if (symbol === "+") {
+    return "adjacent-sibling combinator +";
+  }
+  if (symbol === "~") {
+    return "general-sibling combinator ~";
+  }
+  return /\S\s+\S/.test(outline)
+    ? "descendant combinator (a space)"
+    : undefined;
+}
+
+/**
+ * Les alternatives d'une liste de sélecteurs CSS (`a, b`), séparées par une
+ * virgule de premier niveau : une virgule dans `[data-x="a,b"]` ou dans
+ * `:not(a, b)` appartient à sa valeur ou à son groupe. Chaque alternative est
+ * sélectionnée indépendamment, sinon une alternative qui nomme son élément
+ * blanchirait une alternative positionnelle de la même liste.
+ */
+function commaAlternatives(css: string): string[] {
+  const alternatives: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: string | undefined;
+  for (let index = 0; index < css.length; index += 1) {
+    const char = css[index] as string;
+    if (char === "\\") {
+      current += css.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === "," && depth === 0) {
+      alternatives.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  alternatives.push(current);
+  return alternatives
+    .map((alternative) => alternative.trim())
+    .filter((alternative) => alternative.length > 0);
+}
+
+/**
+ * Les pseudo-classes fonctionnelles dont l'argument EST un sélecteur : ce que
+ * l'argument sélectionne fait partie du même chemin que le composé qui le
+ * porte. `:has(label)` et `:not([disabled])` en font partie sans écrire aucun
+ * chemin, et n'opposent donc aucun refus.
+ */
+const SELECTOR_ARGUMENT_PSEUDO_CLASS =
+  /:(not|is|where|matches|has|nth-child|nth-last-child|nth-of-type|nth-last-of-type)\(/gi;
+
+/** Les `:nth-*`, dont l'argument est `An+B [of S]` : seul `S` est un sélecteur. */
+const NTH_ARGUMENT_PSEUDO_CLASS = /^nth-/i;
+
+/** L'index de la parenthèse qui ferme celle ouverte à `open`, ou `-1`. */
+function closingParenthesis(code: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < code.length; index += 1) {
+    const char = code[index];
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+/** Le sélecteur `S` d'un argument `An+B of S`, ou `undefined` sans clause `of`. */
+function nthOfSelector(argument: string): string | undefined {
+  const match = /(?:^|\s)of\s+/i.exec(selectorCode(argument));
+  return match ? argument.slice(match.index + match[0].length) : undefined;
+}
+
+/**
+ * Les sélecteurs passés en argument à une pseudo-classe fonctionnelle, dans
+ * l'ordre du texte. Le sélecteur est lu sur son `selectorCode`, donc une
+ * parenthèse entre guillemets n'en ouvre aucune, et un argument imbriqué est
+ * laissé à l'appel récursif plutôt que relu ici.
+ */
+function selectorArguments(selector: string): string[] {
+  const code = selectorCode(selector);
+  const pattern = new RegExp(SELECTOR_ARGUMENT_PSEUDO_CLASS.source, "gi");
+  const arguments_: string[] = [];
+  let match = pattern.exec(code);
+  while (match) {
+    const open = match.index + match[0].length - 1;
+    const close = closingParenthesis(code, open);
+    if (close < 0) {
+      break;
+    }
+    const argument = selector.slice(open + 1, close);
+    if (NTH_ARGUMENT_PSEUDO_CLASS.test(match[1] ?? "")) {
+      const ofSelector = nthOfSelector(argument);
+      if (ofSelector !== undefined) {
+        arguments_.push(ofSelector);
+      }
+    } else {
+      arguments_.push(argument);
+    }
+    pattern.lastIndex = close + 1;
+    match = pattern.exec(code);
+  }
+  return arguments_;
+}
+
+/**
+ * Attribut qui porte une valeur, quel que soit son opérateur (`=`, `^=`, `$=`,
+ * `*=`, `~=`, `|=`) : `[data-testid="total"]` et `a[href$=".pdf"]` nomment
+ * l'élément aussi précisément l'un que l'autre.
+ */
+const ATTRIBUTE_WITH_VALUE =
+  /^\[\s*[a-zA-Z_][-\w]*\s*[*^$~|]?=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*\]$/;
+
+/** Attribut de seule présence : `[data-cash-state]`. Il prouve une présence, il ne nomme rien. */
+const ATTRIBUTE_PRESENCE = /^\[\s*[a-zA-Z_][-\w]*\s*\]$/;
+
+/**
+ * Les attributs de seule PRÉSENCE d'une alternative : `[data-cash-state]`
+ * prouve une présence, il ne nomme aucun élément. Ils servent au message, qui
+ * propose le conteneur que le plan nomme déjà, jamais à l'exemption.
+ */
+function presenceAttributes(alternative: string): string[] {
+  return bracketBlocks(alternative).filter((block) =>
+    ATTRIBUTE_PRESENCE.test(block)
+  );
+}
+
+/**
+ * Le composé que l'alternative SÉLECTIONNE : le dernier, une fois les
+ * combinateurs de premier niveau retirés (`#saved > span` sélectionne `span`).
+ * `positionalOutline` fournit le masque — chaînes littérales, crochets et
+ * groupes parenthésés rendus opaques — et sa longueur est celle de
+ * l'alternative, donc les deux index coïncident. Un `>`, un `+`, un `~` ou un
+ * blanc de premier niveau ouvre le composé suivant ; un caractère échappé
+ * appartient à son identifiant (`p.class\ name` ne contient pas de descendant).
+ */
+function selectedCompound(alternative: string): string {
+  const outline = positionalOutline(alternative);
+  let start = 0;
+  for (let index = 0; index < outline.length; index += 1) {
+    // Un antislash lisible dans le contour est de premier niveau : le caractère
+    // qu'il échappe appartient à son identifiant, jamais à un combinateur.
+    if (outline[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (/[>+~\s]/.test(outline[index] as string)) {
+      start = index + 1;
+    }
+  }
+  return alternative.slice(start);
+}
+
+/**
+ * Les blocs `[...]` écrits SUR le composé, hors crochets imbriqués et hors
+ * groupes parenthésés : un attribut dans `:has([data-testid="x"])` décrit un
+ * descendant, donc il ne nomme pas l'élément sélectionné. Le composé est lu sur
+ * son `positionalOutline`, où chaînes et contenu sont masqués à longueur
+ * constante : il ne reste que la structure, et un bloc de premier niveau se
+ * reconnaît à son crochet ouvert à profondeur zéro.
+ */
+function ownAttributeBlocks(compound: string): string[] {
+  const outline = positionalOutline(compound);
+  const blocks: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let index = 0; index < outline.length; index += 1) {
+    const char = outline[index];
+    if (char === "[") {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+      if (char === "]" && depth === 0 && start >= 0) {
+        blocks.push(compound.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Pseudo-classes dont l'argument restreint l'élément du composé lui-même :
+ * `:is()`, `:where()` et son alias `:matches()`. Un `:has()` décrit un
+ * descendant et un `:not()` exclut l'élément, donc ni l'un ni l'autre ne nomme
+ * ce que le composé sélectionne.
+ */
+const IDENTITY_PSEUDO_CLASS = /^:(?:is|where|matches)\(/i;
+
+/**
+ * Les listes de sélecteurs écrites par un `:is()` ou un `:where()` DU COMPOSÉ.
+ * Elles sont lues sur `selectorCode`, donc une parenthèse entre guillemets n'en
+ * ouvre aucune, et un groupe écrit plus profond — `:has(:is(#saved))`,
+ * `:not(:where(#saved))` — n'est pas rendu : il parle d'un autre élément.
+ */
+function identityArguments(compound: string): string[] {
+  const code = selectorCode(compound);
+  const arguments_: string[] = [];
+  let depth = 0;
+  let index = 0;
+  while (index < code.length) {
+    const char = code[index] as string;
+    if (char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === ":" && depth === 0) {
+      const identity = IDENTITY_PSEUDO_CLASS.exec(code.slice(index));
+      if (identity) {
+        const open = index + identity[0].length - 1;
+        const close = closingParenthesis(code, open);
+        if (close < 0) {
+          break;
+        }
+        arguments_.push(compound.slice(open + 1, close));
+        index = close + 1;
+        continue;
+      }
+    }
+    index += 1;
+  }
+  return arguments_;
+}
+
+/**
+ * Le composé nomme-t-il l'ÉLÉMENT QU'IL SÉLECTIONNE ? Un `#id` et un attribut
+ * qui porte une valeur le nomment, à condition d'être écrits sur ce composé :
+ * un `#id` dans `[href="#abc"]`, dans `:has(#saved)` ou dans `:not(#x)` désigne
+ * autre chose que l'élément visé, et un attribut écrit dans `:has(...)` décrit
+ * un descendant. Une ancre écrite dans un `:is()` ou un `:where()` du composé le
+ * nomme aussi, parce que l'argument restreint ce même élément.
+ *
+ * Un ancêtre nommé ne suffit pas : `#saved > span` sélectionne TOUS les `span`
+ * de `#saved`, `[data-testid="total"] > span` tous ceux de `[data-testid="total"]`,
+ * et Playwright les refuse en strict mode dès que deux existent. C'est la même
+ * ambiguïté que `aside > div`, avec un conteneur stable devant.
+ */
+function namesItsElement(compound: string): boolean {
+  // Un `#` n'est un id que hors chaînes littérales, hors crochets et hors
+  // groupes parenthésés : `#abc` dans `[href="#abc"]` est une valeur,
+  // `url(#abc)` une référence, `:has(#abc)` un descendant.
+  if (/#[A-Za-z_][\w-]*/.test(positionalOutline(compound))) {
+    return true;
+  }
+  if (
+    ownAttributeBlocks(compound).some((block) =>
+      ATTRIBUTE_WITH_VALUE.test(block)
+    )
+  ) {
+    return true;
+  }
+  // `:is()` et `:where()` filtrent l'élément du composé : une alternative qui
+  // nomme le sien nomme donc celui-là (`section > div:is(#saved)`).
+  return identityArguments(compound).some((argument) =>
+    commaAlternatives(argument).some((alternative) =>
+      namesItsElement(selectedCompound(alternative))
+    )
+  );
+}
+
+/** Un chemin positionnel refusé : la position qu'il exprime, et le sélecteur qui l'écrit. */
+interface PositionalPath {
+  path: string;
+  position: string;
+}
+
+/**
+ * Le premier chemin positionnel de l'alternative, à quelque profondeur qu'il
+ * soit écrit, ou `undefined` quand elle se contente de nommer son élément. Un
+ * argument de pseudo-classe fonctionnelle est lu comme une alternative à part
+ * entière, parce qu'il fait partie du même chemin : `:is(aside > div)` ne
+ * sélectionne pas un élément plus unique que `aside > div`.
+ */
+function positionalPath(alternative: string): PositionalPath | undefined {
+  const position = positionalReason(positionalOutline(alternative));
+  if (position && !namesItsElement(selectedCompound(alternative))) {
+    return { path: alternative, position };
+  }
+  for (const argument of selectorArguments(alternative)) {
+    for (const nested of commaAlternatives(argument)) {
+      const path = positionalPath(nested);
+      if (path) {
+        return path;
+      }
+    }
+  }
+  return;
+}
+
+/**
+ * Ce qu'un locator CSS doit à une position, `undefined` quand il nomme son
+ * élément. `aside > div`, `div:nth-of-type(2)`, `#saved > span` et
+ * `[data-testid="total"] > span` sont refusés ; `div > #saved`,
+ * `li:first-child[id="saved"]`, `[role="status"]` et
+ * `[data-cash-state="cloture"]` ne le sont pas : l'ancre doit désigner
+ * l'élément que le sélecteur SÉLECTIONNE, pas l'un de ses ancêtres. Le chemin
+ * est cherché à toute profondeur, donc `:is(aside > div)` et
+ * `div:has(li:nth-child(2))` sont refusés pour la même raison.
+ *
+ * La raison cite le chemin fautif et, quand le plan y nomme déjà un conteneur
+ * (`[data-cash-state]`), la cible stable qu'il peut viser à la place.
+ */
+export function structuralSelectorReason(locator: Locator): string | undefined {
+  if (locator.by !== "css") {
+    return;
+  }
+  for (const css of cssSelectors(locator.value)) {
+    for (const alternative of commaAlternatives(css)) {
+      const found = positionalPath(alternative);
+      if (!found) {
+        continue;
+      }
+      const container = presenceAttributes(found.path)[0];
+      return `a structural path (${found.path}, ${found.position}: it names a position instead of an element, so it matches several elements by construction${container ? `; the plan already names ${container} in it, target that container instead` : ""})`;
     }
   }
   return;

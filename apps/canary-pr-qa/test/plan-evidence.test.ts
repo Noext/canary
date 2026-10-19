@@ -1233,7 +1233,7 @@ describe("sélecteur construit sur une classe ou une couleur", () => {
       "text=Save.now",
       "label=Save.now",
       "input",
-      "#saved > span",
+      "div > #saved",
     ]) {
       expect(refusals(value), value).toEqual([]);
     }
@@ -1294,6 +1294,354 @@ describe("sélecteur instable refusé avant exécution", () => {
     expect(labels).toEqual(["discover-preview"]);
     expect(plannerFeedback(f)).toHaveLength(1);
     expect(result.outcome).toBe("blocked");
+  });
+});
+
+/**
+ * Le scénario du run 93cd4991 (`comptage-juste-cloture`), réduit à sa forme
+ * fautive : l'assertion du total compté lit `aside > div`, le sélecteur
+ * structurel qui a résolu 4 éléments et bloqué les 4 scénarios du run en strict
+ * mode. L'identifiant d'assertion est celui de l'artefact.
+ */
+function structuralPlan(selector = "aside > div"): Plan {
+  const base = readOnlyPlan({ by: "css", value: selector });
+  const scenario = base.scenarios[0]!;
+  return {
+    ...base,
+    scenarios: [
+      {
+        ...scenario,
+        id: "comptage-juste-cloture",
+        steps: scenario.steps.map((step) =>
+          step.id === "check-heading"
+            ? {
+                ...step,
+                id: "check-total",
+                description: "vérifier le total compté",
+                action: {
+                  type: "assert" as const,
+                  assertionId: "total-compte",
+                },
+              }
+            : step
+        ),
+        assertions: [
+          {
+            ...scenario.assertions[0]!,
+            id: "total-compte",
+            description: "Le total compté est affiché : 1 240,00 €",
+            kind: "text",
+            expected: "1 240,00 €",
+            target: { by: "css", value: selector },
+            afterStep: "load",
+            verification: "state",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** La même assertion une fois la cible nommée : `#saved` porte l'élément. */
+function namedPlan(): Plan {
+  const base = PlanSchema.parse(structuralPlan("#saved"));
+  const scenario = base.scenarios[0]!;
+  const { expected: _expected, ...presence } = scenario.assertions[0] as {
+    expected?: unknown;
+  };
+  const assertion = {
+    ...presence,
+    kind: "visible" as const,
+  } as (typeof scenario.assertions)[number];
+  return {
+    ...base,
+    scenarios: [{ ...scenario, assertions: [assertion] }],
+  };
+}
+
+describe("sélecteur structurel : une position ne nomme pas un élément", () => {
+  const refusals = (value: string) =>
+    unstableSelectorRefusals(
+      PlanSchema.parse(readOnlyPlan({ by: "css", value }))
+    );
+  it("refuse aside > div du run 93cd4991 et rend le message exact", () => {
+    const refused = unstableSelectorRefusals(
+      PlanSchema.parse(structuralPlan())
+    );
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    expect(refused[0]?.error.message).toBe(
+      'Scenario comptage-juste-cloture targets an element with a CSS selector built from a structural path (aside > div, child combinator >: it names a position instead of an element, so it matches several elements by construction): load (assertion total-compte) → css="aside > div"'
+    );
+    expect(refused[0]?.error.hint).toContain(
+      "it resolves several elements by construction"
+    );
+  });
+  it("refuse chacun des quatre combinateurs et nomme celui qui est en cause", () => {
+    const measured = [
+      ["aside > div", "child combinator >"],
+      ["header h1", "descendant combinator (a space)"],
+      ["aside + div", "adjacent-sibling combinator +"],
+      ["aside ~ div", "general-sibling combinator ~"],
+    ] as const;
+    for (const [value, combinator] of measured) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message).toContain(`${combinator}:`);
+      expect(refused[0]?.error.message).toContain(
+        `css=${JSON.stringify(value)}`
+      );
+    }
+  });
+  it("refuse la même position sur un attribut qui ne nomme rien", () => {
+    // La forme mesurée du corpus : une présence ([data-cash-state]) puis un
+    // chemin positionnel. L'attribut seul n'est pas une ancre.
+    const refused = refusals(
+      "[data-cash-state] aside > div:first-child > p:nth-of-type(2)"
+    );
+    expect(refused).toHaveLength(1);
+    // La cible stable est déductible du matériel : le conteneur que le plan
+    // nomme déjà, [data-cash-state].
+    expect(refused[0]?.error.message).toContain(
+      "the plan already names [data-cash-state] in it, target that container instead"
+    );
+  });
+  it("nomme l'étape d'action fautive, pas seulement son identifiant", () => {
+    const plan = PlanSchema.parse(structuralPlan());
+    const scenario = plan.scenarios[0]!;
+    const stepPlan: Plan = {
+      ...plan,
+      scenarios: [
+        {
+          ...scenario,
+          steps: [
+            {
+              id: "count-500",
+              description: "compter 2 billets de 500 €",
+              action: {
+                type: "fill",
+                locator: { by: "css", value: "aside > div" },
+                value: "2",
+              },
+            },
+            ...scenario.steps,
+          ],
+        },
+      ],
+    };
+    const refused = unstableSelectorRefusals(stepPlan);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain(
+      'count-500 → css="aside > div"'
+    );
+  });
+  it("refuse une alternative positionnelle d'une liste de sélecteurs", () => {
+    // Une liste est lue alternative par alternative : `#saved` nomme son
+    // élément, `aside > div` n'en nomme aucun, et Playwright résout l'union
+    // des deux, donc le strict mode tombe sur la seconde.
+    const refused = refusals("#saved, aside > div");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.error.message).toContain("aside > div");
+    expect(refused[0]?.error.message).toContain("child combinator >");
+  });
+  it("refuse une pseudo-classe positionnelle sans combinateur", () => {
+    // Le prompt et le catalogue du dashboard annoncent :nth-of-type comme une
+    // position : le contrôle doit la refuser sans qu'un combinateur la porte.
+    for (const value of [
+      "div:nth-of-type(2)",
+      "li:first-child",
+      "td:nth-child(3)",
+    ]) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message).toContain("positional pseudo-class");
+    }
+  });
+  it("n'oppose aucun refus à une liste dont chaque alternative nomme son élément", () => {
+    for (const value of [
+      "#saved, #total",
+      '[data-testid="total"], [role="status"]',
+      'li:first-child[id="saved"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("n'oppose aucun refus à une cible qui nomme son élément", () => {
+    // Non-régression : id, attribut qui porte une valeur, rôle+nom, data-*
+    // stable et forme de seule présence restent acceptés, combinateur ou non.
+    for (const value of [
+      'header [data-canary-preview="pr"]',
+      "div > #saved",
+      'input[inputmode="numeric"]:disabled',
+      '[role="status"]',
+      '[data-cash-state="cloture"]',
+      "[data-cash-state]",
+      "#saved",
+      "div",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("refuse un chemin dont seul l'ANCÊTRE est nommé", () => {
+    // L'ancre doit désigner l'élément SÉLECTIONNÉ : `span` reste `span` sous un
+    // conteneur stable, donc Playwright le refuse en strict mode dès qu'il y en
+    // a deux. Chaque forme porte une ancre, aucune ne nomme sa cible.
+    const refusedForms = [
+      ["#saved > span", "child combinator >"],
+      ['[data-testid="total"] > span', "child combinator >"],
+      [
+        'label:has(input[aria-label="Quantité · Billet de 500 €"]) > span:nth-of-type(2)',
+        "positional pseudo-class :nth-of-type",
+      ],
+      ["#saved span", "descendant combinator (a space)"],
+      ["#saved + div", "adjacent-sibling combinator +"],
+    ] as const;
+    for (const [value, position] of refusedForms) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        `structural path (${value}, ${position}: it names a position instead of an element`
+      );
+    }
+  });
+  it("refuse une ancre écrite dans :has(), qui nomme un descendant", () => {
+    // `#saved > div:has(#total)` sélectionne le `div` qui CONTIENT `#total` :
+    // l'id y décrit un descendant, pas le `div` visé, et le conteneur stable
+    // `#saved` ne le rend pas unique pour autant.
+    for (const value of [
+      "#saved > div:has(#total)",
+      '#saved > div:has([data-testid="total"])',
+    ]) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        "names a position instead of an element"
+      );
+    }
+  });
+  it("n'oppose aucun refus à un attribut qui porte une valeur, quel que soit son opérateur", () => {
+    // `ATTRIBUTE_WITH_VALUE` ne lisait que `=` : un attribut valué par `^=`,
+    // `$=`, `*=`, `~=` ou `|=` sur le composé sélectionné n'était pas une
+    // ancre, donc la cible était refusée alors qu'elle nomme son élément.
+    for (const value of [
+      'form > a[href$=".pdf"]',
+      'section > [data-testid^="save"]',
+      'section > [data-testid$="total"]',
+      'section > [data-testid*="tot"]',
+      'section > [data-state~="open"]',
+      'section > [lang|="fr"]',
+      'section > [data-testid="total"]',
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("n'oppose aucun refus à une ancre écrite dans :is() ou :where()", () => {
+    // `:is()` et `:where()` restreignent l'élément du composé : une ancre dans
+    // leur argument nomme la cible, alors que `positionalOutline` masque la
+    // parenthèse et que `:has()`/`:not()` ne disent rien de cet élément.
+    for (const value of [
+      "section > div:is(#saved)",
+      'main > :where([data-testid="total"])',
+      'main > div:is([data-testid="total"])',
+      "section > div:matches(#saved)",
+      "section > div:is(#saved, #total)",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("refuse la même ancre dans :has() ou :not(), qui parlent d'un autre élément", () => {
+    // Contrepartie de l'exemption : `:has()` décrit un descendant et `:not()`
+    // exclut l'élément, donc l'ancre qu'ils portent ne nomme pas la cible.
+    for (const value of [
+      "section > div:has(#saved)",
+      "section > div:not(#saved)",
+      'section > div:has([data-testid="total"])',
+      "section > div:not(:is(#saved))",
+    ]) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        "names a position instead of an element"
+      );
+    }
+  });
+  it("refuse le même chemin écrit dans une pseudo-classe fonctionnelle", () => {
+    // Un argument de pseudo-classe à sélecteur fait partie du même chemin :
+    // `:is(aside > div)` sélectionne exactement l'ensemble que `aside > div`,
+    // donc masquer la parenthèse blanchirait une cible que la règle refuse.
+    const refusedForms = [
+      [":is(aside > div)", "aside > div", "child combinator >"],
+      [
+        ":where(div:nth-child(2))",
+        "div:nth-child(2)",
+        "positional pseudo-class :nth-child",
+      ],
+      ["div:not(aside + div)", "aside + div", "adjacent-sibling combinator +"],
+      ["div:has(aside ~ div)", "aside ~ div", "general-sibling combinator ~"],
+      ["label:is(aside > span)", "aside > span", "child combinator >"],
+      [
+        "div:has(li:nth-child(2))",
+        "li:nth-child(2)",
+        "positional pseudo-class :nth-child",
+      ],
+      [":is(#saved, aside > div)", "aside > div", "child combinator >"],
+      ["#saved:has(aside > div)", "aside > div", "child combinator >"],
+      ["div:not(:is(aside > span))", "aside > span", "child combinator >"],
+    ] as const;
+    for (const [value, path, position] of refusedForms) {
+      const refused = refusals(value);
+      expect(refused, value).toHaveLength(1);
+      expect(refused[0]?.error.message, value).toContain(
+        `structural path (${path}, ${position}: it names a position instead of an element`
+      );
+    }
+  });
+  it("n'oppose aucun refus à une pseudo-classe fonctionnelle sans chemin", () => {
+    // `:not([disabled])` et `:has(label)` ne portent aucune position, et un
+    // argument qui nomme son élément est aussi unique que l'élément nommé.
+    for (const value of [
+      "input:not([disabled])",
+      "button:not([disabled])",
+      "label:has(label)",
+      'label:has(input[aria-label="Quantité · Billet de 500 €"])',
+      "div:is(#saved)",
+      'div:where(#saved, [data-testid="total"])',
+      "div:is(aside > #saved)",
+      "div:not(#saved)",
+    ]) {
+      expect(refusals(value), value).toEqual([]);
+    }
+  });
+  it("bloque le scénario structurel non corrigé avant toute étape navigateur", async () => {
+    const f = await setup({ plans: [PlanSchema.parse(structuralPlan())] });
+    const labels = stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome).toBe("blocked");
+    expect(scenario.diagnostic?.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    expect(scenario.error).toContain("aside > div");
+    // Refusé AVANT exécution : aucune étape navigateur, aucun artefact.
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.artifacts).toEqual([]);
+    expect(labels).toEqual(["discover-preview"]);
+  });
+  it("exécute la même assertion une fois la cible nommée", async () => {
+    const f = await setup({ plans: [namedPlan()] });
+    const labels = stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome, result.scenarios[0]?.error ?? "").toBe("passed");
+    expect(labels).toEqual([
+      "discover-preview",
+      "open-preview",
+      "1-goto",
+      "2-assert",
+    ]);
   });
 });
 
