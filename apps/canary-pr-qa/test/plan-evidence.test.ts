@@ -1428,8 +1428,16 @@ function assertionOnlyPlan(
 }
 
 describe("assertion sans valeur attendue", () => {
-  it("refuse un attendu absent pour les cinq kinds qui comparent à une valeur", () => {
-    for (const kind of ["text", "value", "url", "count", "download"]) {
+  it("refuse un attendu absent pour les sept kinds qui comparent à une valeur", () => {
+    for (const kind of [
+      "text",
+      "value",
+      "url",
+      "count",
+      "download",
+      "popup",
+      "visual",
+    ]) {
       const refusals = missingExpectationRefusals(
         assertionOnlyPlan([savedNameAssertion(kind)])
       );
@@ -1450,16 +1458,64 @@ describe("assertion sans valeur attendue", () => {
     }
   });
   it("n'oppose aucun refus aux kinds qui décident sans attendu", () => {
-    // `visible` et `hidden` lisent une présence, `visual` compare des pixels
-    // contre une baseline nommée, `popup` sonde une URL d'événement : aucun ne
-    // dépend d'un `expected` pour trancher.
-    for (const kind of ["visible", "hidden", "visual", "popup"]) {
+    // `visible` et `hidden` lisent une présence (`actual === true|false`) : eux
+    // seuls tranchent sans `expected`. `visual` et `popup` en dépendent — la
+    // baseline nommée pour l'un, l'URL ouverte pour l'autre — et sont couverts
+    // par le refus ci-dessous.
+    for (const kind of ["visible", "hidden"]) {
       expect(
         missingExpectationRefusals(
           assertionOnlyPlan([savedNameAssertion(kind)])
         ),
         kind
       ).toEqual([]);
+    }
+  });
+  it("refuse popup et visual sans valeur à vérifier, et nomme leur attendu", () => {
+    // `popup` compare l'URL ouverte à `expected` (`actual === assertion.expected`)
+    // et `visual` passe `expected` comme nom de baseline à `compareVisual`, qui
+    // lève « Trusted visual baseline undefined is not configured » : sans
+    // attendu, l'un échoue à coup sûr et l'autre lève, après avoir dépensé
+    // toutes les étapes du scénario.
+    for (const kind of ["popup", "visual"]) {
+      for (const expected of [undefined, "", " ", "\n\t"]) {
+        const refusals = missingExpectationRefusals(
+          assertionOnlyPlan([
+            savedNameAssertion(
+              kind,
+              expected === undefined ? {} : { expected }
+            ),
+          ])
+        );
+        expect(refusals, `${kind}:${JSON.stringify(expected)}`).toHaveLength(1);
+        const refusal = refusals[0]!;
+        expect(refusal.error.code, kind).toBe("PLAN_EXPECTED_MISSING");
+        expect(refusal.error.message, kind).toContain("Scenario saved-name");
+        expect(refusal.error.message, kind).toContain(
+          `assertion ${kind}-saved`
+        );
+        expect(refusal.error.message, kind).toContain(`kind ${kind}`);
+      }
+      // L'aide dit quelle valeur écrire pour ces deux kinds, comme pour les
+      // autres : c'est elle que le planificateur reçoit pour corriger.
+      const hinted = missingExpectationRefusals(
+        assertionOnlyPlan([savedNameAssertion(kind)])
+      )[0]!;
+      expect(hinted.error.hint, kind).toContain(
+        kind === "popup"
+          ? "popup the exact popup URL"
+          : "visual the name of a trusted baseline from the fixture catalog"
+      );
+      // Un attendu non vide reste accepté, même d'un caractère : la règle
+      // juge la présence, jamais le contenu.
+      for (const expected of ["x", "…", "http://fixture/popup"]) {
+        expect(
+          missingExpectationRefusals(
+            assertionOnlyPlan([savedNameAssertion(kind, { expected })])
+          ),
+          `${kind}:${expected}`
+        ).toEqual([]);
+      }
     }
   });
   it("accepte un attendu présent, même d'un caractère ou de ponctuation seule", () => {
@@ -1604,6 +1660,38 @@ describe("attendu manquant sur le chemin de lecture", () => {
       "utf8"
     );
     expect(events).toContain('"PLAN_EXPECTED_MISSING"');
+  });
+  it("refuse à la lecture le plan rejoué dont popup ou visual ne peut rien vérifier", async () => {
+    for (const kind of ["popup", "visual"]) {
+      const f = await setup();
+      const labels = stubCanary(ARIA);
+      // Plan rejoué, jamais passé par `PlanSchema` : sans ce refus de lecture,
+      // `popup` ne comparerait à rien et `visual` chercherait une baseline
+      // `undefined`, après avoir dépensé les étapes du scénario.
+      scriptPlan(savedNamePlan(savedNameAssertion(kind)));
+      const result = await runQa(
+        { prUrl: PR_URL, previewUrl: f.baseUrl },
+        { ...f.config, QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline` }
+      );
+      expect(result.outcome, kind).toBe("blocked");
+      const scenario = result.scenarios[0]!;
+      expect(scenario.outcome, kind).toBe("blocked");
+      expect(scenario.diagnostic?.code, kind).toBe("PLAN_EXPECTED_MISSING");
+      // Le message produit nomme le scénario, l'assertion et le kind...
+      expect(scenario.error, kind).toBe(
+        `Scenario saved-name compares to nothing: assertion ${kind}-saved (kind ${kind}) has no expected`
+      );
+      // ...et l'aide dit quelle valeur écrire pour ce kind précis.
+      expect(scenario.diagnostic?.hint, kind).toBe(
+        `Give each of these assertions the value its requirement produces: text the exact text to match, value the field's exact content, url the exact URL, count an integer between 0 and 10000, download the exact filename, popup the exact popup URL, visual the name of a trusted baseline from the fixture catalog. kind "value" may keep expected: "" to assert an empty field; for text, url, count, download, popup and visual a missing or blank expected can never be satisfied.`
+      );
+      expect(scenario.steps, kind).toEqual([]);
+      expect(scenario.artifacts, kind).toEqual([]);
+      // Seule la découverte ouvre le navigateur, et la préversion de base lit la
+      // même table de refus : le scénario refusé n'exécute rien, ni ici ni là.
+      expect(labels, kind).toEqual(["discover-preview"]);
+      expect(result.baseline?.scenarios, kind).toEqual([]);
+    }
   });
   it("exécute et accepte un attendu vide de kind value", async () => {
     const f = await setup({

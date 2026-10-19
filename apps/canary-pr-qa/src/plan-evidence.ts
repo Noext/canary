@@ -644,11 +644,13 @@ export function unstableSelectorRefusals(
 }
 
 /**
- * Les kinds qui lisent une valeur et la comparent à `expected` : `text` lit un
- * texte, `value` le contenu d'un champ, `url` l'URL courante, `count` un nombre
- * d'éléments, `download` un nom de fichier. `visible` et `hidden` lisent une
- * présence (`actual === true|false`) et `visual` compare des pixels contre une
- * baseline nommée : leur décision ne dépend pas d'un `expected` manquant.
+ * Les kinds dont la décision passe par `expected` : `text` lit un texte,
+ * `value` le contenu d'un champ, `url` l'URL courante, `count` un nombre
+ * d'éléments, `download` un nom de fichier, `popup` l'URL de la fenêtre
+ * ouverte (comparée par `actual === assertion.expected`, comme `url`), et
+ * `visual` le NOM de la baseline de confiance, que `compareVisual` cherche dans
+ * le catalogue de fixtures. Seuls `visible` et `hidden` lisent une simple
+ * présence (`actual === true|false`) et se passent donc d'attendu.
  */
 const VALUE_ASSERTION_KINDS = new Set([
   "text",
@@ -656,14 +658,18 @@ const VALUE_ASSERTION_KINDS = new Set([
   "url",
   "count",
   "download",
+  "popup",
+  "visual",
 ]);
 
 /**
  * Un `expected` absent ne peut pas être satisfait : `assertionMatches` compare
- * alors à `undefined` pour `value`, `url`, `count` et `download`
+ * alors à `undefined` pour `value`, `url`, `popup`, `count` et `download`
  * (`actual === undefined`, toujours faux) et à la chaîne `"undefined"` pour
- * `text`. Le scénario échoue donc à coup sûr, après avoir dépensé toutes ses
- * étapes navigateur : un plan qui compare à rien ne peut que rater.
+ * `text`. `visual` ne compare pas à l'attendu mais le passe comme nom de
+ * baseline à `compareVisual`, qui lève « Trusted visual baseline undefined is
+ * not configured ». Le scénario échoue donc à coup sûr, après avoir dépensé
+ * toutes ses étapes navigateur : un plan qui compare à rien ne peut que rater.
  *
  * `PlanSchema` exige déjà `expected` pour chaque kind, mais un plan qui
  * contourne la validation d'entrée — plan rejoué, plan écrit à la main, test,
@@ -673,11 +679,12 @@ const VALUE_ASSERTION_KINDS = new Set([
  *
  * Deux formes vides ne disent pas la même chose :
  *
- * - `text`, `url` et `download` exigent un contenu non vide. La comparaison
- *   `text` normalise et rogne l'attendu, donc un attendu de blancs se réduit à
- *   `""` et `includes("")` accepte n'importe quel texte : une assertion qui ne
- *   prouve rien. Une URL ou un nom de fichier vide n'existe pas. `count` exige
- *   un entier dans les bornes du schéma, et `0` est une valeur, pas un vide.
+ * - `text`, `url`, `download`, `popup` et `visual` exigent un contenu non vide.
+ *   La comparaison `text` normalise et rogne l'attendu, donc un attendu de
+ *   blancs se réduit à `""` et `includes("")` accepte n'importe quel texte :
+ *   une assertion qui ne prouve rien. Une URL, un nom de fichier, une URL de
+ *   popup ou un nom de baseline vide n'existe pas. `count` exige un entier dans
+ *   les bornes du schéma, et `0` est une valeur, pas un vide.
  * - `value` n'exige que la PRÉSENCE. `expected: ""` y est la forme mesurée de
  *   « le champ est vide » : dans le corpus de 193 runs, 27 assertions de kind
  *   `value` portent `expected: ""` sur 26 runs, 25 passent, et toutes
@@ -713,7 +720,7 @@ export function missingExpectationRefusals(
       error: new QaError(
         "PLAN_EXPECTED_MISSING",
         `Scenario ${scenario.id} compares to nothing: ${offenders.join(" ; ")}`,
-        'Give each of these assertions the value its requirement produces: text the exact text to match, value the field\'s exact content, url the exact URL, count an integer between 0 and 10000, download the exact filename. kind "value" may keep expected: "" to assert an empty field; for text, url, count and download a missing or blank expected can never be satisfied.'
+        'Give each of these assertions the value its requirement produces: text the exact text to match, value the field\'s exact content, url the exact URL, count an integer between 0 and 10000, download the exact filename, popup the exact popup URL, visual the name of a trusted baseline from the fixture catalog. kind "value" may keep expected: "" to assert an empty field; for text, url, count, download, popup and visual a missing or blank expected can never be satisfied.'
       ),
     });
   }
