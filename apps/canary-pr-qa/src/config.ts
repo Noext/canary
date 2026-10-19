@@ -6,6 +6,48 @@ import { QaError } from "./diagnostics.js";
 import { ModelIdSchema } from "./model-catalog.js";
 import { isValidPreviewHost } from "./preview-hosts.js";
 
+/**
+ * Plafond de sortie d'un seul appel modèle, en tokens : le plus grand chiffre de
+ * sortie qu'un envoi peut demander. Il ne remplace pas la borne de l'appelant
+ * (`QA_PLAN_MAX_TOKENS`, `QA_DOCTOR_MAX_TOKENS`) : il la ramène, et c'est ce
+ * chiffre-là qui part au fournisseur, qui réserve l'enveloppe du run et qui juge
+ * la réponse.
+ *
+ * C'est un choix de dimensionnement justifié par une mesure du lot Q, pas une
+ * mesure de ce plafond : l'endpoint ne stocke pas sa `completion_tokens`, la
+ * sortie d'un appel se déduit donc d'un total rapporté moins l'entrée. Les 184
+ * runs du lot Q (même PR et même sha, donc la même charge utile — 238 420
+ * octets, déduits du compte exact du run 1eb26f8c — remplissant son budget de
+ * contexte) portent tous le même prompt ; le plus petit total à deux appels,
+ * 138 937, en donne le plafond rigoureux : 69 468 tokens d'entrée, puisque les
+ * sorties sont comptées au-dessus. Sur les 37 runs à un appel dont l'endpoint a
+ * chiffré l'usage, la sortie par appel va de 7 741 à 57 778 tokens sous ce
+ * plafond, et jusqu'à 67 641 si l'entrée n'en vaut que 59 605 (238 420 octets à
+ * quatre octets par token). Dix des trente-sept dépassent déjà 32 768, l'ancienne
+ * valeur.
+ *
+ * Un plan de 7 à 8 scénarios — les 18 runs à un appel de cette taille — pèse de
+ * 24 499 à 39 761 octets de JSON et de 77 209 à 109 666 tokens comptés, soit au
+ * plus 50 061 tokens de sortie : le raisonnement se paie dans le même champ de
+ * limite, donc la sortie vaut plusieurs fois la taille du JSON qu'elle porte.
+ * 98 304 couvre ce pire cas avec 96 % de marge et 67 641 avec 45 %, et laisse
+ * quatre envois tenir dans `QA_RUN_MAX_TOKENS` = 1 000 000 (119 402 d'entrée
+ * plus 98 304 par envoi).
+ */
+export const MAX_OUTPUT_TOKENS_PER_CALL = 98_304;
+
+/**
+ * Plancher de `QA_CALL_MAX_TOKENS` : la plus petite valeur qui porte encore le
+ * JSON d'un plan réellement mesuré. Le plus gros plan du lot Q (8 scénarios)
+ * vaut 39 761 octets, soit environ 12 000 tokens à 3,5 octets par token.
+ *
+ * Il ne porte que ce JSON, jamais le raisonnement qui le précède : la sortie
+ * mesurée d'un plan de 7 à 8 scénarios monte jusqu'à 50 061 tokens, et un
+ * opérateur réglé au plancher tronque ces plans-là. C'est une borne basse
+ * assumée, pas un réglage recommandé ; le défaut la dépasse de six fois.
+ */
+export const MIN_OUTPUT_TOKENS_PER_CALL = 16_384;
+
 const envSchema = z.object({
   QA_ALLOW_PRIVATE_PREVIEWS: z.enum(["true", "false"]).default("false"),
   QA_WEBHOOK_MAX_RUNS_PER_HOUR: z.coerce
@@ -105,6 +147,23 @@ const envSchema = z.object({
     .min(128)
     .max(1_000_000)
     .default(1024),
+  /**
+   * Plafond de sortie d'un appel, appliqué à chaque envoi par `Model.json`.
+   * Une valeur plus basse resserre la dépense d'un appel ; la relever est un
+   * choix explicite, et le plafond du plan ne peut plus la contourner.
+   *
+   * Le plancher (`MIN_OUTPUT_TOKENS_PER_CALL`) est la taille sous laquelle le
+   * JSON d'un plan réellement mesuré ne tient plus ; 0 est refusé, jamais lu
+   * comme « illimité » : c'est l'absence de borne sur un envoi qui a brûlé
+   * l'enveloppe du run 1eb26f8c, et un plafond désactivé ne se verrait qu'au
+   * moment où le run bloque sur son budget total.
+   */
+  QA_CALL_MAX_TOKENS: z.coerce
+    .number()
+    .int()
+    .min(MIN_OUTPUT_TOKENS_PER_CALL)
+    .max(1_000_000)
+    .default(MAX_OUTPUT_TOKENS_PER_CALL),
   QA_STEP_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(120).default(30),
   QA_MODEL_TIMEOUT_SECONDS: z.coerce
     .number()

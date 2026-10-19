@@ -587,7 +587,10 @@ Le flux live montre les phases et actions ; les vidéos sont des enregistrements
 finalisés, pas une diffusion vidéo en direct. Les métriques modèle indiquent
 latence/appels/tokens ; le résultat inclut usage et coût estimé. Renseigner les
 prix réels `QA_INPUT_COST_PER_MILLION` et `QA_OUTPUT_COST_PER_MILLION` pour le suivi
-du coût. Si l'endpoint omet `usage`, le runner emploie une estimation conservative.
+du coût. Un appel est compté à l'usage rapporté par l'endpoint ; si `usage` est
+absent, le runner chiffre la sortie qu'il a réellement livrée — jamais le plafond
+`QA_CALL_MAX_TOKENS`, qui n'est qu'une autorisation — et marque le run comme
+estimé (`usage.estimated`).
 Les budgets globaux de temps/tokens sont appliqués indépendamment du tarif.
 `OTEL_EXPORTER_OTLP_ENDPOINT` active les spans OTLP ; un collecteur externe est
 nécessaire pour les consulter.

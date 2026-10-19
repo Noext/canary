@@ -61,6 +61,38 @@ function completeStream(
     { headers: { "Content-Type": "text/event-stream" }, status: 200 }
   );
 }
+/**
+ * Charge utile dont la borne d'entrée vaut exactement `bound` tokens, au même
+ * chiffrage que `Model.inputTokenBound` : un demi-token par octet du corps
+ * transmis, plus 64 tokens par rôle du gabarit de chat — trois pour les deux
+ * messages envoyés. Elle sert à rejouer les chiffres mesurés d'un run, pas une
+ * forme approchée : à 119 402, elle produit les 238 420 octets mesurés.
+ */
+function payloadForInputBound(bound: number): { padding: string } {
+  const pad = (length: number) => ({
+    padding: "x".repeat(length),
+  });
+  const bytes = (length: number) =>
+    Buffer.byteLength(
+      JSON.stringify([
+        {
+          content: "You plan\nReturn a valid JSON object only.",
+          role: "system",
+        },
+        { content: JSON.stringify(pad(length)), role: "user" },
+      ]),
+      "utf8"
+    );
+  const target = 2 * (bound - 64 * 3);
+  let length = target;
+  // Le corps grandit d'un octet par octet de remplissage : le point fixe est
+  // atteint au premier ajustement.
+  length += target - bytes(length);
+  if (bytes(length) !== target) {
+    throw new Error("Fixture payload cannot reach the requested input bound");
+  }
+  return pad(length);
+}
 /** Périmètre de run borné par `maxTokens`, pour les tests d'admission. */
 function budgetScope(maxTokens: number): RunScope {
   return {
@@ -446,7 +478,7 @@ it("refuses the retry of a lost attempt that declared a total above the envelope
   expect(scope.observedInputTokens).toBe(900_000);
   expect(request).toHaveBeenCalledTimes(1);
 });
-it("counts the input bound when a successful response zero-fills its usage", async () => {
+it("counts the input bound and the delivered output when a response zero-fills its usage", async () => {
   const f = await fixture();
   cleanup.push(f.close);
   const request = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -468,13 +500,192 @@ it("counts the input bound when a successful response zero-fills its usage", asy
     )
   ).resolves.toEqual({ ok: true });
   // Un usage nul sur une réponse réussie n'est pas une mesure : l'appel est
-  // chiffré à la borne de l'entrée (245) plus la sortie maximale autorisée
-  // (500), soit 745 tokens — et non 0, comme si l'endpoint avait répondu
-  // gratuitement. Le run passe en estimé, faute d'usage rapporté.
-  expect(scope.tokens).toBe(745);
+  // chiffré à la borne de l'entrée (245) plus ce que le transport a livré — les
+  // 11 caractères du contenu, 4 tokens à trois caractères par token — et non à
+  // zéro, comme si l'endpoint avait répondu gratuitement. Le plafond de sortie
+  // (500) n'est pas un débit : c'est ce que l'appel pouvait produire, pas ce
+  // qu'il a produit.
+  expect(scope.tokens).toBe(249);
+  expect(scope.tokens).toBeLessThan(245 + 500);
   expect(scope.estimated).toBe(true);
   expect(scope.calls).toBe(1);
   expect(request).toHaveBeenCalledTimes(1);
+});
+it("compte le raisonnement livré par une réponse non streamée, pas seulement son contenu", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = { ...f.config, OPENAI_STREAM: "false" as const };
+  const content = '{"ok":true}';
+  const reasoning = "x".repeat(300);
+  vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content, reasoning_content: reasoning },
+          },
+        ],
+      }),
+      { headers: { "Content-Type": "application/json" }, status: 200 }
+    )
+  );
+  const scope = budgetScope(3000);
+  await expect(
+    runScope.run(scope, () =>
+      new Model(config).json("You plan", {}, z.object({ ok: z.boolean() }), 500)
+    )
+  ).resolves.toEqual({ ok: true });
+  // Sans `usage`, la sortie est ce que le transport a livré, et le raisonnement
+  // se paie dans le même champ de limite qu'en flux : les 11 caractères du
+  // contenu et les 300 du raisonnement, à trois caractères par token. Ne compter
+  // que le contenu sous-estimerait un appel que l'endpoint ne chiffre pas.
+  expect(scope.tokens).toBe(
+    245 + Math.ceil((content.length + reasoning.length) / 3)
+  );
+  expect(scope.estimated).toBe(true);
+});
+it("compte la sortie annoncée par l'endpoint, et pas celle qu'il pouvait produire", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const request = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    completeStream('{"ok":true}', {
+      prompt_tokens: 11,
+      completion_tokens: 7,
+      total_tokens: 18,
+    })
+  );
+  const scope = budgetScope(3000);
+  await expect(
+    runScope.run(scope, () =>
+      new Model(f.config).json(
+        "You plan",
+        {},
+        z.object({ ok: z.boolean() }),
+        500
+      )
+    )
+  ).resolves.toEqual({ ok: true });
+  // Le débit d'un appel est ce que l'endpoint a compté : 18 tokens rapportés,
+  // jamais les 745 de nos bornes (245 d'entrée estimée plus la sortie maximale
+  // autorisée).
+  expect(scope.tokens).toBe(18);
+  expect(scope.estimated).toBe(false);
+  expect(scope.calls).toBe(1);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it("admet la reprise d'un contenu inexploitable non chiffré au lieu de la refuser sur le plafond", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    OPENAI_STREAM: "false" as const,
+    QA_MODEL_RETRIES: 1,
+  };
+  const truncated = '{"ok":true';
+  const complete = '{"ok":true}';
+  const request = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: "length", message: { content: truncated } },
+          ],
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      )
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: complete } }],
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      )
+    );
+  // Forme du run 1eb26f8c à l'échelle du fixture : aucun usage rapporté, un
+  // contenu coupé. Sous 2 000, l'ancienne comptabilité inscrivait les 1 000 du
+  // plafond (plus l'entrée estimée, 245) comme consommés ; la réservation de la
+  // reprise, 1 245, ne tenait plus au-dessus et l'admission la refusait avant
+  // tout envoi. La mesure de ce qui a été livré — 10 caractères, 4 tokens —
+  // laisse la reprise partir.
+  const scope = budgetScope(2000);
+  await expect(
+    runScope.run(scope, () =>
+      new Model(config).json(
+        "You plan",
+        {},
+        z.object({ ok: z.boolean() }),
+        1000
+      )
+    )
+  ).resolves.toEqual({ ok: true });
+  expect(scope.tokens).toBe(
+    2 * 245 + Math.ceil(truncated.length / 3) + Math.ceil(complete.length / 3)
+  );
+  expect(scope.tokens).toBeLessThan(245 + 1000);
+  expect(scope.estimated).toBe(true);
+  expect(scope.retries).toBe(1);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+it("rejoue le run 1eb26f8c à ses propres chiffres : 238 420 octets, 393 216 de plan, 1 000 000 d'enveloppe", async () => {
+  const f = await fixture();
+  cleanup.push(f.close);
+  const config = {
+    ...f.config,
+    OPENAI_STREAM: "false" as const,
+    QA_MODEL_RETRIES: 1,
+  };
+  const truncated = '{"ok":true';
+  const complete = '{"ok":true}';
+  const request = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: "length", message: { content: truncated } },
+          ],
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      )
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: complete } }],
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 200 }
+      )
+    );
+  // Les chiffres du run mesuré : sa charge utile de 238 420 octets vaut une
+  // borne d'entrée de 119 402 tokens, et ses 512 618 tokens comptés sont
+  // exactement cette borne plus les 393 216 du plafond de plan. Doublés, ils
+  // dépassaient l'enveloppe de 1 000 000 : la reprise n'était jamais envoyée.
+  const inputBound = 119_402;
+  const planBound = 393_216;
+  expect(2 * (inputBound + planBound)).toBeGreaterThan(1_000_000);
+  const scope = budgetScope(1_000_000);
+  await expect(
+    runScope.run(scope, () =>
+      new Model(config).json(
+        "You plan",
+        payloadForInputBound(inputBound),
+        z.object({ ok: z.boolean() }),
+        planBound
+      )
+    )
+  ).resolves.toEqual({ ok: true });
+  expect(scope.tokens).toBe(
+    2 * inputBound +
+      Math.ceil(truncated.length / 3) +
+      Math.ceil(complete.length / 3)
+  );
+  expect(scope.tokens).toBeLessThan(2 * (inputBound + planBound));
+  expect(scope.estimated).toBe(true);
+  expect(scope.retries).toBe(1);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 it("counts a lost attempt's reserve in the admission, so the envelope stays a hard bound", async () => {
   const scope: RunScope = {
