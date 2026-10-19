@@ -261,7 +261,21 @@ export const ActionSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("popup"), locator, assertionId: text }).strict(),
   z.object({ type: z.literal("goto"), path: text }).strict(),
-  z.object({ type: z.literal("click"), locator }).strict(),
+  z
+    .object({
+      type: z.literal("click"),
+      locator,
+      /**
+       * Clic d'ÉTABLISSEMENT d'un état : si la cible est absente, l'étape est
+       * sautée au lieu d'échouer, parce que cette absence prouve que l'état
+       * visé est déjà en place (le bouton « Réouvrir le comptage » n'existe que
+       * caisse fermée). Un clic métier n'utilise jamais cette option : là, une
+       * cible absente est un défaut et doit rester un échec. Les autres actions
+       * n'acceptent pas la clé, leurs objets étant `strict`.
+       */
+      ifPresent: z.boolean().optional(),
+    })
+    .strict(),
   z
     .object({ type: z.literal("fill"), locator, value: z.string().max(2000) })
     .strict(),
@@ -315,6 +329,73 @@ export const ScenarioSchema = z
     assertions: z.array(AssertionSchema).min(1).max(10),
   })
   .strict();
+/**
+ * Actions MÉTIER : elles déplacent la donnée que le scénario prétend prouver.
+ * Un clic tolérant placé après elles n'établit plus un état de départ, il
+ * remplace une action obligatoire — et sa cible absente passerait alors pour un
+ * saut légitime.
+ */
+const BUSINESS_ACTION_TYPES = new Set<string>([
+  "check",
+  "fill",
+  "press",
+  "select",
+]);
+/**
+ * Un clic `ifPresent` hors de son contrat : l'étape fautive et la raison, que le
+ * schéma et le rejeu du runner nomment tous deux de la même façon.
+ */
+export interface EstablishingClickFault {
+  reason: string;
+  stepId: string;
+}
+/**
+ * Contrat EXÉCUTABLE de `click.ifPresent` : le drapeau n'est permis que sur une
+ * étape d'ÉTABLISSEMENT, et cette qualité se vérifie sur la structure du
+ * scénario, pas sur les mots de sa description.
+ *
+ * 1. Le clic précède la PREMIÈRE action métier du scénario (fill, select, check,
+ *    press). Après elle, une cible absente est un défaut : elle est tolérée par
+ *    erreur sur un clic obligatoire, et l'étape est sautée sans que rien ne le
+ *    montre.
+ * 2. Une assertion se rattache à ce clic (`afterStep` = son identifiant) : elle
+ *    vérifie l'état obtenu, donc une étape sautée ne peut pas passer inaperçue.
+ *    Le contrat ordonne déjà cette assertion APRÈS le clic (`afterStep` doit
+ *    viser une étape antérieure), et le mode correct est `verification: state` :
+ *    une étape sautée ne déplace aucune valeur, donc une transition y échoue
+ *    par construction.
+ *
+ * Le refus est déterministe : il ne dépend ni de la page, ni de l'état laissé
+ * par un run antérieur, et il est prononcé avant toute étape navigateur.
+ */
+export function establishingClickFault(
+  scenario: z.infer<typeof ScenarioSchema>,
+  index: number
+): EstablishingClickFault | undefined {
+  const step = scenario.steps[index];
+  if (step?.action.type !== "click" || step.action.ifPresent !== true) {
+    return;
+  }
+  const firstBusiness = scenario.steps.findIndex((item) =>
+    BUSINESS_ACTION_TYPES.has(item.action.type)
+  );
+  const business = scenario.steps[firstBusiness];
+  if (business && index > firstBusiness) {
+    return {
+      stepId: step.id,
+      reason: `ifPresent is only for an establishing step placed before the first business action, but this click comes after ${business.id} (${business.action.type})`,
+    };
+  }
+  if (
+    !scenario.assertions.some((assertion) => assertion.afterStep === step.id)
+  ) {
+    return {
+      stepId: step.id,
+      reason: `ifPresent skips the step when its target is absent, so an assertion must verify the state it establishes: no assertion has afterStep ${step.id} (attach one to this click, verification "state")`,
+    };
+  }
+  return;
+}
 export const PlanSchema = z
   .object({
     summary: text,
@@ -417,6 +498,10 @@ function validateScenarioContract(
     if (["finish", "blocked"].includes(step.action.type)) {
       issue("Finish/blocked cannot be a contract step");
     }
+    const fault = establishingClickFault(scenario, index);
+    if (fault) {
+      issue(`Scenario ${scenario.id} step ${fault.stepId}: ${fault.reason}`);
+    }
     const id = validateContractAssertion(scenario, index, ctx);
     if (id) {
       evaluated.push(id);
@@ -484,6 +569,12 @@ export interface StepResult {
   observation: string;
   ok: boolean;
   reason: string;
+  /**
+   * Clic `ifPresent` dont la cible était absente : l'étape n'a rien fait parce
+   * que l'état qu'elle établit était déjà là. Ce n'est ni une réussite
+   * silencieuse ni un échec, et le rapport le dit.
+   */
+  skipped?: boolean;
   /** Étape du contrat jouée ici : l'hôte exécute le plan, il ne l'interprète pas. */
   stepId?: string;
 }

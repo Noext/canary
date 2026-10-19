@@ -188,6 +188,21 @@ aucun compte de production n'est deviné ou créé automatiquement.
 
 Les actions `download` et `popup` attendent réellement l'événement, vérifient
 respectivement le nom du téléchargement sans erreur et l'URL de la popup.
+Un `click` porte `ifPresent: true` quand il sert uniquement à ÉTABLIR un état
+dont le scénario dépend : si le contrôle est absent, l'état visé est déjà en
+place, l'étape est sautée et le rapport la nomme comme sautée. Absent signifie
+qu'aucun élément ne correspond au locator : un contrôle présent mais jamais
+visible, un nom accessible ambigu ou deux éléments correspondants restent des
+échecs visibles, jamais un saut silencieux. Cette option ne
+s'applique jamais à une action métier qui doit avoir lieu — une cible absente y
+reste un échec — et aucune autre action ne l'accepte. Une étape sautée ne peut
+pas démontrer de transition : sa baseline est relevée avant un clic qui n'a pas
+eu lieu, donc les deux valeurs sont identiques. C'est pourquoi l'assertion qui
+suit une étape d'établissement se vérifie en `state`.
+Ce contrat est vérifié avant exécution : un plan qui place `ifPresent` après la
+première action métier (`fill`, `select`, `check`, `press`), ou qui ne rattache
+aucune assertion à ce clic (`afterStep` = l'étape du clic), est refusé avec un
+message qui nomme le scénario, l'étape et la raison.
 Une assertion `visual` compare le screenshot de sa cible à une image PNG
 **de confiance**, déclarée dans `visuals` du catalogue. La tolérance maximale est
 0,1, réglable via `visualTolerance` ; la taille doit correspondre. Ces images ne

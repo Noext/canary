@@ -58,6 +58,10 @@ export const errorMessages: Record<string, string | undefined> = {
   PR_CHANGED:
     "La pull request a changé pendant le test : ce résultat ne correspond plus au dernier commit.",
   PR_CLOSED: "Cette pull request est fermée.",
+  PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT:
+    "Le scénario attend la valeur d’un attribut d’un sélecteur qui rend du texte : `text` lit le texte visible à l’intérieur de la cible et `value` le contenu d’un champ, jamais la valeur d’un attribut.",
+  PLAN_IF_PRESENT_NOT_ESTABLISHING:
+    "Le scénario rend un clic facultatif alors qu’il n’établit pas un état de départ : il vient après une action métier, ou aucune assertion ne vérifie ce que ce clic établit.",
   PLAN_CHANGED_FILE_UNCOVERED:
     "Un fichier modifié par la pull request n’est couvert par aucun scénario et n’est pas listé comme ignoré.",
   PLAN_SCENARIO_ID_RESERVED:
@@ -710,6 +714,10 @@ export const runAdvice: Record<string, string> = {
     "Relancez le test ; si l’erreur revient, choisissez un modèle plus fiable ou augmentez `QA_RUN_MAX_TOKENS`.",
   MODEL_PROVIDER_DENIED:
     "Autorisez l’IP de sortie du VPS chez le fournisseur (Cloudflare), vérifiez la clé, puis relancez.",
+  PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT:
+    'Pour prouver la valeur d’un attribut, visez-la par sa présence — `[data-cash-state="ouvert"]` avec `kind: visible`, ou `kind: count` valant 1 — ou attendez le texte que la vue affiche ; et si le scénario a besoin d’une session ouverte, établissez-la d’abord par une étape observable (le bouton « Réouvrir le comptage ») puis assertez après cette étape.',
+  PLAN_IF_PRESENT_NOT_ESTABLISHING:
+    "Gardez le clic facultatif pour la seule étape qui établit l’état de départ : placez-la avant la première saisie ou sélection, et rattachez-lui une assertion (`afterStep` = cette étape, `verification: state`). Un clic métier reste un clic normal.",
   PR_CHANGED: "Relancez un test sur le dernier commit de la pull request.",
   PR_CLOSED: "Cette pull request est fermée : il n’y a rien à tester.",
   PLAN_CHANGED_FILE_UNCOVERED:

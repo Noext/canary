@@ -231,6 +231,68 @@ function spellingPage(exposed: string[]) {
 }
 
 /**
+ * Faux Playwright d'un clic d'établissement. Chaque élément exposé est nommé ;
+ * `waitFor` ne rend la main que si le délai DEMANDÉ couvre son apparition, et
+ * lève sinon le délai Playwright d'une cible introuvable. Deux éléments
+ * correspondants lèvent la violation de mode strict, comme la page réelle, dont
+ * `locator.waitFor` est compilé avec `strict: true`. `getByLabel` ne résout rien :
+ * le contrôle n'est atteignable que par son nom accessible.
+ */
+function establishingPage(elements: EstablishingElement[]) {
+  const clicked: string[] = [];
+  const locator = (targets: EstablishingElement[]): EstablishingLocator => ({
+    targets,
+    count: async () => targets.length,
+    or: (other) => locator([...new Set([...targets, ...other.targets])]),
+    waitFor: async ({ timeout }) => {
+      if (targets.length !== 1) {
+        throw targets.length === 0
+          ? new Error(`Timeout ${timeout}ms exceeded.`)
+          : new Error(
+              `strict mode violation: locator resolved to ${targets.length} elements`
+            );
+      }
+      if ((targets[0]!.appearsAfterMs ?? 0) > timeout) {
+        throw new Error(`Timeout ${timeout}ms exceeded.`);
+      }
+    },
+    click: async () => {
+      if (targets.length !== 1) {
+        throw new Error(
+          `strict mode violation: locator resolved to ${targets.length} elements`
+        );
+      }
+      clicked.push(targets[0]!.name);
+    },
+  });
+  return {
+    clicked,
+    page: {
+      getByLabel: () => locator([]),
+      getByRole: (_role: string, options: { name: string }) =>
+        locator(elements.filter((element) => element.name === options.name)),
+      url: () => "https://preview.test/caisse",
+      snapshotForAI: async () => ({ full: "" }),
+    },
+  };
+}
+
+/** Élément exposé par la page du faux Playwright, avec son délai d'apparition. */
+interface EstablishingElement {
+  appearsAfterMs?: number;
+  name: string;
+}
+
+/** Locator du faux Playwright : ce que le script compilé appelle réellement. */
+interface EstablishingLocator {
+  click: (options: { timeout: number }) => Promise<void>;
+  count: () => Promise<number>;
+  or: (other: EstablishingLocator) => EstablishingLocator;
+  targets: EstablishingElement[];
+  waitFor: (options: { state: string; timeout: number }) => Promise<void>;
+}
+
+/**
  * Lecture compilée d'une assertion `visible`, `hidden` ou `count` contre une
  * page qui expose les graphies listées. Le verdict (`passed`) est celui que
  * l'exécuteur applique au `actual` lu, jamais un verdict recopié à la main.
@@ -3629,4 +3691,80 @@ it("points the planner only at payload paths it actually receives", () => {
   expect(payload.sourceLines).toEqual([
     { path: "src/a.ts", lines: [{ line: 1, text: "const saved = true;" }] },
   ]);
+});
+
+/**
+ * L'étape d'établissement tolère une cible ABSENTE, jamais une cible qu'elle
+ * n'a pas su atteindre. Un délai de localisateur consommé dans le script
+ * (1,5 s) transformait une ambiguïté, un nom accessible atteint par le repli ou
+ * un contrôle apparu après ce délai en étape sautée : l'état visé restait alors
+ * non établi, en silence.
+ */
+describe("click(ifPresent): l'absence se mesure, elle ne se déduit pas d'un délai", () => {
+  const opening: Locator = {
+    by: "role",
+    value: "button",
+    name: "Reopen counting",
+  };
+  async function run(
+    elements: EstablishingElement[],
+    locator: Locator = opening
+  ) {
+    const page = establishingPage(elements);
+    const result = await runCompiledScript(
+      compileAction(
+        {
+          type: "click",
+          locator,
+          ifPresent: true,
+        } as Parameters<typeof compileAction>[0],
+        "https://preview.test"
+      ),
+      page.page
+    );
+    return { ...result, clicked: page.clicked };
+  }
+
+  it("saute l'étape quand aucun élément ne correspond : zéro correspondance est une absence", async () => {
+    const step = await run([]);
+    expect(step.failure).toBeUndefined();
+    expect(step.observation?.actual).toBe(false);
+    expect(step.clicked).toEqual([]);
+  });
+
+  it("clique la cible présente et unique", async () => {
+    const step = await run([{ name: "Reopen counting" }]);
+    expect(step.failure).toBeUndefined();
+    expect(step.observation?.actual).toBe(true);
+    expect(step.clicked).toEqual(["Reopen counting"]);
+  });
+
+  it("lève sur une cible ambiguë au lieu de la sauter", async () => {
+    const step = await run([
+      { name: "Reopen counting" },
+      { name: "Reopen counting" },
+    ]);
+    expect(step.failure).toBeDefined();
+    expect(step.observation).toBeUndefined();
+    expect(step.clicked).toEqual([]);
+  });
+
+  it("attend le délai d'un clic ordinaire : un contrôle visible après 1,5 s est cliqué", async () => {
+    const step = await run([{ name: "Reopen counting", appearsAfterMs: 2000 }]);
+    expect(step.failure).toBeUndefined();
+    expect(step.observation?.actual).toBe(true);
+    expect(step.clicked).toEqual(["Reopen counting"]);
+  });
+
+  it("atteint par le nom accessible un contrôle dont le libellé exact ne résout rien", async () => {
+    // Le délai du libellé strict doit remonter jusqu'au repli : consommé dans
+    // le script, il faisait passer un contrôle présent pour absent.
+    const step = await run([{ name: "Reopen counting" }], {
+      by: "label",
+      value: "Reopen counting",
+    });
+    expect(step.failure).toBeUndefined();
+    expect(step.observation?.actual).toBe(true);
+    expect(step.clicked).toEqual(["Reopen counting"]);
+  });
 });

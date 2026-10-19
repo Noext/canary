@@ -195,3 +195,58 @@ it("states the three verification semantics to the planner", () => {
     /use state with afterStep set to the interaction step/i
   );
 });
+
+it("teaches that a text assertion never reads an attribute value", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Défaut mesuré du run 1b49d751 : `text` sur `[data-cash-state]` attendant
+  // « ouvert », alors que `innerText` de ce conteneur rend toute la vue et que
+  // l'attribut n'y figure jamais. La consigne nomme la lecture réelle, la voie
+  // correcte (présence sur la valeur de l'attribut, ou texte visible) et
+  // l'établissement de l'état par une étape observable.
+  expect(prompt).toMatch(
+    /kind "text" reads the visible text INSIDE the target \(innerText\), never one of its attributes/i
+  );
+  expect(prompt).toMatch(
+    /Never plan kind "value" on an element that is not an input/i
+  );
+  expect(prompt).toMatch(
+    /\[data-cash-state="ouvert"\] with kind "visible", or kind "count" expecting 1/i
+  );
+  expect(prompt).toMatch(
+    /must ESTABLISH that state with an observable step before asserting it/i
+  );
+  expect(prompt).toMatch(/put the "ouvert" assertion AFTER that step/i);
+});
+
+it("teaches the two readable forms and when a transition is provable", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Sonde P3 : une étape d'établissement vérifiée en `transition` échoue en
+  // TRANSITION_NOT_OBSERVED quand l'état est déjà le bon. Sonde P5 : la règle
+  // ne doit pas confondre un sélecteur d'attribut d'état avec un rôle dont le
+  // texte visible est le contenu.
+  expect(prompt).toMatch(
+    /put the "ouvert" assertion AFTER that step, with verification "state" on the step that established it/i
+  );
+  expect(prompt).toMatch(
+    /verification "transition" is only for a step that genuinely moves the value/i
+  );
+  expect(prompt).toMatch(
+    /\[role="status"\] is a region whose visible text IS its content, so kind "text" on it is fine/i
+  );
+});
+
+it("limits ifPresent to an establishing step and names its two consequences", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // L'option rend un clic tolérant à l'absence, ce qui est vrai seulement pour
+  // une étape qui établit un état : sur une action métier, elle masquerait un
+  // vrai défaut. Son étape sautée ne démontre pas de transition.
+  expect(prompt).toMatch(
+    /Declare that establishing click with "ifPresent": true on the click action/i
+  );
+  expect(prompt).toMatch(
+    /Use "ifPresent" ONLY on such an establishing step, never on a business action that must happen/i
+  );
+  expect(prompt).toMatch(
+    /A skipped establishing step cannot demonstrate a transition/i
+  );
+});
