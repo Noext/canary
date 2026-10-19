@@ -840,6 +840,19 @@ export function attributeValueRefusals(
 }
 
 /**
+ * Une lecture fautive, telle que le refus la nomme : l'assertion, son kind, la
+ * forme de présence du même attribut d'état et le libellé attendu — l'indice de
+ * l'élément qui rend ce texte.
+ */
+interface StateTargetReadFault {
+  assertion: string;
+  expected: unknown;
+  kind: string;
+  /** Phrase du message : assertion, étape, sélecteur et libellé. */
+  line: string;
+  presence: string;
+}
+/**
  * Ce qu'une assertion de `text` ou `value` doit à un élément SÉLECTIONNÉ PAR UNE
  * VALEUR D'ÉTAT, `undefined` quand elle ne lit pas un tel élément.
  * `[data-cash-state="cloture"]` ne désigne un élément que TANT QUE la session
@@ -868,10 +881,17 @@ export function attributeValueRefusals(
  * dans le sélecteur. Le remède est dans la règle ci-dessus : prouver l'état par
  * présence (`visible` ou `count`) et lire le texte de la vue sur le sélecteur
  * qui le porte.
+ *
+ * Le lot U montre le coût d'un refus qui ne nomme pas ce remède : les six
+ * scénarios du run 210357d8 ont été bloqués d'un coup par cette règle, pour 17
+ * assertions dont le libellé attendu (« 6 unités comptées », « Comptage
+ * juste », « Comptage verrouillé ») désignait déjà l'élément à viser — le
+ * conteneur sans sa valeur épinglée, que le corpus cité ci-dessus lit 924 fois
+ * en `text`, dont 885 passent.
  */
 function stateTargetReadFault(
   assertion: Scenario["assertions"][number]
-): string | undefined {
+): StateTargetReadFault | undefined {
   const target = assertion.target;
   if (assertion.kind !== "text" && assertion.kind !== "value") {
     return;
@@ -893,32 +913,197 @@ function stateTargetReadFault(
   const expected = assertionExpected(assertion);
   const expectation =
     expected === undefined ? "" : ` and expects ${JSON.stringify(expected)}`;
-  return `assertion ${assertion.id} (after ${assertion.afterStep ?? "no step"}, kind ${assertion.kind}) reads ${selector}, an element that exists only while that state holds${expectation}`;
+  return {
+    assertion: assertion.id,
+    kind: assertion.kind,
+    presence: `[${state.attribute}]`,
+    expected,
+    line: `assertion ${assertion.id} (after ${assertion.afterStep ?? "no step"}, kind ${assertion.kind}) reads ${selector}, an element that exists only while that state holds${expectation}`,
+  };
 }
 
+/**
+ * Rôles dont le contenu n'est pas un texte lisible : un champ de formulaire
+ * expose sa VALEUR dans l'instantané et une image son nom accessible, si bien
+ * qu'une assertion `text` n'y lit rien. Ces rôles ne sont donc jamais proposés
+ * comme cible de lecture, même quand le libellé attendu est leur valeur.
+ */
+const NON_TEXT_ROLES = new Set([
+  "checkbox",
+  "combobox",
+  "img",
+  "meter",
+  "progressbar",
+  "radio",
+  "searchbox",
+  "slider",
+  "spinbutton",
+  "switch",
+  "textbox",
+]);
+/** Un nœud de l'instantané : son rôle, son nom accessible et le texte qu'il rend. */
+interface SnapshotTextNode {
+  name: string;
+  rendered: string;
+  role: string;
+}
+/**
+ * Nœuds de l'instantané de découverte qui RENDENT un texte : le contenu écrit
+ * après les attributs (`- status [ref=e8]: Comptage juste`), seul texte qu'une
+ * assertion `text` lit (`innerText`). Deux autres formes sont écartées, chacune
+ * mesurée sur une page de référence : les nœuds texte (`- text: …`) ne sont pas
+ * des rôles — `role=text` ne résout aucun élément (`0`, puis 5 s d'attente), et
+ * le parseur voisin `ariaRoleNameNodes` les écarte déjà — et le nom accessible
+ * n'est pas le contenu rendu : un bouton `aria-label="Enregistrer le comptage"`
+ * rend « 💾 », dont l'`innerText` ne contient pas son nom. Un nom n'est donc
+ * recopié dans le locator que lorsqu'il coïncide avec le contenu rendu, et un
+ * nœud que seul son nom désigne n'est jamais proposé comme cible de lecture.
+ * Les propriétés (`- /url: …`) ne rendent aucun texte et sont ignorées.
+ */
+function snapshotTextNodes(aria: string): SnapshotTextNode[] {
+  const nodes: SnapshotTextNode[] = [];
+  for (const line of aria.split("\n")) {
+    const node = line.trim();
+    if (!node.startsWith("- ") || /^- \/|^- text\b/.test(node)) {
+      continue;
+    }
+    const body = node.slice(2);
+    const role = /^[a-z]+/i.exec(body)?.[0];
+    if (!role) {
+      continue;
+    }
+    const rest = body.slice(role.length);
+    const inline = /:\s+(.+)$/.exec(rest)?.[1];
+    if (inline === undefined) {
+      continue;
+    }
+    const rendered = normalizeText(readSpellingValue(inline));
+    if (rendered === "") {
+      continue;
+    }
+    const named = rest.trimStart();
+    const name = named.startsWith('"') ? readQuoted(named) : "";
+    if (name !== "" && normalizeText(name) !== rendered) {
+      continue;
+    }
+    nodes.push({ role: role.toLowerCase(), name, rendered });
+  }
+  return nodes;
+}
+/**
+ * Cibles que l'instantané nomme pour un texte attendu : le nœud qui REND ce
+ * libellé, écrit comme le plan écrit un locator (`role=status name=""`), et
+ * seulement quand ce couple ne désigne qu'un élément de la page. Un libellé que
+ * l'instantané ne rend pas, ou qu'un rôle porté par plusieurs nœuds rend, ne
+ * produit aucune cible : le relevé ne choisit pas à la place du planificateur.
+ */
+function renderedTargets(
+  nodes: SnapshotTextNode[],
+  expected: unknown
+): string[] {
+  if (typeof expected !== "string") {
+    return [];
+  }
+  const label = normalizeText(expected);
+  if (label === "") {
+    return [];
+  }
+  const roles = new Map<string, number>();
+  const pairs = new Map<string, number>();
+  for (const node of nodes) {
+    roles.set(node.role, (roles.get(node.role) ?? 0) + 1);
+    const pair = `${node.role}\u0000${normalizeText(node.name)}`;
+    pairs.set(pair, (pairs.get(pair) ?? 0) + 1);
+  }
+  const targets = new Set<string>();
+  for (const node of nodes) {
+    if (!node.rendered.includes(label)) {
+      continue;
+    }
+    const unique =
+      node.name === ""
+        ? roles.get(node.role) === 1
+        : pairs.get(`${node.role}\u0000${normalizeText(node.name)}`) === 1;
+    if (!unique) {
+      continue;
+    }
+    targets.add(`role=${node.role} name=${JSON.stringify(node.name)}`);
+    if (targets.size === 2) {
+      break;
+    }
+  }
+  return [...targets];
+}
+/**
+ * La cible visible de chaque lecture fautive, dite à partir du matériel : la
+ * forme de seule présence du même attribut d'état — présente dans tous les
+ * états, donc jamais conditionnelle — et, quand l'instantané de découverte rend
+ * le libellé attendu sur un nœud unique, ce nœud nommé par son rôle et son nom.
+ * Rien n'est deviné : sans instantané, la phrase ne nomme que la présence, qui
+ * se déduit du sélecteur lui-même.
+ */
+function visibleTargetAdvice(
+  faults: StateTargetReadFault[],
+  aria: string | undefined
+): string {
+  // L'instantané est lu une fois pour tout le scénario, pas une fois par
+  // assertion fautive.
+  const nodes =
+    aria === undefined
+      ? []
+      : snapshotTextNodes(aria).filter(
+          (node) => !NON_TEXT_ROLES.has(node.role)
+        );
+  const items = faults.map((fault) => {
+    const label =
+      typeof fault.expected === "string"
+        ? ` expecting ${JSON.stringify(fault.expected)}`
+        : "";
+    const named = renderedTargets(nodes, fault.expected);
+    // `value` lit un champ : la présence d'un attribut d'état ne désigne pas
+    // un champ, donc elle n'est offerte que comme preuve de l'état, jamais
+    // comme cible de lecture.
+    if (fault.kind === "value") {
+      return `assertion ${fault.assertion} reads a field${label} → target the input itself by its label or its role, and prove the state with ${fault.presence}`;
+    }
+    const targets = [fault.presence, ...named];
+    return `assertion ${fault.assertion}${label} → read ${targets.join(" or ")}${named.length > 0 ? " (the discovery snapshot renders this label there)" : ""}`;
+  });
+  const presence = [...new Set(faults.map((fault) => fault.presence))].join(
+    ", "
+  );
+  return `${presence} is the same element without its pinned value, so it exists in every state and carries the text the view displays: ${items.join(" ; ")}`;
+}
 /**
  * Refus des assertions qui lisent un élément sélectionné par une valeur d'état
  * (voir `stateTargetReadFault`). Même forme que les refus voisins : un refus par
  * scénario, nommant l'assertion, le sélecteur, l'attendu et la voie correcte, et
  * `runner.ts` le rejoue avant la première étape navigateur.
+ *
+ * Le second argument est l'instantané de découverte déjà capturé pour la
+ * validation d'évidence : le refus s'en sert pour nommer la cible visible que
+ * la page expose, comme `planEvidenceDiagnostic` nomme la cible exposée à la
+ * place d'une cible absente. Sans lui, le refus nomme la présence du même
+ * attribut, qui se déduit du sélecteur.
  */
 export function stateTargetReadRefusals(
-  plan: Plan
+  plan: Plan,
+  aria?: string
 ): { error: QaError; scenario: Scenario }[] {
   const refusals: { error: QaError; scenario: Scenario }[] = [];
   for (const scenario of plan.scenarios) {
-    const offenders = scenario.assertions
+    const faults = scenario.assertions
       .map((assertion) => stateTargetReadFault(assertion))
-      .filter((fault): fault is string => fault !== undefined);
-    if (offenders.length === 0) {
+      .filter((fault): fault is StateTargetReadFault => fault !== undefined);
+    if (faults.length === 0) {
       continue;
     }
     refusals.push({
       scenario,
       error: new QaError(
         "PLAN_STATE_TARGET_READ_AS_TEXT",
-        `Scenario ${scenario.id} reads an element selected by a state value as if it carried text: ${offenders.join(" ; ")}`,
-        'An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (measured: run 76f7b2a9 waited 5000 ms for [data-cash-state="cloture"] at innerText). Prove the state by presence instead — [data-cash-state="cloture"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-cash-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value.'
+        `Scenario ${scenario.id} reads an element selected by a state value as if it carried text: ${faults.map((fault) => fault.line).join(" ; ")}`,
+        `An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (measured: run 76f7b2a9 waited 5000 ms for [data-cash-state="cloture"] at innerText). Prove the state by presence instead — [data-cash-state="cloture"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-cash-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value. Visible target for this plan: ${visibleTargetAdvice(faults, aria)}.`
       ),
     });
   }

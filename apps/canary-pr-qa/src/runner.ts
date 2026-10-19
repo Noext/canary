@@ -801,9 +801,17 @@ function planRefusals(
   policy: Policy,
   context: PrContext,
   config: Config,
-  scans: AmputationScans = amputationScans()
+  scans: AmputationScans = amputationScans(),
+  aria?: string
 ): string[] {
-  const parts = planRefusalParts(candidate, policy, context, config, scans);
+  const parts = planRefusalParts(
+    candidate,
+    policy,
+    context,
+    config,
+    scans,
+    aria
+  );
   return [
     ...fatalPrelude(parts.fatal),
     ...parts.before,
@@ -825,7 +833,8 @@ function planRefusalParts(
   policy: Policy,
   context: PrContext,
   config: Config,
-  scans: AmputationScans
+  scans: AmputationScans,
+  aria?: string
 ): {
   fatal: FatalClass[];
   before: string[];
@@ -861,7 +870,7 @@ function planRefusalParts(
       ...attributeValueRefusals(candidate).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
-      ...stateTargetReadRefusals(candidate).map(
+      ...stateTargetReadRefusals(candidate, aria).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
       // Un plan passé par `PlanSchema` ne peut plus porter ces formes : ce refus
@@ -1152,7 +1161,14 @@ async function executePlan(
       // correction, au lieu de faire échouer le run sur une citation recopiée
       // de mémoire ou attribuée au mauvais fichier.
       const scans = amputationScans();
-      const messages = planRefusals(candidate, policy, context, config, scans);
+      const messages = planRefusals(
+        candidate,
+        policy,
+        context,
+        config,
+        scans,
+        evidence
+      );
       if (messages.length === 0) {
         return;
       }
@@ -1214,7 +1230,7 @@ async function executePlan(
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
       ...attributeValueRefusals(result.plan),
-      ...stateTargetReadRefusals(result.plan),
+      ...stateTargetReadRefusals(result.plan, evidence),
       ...missingExpectationRefusals(result.plan),
       ...ifPresentRefusals(result.plan),
     ].map((item) => [item.scenario.id, item.error])
