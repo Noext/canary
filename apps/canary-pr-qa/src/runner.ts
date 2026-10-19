@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
@@ -958,6 +958,28 @@ function quotePickMessage(offers: QuoteOffer[]): string {
   return QUOTE_PICK_HEADER + blocks.join("");
 }
 /**
+ * Longueur du préfixe sha256 qui identifie une citation résolue dans le
+ * journal. Assez long pour recouper la même citation entre deux runs, jamais
+ * assez pour en retrouver le texte.
+ */
+const QUOTE_FINGERPRINT_CHARS = 16;
+/**
+ * Métadonnées journalisables d'une citation résolue. La citation elle-même
+ * n'est JAMAIS journalisée : elle est recopiée du dépôt testé, donc elle peut
+ * porter un secret que ce dépôt y a laissé et que `redact` ne connaît pas —
+ * seules sa taille, son nombre de lignes et son empreinte vont au journal.
+ */
+function quoteLogFields(text: string) {
+  return {
+    quoteChars: text.length,
+    quoteFingerprint: createHash("sha256")
+      .update(text)
+      .digest("hex")
+      .slice(0, QUOTE_FINGERPRINT_CHARS),
+    quoteLines: text.split("\n").length,
+  };
+}
+/**
  * Écrit les citations choisies dans une copie du plan refusé : la valeur rendue
  * porte des textes réels du fichier cité, jamais un indice, et le plan d'origine
  * n'est pas modifié — une correction qui ne converge pas laisse donc au
@@ -986,11 +1008,11 @@ function applyQuotePicks(
     logger.info(
       {
         line: chosen.line,
+        ...quoteLogFields(chosen.text),
         requirement: offer.rank,
         runId,
         scenario: offer.scenarioId,
         sourceFile: offer.requirement.sourceFile,
-        quote: chosen.text,
       },
       "Requirement quote resolved by pick"
     );
