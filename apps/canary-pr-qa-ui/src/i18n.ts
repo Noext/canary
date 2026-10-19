@@ -729,7 +729,7 @@ export const runAdvice: Record<string, string> = {
   PLAN_SELECTOR_UNSTABLE:
     "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source, écrits sur l’élément visé et non sur un de ses ancêtres — jamais une position (`>`, espace, `+`, `~`, `:nth-of-type`), puis relancez.",
   PLAN_STATE_TARGET_READ_AS_TEXT:
-    'Prouvez l’état par sa présence (`[data-cash-state="cloture"]` avec `kind: visible`, ou `kind: count` valant 1) et lisez le texte affiché sur le sélecteur qui le porte (`[data-cash-state]`, `[role="status"]` ou l’élément qui l’affiche), puis relancez.',
+    'Lisez le texte sur l’élément qui le rend : le conteneur d’état sans sa valeur épinglée (`[data-cash-state]`, présent dans tous les états) ou le rôle et le nom accessibles que l’instantané de découverte expose (`role=status`) — le libellé attendu est l’indice de cet élément — et prouvez l’état par sa présence (`[data-cash-state="cloture"]` avec `kind: visible`, ou `kind: count` valant 1), puis relancez.',
   PLAN_SKIP_OUTSIDE_DIFF:
     "Relancez le test : le planificateur ne peut ignorer qu’un fichier modifié par la PR, jamais un fichier de contexte inchangé.",
   PLAN_SOURCE_OUTSIDE_DIFF:
