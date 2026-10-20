@@ -70,6 +70,19 @@ export function normalizeQuoteText(value: string): string {
  * du décompte, comme `$` et `#` qui forment eux aussi des identifiants
  * JavaScript (`$foo`, `#field`).
  *
+ * L'apostrophe est exclue pour la même raison, par l'autre bout : elle ne
+ * sépare rien, elle PRÉCÈDE un identifiant (le lifetime Rust `'dangerous`,
+ * `'static`, le caractère `'a'`) ou elle délimite un contenu dont les lettres
+ * et le blanc rendent déjà compte. Compter le sigil laissait donc un
+ * identifiant nu redevenir témoin sous une autre écriture : `'dangerous`
+ * (10 caractères, des lettres, une apostrophe) couvrait un fichier `.rs` d'un
+ * dépôt où une PR non fiable pilote le planificateur. Les cas légitimes ne sont
+ * pas refusés pour autant, parce qu'ils passent par les autres caractères :
+ * `let c = 'a';` porte `=` et `;` plus le blanc entre deux mots, `'bonjour le
+ * monde'` porte ce même blanc, et `data-cash-state={closed?"cloture":"ouvert"}`
+ * porte accolades, `=` et `?`. Le guillemet interne, lui, reste compté : c'est
+ * une des formes du contrat.
+ *
  * Le seuil de structure vaut UN et non deux : des contrats déjà tenus par la
  * suite acceptent une citation dont c'est le seul caractère de structure —
  * `total=17` porte un seul `=`, `value 12` un seul blanc —, donc exiger deux
@@ -107,9 +120,12 @@ const WORD_CHARS = /[\p{L}\p{N}]/gu;
  * oblique en sont exclus : ce sont des caractères de LIAISON d'identifiant
  * (`snake_case`, `kebab-case`, `a.b.c`, `a:b`, `a/b`), donc les compter
  * accepterait un identifiant nu comme témoin. `$` et `#` le sont aussi parce
- * qu'ils forment des identifiants JavaScript (`$foo`, `#field`).
+ * qu'ils forment des identifiants JavaScript (`$foo`, `#field`). L'apostrophe
+ * l'est enfin : c'est un sigil qui précède un identifiant — le lifetime Rust
+ * `'dangerous` — ou un délimiteur dont le contenu compte par ses lettres et
+ * ses blancs, donc un identifiant nu préfixé passait pour une expression.
  */
-const STRUCTURE_CHARS = /[{}()[\]=!<>,;"'`|&?+*%^~]/gu;
+const STRUCTURE_CHARS = /[{}()[\]=!<>,;"`|&?+*%^~]/gu;
 /**
  * Le blanc qui sépare deux mots : une suite de blancs bordée d'un mot de part
  * et d'autre. Un blanc voisin d'une ponctuation ne compte pas — c'est la
