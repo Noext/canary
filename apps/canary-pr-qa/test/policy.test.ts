@@ -813,14 +813,17 @@ it("refuses an identifier linked by underscores, hyphens, dots, colons or slashe
  * de lettres et le compteur de structure, et couvrait un fichier `.rs` d'un
  * dépôt où une PR non fiable pilote le planificateur.
  *
- * L'apostrophe ne compte plus : elle ne sépare rien, elle précède un identifiant
- * (`'dangerous`, `'static`, `'a`) ou délimite un contenu dont les lettres et le
- * blanc rendent déjà compte. La règle ne rouvre pas de faux refus, parce que les
- * cas légitimes portent les autres caractères : `let marker = 'a';` (17
- * caractères, `=` et `;`), la ligne qui porte le lifetime (parenthèses,
- * chevrons, `&`) et `'le comptage est verrouillé'` (le blanc entre deux mots).
- * Aucune des copies déjà tenues ci-dessus — `WHITESPACE_FREE_QUOTES`, `total=17`,
- * `value 12` — ne contient d'apostrophe : leur verdict ne bouge pas.
+ * L'apostrophe ne compte plus comme symbole : seul l'apostrophe SIGIL, celui
+ * qui précède un identifiant (`'dangerous`, `'static`, `'a`), disparaît du
+ * décompte. Une paire qui délimite un contenu non vide reste une structure —
+ * `'cloture'`, `'completed'`, qui sont des chaînes de caractères au même titre
+ * que `"cloture"` —, sinon un littéral d'un seul mot serait refusé selon le
+ * style de guillemet de la source et tuerait le run. Les autres cas légitimes
+ * portent les caractères restants : `let marker = 'a';` (17 caractères, `=` et
+ * `;`), la ligne qui porte le lifetime (parenthèses, chevrons, `&`) et
+ * `'le comptage est verrouillé'` (le blanc entre deux mots). Aucune des copies
+ * déjà tenues ci-dessus — `WHITESPACE_FREE_QUOTES`, `total=17`, `value 12` — ne
+ * contient d'apostrophe : leur verdict ne bouge pas.
  */
 const RUST_SOURCE = [
   "pub struct Request<'dangerous> {",
@@ -911,9 +914,28 @@ it("refuses a Rust lifetime as a witness and keeps the code that carries one", (
   // LIGNE qui le porte qui est un témoin, pas le littéral.
   expect("'a'").toHaveLength(3);
   expect(quoteCarriesContent("'a'")).toBe(false);
-  // Une chaîne entre apostrophes reste un témoin quand elle est substantielle :
-  // le blanc entre deux mots suffit, sans que l'apostrophe compte.
-  expect(quoteCarriesContent("'le comptage est verrouillé'")).toBe(true);
+  // Une chaîne entre apostrophes reste un témoin : sa paire la délimite, comme
+  // le ferait un guillemet double. `'completed'` et `'cloture'` sont les deux
+  // littéraux nommés par la revue de code du tour 1.
+  for (const literal of [
+    "'completed'",
+    "'cloture'",
+    "'le comptage est verrouillé'",
+  ]) {
+    expect(quoteCarriesContent(literal), `${literal}: contenu`).toBe(true);
+    expect(quoteCarriesContent(literal.replaceAll("'", '"')), literal).toBe(
+      true
+    );
+  }
+  // Le sigil ne passe pas pour un délimiteur : `'dangerous` reste refusé là où
+  // `'dangerous'` cite une chaîne de caractères.
+  expect(quoteCarriesContent("'dangerous")).toBe(false);
+  expect(quoteCarriesContent("'dangerous'")).toBe(true);
+  // Et un sigil planté DANS du code reste un témoin par ce code, pas par lui.
+  expect(quoteCarriesContent("state='dangerous")).toBe(true);
+  expect(quoteHasWitness("let state='dangerous", "state='dangerous")).toBe(
+    true
+  );
   // Contre-épreuve : la règle resserrée ne rouvre aucun faux refus déjà fermé.
   for (const quote of [
     ...WHITESPACE_FREE_QUOTES,
