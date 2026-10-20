@@ -11,7 +11,14 @@ import {
 import { type Config, validateConfiguration } from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
-import { fixtureCatalog } from "./fixtures.js";
+import {
+  fixtureCatalog,
+  NO_DECLARED_PRECONDITIONS,
+  preconditionPlanRefusal,
+  preconditionRefusals,
+  type TrustedCatalog,
+  trustedCatalog,
+} from "./fixtures.js";
 import { GitHub, type PrContext } from "./github.js";
 import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
@@ -767,16 +774,12 @@ export function planPayload(
   context: PrContext,
   preview: Preview,
   initialPage: Observation,
-  fixtures: {
-    fixtures: Record<string, string>;
-    roles: string[];
-    visuals: string[];
-  },
+  catalog: TrustedCatalog,
   config: Config
 ) {
   const payload = {
     changedFiles: context.files.map((file) => file.filename),
-    fixtures,
+    fixtures: catalog,
     initialPage,
     maxScenarios: config.QA_MAX_SCENARIOS,
     pr: context,
@@ -816,6 +819,7 @@ function planRefusals(
   policy: Policy,
   context: PrContext,
   config: Config,
+  catalog: TrustedCatalog,
   scans: AmputationScans = amputationScans(),
   evidence?: DiscoveryEvidence
 ): string[] {
@@ -824,6 +828,7 @@ function planRefusals(
     policy,
     context,
     config,
+    catalog,
     scans,
     evidence
   );
@@ -848,6 +853,7 @@ function planRefusalParts(
   policy: Policy,
   context: PrContext,
   config: Config,
+  catalog: TrustedCatalog,
   scans: AmputationScans,
   evidence?: DiscoveryEvidence,
   resolved: ReadonlySet<string> = new Set()
@@ -858,6 +864,15 @@ function planRefusalParts(
   after: string[];
 } {
   const shape = planShapeRefusals(candidate, context, config);
+  // Une précondition hors catalogue bloque CHAQUE scénario qui la porte, sans
+  // qu'aucune étape navigateur ne soit dépensée : rendue ici, elle laisse au
+  // planificateur sa tentative de correction, et un plan non corrigé est arrêté
+  // par `preconditionRefusals` avant la première étape.
+  const precondition = preconditionPlanRefusal(
+    candidate,
+    catalog,
+    context.ref.repo
+  );
   return {
     fatal: [
       ...coverageFatalClasses(candidate, context, policy, scans, resolved),
@@ -877,6 +892,9 @@ function planRefusalParts(
     ],
     ungrounded: ungroundedPlanRefusals(candidate, context, policy, scans),
     after: [
+      // En tête du groupe : une liste de citations longue ne doit pas la pousser
+      // hors des 2000 caractères de la correction.
+      ...(precondition ? [precondition] : []),
       ...writeEvidenceRefusals(candidate, policy).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
@@ -1073,7 +1091,11 @@ export function quotePickCorrection(
   context: PrContext,
   config: Config,
   runId?: string,
-  scans: AmputationScans = amputationScans()
+  scans: AmputationScans = amputationScans(),
+  // Défaut vide : un appelant sans catalogue ne peut attester aucune
+  // précondition, donc la correction par indice s'écarte au lieu de réparer les
+  // citations d'un plan dont les préconditions resteraient inexécutables.
+  catalog: TrustedCatalog = NO_DECLARED_PRECONDITIONS
 ): ConstrainedCorrection<Plan> | undefined {
   const faults = ungroundedRequirements(candidate, context);
   // Chaque candidat offert est vérifié comme témoin de son fichier (voir
@@ -1094,6 +1116,7 @@ export function quotePickCorrection(
     policy,
     context,
     config,
+    catalog,
     scans,
     undefined,
     resolved
@@ -1183,14 +1206,10 @@ async function executePlan(
     root,
     canary
   );
-  const fixtures = await fixtureCatalog(config, context.ref.repo).then((c) => ({
-    roles: Object.keys(c.roles),
-    visuals: Object.keys(c.visuals),
-    fixtures: Object.fromEntries(
-      Object.entries(c.fixtures).map(([name, f]) => [name, f.description])
-    ),
-  }));
-  const payload = planPayload(context, preview, initialPage, fixtures, config);
+  const catalog = await fixtureCatalog(config, context.ref.repo).then(
+    trustedCatalog
+  );
+  const payload = planPayload(context, preview, initialPage, catalog, config);
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });
@@ -1204,10 +1223,15 @@ async function executePlan(
       // correction, au lieu de faire échouer le run sur une citation recopiée
       // de mémoire ou attribuée au mauvais fichier.
       const scans = amputationScans();
-      const messages = planRefusals(candidate, policy, context, config, scans, {
-        url: initialPage.url,
-        aria: evidence,
-      });
+      const messages = planRefusals(
+        candidate,
+        policy,
+        context,
+        config,
+        catalog,
+        scans,
+        { url: initialPage.url, aria: evidence }
+      );
       if (messages.length === 0) {
         return;
       }
@@ -1221,7 +1245,8 @@ async function executePlan(
           context,
           config,
           result.id,
-          scans
+          scans,
+          catalog
         ) ??
         `Plan rejected: ${messages.join(" ")} Return the complete corrected plan.`
       );
@@ -1266,6 +1291,7 @@ async function executePlan(
   // l'autre.
   const preExecutionRefusals = new Map(
     [
+      ...preconditionRefusals(result.plan, catalog, context.ref.repo),
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
       ...attributeValueRefusals(result.plan),
