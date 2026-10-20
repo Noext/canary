@@ -8,6 +8,8 @@ import {
   requirementHasWitness,
   ungroundedRequirement,
   ungroundedRequirements,
+  unwitnessedPlanRefusals,
+  unwitnessedSources,
   validateCoverage,
   weakWitnessLines,
 } from "../src/policy.js";
@@ -244,4 +246,152 @@ it("pairs the fatal class fault with the real line, not only the class advice", 
   expect(fatal?.faults?.[0]?.remedy).toContain(
     `116: ${JSON.stringify(cashLine(116))}`
   );
+});
+
+/**
+ * Le plan mesuré privé du scénario qui témoigne de `cash.ts` par une citation
+ * substantielle : l'identifiant faible devient le SEUL témoin de son fichier
+ * déclaré, et la couverture dérive donc son propre refus de la même citation
+ * (finding P2 de la PR #62, `policy.ts:1392`). C'est le cas courant d'un
+ * scénario à une seule exigence, celui que la correction par indice doit encore
+ * pouvoir traiter.
+ */
+function singleWitnessPlan() {
+  const plan = measuredPlan();
+  return PlanSchema.parse({
+    ...plan,
+    scenarios: plan.scenarios.filter(
+      (scenario) => scenario.id !== "cash-invalid-decimal-quantity"
+    ),
+  });
+}
+
+/**
+ * Le finding P2 : le refus de couverture dérivé de la même citation faible
+ * bloquait la correction contrainte avant qu'elle n'offre le moindre candidat.
+ * La correction écrit une ligne RÉELLE et vérifiée comme témoin du fichier,
+ * donc elle répare les deux refus ensemble, et la règle de contenu ne bouge pas
+ * — l'identifiant nu reste refusé au premier tour.
+ */
+it("opens the pick when the weak quote is the scenario's only file witness", () => {
+  const context = measuredContext();
+  const plan = singleWitnessPlan();
+  const faults = ungroundedRequirements(plan, context);
+  expect(faults).toHaveLength(1);
+  const unwitnessed = unwitnessedSources(plan, context);
+  expect(unwitnessed).toEqual([
+    {
+      file: CASH,
+      scenarioId: "cash-variance-blocked-then-justified",
+      weak: true,
+    },
+  ]);
+  // Le refus dérivé existe bien, et c'est lui que la correction écarte : le
+  // test tombe si la paire (scénario, fichier) cesse d'être traitée comme
+  // résolue par le choix.
+  expect(unwitnessedPlanRefusals(plan, context, policy)[0]).toContain(
+    "Scenario cash-variance-blocked-then-justified declares packages/domain/src/cash.ts without a source requirement witness"
+  );
+  const correction = quotePickCorrection(
+    plan,
+    policy,
+    context,
+    config,
+    "lot-v-replay"
+  );
+  expect(correction).toBeDefined();
+  if (!correction) {
+    throw new Error("Expected the pick for a scenario's only file witness");
+  }
+  const [fault] = faults;
+  if (!fault) {
+    throw new Error("Expected the measured weak witness refusal");
+  }
+  // Les deux lignes réelles qui portent l'identifiant, dans la borne d'ambiguïté
+  // de 168c394 : le choix reste au planificateur, aucun indice n'est imposé.
+  expect(
+    quoteResolutionCandidates(fault.requirement, context).map(
+      (candidate) => candidate.line
+    )
+  ).toEqual([116, 146]);
+  expect(correction.message).toContain(`1: ${JSON.stringify(cashLine(116))}`);
+  const resolved = correction.resolve({
+    picks: [
+      {
+        scenario: "cash-variance-blocked-then-justified",
+        requirement: 3,
+        candidate: 1,
+      },
+    ],
+  });
+  expect(resolved).toBeDefined();
+  if (!resolved) {
+    throw new Error("Expected the pick to resolve the refused quote");
+  }
+  // Le gate accepte le plan corrigé : plus de citation fautive, plus de fichier
+  // déclaré sans témoin, et la validation de couverture passe.
+  expect(ungroundedRequirements(resolved, context)).toEqual([]);
+  expect(unwitnessedSources(resolved, context)).toEqual([]);
+  expect(validateCoverage(resolved, context, policy, config).gate).toBe(
+    "complete"
+  );
+});
+
+/**
+ * L'autre moitié de la borne, mesurée sur le même plan : un identifiant commun
+ * (`return`, trois lignes de `cash.ts`) garde le refus sans proposition. Écrire
+ * l'une de ces lignes serait un choix arbitraire, donc la correction par indice
+ * reste fermée et le planificateur réécrit l'exigence.
+ */
+it("keeps the refusal without a pick when the only file witness is ambiguous", () => {
+  const context = measuredContext();
+  const plan = singleWitnessPlan();
+  const requirement = plan.scenarios[0]?.requirements[2];
+  if (!requirement) {
+    throw new Error("Expected the measured weak requirement");
+  }
+  requirement.quote = "return";
+  const [fault] = ungroundedRequirements(plan, context);
+  expect(fault?.requirement.quote).toBe("return");
+  expect(
+    weakWitnessLines({ quote: "return", sourceFile: CASH }, context)
+  ).toEqual([]);
+  expect(
+    quoteResolutionCandidates({ quote: "return", sourceFile: CASH }, context)
+  ).toEqual([]);
+  expect(
+    quotePickCorrection(plan, policy, context, config, "lot-v-replay")
+  ).toBeUndefined();
+  // Le refus rendu au planificateur est celui d'aujourd'hui, mot pour mot :
+  // la couverture dérivée y figure toujours.
+  expect(unwitnessedPlanRefusals(plan, context, policy)).toHaveLength(1);
+  expect(() => validateCoverage(plan, context, policy, config)).toThrow(
+    "Weak source witness"
+  );
+});
+
+/**
+ * Ce que la correction n'a pas le droit d'écarter : un fichier déclaré sans
+ * témoin qu'aucun candidat ne témoigne. Seule la paire que le choix répare
+ * disparaît du gate, donc le refus du fichier restant garde la correction
+ * fermée — sinon le plan passerait la couverture sur un fichier non témoigné.
+ */
+it("keeps the pick closed for a declared file the pick does not witness", () => {
+  const context = measuredContext();
+  const plan = singleWitnessPlan();
+  const scenario = plan.scenarios[0];
+  if (!scenario) {
+    throw new Error("Expected the measured weak scenario");
+  }
+  scenario.requirements = scenario.requirements.filter(
+    (requirement) => requirement.sourceFile !== PAGE
+  );
+  expect(unwitnessedSources(plan, context).map(({ file }) => file)).toEqual([
+    PAGE,
+    CASH,
+  ]);
+  expect(
+    quotePickCorrection(plan, policy, context, config, "lot-v-replay")
+  ).toBeUndefined();
+  expect(unwitnessedPlanRefusals(plan, context, policy)).toHaveLength(2);
 });

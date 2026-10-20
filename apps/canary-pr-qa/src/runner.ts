@@ -53,6 +53,7 @@ import {
   validateCoverage,
   validateProvider,
   weakWitnessSuggestion,
+  witnessPairKey,
   writeEvidenceRefusals,
 } from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
@@ -479,15 +480,23 @@ function ungroundedRemedy(
  * citations fautives, donc lui donner un budget neuf ferait repayer à chacune un
  * balayage du fichier cité. Exportée pour que le test mesure ce plafond sur ce
  * chemin.
+ *
+ * `resolved` porte les paires (scénario, fichier) que la correction contrainte
+ * répare elle-même : la ligne écrite dans le plan témoigne du fichier, donc ce
+ * refus de couverture n'est plus un défaut que le plan garde (voir
+ * `quotePickCorrection`).
  */
 export function coverageFatalClasses(
   candidate: Plan,
   context: PrContext,
   policy: Policy,
-  scans: AmputationScans
+  scans: AmputationScans,
+  resolved: ReadonlySet<string> = new Set()
 ): FatalClass[] {
   const classes: FatalClass[] = [];
-  const unwitnessed = unwitnessedSources(candidate, context);
+  const unwitnessed = unwitnessedSources(candidate, context).filter(
+    (item) => !resolved.has(witnessPairKey(item.scenarioId, item.file))
+  );
   if (unwitnessed.length > 0) {
     classes.push({
       code: "COVERAGE_WITNESS_MISSING",
@@ -840,7 +849,8 @@ function planRefusalParts(
   context: PrContext,
   config: Config,
   scans: AmputationScans,
-  evidence?: DiscoveryEvidence
+  evidence?: DiscoveryEvidence,
+  resolved: ReadonlySet<string> = new Set()
 ): {
   fatal: FatalClass[];
   before: string[];
@@ -850,7 +860,7 @@ function planRefusalParts(
   const shape = planShapeRefusals(candidate, context, config);
   return {
     fatal: [
-      ...coverageFatalClasses(candidate, context, policy, scans),
+      ...coverageFatalClasses(candidate, context, policy, scans, resolved),
       ...contextFatalClasses(candidate, context),
       ...namedFatalClass(
         contractBudgetRefusals(candidate, config),
@@ -859,7 +869,7 @@ function planRefusalParts(
       ...shape,
     ],
     before: [
-      ...unwitnessedPlanRefusals(candidate, context, policy),
+      ...unwitnessedPlanRefusals(candidate, context, policy, resolved),
       ...undeclaredSourcePlanRefusals(candidate, context),
       ...shape.map(
         (refusal) => `${fatalError(refusal).message}. ${refusal.hint}`
@@ -1049,6 +1059,13 @@ function applyQuotePicks(
  * de scénario ni de lecture), chaque citation fautive a au moins un candidat
  * réel et vérifié comme témoin, et la liste tient dans le message. Sinon
  * `undefined` : l'appelant rend le refus d'aujourd'hui, mot pour mot.
+ *
+ * Le refus de couverture dérivé de la même citation ne fait pas exception :
+ * quand le scénario n'a que cette exigence pour son fichier déclaré, écrire un
+ * candidat dans le plan témoigne du fichier, donc les deux refus tombent
+ * ensemble (run 58e47755). Ce qui reste un défaut — un autre fichier déclaré
+ * sans témoin, une citation hors du fichier — garde son refus et écarte la
+ * correction.
  */
 export function quotePickCorrection(
   candidate: Plan,
@@ -1058,7 +1075,29 @@ export function quotePickCorrection(
   runId?: string,
   scans: AmputationScans = amputationScans()
 ): ConstrainedCorrection<Plan> | undefined {
-  const parts = planRefusalParts(candidate, policy, context, config, scans);
+  const faults = ungroundedRequirements(candidate, context);
+  // Chaque candidat offert est vérifié comme témoin de son fichier (voir
+  // `quoteResolutionCandidates`) : la paire (scénario, fichier) d'une citation
+  // FAIBLE est donc couverte dès que son indice est écrit dans le plan, et le
+  // refus de couverture dérivé de la même citation tombe avec elle. Une citation
+  // absente garde son remède détaillé et son refus : sa ligne réelle n'est pas
+  // le seul remède, et la correction n'y a pas à choisir à sa place.
+  const resolved = new Set(
+    faults
+      .filter((fault) => hasWeakWitness(fault.requirement, context))
+      .map((fault) =>
+        witnessPairKey(fault.scenarioId, fault.requirement.sourceFile)
+      )
+  );
+  const parts = planRefusalParts(
+    candidate,
+    policy,
+    context,
+    config,
+    scans,
+    undefined,
+    resolved
+  );
   if (parts.before.length > 0 || parts.after.length > 0) {
     return;
   }
@@ -1068,14 +1107,12 @@ export function quotePickCorrection(
   ) {
     return;
   }
-  const offers: QuoteOffer[] = ungroundedRequirements(candidate, context).map(
-    (fault) => ({
-      candidates: quoteResolutionCandidates(fault.requirement, context, scans),
-      rank: fault.rank,
-      requirement: fault.requirement,
-      scenarioId: fault.scenarioId,
-    })
-  );
+  const offers: QuoteOffer[] = faults.map((fault) => ({
+    candidates: quoteResolutionCandidates(fault.requirement, context, scans),
+    rank: fault.rank,
+    requirement: fault.requirement,
+    scenarioId: fault.scenarioId,
+  }));
   if (
     offers.length === 0 ||
     offers.some((offer) => offer.candidates.length === 0)

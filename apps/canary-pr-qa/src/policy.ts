@@ -2215,26 +2215,46 @@ export function unwitnessedSources(
 }
 
 /**
+ * Clé d'une paire (scénario, fichier) de source déclarée. Le séparateur est un
+ * saut de ligne : un chemin de fichier ni un identifiant de scénario n'en
+ * portent, donc deux paires distinctes ne peuvent pas produire la même clé — ce
+ * qu'un `:` ne garantit pas pour un scénario dont l'identifiant en contient un.
+ */
+export function witnessPairKey(scenarioId: string, file: string): string {
+  return `${scenarioId}\n${file}`;
+}
+
+/**
  * Fichiers cités sans témoin, sous forme de refus rendus au planificateur : il
  * apprend la règle ici, dispose d'une tentative de correction, et
  * `validateCoverage` reste le contrôle final qui refuse un plan non corrigé.
+ *
+ * `resolved` écarte les paires qu'une correction en cours répare déjà : la
+ * correction contrainte écrit dans le plan une ligne réelle qui témoigne du
+ * fichier, donc le refus de couverture dérivé de la même citation faible tombe
+ * avec elle (voir `quotePickCorrection`, runner.ts).
  */
 export function unwitnessedPlanRefusals(
   plan: Plan,
   context: PrContext,
-  policy: Policy
+  policy: Policy,
+  resolved: ReadonlySet<string> = new Set()
 ): string[] {
   const changed = new Set(context.files.map((file) => file.filename));
-  return unwitnessedSources(plan, context).map(({ file, scenarioId, weak }) => {
-    const error = unwitnessedRequirement(
-      scenarioId,
-      file,
-      policy,
-      changed.has(file),
-      weak
-    );
-    return `${error.message}. ${error.hint}`;
-  });
+  return unwitnessedSources(plan, context)
+    .filter(
+      ({ file, scenarioId }) => !resolved.has(witnessPairKey(scenarioId, file))
+    )
+    .map(({ file, scenarioId, weak }) => {
+      const error = unwitnessedRequirement(
+        scenarioId,
+        file,
+        policy,
+        changed.has(file),
+        weak
+      );
+      return `${error.message}. ${error.hint}`;
+    });
 }
 
 /**
