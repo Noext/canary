@@ -59,6 +59,7 @@ import {
   SECOND_FILE_QUOTE,
   SHA,
 } from "./fixture.js";
+import { LOT_W_PRECONDITIONS } from "./lot-w-preconditions.js";
 
 const close: (() => Promise<void>)[] = [];
 /** Politique par défaut : `src/` est critique, aucun skip n'est approuvé. */
@@ -1463,6 +1464,94 @@ describe("runner false-green regressions", () => {
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
     ).toBe("error");
+  });
+  /**
+   * Le plan du run 985c3de7, réduit à ce que son refus mesuré portait : six
+   * identifiants et leurs préconditions réelles, sur le témoin du fixture.
+   */
+  function measuredPreconditionPlan() {
+    const base = structuredClone(plan.scenarios[0]!);
+    return {
+      scenarios: LOT_W_PRECONDITIONS.map(({ id, preconditions }) => ({
+        ...base,
+        id,
+        preconditions,
+      })),
+      skipped: [],
+      summary: "rejeu du run 985c3de7",
+    };
+  }
+  /**
+   * Rejeu du run 985c3de7 : le plan a déclaré `role:Administrateur démo 1` et
+   * `role:Pharmacie DEMO17 active`, deux bascules de profil visibles dans la page
+   * de découverte, alors que le catalogue de confiance ne déclare rien. Le refus
+   * d'alors — `Role Administrateur démo 1 missing` — arrivait à l'EXÉCUTION, une
+   * fois le run payé, et ne nommait ni le catalogue vide ni la forme correcte.
+   * Le planificateur reçoit maintenant ce refus pendant la planification et
+   * dispose de sa tentative de correction.
+   */
+  it("returns an undeclared precondition to the planner before blocking", async () => {
+    const invented = measuredPreconditionPlan();
+    const corrected = structuredClone(invented);
+    for (const scenario of corrected.scenarios) {
+      scenario.preconditions = [];
+    }
+    const f = await setup({ plans: [invented, corrected] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    expect(correction).toContain("Preconditions no scenario can satisfy");
+    for (const entry of LOT_W_PRECONDITIONS) {
+      expect(correction).toContain(entry.id);
+    }
+    expect(correction).toContain("role:Pharmacie DEMO17 active");
+    expect(correction).toContain(
+      "The trusted catalog declares nothing for fixture/app"
+    );
+    // La voie de correction : la valeur observée dans la page se conduit par une
+    // étape, pas par une précondition.
+    expect(correction).toContain("is a step, not a precondition");
+    expect(correction.length).toBeLessThan(2000);
+    expect(f.modelRequests).toHaveLength(2);
+    // Le run mesuré s'arrêtait sur six scénarios bloqués ; corrigé, il les joue.
+    expect(result.outcome).toBe("passed");
+    expect(result.scenarios).toHaveLength(LOT_W_PRECONDITIONS.length);
+    for (const scenario of result.scenarios) {
+      expect(scenario.outcome, scenario.error).toBe("passed");
+    }
+  });
+  it("blocks an uncorrected precondition with the catalog it looked for", async () => {
+    const invented = measuredPreconditionPlan();
+    const f = await setup({ plans: [invented, invented] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    // Chaque scénario est arrêté avant toute étape navigateur, avec un diagnostic
+    // nommé qui cite le catalogue consulté.
+    expect(result.scenarios).toHaveLength(LOT_W_PRECONDITIONS.length);
+    for (const scenario of result.scenarios) {
+      expect(scenario.steps).toEqual([]);
+      expect(scenario.diagnostic?.code).toBe("PRECONDITION_UNVERIFIED");
+      expect(scenario.diagnostic?.message).toContain(
+        "The trusted catalog declares nothing for fixture/app"
+      );
+      expect(scenario.diagnostic?.message).toContain(
+        "role:Administrateur démo 1"
+      );
+      expect(scenario.diagnostic?.message).not.toContain(
+        "Role Administrateur démo 1 missing"
+      );
+    }
   });
   /**
    * Défaut signalé par la revue interne : sur un fichier critique, une citation
