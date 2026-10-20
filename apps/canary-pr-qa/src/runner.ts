@@ -55,6 +55,7 @@ import {
   undeclaredSources,
   ungroundedPlanRefusals,
   ungroundedRequirements,
+  uniqueQuoteCandidate,
   unwitnessedPlanRefusals,
   unwitnessedSources,
   validateCoverage,
@@ -1076,6 +1077,144 @@ function applyQuotePicks(
   return resolved;
 }
 /**
+ * Paires (scénario, fichier) qu'une citation faible couvre dès que sa
+ * substitution est écrite dans le plan : le refus de couverture dérivé de la
+ * même citation tombe avec elle, que la substitution vienne d'un indice choisi
+ * (voir `quotePickCorrection`) ou d'une portion réelle écrite par le gate (voir
+ * `resolveQuotesWithoutAsking`). Une citation absente n'y entre pas : sa ligne
+ * réelle n'est pas son seul remède, et la substitution n'a pas à choisir.
+ */
+function weakWitnessPairs(
+  faults: { requirement: Requirement; scenarioId: string }[],
+  context: PrContext
+): Set<string> {
+  return new Set(
+    faults
+      .filter((fault) => hasWeakWitness(fault.requirement, context))
+      .map((fault) =>
+        witnessPairKey(fault.scenarioId, fault.requirement.sourceFile)
+      )
+  );
+}
+/**
+ * Une citation refusée que le gate a remplacée lui-même : la citation fautive
+ * telle que le plan la portait, la ligne réelle du fichier déclaré, et le texte
+ * verbatim écrit à sa place.
+ */
+export interface ResolvedQuote {
+  /** La citation refusée, avant remplacement. */
+  from: string;
+  /** La ligne du fichier déclaré qui porte `to`. */
+  line: number;
+  /** Rang de l'exigence dans son scénario, celui que les refus nomment. */
+  rank: number;
+  scenarioId: string;
+  sourceFile: string;
+  /** Le texte réel écrit dans le plan, portion verbatim de la ligne `line`. */
+  to: string;
+}
+/**
+ * Résolution déterministe d'une citation refusée : quand une SEULE portion
+ * réelle du fichier déclaré la résout, le gate l'écrit dans le plan et le
+ * planificateur n'a plus rien à retaper. C'est le maillon mesuré qui casse
+ * depuis 12 des 16 runs de la famille : la détection du bon texte existe déjà —
+ * `quotePickCorrection` offrait les lignes 116 et 146 sur le cas témoin faible,
+ * et les candidats existaient pour la recousure — mais faire répondre le modèle
+ * quand la réponse est déjà déterminable lui laisse reproduire l'altération
+ * qu'on lui demande de corriger.
+ *
+ * La résolution est donc posée sous les mêmes conditions que la correction par
+ * indice : la citation est le SEUL défaut du plan (aucune classe fatale d'une
+ * autre famille, aucun refus de scénario ni de lecture), et CHAQUE citation
+ * fautive doit avoir exactement un candidat AVANT la première écriture — une
+ * résolution partielle laisserait un plan à moitié réécrit et un refus qui ne
+ * nomme plus ce que le planificateur avait écrit. Deux candidats ou plus, ou
+ * aucun, laissent le refus d'aujourd'hui et la correction par indice inchangés.
+ *
+ * Le texte écrit est une portion verbatim d'une ligne réelle du fichier déclaré
+ * (voir `uniqueQuoteCandidate`) : la citation fautive n'est jamais acceptée,
+ * elle est remplacée. Le plan reçu est modifié en place, comme
+ * `repairRequirementAttribution`, donc la valeur que `model.json` rend — et que
+ * le run persiste — porte le texte résolu.
+ */
+export function resolveQuotesWithoutAsking(
+  candidate: Plan,
+  policy: Policy,
+  context: PrContext,
+  config: Config,
+  runId?: string,
+  scans: AmputationScans = amputationScans(),
+  catalog: TrustedCatalog = NO_DECLARED_PRECONDITIONS
+): ResolvedQuote[] {
+  const faults = ungroundedRequirements(candidate, context);
+  if (faults.length === 0) {
+    return [];
+  }
+  const parts = planRefusalParts(
+    candidate,
+    policy,
+    context,
+    config,
+    catalog,
+    scans,
+    undefined,
+    weakWitnessPairs(faults, context)
+  );
+  if (
+    parts.reserved.length > 0 ||
+    parts.before.length > 0 ||
+    parts.after.length > 0
+  ) {
+    return [];
+  }
+  if (
+    parts.fatal.length === 0 ||
+    parts.fatal.some((item) => item.code !== "REQUIREMENT_UNGROUNDED")
+  ) {
+    return [];
+  }
+  const candidates = faults.map((fault) =>
+    uniqueQuoteCandidate(fault.requirement, context, scans)
+  );
+  if (candidates.some((item) => item === undefined)) {
+    return [];
+  }
+  const written: ResolvedQuote[] = [];
+  for (const [index, fault] of faults.entries()) {
+    const only = candidates[index];
+    if (!only) {
+      continue;
+    }
+    const from = fault.requirement.quote;
+    written.push({
+      from,
+      line: only.line,
+      rank: fault.rank,
+      scenarioId: fault.scenarioId,
+      sourceFile: fault.requirement.sourceFile,
+      to: only.text,
+    });
+    fault.requirement.quote = only.text;
+    // La citation elle-même n'entre jamais au journal : elle est recopiée du
+    // dépôt testé, donc elle peut y porter un secret que `redact` ne connaît
+    // pas. L'empreinte et la taille disent quelle citation a été remplacée, la
+    // ligne réelle dit par quoi, et le plan persisté porte le texte.
+    logger.info(
+      {
+        line: only.line,
+        replaced: quoteLogFields(from),
+        requirement: fault.rank,
+        resolved: quoteLogFields(only.text),
+        runId,
+        scenario: fault.scenarioId,
+        sourceFile: fault.requirement.sourceFile,
+      },
+      "Requirement quote resolved by the gate"
+    );
+  }
+  return written;
+}
+/**
  * Correction contrainte d'une citation refusée. Le défaut mesuré du run
  * 9add286d n'est pas un faux refus : la copie reproduit 56 caractères de la
  * ligne 368, puis insère `:""` avant l'accolade qui ferme l'interpolation et
@@ -1117,13 +1256,6 @@ export function quotePickCorrection(
   // refus de couverture dérivé de la même citation tombe avec elle. Une citation
   // absente garde son remède détaillé et son refus : sa ligne réelle n'est pas
   // le seul remède, et la correction n'y a pas à choisir à sa place.
-  const resolved = new Set(
-    faults
-      .filter((fault) => hasWeakWitness(fault.requirement, context))
-      .map((fault) =>
-        witnessPairKey(fault.scenarioId, fault.requirement.sourceFile)
-      )
-  );
   const parts = planRefusalParts(
     candidate,
     policy,
@@ -1132,7 +1264,7 @@ export function quotePickCorrection(
     catalog,
     scans,
     undefined,
-    resolved
+    weakWitnessPairs(faults, context)
   );
   if (
     parts.reserved.length > 0 ||
@@ -1240,6 +1372,20 @@ async function executePlan(
       // correction, au lieu de faire échouer le run sur une citation recopiée
       // de mémoire ou attribuée au mauvais fichier.
       const scans = amputationScans();
+      // Une citation que le gate peut résoudre lui-même ne repart pas chez le
+      // planificateur : quand une seule portion réelle du fichier déclaré la
+      // résout, ce texte est écrit ici et le modèle n'a rien à retaper (voir
+      // `resolveQuotesWithoutAsking`). Deux candidats ou plus, ou aucun, gardent
+      // le refus et la correction d'aujourd'hui, inchangés.
+      resolveQuotesWithoutAsking(
+        candidate,
+        policy,
+        context,
+        config,
+        result.id,
+        scans,
+        catalog
+      );
       const messages = planRefusals(
         candidate,
         policy,

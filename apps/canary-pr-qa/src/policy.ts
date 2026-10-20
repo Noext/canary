@@ -1418,6 +1418,39 @@ export function quoteResolutionCandidates(
  */
 const QUOTE_RESOLUTION_CANDIDATE_LIMIT = 4;
 /**
+ * La portion réelle du fichier déclaré qui résout une citation refusée, quand
+ * une SEULE existe : le gate écrit ce texte à sa place au lieu de demander au
+ * planificateur de le recopier, et c'est ce qui ferme la classe mesurée — 12 des
+ * 16 runs de la famille `REQUIREMENT_UNGROUNDED` meurent sur une copie retapée
+ * (`:`""` inséré dans la première interpolation de la ligne 368), y compris au
+ * tour de correction qui reçoit le fragment exact.
+ *
+ * `undefined` dès que `quoteResolutionCandidates` en offre zéro ou plusieurs :
+ * deux candidats ou plus laissent le refus et la correction par indice intacts
+ * — le planificateur choisit, comme pour `ecart-a-justifier` et ses deux lignes
+ * —, et aucun candidat ne donne rien à écrire. Le texte rendu est vérifié
+ * VERBATIM sur la ligne nommée du fichier cité : un candidat reconstruit, rogné
+ * ou normalisé ferait entrer dans le plan un témoin que le fichier ne porte pas.
+ * Il est déjà vérifié comme témoin du fichier déclaré, donc la couverture reste
+ * valide, et un identifiant nu reçoit la ligne entière qui porte sa structure.
+ */
+export function uniqueQuoteCandidate(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext,
+  scans: AmputationScans = amputationScans()
+): { line: number; text: string } | undefined {
+  const candidates = quoteResolutionCandidates(requirement, context, scans);
+  const [only] = candidates;
+  if (candidates.length !== 1 || !only) {
+    return;
+  }
+  return fileContentLines(requirement, context).some(
+    (item) => item.line === only.line && item.text.includes(only.text)
+  )
+    ? only
+    : undefined;
+}
+/**
  * Le fragment réel qui porte TOUS les mots de la copie, aligné sur des jetons
  * entiers, quand seul un caractère de ponctuation les distingue : la copie
  * 7eef87d4 perd une `)`, donc ses mots sont exactement ceux de sa ligne et aucun
