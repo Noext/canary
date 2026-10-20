@@ -322,6 +322,36 @@ describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
 });
 
 describe("suggestion de rôle et page changée depuis la découverte", () => {
+  it("retire la suggestion quand la vérification relit la cible APRÈS l'action", () => {
+    // `transition` et `persisted` relèvent leur référence à l'entrée de
+    // `afterStep`, mais relisent la cible après cette étape — ou après le
+    // rechargement. Indexer le conseil à l'entrée laissait donc nommer un rôle
+    // de la découverte sur une page que l'action venait de changer.
+    for (const verification of ["transition", "persisted"] as const) {
+      const plan = closurePlan(
+        [
+          goto("go"),
+          step("close", {
+            type: "click",
+            locator: { by: "role", value: "button", name: "Clôturer" },
+          }),
+        ],
+        "close"
+      );
+      const assertion = plan.scenarios[0]?.assertions[0];
+      if (assertion) {
+        assertion.verification = verification;
+      }
+      const hint =
+        stateTargetReadRefusals(plan, {
+          url: PREVIEW_URL,
+          aria: CLOSED_VIEW_ARIA,
+        })[0]?.error.hint ?? "";
+      expect(hint, verification).not.toContain("role=status");
+      expect(hint, verification).toContain("→ read [data-cash-state]");
+    }
+  });
+
   it("retire la suggestion quand une action a changé la page avant l'assertion", () => {
     const hint = hintOf(
       closurePlan(
@@ -479,6 +509,23 @@ describe("conseil de cible : compte, ciblage et contenu publié", () => {
     const hint = stateTargetReadRefusals(plan)[0]?.error.hint ?? "";
     expect(hint).toContain(`→ read ${advice}`);
     expect(hint).not.toContain(selector);
+  });
+
+  it("exige la preuve qu'une forme de présence ne sélectionne qu'un élément", () => {
+    // Retirer une valeur élargit le sélecteur : `[aria-expanded=true]` devient
+    // `[aria-expanded]`, que tous les contrôles dépliés comme repliés portent.
+    // Un texte se lit en strict mode, donc le conseil nomme la vérification qui
+    // évite d'y consumer la seule correction disponible.
+    const plan = closurePlan([goto("go")], "go");
+    const assertion = plan.scenarios[0]?.assertions[0];
+    if (assertion) {
+      assertion.target = { by: "css", value: "[aria-expanded=true]" };
+    }
+    const hint = stateTargetReadRefusals(plan)[0]?.error.hint ?? "";
+    expect(hint).toContain("→ read [aria-expanded]");
+    expect(hint).toContain(
+      'prove it selects one (kind "count" expecting 1) before reading a text'
+    );
   });
 
   it("ne publie aucun texte de l'instantané dans le diagnostic sérialisé", () => {

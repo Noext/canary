@@ -378,6 +378,10 @@ function pageUnchangedByStep(
   return pageUnchanged;
 }
 
+/** Vrai quand la vérification relit sa cible APRÈS l'étape qui la déplace. */
+function readsAfterStep(assertion: Scenario["assertions"][number]): boolean {
+  return ["transition", "persisted"].includes(assertion.verification);
+}
 /** Position de l'étape qui relit la cible d'une assertion. */
 function assertionReadIndex(
   scenario: Scenario,
@@ -386,7 +390,7 @@ function assertionReadIndex(
   // Une vérification transition/persisted relève sa référence avant
   // l'interaction : la cible doit donc déjà exister à l'entrée de `afterStep`.
   // Les autres vérifications lisent leur cible pendant leur propre étape.
-  if (["transition", "persisted"].includes(assertion.verification)) {
+  if (readsAfterStep(assertion)) {
     return stepIndex(
       scenario,
       (index) => scenario.steps[index]?.id === assertion.afterStep
@@ -395,6 +399,22 @@ function assertionReadIndex(
   return stepIndex(scenario, (index) =>
     isAssertionStep(scenario, index, assertion.id)
   );
+}
+/**
+ * L'étape dont la page doit encore être celle de la découverte pour que le
+ * conseil nomme un nœud de l'instantané. `assertionReadIndex` désigne l'entrée
+ * de `afterStep` pour `transition` et `persisted`, parce que c'est là que la
+ * référence est relevée ; mais la cible est relue APRÈS cette étape, ou après
+ * le rechargement, où un rôle tiré de la découverte peut avoir disparu. Le
+ * conseil se place donc à la sortie de l'étape, et hors du scénario il ne
+ * nomme rien : `pageUnchanged[...]` vaut alors `undefined`, donc pas de rôle.
+ */
+function advicePageIndex(
+  scenario: Scenario,
+  assertion: Scenario["assertions"][number]
+): number {
+  const index = assertionReadIndex(scenario, assertion);
+  return readsAfterStep(assertion) ? index + 1 : index;
 }
 
 function inspectScenario(
@@ -1180,7 +1200,7 @@ function visibleTargetAdvice(
   const presence = [...new Set(faults.map((fault) => fault.presence))].join(
     ", "
   );
-  return `${presence} is the same element without its pinned value, so it exists in every state and carries the text the view displays: ${items.join(" ; ")}`;
+  return `${presence} is the same selector without its pinned value, so it exists in every state and carries the text the view displays; removing a value can also widen it to several elements, so prove it selects one (kind "count" expecting 1) before reading a text, and fall back to the element that renders it when it does not: ${items.join(" ; ")}`;
 }
 /**
  * Refus des assertions qui lisent un élément sélectionné par une valeur d'état
@@ -1216,7 +1236,7 @@ export function stateTargetReadRefusals(
             {
               ...fault,
               unchangedFromDiscovery:
-                pageUnchanged[assertionReadIndex(scenario, assertion)] ?? false,
+                pageUnchanged[advicePageIndex(scenario, assertion)] ?? false,
             },
           ];
     });
