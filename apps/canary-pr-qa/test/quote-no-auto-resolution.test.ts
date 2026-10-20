@@ -709,14 +709,19 @@ describe("vue partielle du fichier cité", () => {
 });
 
 /**
- * Le retrait lui-même. `resolveQuotesWithoutAsking` (runner.ts) et
- * `uniqueQuoteCandidate` (policy.ts) traversaient la frontière entre les deux
- * modules, donc chacun était exporté : les réintroduire pour écrire une citation
- * d'office rend l'un des deux visible ici. C'est le seul témoin qui tombe au
- * moment où le mécanisme revient, sans dépendre du chemin qui l'appellerait —
- * le chemin, lui, est gardé par `plan-evidence.test.ts` (« n'écrit pas la copie
- * refusée à sa place et la fait résoudre par l'indice »), qui compte les appels
- * modèle et tomberait à un seul si le gate réécrivait la citation.
+ * Le retrait lui-même, comme sonnette : `resolveQuotesWithoutAsking`
+ * (runner.ts) et `uniqueQuoteCandidate` (policy.ts) traversaient la frontière
+ * entre les deux modules, donc chacun était exporté, et réintroduire l'un ou
+ * l'autre pour écrire une citation d'office le rend visible ici en un test qui
+ * ne dépend d'aucune entrée. Ce n'est qu'une sonnette : elle ne dit rien d'un
+ * aide renommé ou privé, ni du chemin qui l'appellerait.
+ *
+ * Ce chemin est gardé par le rejeu de bout en bout de `plan-evidence.test.ts`,
+ * qui couvre les familles où l'écriture automatique écrivait réellement — copie
+ * altérée (run 9add286d), identifiant nu porté par une seule ligne réelle (la
+ * mesure de #62), vue partielle du fichier déclaré, question restée sans
+ * réponse. Chacune attend DEUX appels modèle et la citation du planificateur
+ * dans le plan persisté : une écriture automatique n'en paierait qu'un.
  */
 describe("mécanisme retiré", () => {
   it("n'expose ni resolveQuotesWithoutAsking ni uniqueQuoteCandidate", async () => {
