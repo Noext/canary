@@ -300,41 +300,237 @@ export const ActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("finish") }).strict(),
   z.object({ type: z.literal("blocked"), explanation: text }).strict(),
 ]);
-export const ScenarioSchema = z
+/**
+ * Le matériel numéroté que le planificateur reçoit (`sourceLines` du message,
+ * voir `planPayload` dans runner.ts) : les lignes réelles de chaque fichier
+ * modifié, avec leur numéro dans le nouveau fichier. C'est la SEULE source d'une
+ * référence `line` : le gate y lit le texte qu'il écrit dans `quote`, donc rien
+ * de ce que le planificateur devait recopier n'est plus recopié.
+ */
+export interface SourceLineMaterial {
+  lines: { line: number; text: string }[];
+  path: string;
+}
+/**
+ * Nombre de numéros cités de part et d'autre d'une ligne demandée quand elle
+ * n'est pas dans le matériel : assez pour situer la ligne dans la portion que le
+ * planificateur voit, jamais assez pour noyer le refus.
+ */
+const REFERENCE_NEIGHBOUR_LINES = 3;
+/** Numéros proposés quand la ligne demandée ne porte pas de contenu citable. */
+const REFERENCE_CARRIER_LINES = 2;
+/** Fichiers nommés quand une référence vise un fichier que le matériel ignore. */
+const REFERENCE_NAMED_FILES = 5;
+function namedList(items: string[]): string {
+  const shown = items.slice(0, REFERENCE_NAMED_FILES).join(", ");
+  const rest = items.length - REFERENCE_NAMED_FILES;
+  return rest > 0 ? `${shown} (+${rest} more)` : shown;
+}
+/**
+ * Les numéros que le matériel porte autour de celui qui a été demandé, avant et
+ * après : le refus nomme la ligne voulue ET ce que le planificateur pouvait
+ * désigner, sans jamais lui rendre un texte à recopier.
+ */
+function neighbouringLines(lines: { line: number }[], line: number): string {
+  const numbers = lines.map((item) => item.line);
+  const before = numbers
+    .filter((number) => number < line)
+    .slice(-REFERENCE_NEIGHBOUR_LINES);
+  const after = numbers
+    .filter((number) => number > line)
+    .slice(0, REFERENCE_NEIGHBOUR_LINES);
+  const parts = [
+    ...(before.length > 0 ? [`${before.join(", ")} before it`] : []),
+    ...(after.length > 0 ? [`${after.join(", ")} after it`] : []),
+  ];
+  return parts.length === 0 ? "no other line" : parts.join(" and ");
+}
+/**
+ * Les lignes les plus proches de la ligne demandée qui portent, elles, du
+ * contenu citable : la ligne demandée existe mais ne peut rien témoigner, donc
+ * le refus désigne les voisines qui le peuvent au lieu de renvoyer le
+ * planificateur vers la même ligne.
+ */
+function carryingLines(
+  lines: { line: number; text: string }[],
+  line: number
+): number[] {
+  return lines
+    .filter(
+      (item) =>
+        item.line !== line &&
+        item.text.length <= QUOTE_MAX_CHARS &&
+        quoteCarriesContent(item.text)
+    )
+    .sort(
+      (left, right) =>
+        Math.abs(left.line - line) - Math.abs(right.line - line) ||
+        left.line - right.line
+    )
+    .slice(0, REFERENCE_CARRIER_LINES)
+    .map((item) => item.line);
+}
+/**
+ * Ce que donne une référence `line` : le texte réel de la ligne dans le
+ * matériel, ou le refus qui dit pourquoi elle ne désigne rien d'exploitable.
+ */
+export type LineReferenceResolution = { refusal: string } | { text: string };
+/**
+ * Résolution d'une référence `sourceFile` + `line` dans le matériel numéroté.
+ *
+ * Le texte écrit dans `quote` est celui du matériel, octet pour octet : une
+ * référence ne peut donc pas porter une copie altérée, ce qui est la cause
+ * mesurée de la famille de refus (ligne 368 retapée avec `:""` inséré, alors
+ * qu'elle était dans `sourceLines`). Aucune tolérance n'est ajoutée pour
+ * autant : la ligne est LUE, jamais recréée ni rognée, et une ligne absente du
+ * matériel, ambiguë, vide de code ou au-delà du plafond de citation est refusée
+ * avec le numéro demandé et les numéros que le matériel porte autour — sans
+ * jamais citer de texte de page.
+ */
+export function resolveLineReference(
+  sourceFile: string,
+  line: number,
+  material: SourceLineMaterial[]
+): LineReferenceResolution {
+  const file = material.find((item) => item.path === sourceFile);
+  if (file && file.lines.length === 0) {
+    return {
+      refusal: `No numbered line for ${sourceFile}: sourceLines lists that file but no line of it, because its diff carries no added or context line. Quote exact text from it instead.`,
+    };
+  }
+  if (!file) {
+    const listed = material.map((item) => item.path);
+    return {
+      refusal: `No numbered line for ${sourceFile}: sourceLines lists no such file${listed.length === 0 ? " (it lists no file)" : ` (it lists ${namedList(listed)})`}. Designate a line of a file it lists, or quote exact text from ${sourceFile} with quote.`,
+    };
+  }
+  const matches = file.lines.filter((item) => item.line === line);
+  if (matches.length > 1) {
+    return {
+      refusal: `Line ${line} of ${sourceFile} is ambiguous: sourceLines lists it ${matches.length} times, so it designates no single fragment. Quote the exact text instead, since preference cannot be measured.`,
+    };
+  }
+  const found = matches[0];
+  if (!found) {
+    return {
+      refusal: `Line ${line} of ${sourceFile} is not in the numbered material: sourceLines lists ${neighbouringLines(file.lines, line)} (it carries the lines of the patch hunks, not every line of the file, and the context budget can cut that list short). Designate one of the listed numbers, or quote exact text from that file.`,
+    };
+  }
+  if (found.text.length > QUOTE_MAX_CHARS) {
+    return {
+      refusal: `Line ${line} of ${sourceFile} holds ${found.text.length} characters, beyond the ${QUOTE_MAX_CHARS}-character quote cap, so it cannot be written as a whole: quote an exact fragment of it with quote instead.`,
+    };
+  }
+  if (!quoteCarriesContent(found.text)) {
+    const carriers = carryingLines(file.lines, line);
+    return {
+      refusal: `Line ${line} of ${sourceFile} carries no usable code content: it is blank, or holds nothing but punctuation or invisible characters, so it cannot witness a behavior. ${carriers.length === 0 ? "" : `Lines that do carry code content: ${carriers.join(", ")}. `}Designate one of them, or quote an exact fragment of that file.`,
+    };
+  }
+  return { text: found.text };
+}
+/**
+ * L'exigence du plan PERSISTÉ : une citation texte, toujours. Toute la lecture
+ * en aval — couverture, témoin, rapport, UI — ne connaît que cette forme.
+ */
+const persistedRequirement = z
   .object({
-    id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
-    title: text,
-    rationale: text,
-    kind: z.enum(["happy_path", "edge_case", "regression"]),
-    sourceFiles: z.array(text).min(1).max(30),
-    preconditions: z.array(text).max(10),
-    steps: z
-      .array(
-        z
-          .object({
-            id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
-            description: text,
-            action: ActionSchema,
-          })
-          .strict()
-      )
-      .min(1)
-      .max(40),
-    requirements: z
-      .array(
-        z
-          .object({
-            sourceFile: text,
-            quote,
-            behavior: text,
-          })
-          .strict()
-      )
-      .min(1)
-      .max(20),
-    assertions: z.array(AssertionSchema).min(1).max(10),
+    sourceFile: text,
+    quote,
+    behavior: text,
   })
   .strict();
+/**
+ * L'exigence telle que le planificateur la PRODUIT : soit une citation texte
+ * (forme persistée, rétro-compatible), soit une RÉFÉRENCE `line` que le gate
+ * résout dans le matériel avant toute validation. Les deux formes sont
+ * exclusives : les accepter ensemble laisserait une copie altérée accompagner
+ * une ligne juste et passer pour un témoin, ce qui serait une tolérance
+ * nouvelle. La résolution écrit le texte réel de la ligne dans `quote` — la
+ * valeur rendue est donc identique à celle d'une citation, jamais un indice.
+ */
+function submittedRequirement(material: SourceLineMaterial[]) {
+  return z
+    .object({
+      sourceFile: text,
+      quote: quote.optional(),
+      line: z.number().int().min(1).optional(),
+      behavior: text,
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      if (value.quote === undefined && value.line === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["quote"],
+          message: `A requirement needs a source reference: "line", the number of a line sourceLines lists for ${value.sourceFile}, or "quote", the exact text itself.`,
+        });
+        return;
+      }
+      if (value.quote !== undefined && value.line !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["quote"],
+          message: `"quote" and "line" are alternatives, never both: a line reference is resolved by the gate, so a quote sent beside it would prove nothing. Send line alone for ${value.sourceFile}.`,
+        });
+        return;
+      }
+      if (value.line === undefined) {
+        return;
+      }
+      const resolution = resolveLineReference(
+        value.sourceFile,
+        value.line,
+        material
+      );
+      if ("refusal" in resolution) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["line"],
+          message: resolution.refusal,
+        });
+        return;
+      }
+      value.quote = resolution.text;
+    })
+    .transform((value) => ({
+      sourceFile: value.sourceFile,
+      quote: value.quote ?? "",
+      behavior: value.behavior,
+    }));
+}
+/**
+ * Les clés d'un scénario, indépendantes de la forme d'une exigence : le
+ * planificateur en produit une (citation ou référence), le plan persisté n'en
+ * garde qu'une citation texte.
+ */
+function scenarioSchema<T extends z.ZodTypeAny>(requirement: T) {
+  return z
+    .object({
+      id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
+      title: text,
+      rationale: text,
+      kind: z.enum(["happy_path", "edge_case", "regression"]),
+      sourceFiles: z.array(text).min(1).max(30),
+      preconditions: z.array(text).max(10),
+      steps: z
+        .array(
+          z
+            .object({
+              id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
+              description: text,
+              action: ActionSchema,
+            })
+            .strict()
+        )
+        .min(1)
+        .max(40),
+      requirements: z.array(requirement).min(1).max(20),
+      assertions: z.array(AssertionSchema).min(1).max(10),
+    })
+    .strict();
+}
+export const ScenarioSchema = scenarioSchema(persistedRequirement);
 /**
  * Actions MÉTIER : elles déplacent la donnée que le scénario prétend prouver.
  * Un clic tolérant placé après elles n'établit plus un état de départ, il
@@ -402,24 +598,43 @@ export function establishingClickFault(
   }
   return;
 }
-export const PlanSchema = z
-  .object({
-    summary: text,
-    scenarios: z.array(ScenarioSchema).max(20),
-    skipped: z
-      .array(z.object({ sourceFile: text, reason: text }).strict())
-      .max(100),
-  })
-  .strict()
-  .superRefine((plan, ctx) => {
-    const ids = plan.scenarios.map((scenario) => scenario.id);
-    if (new Set(ids).size !== ids.length) {
-      ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
-    }
-    for (const scenario of plan.scenarios) {
-      validateScenarioContract(scenario, ctx);
-    }
-  });
+/**
+ * Le contrat d'un plan, indépendant de la forme d'une exigence — voir
+ * `scenarioSchema`. Le planificateur est validé par la forme qui accepte une
+ * référence `line` ; tout le reste — couverture, rapport, rejeu — lit le plan
+ * persisté, qui ne porte que des citations texte.
+ */
+function planSchema<T extends z.ZodTypeAny>(requirement: T) {
+  return z
+    .object({
+      summary: text,
+      scenarios: z.array(scenarioSchema(requirement)).max(20),
+      skipped: z
+        .array(z.object({ sourceFile: text, reason: text }).strict())
+        .max(100),
+    })
+    .strict()
+    .superRefine((plan, ctx) => {
+      const ids = plan.scenarios.map((scenario) => scenario.id);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
+      }
+      for (const scenario of plan.scenarios) {
+        validateScenarioContract(scenario, ctx);
+      }
+    });
+}
+export const PlanSchema = planSchema(persistedRequirement);
+/**
+ * Le schéma de la RÉPONSE du planificateur : la forme persistée, plus la
+ * référence `line` qu'un gate résout dans le matériel reçu (`sourceLines`).
+ * C'est le point d'entrée unique de la résolution : elle a donc lieu avant
+ * toute validation de couverture, et un plan accepté ne peut pas porter une
+ * citation recopiée que le modèle aurait altérée.
+ */
+export function plannerPlanSchema(material: SourceLineMaterial[]) {
+  return planSchema(submittedRequirement(material));
+}
 function validateContractAssertion(
   scenario: z.infer<typeof ScenarioSchema>,
   index: number,

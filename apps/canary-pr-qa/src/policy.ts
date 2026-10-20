@@ -10,6 +10,7 @@ import {
   QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
   type Scenario,
+  type SourceLineMaterial,
 } from "./schema.js";
 
 /**
@@ -626,12 +627,12 @@ function allFileContentLines(
 }
 /**
  * Lignes réelles du contenu après changement, numérotées dans le nouveau
- * fichier : c'est le matériel que le planificateur reçoit pour RECOPIER au lieu
- * de retaper (voir `planPayload`, runner.ts). Le numéro est celui que les refus
- * nomment — la ligne « 368: "..." » d'un remède se retrouve telle quelle ici —,
- * donc une correction « cite la ligne 368 » se résout sans reconstruire la
- * ligne. Jamais de texte inventé : chaque ligne vient du patch, sans son
- * préfixe.
+ * fichier : c'est le matériel que le planificateur reçoit et DÉSIGNE par son
+ * numéro (voir `planPayload`, runner.ts, et `plannerPlanSchema`, schema.ts). Le
+ * numéro est celui que les refus nomment — la ligne « 368: "..." » d'un remède
+ * se retrouve telle quelle ici —, donc une référence « line: 368 » se résout
+ * sans recopier la ligne. Jamais de texte inventé : chaque ligne vient du
+ * patch, sans son préfixe.
  *
  * Borné par le budget que l'appelant peut encore envoyer : au-delà, la ligne
  * n'est pas montrée et le patch reste la source du planificateur. Le coût d'une
@@ -647,8 +648,8 @@ function allFileContentLines(
 export function numberedSourceLines(
   context: PrContext,
   budget: number
-): { path: string; lines: { line: number; text: string }[] }[] {
-  const files: { path: string; lines: { line: number; text: string }[] }[] = [];
+): SourceLineMaterial[] {
+  const files: SourceLineMaterial[] = [];
   let used = 0;
   for (const file of context.files) {
     if (!file.patch) {
