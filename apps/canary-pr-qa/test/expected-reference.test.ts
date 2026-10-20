@@ -1,0 +1,474 @@
+import { describe, expect, it } from "vitest";
+import { assertionMatches } from "../src/canary.js";
+import { missingExpectationRefusals } from "../src/plan-evidence.js";
+import {
+  type Plan,
+  PlanSchema,
+  plannerPlanSchema,
+  resolveExpectedLiteral,
+  type SourceLineMaterial,
+} from "../src/schema.js";
+import { CASH_TS_LINES, PAGE_TS_LINES } from "./lot-v-replay.js";
+
+const PAGE = "apps/web/app/page.tsx";
+const CASH = "packages/domain/src/cash.ts";
+
+function lineOf(
+  file: string,
+  line: number,
+  lines: { line: number; text: string }[]
+): string {
+  const found = lines.find((item) => item.line === line);
+  if (!found) {
+    throw new Error(`No measured line ${line} of ${file}`);
+  }
+  return found.text;
+}
+
+function pageLine(line: number): string {
+  return lineOf(PAGE, line, PAGE_TS_LINES);
+}
+
+function cashLine(line: number): string {
+  return lineOf(CASH, line, CASH_TS_LINES);
+}
+
+function materialFor(
+  file: string,
+  lines: { line: number; text: string }[]
+): SourceLineMaterial[] {
+  return [{ lines, path: file }];
+}
+
+/**
+ * Le plan minimal qui porte une assertion unique : c'est l'attendu de cette
+ * assertion que la forme RÉFÉRENCE désigne, et rien d'autre du plan ne dépend
+ * du matériel.
+ */
+function submission(
+  file: string,
+  kind: string,
+  expected: unknown,
+  quote = "ecart-justifie"
+) {
+  return {
+    skipped: [],
+    summary: "Le littéral de la ligne est la valeur attendue",
+    scenarios: [
+      {
+        assertions: [
+          {
+            afterStep: "observe",
+            description: "La vue affiche la valeur désignée",
+            id: "status",
+            kind,
+            ...(expected === undefined ? {} : { expected }),
+            target: { by: "css", value: "#status" },
+            verification: "state",
+          },
+        ],
+        id: "designated-literal",
+        kind: "happy_path",
+        preconditions: [],
+        rationale:
+          "Le comportement changé est porté par le littéral de la ligne",
+        requirements: [
+          {
+            behavior: "Le statut changé est prouvé par le littéral de la ligne",
+            quote,
+            sourceFile: file,
+          },
+        ],
+        sourceFiles: [file],
+        steps: [
+          {
+            action: { type: "observe" },
+            description: "Observer la page",
+            id: "observe",
+          },
+          {
+            action: { type: "assert", assertionId: "status" },
+            description: "Vérifier la valeur désignée",
+            id: "check",
+          },
+        ],
+        title: "Littéral désigné",
+      },
+    ],
+  };
+}
+
+/** Le plan minimal dont l'attendu de l'assertion unique est `expected`. */
+function withExpected(file: string, kind: string, expected: unknown) {
+  return submission(file, kind, expected);
+}
+
+function referenceSubmission(
+  file: string,
+  kind: string,
+  line: number,
+  expectedSource = file
+) {
+  return withExpected(file, kind, { line, sourceFile: expectedSource });
+}
+
+/**
+ * Ce que le gate rend d'une réponse du planificateur : le plan persisté, ou le
+ * refus nommé quand une référence ne désigne pas un littéral exploitable.
+ */
+function resolve(
+  input: unknown,
+  material: SourceLineMaterial[]
+): { plan?: Plan; refusal?: string } {
+  const parsed = plannerPlanSchema(material).safeParse(input);
+  return parsed.success
+    ? { plan: parsed.data }
+    : { refusal: refusalOf(parsed.error) };
+}
+
+function refusalOf(error: unknown): string {
+  const issues =
+    (error as { issues?: { message: string; path: (string | number)[] }[] })
+      .issues ?? [];
+  return issues
+    .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+    .join(" | ");
+}
+
+function accepted(plan: Plan | undefined, label: string): Plan {
+  expect(plan, label).toBeDefined();
+  return plan as Plan;
+}
+
+/** L'attendu de l'assertion unique du plan, dont les kinds sans valeur n'en portent pas. */
+function expectedOf(plan: Plan): unknown {
+  const [assertion] = plan.scenarios[0]?.assertions ?? [];
+  return assertion && "expected" in assertion ? assertion.expected : undefined;
+}
+
+/** La forme persistée de l'assertion unique du plan. */
+function assertionOf(plan: Plan) {
+  const [assertion] = plan.scenarios[0]?.assertions ?? [];
+  return assertion;
+}
+
+describe("résolution d'un expected désigné par sa ligne", () => {
+  it("écrit le littéral de la ligne dans expected, identique octet pour octet", () => {
+    const material = materialFor(CASH, CASH_TS_LINES);
+    const plan = accepted(
+      resolve(referenceSubmission(CASH, "value", 144), material).plan,
+      "statut désigné"
+    );
+    // Le littéral est écrit tel quel, sans ses guillemets : la ligne écrit
+    // `status: "ecart-justifie"`, donc l'attendu persisté est `ecart-justifie`.
+    expect(cashLine(144)).toContain('"ecart-justifie"');
+    expect(expectedOf(plan)).toBe("ecart-justifie");
+    // La référence ne survit pas dans le plan : `expected` reste du texte, donc
+    // tout l'aval (exécution, rapport, UI) est inchangé.
+    expect(Object.hasOwn(assertionOf(plan) ?? {}, "line")).toBe(false);
+  });
+
+  it("tombe si la résolution est annulée : le plan résolu se revalide par la forme persistée", () => {
+    const material = materialFor(CASH, CASH_TS_LINES);
+    const plan = accepted(
+      resolve(referenceSubmission(CASH, "value", 146), material).plan,
+      "statut désigné"
+    );
+    expect(expectedOf(plan)).toBe("ecart-a-justifier");
+    // Sans la résolution, `expected` resterait l'objet `{sourceFile, line}` :
+    // la forme persistée le refuserait, et l'assertion ci-dessus tomberait.
+    expect(() => PlanSchema.parse(plan)).not.toThrow();
+    // Le chemin de LECTURE accepte l'attendu résolu comme n'importe quelle
+    // chaîne : `missingExpectationRefusals` ne voit aucun attendu vide.
+    expect(missingExpectationRefusals(plan)).toEqual([]);
+  });
+
+  it("garde les interpolations et les échappements du littéral, sans les interpréter", () => {
+    const material = materialFor(PAGE, PAGE_TS_LINES);
+    const literal = resolveExpectedLiteral(PAGE, 354, material);
+    // La ligne 354 porte quatre littéraux : elle ne désigne donc aucune valeur.
+    expect(literal).toHaveProperty("refusal");
+    const template =
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: la ligne citée porte un littéral, pas un gabarit à interpoler.
+      "  const message = `Écart de ${formatAmountFr(centsToEuros(closure.varianceCents))} : une justification écrite est obligatoire avant clôture.`;";
+    const only = resolveExpectedLiteral(
+      PAGE,
+      12,
+      materialFor(PAGE, [{ line: 12, text: template }])
+    );
+    // Rien n'est calculé : le littéral garde `${...}` tel que la ligne l'écrit.
+    expect(only).toEqual({
+      literal:
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: le littéral attendu garde son interpolation, non évaluée.
+        "Écart de ${formatAmountFr(centsToEuros(closure.varianceCents))} : une justification écrite est obligatoire avant clôture.",
+    });
+    const escaped = resolveExpectedLiteral(
+      PAGE,
+      13,
+      materialFor(PAGE, [
+        { line: 13, text: "  onChange({ reason: 'il a dit \\\"non\\\"' });" },
+      ])
+    );
+    // L'échappement reste celui de la ligne : le gate ne retire aucun antislash.
+    expect(escaped).toEqual({ literal: 'il a dit \\"non\\"' });
+  });
+
+  it("lit un littéral délimité par des guillemets simples", () => {
+    const material = materialFor(CASH, [
+      { line: 200, text: "  if (value === 'cloture') return true;" },
+    ]);
+    expect(resolveExpectedLiteral(CASH, 200, material)).toEqual({
+      literal: "cloture",
+    });
+  });
+
+  it("n'invente pas de littéral sur les apostrophes d'une prose", () => {
+    const prose = materialFor(CASH, [
+      { line: 201, text: "  // l'écart d'espèces reste exigible" },
+    ]);
+    // Sans la règle des apostrophes, cette ligne rendrait `écart d` comme valeur.
+    expect(resolveExpectedLiteral(CASH, 201, prose)).toHaveProperty("refusal");
+  });
+});
+
+/**
+ * Les refus d'une référence de littéral, nommés et actionnables : la ligne
+ * demandée, puis ce que la ligne porte réellement. Aucun refus n'écrit de
+ * valeur devinée, et aucun ne déverse la ligne entière dans le diagnostic.
+ */
+describe("refus d'une référence de littéral : la ligne demandée, puis ce qu'elle porte", () => {
+  it("nomme les lignes disponibles autour d'une ligne absente du matériel", () => {
+    const resolved = resolve(
+      referenceSubmission(PAGE, "text", 999),
+      materialFor(PAGE, PAGE_TS_LINES)
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `scenarios.0.assertions.0.expected: Line 999 of ${PAGE} is not in the numbered material`
+    );
+    expect(resolved.refusal).toContain("354, 368, 375 before it");
+    expect(resolved.refusal).toContain("write the value itself in expected");
+  });
+
+  it("nomme les lignes qui portent un seul littéral quand la ligne n'en porte aucun", () => {
+    const material = materialFor(CASH, CASH_TS_LINES);
+    const resolved = resolve(referenceSubmission(CASH, "text", 77), material);
+    expect(resolved.plan).toBeUndefined();
+    // La ligne 77 est `if (!/^\d{1,9}$/.test(text)) return null;` : aucune
+    // chaîne entre guillemets, donc aucune valeur attendue à en tirer.
+    expect(resolved.refusal).toContain(
+      `Line 77 of ${CASH} carries no string literal at all`
+    );
+    // Les lignes qui portent, elles, exactement un littéral : 144 et 146.
+    expect(resolved.refusal).toContain(
+      "Lines that carry exactly one string literal: 144, 146"
+    );
+  });
+
+  it("nomme les littéraux quand la ligne en porte plusieurs", () => {
+    const material = materialFor(CASH, CASH_TS_LINES);
+    const resolved = resolve(referenceSubmission(CASH, "text", 116), material);
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `Line 116 of ${CASH} carries 3 string literals`
+    );
+    // Les littéraux réels de la ligne, nommés entre leurs propres guillemets.
+    expect(resolved.refusal).toContain(
+      '"compte-juste", "ecart-justifie", "ecart-a-justifier"'
+    );
+  });
+
+  it("borne le nombre de littéraux nommés et la longueur de chacun", () => {
+    const resolved = resolve(
+      referenceSubmission(PAGE, "text", 350),
+      materialFor(PAGE, PAGE_TS_LINES)
+    );
+    expect(resolved.plan).toBeUndefined();
+    // Sept littéraux sur la ligne 350 : quatre sont nommés, les trois autres
+    // comptés — un refus ne déverse jamais la ligne dans le diagnostic.
+    expect(resolved.refusal).toContain(
+      `Line 350 of ${PAGE} carries 7 string literals`
+    );
+    expect(resolved.refusal).toContain("(+3 more)");
+  });
+
+  it("refuse un littéral au-delà du plafond de citation, sans le rogner", () => {
+    const line = `  setMessage("${"x".repeat(1200)}");`;
+    const resolved = resolve(
+      referenceSubmission("src/notice.ts", "text", 1, "src/notice.ts"),
+      materialFor("src/notice.ts", [{ line: 1, text: line }])
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      "The string literal on line 1 of src/notice.ts holds 1200 characters, beyond the 1000-character citation cap"
+    );
+    expect(resolved.refusal).toContain("write the value itself in expected");
+  });
+
+  it("refuse une ligne que le matériel liste deux fois", () => {
+    const lines = [...CASH_TS_LINES, { line: 144, text: cashLine(144) }];
+    const resolved = resolve(
+      referenceSubmission(CASH, "value", 144),
+      materialFor(CASH, lines)
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `Line 144 of ${CASH} is ambiguous: sourceLines lists it 2 times`
+    );
+  });
+
+  it("refuse un fichier que le matériel ne liste pas, en nommant ceux qu'il liste", () => {
+    const resolved = resolve(
+      referenceSubmission("src/absent.ts", "text", 12),
+      materialFor(PAGE, PAGE_TS_LINES)
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      "No numbered line for src/absent.ts: sourceLines lists no such file"
+    );
+    expect(resolved.refusal).toContain(`(it lists ${PAGE})`);
+  });
+
+  it("refuse un fichier listé sans aucune ligne, plutôt que de deviner", () => {
+    const resolved = resolve(referenceSubmission(PAGE, "text", 1), [
+      { lines: [], path: PAGE },
+    ]);
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `No numbered line for ${PAGE}: sourceLines lists that file but no line of it`
+    );
+  });
+
+  it("refuse un littéral vide pour un text, qui matcherait toute page", () => {
+    const resolved = resolve(
+      referenceSubmission(CASH, "text", 210),
+      materialFor(CASH, [{ line: 210, text: '  setMessage("");' }])
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `The string literal on line 210 of ${CASH} is empty or blank`
+    );
+  });
+});
+
+/**
+ * La forme chaîne libre est STRICTEMENT inchangée : elle traverse le schéma sans
+ * être comparée à un matériel dont elle n'a pas besoin, et n'ouvre aucun refus
+ * nouveau. Les kinds sans valeur attendue restent inchangés eux aussi.
+ */
+describe("compatibilité : la forme chaîne libre est inchangée", () => {
+  it("accepte la valeur écrite telle quelle, sans matériel et sans la lire", () => {
+    const plan = accepted(
+      resolve(withExpected(CASH, "text", "Comptage juste"), []).plan,
+      "attendu libre"
+    );
+    expect(expectedOf(plan)).toBe("Comptage juste");
+  });
+
+  it("n'ouvre aucun refus pour une valeur composée au rendu", () => {
+    const composed =
+      "Écart de 500,00 € : une justification écrite est obligatoire avant clôture.";
+    const resolved = resolve(withExpected(PAGE, "text", composed), []);
+    expect(resolved.refusal).toBeUndefined();
+    expect(expectedOf(accepted(resolved.plan, "attendu composé"))).toBe(
+      composed
+    );
+  });
+
+  it("garde l'attendu vide de kind value, qui compare à un champ vide", () => {
+    const resolved = resolve(withExpected(CASH, "value", ""), []);
+    expect(resolved.refusal).toBeUndefined();
+    expect(expectedOf(accepted(resolved.plan, "attendu vide"))).toBe("");
+  });
+
+  it("garde la règle du text vide et son message d'origine", () => {
+    const resolved = resolve(withExpected(CASH, "text", "   "), []);
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain("scenarios.0.assertions.0.expected:");
+    expect(resolved.refusal).toContain(
+      "expected is required and cannot be blank"
+    );
+  });
+
+  it("garde la forme libre de kind value, espaces compris", () => {
+    const resolved = resolve(withExpected(CASH, "value", " écart "), []);
+    expect(expectedOf(accepted(resolved.plan, "attendu espacé"))).toBe(
+      " écart "
+    );
+  });
+
+  it("laisse les kinds sans valeur attendue inchangés", () => {
+    const visible = resolve(withExpected(CASH, "visible", undefined), []);
+    expect(visible.refusal).toBeUndefined();
+    expect(visible.plan?.scenarios[0]?.assertions[0]?.kind).toBe("visible");
+    // Une référence n'est acceptée que par text et value : `count` porte un
+    // nombre et les autres nomment une URL, un fichier ou une baseline.
+    const count = resolve(
+      withExpected(CASH, "count", { line: 144, sourceFile: CASH }),
+      materialFor(CASH, CASH_TS_LINES)
+    );
+    expect(count.plan).toBeUndefined();
+  });
+});
+
+/**
+ * REJEU des deux seuls rouges réels d'attendu du corpus (262 runs portant un
+ * plan) : runs `3d9ce851` et `5c5cfdb6`, qui attendaient « Écart de 500,00 € »
+ * là où la page affichait 260,00 € — la valeur est COMPOSÉE au rendu. Cette
+ * forme ne les résout pas, et c'est le fait à documenter : une lecture de
+ * littéral ne produit jamais un nombre calculé.
+ */
+describe("rejeu des rouges composés : hors d'atteinte de cette forme", () => {
+  const COMPOSED =
+    "Écart de 500,00 € : une justification écrite est obligatoire avant clôture.";
+  const RENDERED =
+    "Écart de 260,00 € : une justification écrite est obligatoire avant clôture.";
+  /** Les deux runs mesurés : même message attendu, même ligne qui le rend. */
+  const redRuns = ["3d9ce851", "5c5cfdb6"];
+
+  it("ne peut pas désigner la ligne qui rend le message : elle porte quatre littéraux", () => {
+    const material = materialFor(PAGE, PAGE_TS_LINES);
+    for (const runId of redRuns) {
+      const resolved = resolve(
+        referenceSubmission(PAGE, "text", 354),
+        material
+      );
+      expect(resolved.plan, runId).toBeUndefined();
+      expect(resolved.refusal, runId).toContain(
+        `Line 354 of ${PAGE} carries 4 string literals`
+      );
+    }
+  });
+
+  it("ne produit jamais la valeur composée : le littéral garde son interpolation", () => {
+    const literals = pageLine(354).match(/`[^`]*`|"[^"]*"/g) ?? [];
+    expect(literals.length).toBe(4);
+    for (const literal of literals) {
+      // Ni l'attendu du plan ni le texte réellement affiché ne sortent d'une
+      // lecture : le nombre est calculé par `formatAmountFr` au rendu.
+      expect(literal, "aucun littéral n'est la valeur attendue").not.toContain(
+        "500,00"
+      );
+      expect(literal, "aucun littéral n'est la valeur affichée").not.toContain(
+        "260,00"
+      );
+    }
+    // Le littéral du message composé rend son interpolation telle quelle.
+    expect(literals).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: le littéral lu garde son interpolation, non évaluée.
+      "`Écart de ${formatAmountFr(centsToEuros(closure.varianceCents))} : une justification écrite est obligatoire avant clôture.`"
+    );
+  });
+
+  it("laisse le rouge intact : la forme libre ne le répare pas", () => {
+    const plan = accepted(
+      resolve(withExpected(PAGE, "text", COMPOSED), []).plan,
+      "attendu composé écrit à la main"
+    );
+    const assertion = assertionOf(plan);
+    // Le plan est accepté comme avant, et l'assertion reste fausse : le run
+    // échoue toujours, parce que la valeur attendue est calculée au rendu.
+    expect(expectedOf(plan)).toBe(COMPOSED);
+    expect(assertion && assertionMatches(assertion, RENDERED)).toBe(false);
+  });
+});
