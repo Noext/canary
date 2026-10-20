@@ -1,14 +1,7 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
-import {
-  CONTEXT_BUDGET_EXHAUSTED_WARNING,
-  DEPENDENCY_CONTEXT_LIMIT_WARNING,
-  type GitHub,
-  type PrContext,
-  truncatedContextWarning,
-  unavailableContextWarning,
-} from "./github.js";
+import type { GitHub, PrContext } from "./github.js";
 import {
   normalizeQuoteText,
   type Plan,
@@ -587,57 +580,6 @@ function fileContentLines(
   return allFileContentLines(requirement, context).slice(
     0,
     CITED_LINES_EXAMINED
-  );
-}
-/**
- * Vrai quand le matériel du fichier cité est connu comme INCOMPLET : les
- * diagnostics lisent alors une vue partielle, et une portion réelle qui n'y
- * figure pas ne peut pas arbitrer entre ce qu'ils voient. Le refus reste rendu
- * et la correction par indice reste offerte ; c'est la résolution déterministe
- * qui s'abstient (voir `uniqueQuoteCandidate`), parce qu'un candidat unique dans
- * une vue tronquée peut cacher le second candidat de la citation — et le gate
- * écrirait alors une ligne réelle qui ne prouve pas le comportement.
- *
- * Trois troncatures sont connues, toutes instrumentées :
- *
- * - `CITED_LINES_EXAMINED` (2000 lignes) : `fileContentLines` ne rend que les
- *   2000 premières lignes du matériel, et `allFileContentLines` les rend toutes,
- *   donc le dépassement se compte sur la longueur des secondes. Le cas mesuré
- *   est la ligne 2005 d'un fichier qui en porte plus de 2000 : le sosie de la
- *   ligne 1500 était seul dans la vue et le gate écrivait 1500.
- * - 16 000 caractères par fichier : `collectContext` (github.ts) coupe le
- *   contenu lu à `Math.min(remaining, 16_000)`, et l'avertissement
- *   `Truncated context: <chemin> at <révision>` le dit pour ce fichier et cette
- *   révision. Un fichier plus long perd donc ses dernières lignes, sans que son
- *   nombre de lignes restantes trahisse rien.
- * - `QA_CONTEXT_CHARS` et la borne de 256 dépendances : quand ces plafonds de
- *   collecte s'épuisent, les fichiers suivants ne sont pas lus du tout
- *   (`Repository context budget exhausted`, `Dependency context limit (256)
- *   exhausted`) et aucun avertissement ne nomme les fichiers manquants. Ces deux
- *   avertissements valent donc pour tout fichier cité.
- *
- * Un contenu indisponible (`Unavailable context: <chemin> at <révision>`) laisse
- * la même vue partielle que la coupure : il compte aussi. Le patch, lui, n'est
- * jamais rogné : un fichier dont la seule source est le patch garde son matériel
- * complet et se résout comme avant.
- */
-export function citedSourceIncomplete(
-  requirement: Pick<Requirement, "sourceFile">,
-  context: PrContext
-): boolean {
-  if (allFileContentLines(requirement, context).length > CITED_LINES_EXAMINED) {
-    return true;
-  }
-  const { path, refs } = citedSourceRevision(requirement, context);
-  return context.contextWarnings.some(
-    (warning) =>
-      warning === CONTEXT_BUDGET_EXHAUSTED_WARNING ||
-      warning === DEPENDENCY_CONTEXT_LIMIT_WARNING ||
-      refs.some(
-        (ref) =>
-          warning === truncatedContextWarning(path, ref) ||
-          warning === unavailableContextWarning(path, ref)
-      )
   );
 }
 /**
@@ -1501,75 +1443,6 @@ export function quoteResolutionCandidates(
  * `model.ts` — n'a plus la place de les nommer tous.
  */
 const QUOTE_RESOLUTION_CANDIDATE_LIMIT = 4;
-/**
- * La portion réelle du fichier déclaré qui résout une citation refusée, quand
- * une SEULE existe : le gate écrit ce texte à sa place au lieu de demander au
- * planificateur de le recopier, et c'est ce qui ferme la classe mesurée — 12 des
- * 16 runs de la famille `REQUIREMENT_UNGROUNDED` meurent sur une copie retapée
- * (`:`""` inséré dans la première interpolation de la ligne 368), y compris au
- * tour de correction qui reçoit le fragment exact.
- *
- * `undefined` dès que `quoteResolutionCandidates` en offre zéro ou plusieurs :
- * deux candidats ou plus laissent le refus et la correction par indice intacts
- * — le planificateur choisit, comme pour `ecart-a-justifier` et ses deux lignes
- * —, et aucun candidat ne donne rien à écrire. Le texte rendu est vérifié
- * VERBATIM sur la ligne nommée du fichier cité : un candidat reconstruit, rogné
- * ou normalisé ferait entrer dans le plan un témoin que le fichier ne porte pas.
- * Il est déjà vérifié comme témoin du fichier déclaré, donc la couverture reste
- * valide, et un identifiant nu reçoit la ligne entière qui porte sa structure.
- *
- * Deux vues partielles du fichier interdisent d'écrire, parce qu'un candidat
- * unique n'y prouve pas l'unicité. Un matériel incomplet cache la portion
- * réelle qui le départagerait : plus de `CITED_LINES_EXAMINED` lignes, contenu
- * coupé au plafond de 16 000 caractères par fichier ou jamais lu faute de budget
- * (voir `citedSourceIncomplete`). Et un témoin faible — un identifiant nu — est
- * ambigu dès que DEUX lignes réelles le portent, même quand l'une est trop
- * longue pour être citée : la borne de #62, qui ne propose aucune ligne dans ce
- * cas, vaut aussi pour le gate, sinon il écrirait la ligne que la correction par
- * indice refusait justement de proposer.
- */
-export function uniqueQuoteCandidate(
-  requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext,
-  scans: AmputationScans = amputationScans()
-): { line: number; text: string } | undefined {
-  if (
-    citedSourceIncomplete(requirement, context) ||
-    (!quoteCarriesContent(requirement.quote) &&
-      weakWitnessCarrierCount(requirement, context) > 1)
-  ) {
-    return;
-  }
-  const candidates = quoteResolutionCandidates(requirement, context, scans);
-  const [only] = candidates;
-  if (candidates.length !== 1 || !only) {
-    return;
-  }
-  return fileContentLines(requirement, context).some(
-    (item) => item.line === only.line && item.text.includes(only.text)
-  )
-    ? only
-    : undefined;
-}
-/**
- * Combien de lignes réelles distinctes du fichier cité portent la citation,
- * sans la borne de longueur qui écarte une ligne non citable. `weakWitnessLines`
- * ne garde que les lignes citables, donc un identifiant porté par trois lignes
- * dont deux dépassent `QUOTE_MAX_CHARS` n'y laisse qu'un candidat : compter les
- * porteuses réelles est ce qui rend l'ambiguïté visible avant d'écrire.
- */
-function weakWitnessCarrierCount(
-  requirement: Pick<Requirement, "quote" | "sourceFile">,
-  context: PrContext
-): number {
-  const carriers = new Set<string>();
-  for (const { text } of fileContentLines(requirement, context)) {
-    if (quoteAppears(text, requirement.quote)) {
-      carriers.add(normalizeQuoteText(text));
-    }
-  }
-  return carriers.size;
-}
 /**
  * Le fragment réel qui porte TOUS les mots de la copie, aligné sur des jetons
  * entiers, quand seul un caractère de ponctuation les distingue : la copie

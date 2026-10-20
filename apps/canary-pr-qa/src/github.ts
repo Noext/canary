@@ -43,8 +43,7 @@ const fileSchema = z.object({
  * qu'en partie : contenu coupé au plafond de caractères par fichier, contenu
  * indisponible, ou plafonds de collecte épuisés avant sa lecture. Ils sont
  * nommés ici, une seule fois, parce qu'ils ne servent pas qu'au journal : les
- * lecteurs qui décident d'écrire dans le plan les interprètent (voir
- * `citedSourceIncomplete`, policy.ts, et `completeSource`, runner.ts).
+ * lecteurs qui en dépendent les interprètent (voir `completeSource`, runner.ts).
  */
 export const DEPENDENCY_CONTEXT_LIMIT_WARNING =
   "Dependency context limit (256) exhausted";

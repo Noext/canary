@@ -2068,11 +2068,10 @@ describe("attendu manquant sur le chemin de lecture", () => {
  * est celle du run, octet pour octet : les 56 premiers caractères de la ligne 368
  * puis `:""` inséré avant l'accolade qui ferme l'interpolation.
  *
- * Lot X : ce tour de correction n'a plus lieu. Une seule portion réelle du
- * fichier déclaré résout cette copie, donc le gate l'écrit lui-même — un appel
- * modèle, aucune reprise, et le plan persisté porte le texte réel. La correction
- * par indice garde son rôle propre, celui de l'ambiguïté : quand DEUX portions
- * réelles se disputent la citation, le planificateur choisit encore, et le refus
+ * Lot X, après le retrait de l'écriture automatique : cette copie n'est pas une
+ * portion verbatim de la ligne 368, donc le gate ne la remplace pas lui-même. Le
+ * run paie le tour de correction par indice — deux appels, comme la mesure du
+ * run 07429b97 — et le planificateur choisit la portion réelle. Le refus
  * d'aujourd'hui reste le sien quand sa réponse ne résout rien.
  */
 describe("résolution d'une citation refusée (run 9add286d)", () => {
@@ -2127,24 +2126,26 @@ describe("résolution d'une citation refusée (run 9add286d)", () => {
       )?.at(-1)?.content ?? ""
     );
   }
-  it("écrit la citation résolue sans second appel, puis exécute le scénario", async () => {
+  it("n'écrit pas la copie refusée à sa place et la fait résoudre par l'indice", async () => {
     const f = await setup({
       formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
-      // Aucun second plan scripté : le gate ne demande rien au modèle, donc un
-      // appel de plus rendrait un contenu vide et le run échouerait.
-      plans: [planWith(REFUSED_QUOTE)],
+      // Deuxième appel scripté : la question à indices. Le gate ne choisit rien
+      // pour le planificateur, il lui montre la ligne réelle.
+      plans: [planWith(REFUSED_QUOTE), pickAnswer(1)],
     });
     stubCanary(ARIA);
     const result = await runQa(
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    // Un seul appel modèle : la génération. Ni question à indices, ni plan à
-    // réécrire — c'est la mesure du run 07429b97 (2 appels, 0 reprise, blocked).
-    expect(f.modelRequests).toHaveLength(1);
-    expect(lastPrompt(f)).not.toContain("picks");
+    // Deux appels modèle : la génération, puis la question à indices — la mesure
+    // du run 07429b97 avant le retrait (2 appels, 0 reprise, blocked), ici
+    // résolue.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(lastPrompt(f)).toContain("picks");
     expect(lastPrompt(f)).not.toContain("Return the complete corrected plan");
-    // La citation persistée est le texte réel, portion verbatim de la ligne 368.
+    // La citation persistée est le texte réel choisi, portion verbatim de la
+    // ligne 368 — jamais la copie altérée du planificateur.
     const quote = result.plan?.scenarios[0]?.requirements[1]?.quote ?? "";
     expect(REAL_LINE).toContain(quote);
     expect(quote).not.toBe(REFUSED_QUOTE);
