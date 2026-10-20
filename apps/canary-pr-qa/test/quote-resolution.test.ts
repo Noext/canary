@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
-import { type PrContext, parsePrUrl } from "../src/github.js";
+import {
+  CONTEXT_BUDGET_EXHAUSTED_WARNING,
+  DEPENDENCY_CONTEXT_LIMIT_WARNING,
+  type PrContext,
+  parsePrUrl,
+  truncatedContextWarning,
+  unavailableContextWarning,
+} from "../src/github.js";
 import {
   amputationScans,
   PolicySchema,
@@ -554,12 +561,16 @@ describe("trace de la résolution", () => {
 });
 
 /**
- * Deux vues partielles du fichier cité que le vérificateur de l'étape 2 a
- * mesurées : un fichier plus long que `CITED_LINES_EXAMINED` cache la vraie
- * ligne derrière un sosie, et un identifiant nu porté par trois lignes dont deux
- * dépassent la borne de suggestion n'en laisse qu'un candidat. Dans les deux cas
+ * Les vues partielles du fichier cité que le vérificateur de l'étape 2 a
+ * mesurées, et celles que la revue de la PR a nommées : un fichier plus long que
+ * `CITED_LINES_EXAMINED` cache la vraie ligne derrière un sosie, un identifiant
+ * nu porté par trois lignes dont deux dépassent la borne de suggestion n'en
+ * laisse qu'un candidat, et un contenu coupé au plafond de 16 000 caractères par
+ * fichier — ou jamais lu faute de budget — cache une portion réelle sans que son
+ * nombre de lignes restantes le trahisse. Dans tous les cas
  * `quoteResolutionCandidates` offre UN candidat — donc le gate écrirait — alors
- * que le fichier ne prouve pas l'unicité. Le refus d'aujourd'hui reste rendu.
+ * que le fichier ne prouve pas l'unicité. Le refus d'aujourd'hui reste rendu, et
+ * la correction par indice reste offerte.
  */
 describe("vues partielles du fichier cité", () => {
   /** Le contexte d'un fichier donné ligne à ligne, source complète aux deux révisions. */
@@ -581,6 +592,39 @@ describe("vues partielles du fichier cité", () => {
         { content, path: file, ref: SHA },
         { content, path: file, ref: base.baseSha },
       ],
+    };
+  }
+  /** Plafond de caractères par fichier de `collectContext` (github.ts). */
+  const FILE_CONTEXT_CHARS = 16_000;
+  /**
+   * Le contexte que `collectContext` rend pour un fichier plus long que son
+   * plafond de caractères : le contenu lu est le préfixe de 16 000 caractères,
+   * et l'avertissement nomme le fichier et la révision coupés. C'est cet
+   * avertissement que `citedSourceIncomplete` lit — sans lui, la vue paraît
+   * complète dès qu'elle tient sous `CITED_LINES_EXAMINED`. Le patch est gardé :
+   * c'est le cas de production, un fichier changé dont le diff suffit à la
+   * preuve de source alors que sa source de tête est coupée.
+   */
+  function contextCutAtCharCap(
+    file: string,
+    lines: { line: number; text: string }[],
+    patch: string
+  ): PrContext {
+    const full = contextFromLines(file, lines);
+    return {
+      ...full,
+      context: [
+        {
+          content: (full.context[0]?.content ?? "").slice(
+            0,
+            FILE_CONTEXT_CHARS
+          ),
+          path: file,
+          ref: SHA,
+        },
+      ],
+      contextWarnings: [truncatedContextWarning(file, SHA)],
+      files: [{ filename: file, patch, status: "modified" }],
     };
   }
   it("n'écrit pas la ligne sosie quand la vraie ligne dépasse le plafond de lecture", () => {
@@ -614,6 +658,134 @@ describe("vues partielles du fichier cité", () => {
     expect(plan.scenarios[0]?.requirements[1]?.quote).toBe(UNIT_QUOTE_07429B97);
     expect(() => validateCoverage(plan, context, policy, config)).toThrow(
       "No source witness"
+    );
+  });
+  it("n'écrit rien quand le fichier cité est coupé au plafond de caractères", () => {
+    // Un identifiant nu : la famille mesurée où le gate écrivait une ligne
+    // réelle sans demander, parce que la vue lue n'en portait qu'une.
+    const quote = "counted.totalUnits";
+    // Le fichier tient en 1200 lignes, donc `CITED_LINES_EXAMINED` n'est pas
+    // atteint : seule la coupure de caractères est en cause. Le second porteur
+    // réel est au-delà du préfixe lu, le témoin et le sosie sont dedans.
+    const sosie = `  const label = \`\${${quote}}\`;`;
+    const context = contextCutAtCharCap(
+      PAGE,
+      [
+        { line: 100, text: sosie },
+        { line: 300, text: pageLine(350) },
+        { line: 1200, text: pageLine(368) },
+      ],
+      `@@ -300,1 +300,1 @@\n+${pageLine(350)}`
+    );
+    const [read] = context.context;
+    const content = read?.content ?? "";
+    expect(content).toHaveLength(FILE_CONTEXT_CHARS);
+    expect(context.contextWarnings).toEqual([
+      truncatedContextWarning(PAGE, SHA),
+    ]);
+    expect(content).toContain(pageLine(350));
+    // Le second porteur réel n'est PAS dans la vue lue.
+    expect(content).not.toContain(pageLine(368));
+    // Le candidat unique de la vue coupée est le sosie : c'est le piège.
+    expect(
+      quoteResolutionCandidates(
+        { quote, sourceFile: PAGE },
+        context,
+        amputationScans()
+      ).map((candidate) => candidate.line)
+    ).toEqual([100]);
+    expect(
+      uniqueQuoteCandidate({ quote, sourceFile: PAGE }, context)
+    ).toBeUndefined();
+    const plan = planWith(quote);
+    expect(
+      resolveQuotesWithoutAsking(plan, policy, context, config, "charcap")
+    ).toEqual([]);
+    // Le refus est celui d'aujourd'hui, et la correction par indice reste
+    // offerte : le planificateur choisit, le gate n'écrit rien d'office.
+    expect(plan.scenarios[0]?.requirements[1]?.quote).toBe(quote);
+    expect(() => validateCoverage(plan, context, policy, config)).toThrow(
+      "Weak source witness"
+    );
+    const correction = quotePickCorrection(
+      plan,
+      policy,
+      context,
+      config,
+      "charcap"
+    );
+    expect(correction?.message).toContain("picks");
+    // Le seul indice est le sosie de la vue coupée : le planificateur choisit
+    // ce que le gate refusait d'écrire d'office.
+    expect(correction?.message).toContain(`1: ${JSON.stringify(sosie)}`);
+  });
+  it("s'abstient sur toute troncature connue du fichier déclaré", () => {
+    // Vue complète et candidat unique : sans la troncature, le gate écrirait.
+    const complete = contextFromLines(PAGE, [
+      { line: 350, text: pageLine(350) },
+      { line: 368, text: pageLine(368) },
+    ]);
+    expect(
+      uniqueQuoteCandidate(
+        { quote: UNIT_QUOTE_07429B97, sourceFile: PAGE },
+        complete
+      )?.line
+    ).toBe(368);
+    // Chaque plafond de `collectContext` qui laisse le fichier déclaré lu en
+    // partie interdit d'écrire : la mesure serait prise sur une vue partielle.
+    const warnings = [
+      truncatedContextWarning(PAGE, SHA),
+      unavailableContextWarning(PAGE, SHA),
+      CONTEXT_BUDGET_EXHAUSTED_WARNING,
+      DEPENDENCY_CONTEXT_LIMIT_WARNING,
+    ];
+    for (const warning of warnings) {
+      const context = { ...complete, contextWarnings: [warning] };
+      const plan = planWith(UNIT_QUOTE_07429B97);
+      expect(
+        uniqueQuoteCandidate(
+          { quote: UNIT_QUOTE_07429B97, sourceFile: PAGE },
+          context
+        ),
+        warning
+      ).toBeUndefined();
+      expect(
+        resolveQuotesWithoutAsking(plan, policy, context, config, "partial"),
+        warning
+      ).toEqual([]);
+      expect(plan.scenarios[0]?.requirements[1]?.quote, warning).toBe(
+        UNIT_QUOTE_07429B97
+      );
+      expect(() => validateCoverage(plan, context, policy, config)).toThrow(
+        "No source witness"
+      );
+    }
+  });
+  it("résout encore quand la troncature nomme un autre fichier ou une autre révision", () => {
+    // Le matériel du fichier cité est intact : la troncature des autres fichiers
+    // et celle de la révision de base, que `allFileContentLines` ne lit pas pour
+    // un fichier modifié, ne disent rien de son unicité.
+    const context = {
+      ...contextFor(PAGE),
+      contextWarnings: [
+        truncatedContextWarning(CASH, SHA),
+        truncatedContextWarning(PAGE, "2".repeat(40)),
+        unavailableContextWarning(CASH, SHA),
+      ],
+    };
+    const plan = planWith(UNIT_QUOTE_07429B97);
+    const written = resolveQuotesWithoutAsking(
+      plan,
+      policy,
+      context,
+      config,
+      "07429b97"
+    );
+    expect(written).toHaveLength(1);
+    expect(written[0]?.line).toBe(368);
+    expect(plan.scenarios[0]?.requirements[1]?.quote).toBe(written[0]?.to);
+    expect(validateCoverage(plan, context, policy, config).gate).toBe(
+      "complete"
     );
   });
   it("n'écrit pas un identifiant porté par trois lignes dont deux hors de la suggestion", () => {

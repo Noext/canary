@@ -1,7 +1,14 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
-import type { GitHub, PrContext } from "./github.js";
+import {
+  CONTEXT_BUDGET_EXHAUSTED_WARNING,
+  DEPENDENCY_CONTEXT_LIMIT_WARNING,
+  type GitHub,
+  type PrContext,
+  truncatedContextWarning,
+  unavailableContextWarning,
+} from "./github.js";
 import {
   normalizeQuoteText,
   type Plan,
@@ -583,20 +590,75 @@ function fileContentLines(
   );
 }
 /**
- * Vrai quand le fichier cité porte plus de lignes que `fileContentLines` n'en
- * rend : les diagnostics lisent alors une vue partielle, et une portion réelle
- * qui n'y figure pas ne peut pas arbitrer entre ce qu'ils voient. Le refus reste
- * rendu ; c'est la résolution déterministe qui s'abstient (voir
- * `uniqueQuoteCandidate`), parce qu'un candidat unique dans une vue tronquée
- * peut cacher le second candidat de la citation.
+ * Vrai quand le matériel du fichier cité est connu comme INCOMPLET : les
+ * diagnostics lisent alors une vue partielle, et une portion réelle qui n'y
+ * figure pas ne peut pas arbitrer entre ce qu'ils voient. Le refus reste rendu
+ * et la correction par indice reste offerte ; c'est la résolution déterministe
+ * qui s'abstient (voir `uniqueQuoteCandidate`), parce qu'un candidat unique dans
+ * une vue tronquée peut cacher le second candidat de la citation — et le gate
+ * écrirait alors une ligne réelle qui ne prouve pas le comportement.
+ *
+ * Trois troncatures sont connues, toutes instrumentées :
+ *
+ * - `CITED_LINES_EXAMINED` (2000 lignes) : `fileContentLines` ne rend que les
+ *   2000 premières lignes du matériel, et `allFileContentLines` les rend toutes,
+ *   donc le dépassement se compte sur la longueur des secondes. Le cas mesuré
+ *   est la ligne 2005 d'un fichier qui en porte plus de 2000 : le sosie de la
+ *   ligne 1500 était seul dans la vue et le gate écrivait 1500.
+ * - 16 000 caractères par fichier : `collectContext` (github.ts) coupe le
+ *   contenu lu à `Math.min(remaining, 16_000)`, et l'avertissement
+ *   `Truncated context: <chemin> at <révision>` le dit pour ce fichier et cette
+ *   révision. Un fichier plus long perd donc ses dernières lignes, sans que son
+ *   nombre de lignes restantes trahisse rien.
+ * - `QA_CONTEXT_CHARS` et la borne de 256 dépendances : quand ces plafonds de
+ *   collecte s'épuisent, les fichiers suivants ne sont pas lus du tout
+ *   (`Repository context budget exhausted`, `Dependency context limit (256)
+ *   exhausted`) et aucun avertissement ne nomme les fichiers manquants. Ces deux
+ *   avertissements valent donc pour tout fichier cité.
+ *
+ * Un contenu indisponible (`Unavailable context: <chemin> at <révision>`) laisse
+ * la même vue partielle que la coupure : il compte aussi. Le patch, lui, n'est
+ * jamais rogné : un fichier dont la seule source est le patch garde son matériel
+ * complet et se résout comme avant.
  */
-export function citedLinesTruncated(
+export function citedSourceIncomplete(
   requirement: Pick<Requirement, "sourceFile">,
   context: PrContext
 ): boolean {
-  return (
-    allFileContentLines(requirement, context).length > CITED_LINES_EXAMINED
+  if (allFileContentLines(requirement, context).length > CITED_LINES_EXAMINED) {
+    return true;
+  }
+  const { path, refs } = citedSourceRevision(requirement, context);
+  return context.contextWarnings.some(
+    (warning) =>
+      warning === CONTEXT_BUDGET_EXHAUSTED_WARNING ||
+      warning === DEPENDENCY_CONTEXT_LIMIT_WARNING ||
+      refs.some(
+        (ref) =>
+          warning === truncatedContextWarning(path, ref) ||
+          warning === unavailableContextWarning(path, ref)
+      )
   );
+}
+/**
+ * Le chemin et les révisions dont `allFileContentLines` tire le fichier cité :
+ * la révision de tête du chemin de tête, ou la révision de base du
+ * `previous_filename` quand la PR supprime le fichier — la seule où il existe
+ * encore.
+ */
+function citedSourceRevision(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): { path: string; refs: string[] } {
+  const file = context.files.find(
+    (item) => item.filename === requirement.sourceFile
+  );
+  return file?.status === "removed"
+    ? {
+        path: file.previous_filename ?? requirement.sourceFile,
+        refs: [context.baseSha],
+      }
+    : { path: requirement.sourceFile, refs: [context.sha] };
 }
 /** Toutes les lignes réelles du fichier cité, sans le plafond de lecture. */
 function allFileContentLines(
@@ -607,11 +669,7 @@ function allFileContentLines(
     (item) => item.filename === requirement.sourceFile
   );
   const lines = file?.patch ? postChangeHunks(file.patch).flat() : [];
-  const removed = file?.status === "removed";
-  const refs = removed ? [context.baseSha] : [context.sha];
-  const path = removed
-    ? (file?.previous_filename ?? requirement.sourceFile)
-    : requirement.sourceFile;
+  const { path, refs } = citedSourceRevision(requirement, context);
   for (const item of context.context) {
     if (item.path !== path || !refs.includes(item.ref)) {
       continue;
@@ -1461,13 +1519,14 @@ const QUOTE_RESOLUTION_CANDIDATE_LIMIT = 4;
  * valide, et un identifiant nu reçoit la ligne entière qui porte sa structure.
  *
  * Deux vues partielles du fichier interdisent d'écrire, parce qu'un candidat
- * unique n'y prouve pas l'unicité. Un fichier plus long que
- * `CITED_LINES_EXAMINED` cache la portion réelle qui le départagerait (voir
- * `citedLinesTruncated`). Et un témoin faible — un identifiant nu — est ambigu
- * dès que DEUX lignes réelles le portent, même quand l'une est trop longue pour
- * être citée : la borne de #62, qui ne propose aucune ligne dans ce cas, vaut
- * aussi pour le gate, sinon il écrirait la ligne que la correction par indice
- * refusait justement de proposer.
+ * unique n'y prouve pas l'unicité. Un matériel incomplet cache la portion
+ * réelle qui le départagerait : plus de `CITED_LINES_EXAMINED` lignes, contenu
+ * coupé au plafond de 16 000 caractères par fichier ou jamais lu faute de budget
+ * (voir `citedSourceIncomplete`). Et un témoin faible — un identifiant nu — est
+ * ambigu dès que DEUX lignes réelles le portent, même quand l'une est trop
+ * longue pour être citée : la borne de #62, qui ne propose aucune ligne dans ce
+ * cas, vaut aussi pour le gate, sinon il écrirait la ligne que la correction par
+ * indice refusait justement de proposer.
  */
 export function uniqueQuoteCandidate(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -1475,7 +1534,7 @@ export function uniqueQuoteCandidate(
   scans: AmputationScans = amputationScans()
 ): { line: number; text: string } | undefined {
   if (
-    citedLinesTruncated(requirement, context) ||
+    citedSourceIncomplete(requirement, context) ||
     (!quoteCarriesContent(requirement.quote) &&
       weakWitnessCarrierCount(requirement, context) > 1)
   ) {

@@ -19,7 +19,7 @@ import {
   type TrustedCatalog,
   trustedCatalog,
 } from "./fixtures.js";
-import { GitHub, type PrContext } from "./github.js";
+import { GitHub, type PrContext, truncatedContextWarning } from "./github.js";
 import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
@@ -132,7 +132,7 @@ function completeSource(context: PrContext, path: string, ref: string) {
       item.path === path &&
       item.ref === ref &&
       !context.contextWarnings.includes(
-        `Truncated context: ${item.path} at ${item.ref}`
+        truncatedContextWarning(item.path, item.ref)
       )
   );
 }
@@ -1128,8 +1128,12 @@ export interface ResolvedQuote {
  * autre famille, aucun refus de scénario ni de lecture), et CHAQUE citation
  * fautive doit avoir exactement un candidat AVANT la première écriture — une
  * résolution partielle laisserait un plan à moitié réécrit et un refus qui ne
- * nomme plus ce que le planificateur avait écrit. Deux candidats ou plus, ou
- * aucun, laissent le refus d'aujourd'hui et la correction par indice inchangés.
+ * nomme plus ce que le planificateur avait écrit. Deux candidats ou plus, un
+ * candidat de moins, ou un fichier dont le matériel n'est lu qu'en partie
+ * (plafond de caractères par fichier, `CITED_LINES_EXAMINED` lignes, budget de
+ * collecte épuisé — voir `citedSourceIncomplete`) laissent le refus d'aujourd'hui
+ * et la correction par indice inchangés : on ne résout automatiquement que sur un
+ * matériel COMPLET.
  *
  * Le texte écrit est une portion verbatim d'une ligne réelle du fichier déclaré
  * (voir `uniqueQuoteCandidate`) : la citation fautive n'est jamais acceptée,
