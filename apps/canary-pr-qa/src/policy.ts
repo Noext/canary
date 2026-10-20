@@ -577,6 +577,32 @@ function fileContentLines(
   requirement: Pick<Requirement, "sourceFile">,
   context: PrContext
 ): PostChangeLine[] {
+  return allFileContentLines(requirement, context).slice(
+    0,
+    CITED_LINES_EXAMINED
+  );
+}
+/**
+ * Vrai quand le fichier cité porte plus de lignes que `fileContentLines` n'en
+ * rend : les diagnostics lisent alors une vue partielle, et une portion réelle
+ * qui n'y figure pas ne peut pas arbitrer entre ce qu'ils voient. Le refus reste
+ * rendu ; c'est la résolution déterministe qui s'abstient (voir
+ * `uniqueQuoteCandidate`), parce qu'un candidat unique dans une vue tronquée
+ * peut cacher le second candidat de la citation.
+ */
+export function citedLinesTruncated(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): boolean {
+  return (
+    allFileContentLines(requirement, context).length > CITED_LINES_EXAMINED
+  );
+}
+/** Toutes les lignes réelles du fichier cité, sans le plafond de lecture. */
+function allFileContentLines(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): PostChangeLine[] {
   const file = context.files.find(
     (item) => item.filename === requirement.sourceFile
   );
@@ -596,7 +622,7 @@ function fileContentLines(
         .map((text, index) => ({ line: index + 1, text }))
     );
   }
-  return lines.slice(0, CITED_LINES_EXAMINED);
+  return lines;
 }
 /**
  * Lignes réelles du contenu après changement, numérotées dans le nouveau
@@ -1433,12 +1459,28 @@ const QUOTE_RESOLUTION_CANDIDATE_LIMIT = 4;
  * ou normalisé ferait entrer dans le plan un témoin que le fichier ne porte pas.
  * Il est déjà vérifié comme témoin du fichier déclaré, donc la couverture reste
  * valide, et un identifiant nu reçoit la ligne entière qui porte sa structure.
+ *
+ * Deux vues partielles du fichier interdisent d'écrire, parce qu'un candidat
+ * unique n'y prouve pas l'unicité. Un fichier plus long que
+ * `CITED_LINES_EXAMINED` cache la portion réelle qui le départagerait (voir
+ * `citedLinesTruncated`). Et un témoin faible — un identifiant nu — est ambigu
+ * dès que DEUX lignes réelles le portent, même quand l'une est trop longue pour
+ * être citée : la borne de #62, qui ne propose aucune ligne dans ce cas, vaut
+ * aussi pour le gate, sinon il écrirait la ligne que la correction par indice
+ * refusait justement de proposer.
  */
 export function uniqueQuoteCandidate(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
   scans: AmputationScans = amputationScans()
 ): { line: number; text: string } | undefined {
+  if (
+    citedLinesTruncated(requirement, context) ||
+    (!quoteCarriesContent(requirement.quote) &&
+      weakWitnessCarrierCount(requirement, context) > 1)
+  ) {
+    return;
+  }
   const candidates = quoteResolutionCandidates(requirement, context, scans);
   const [only] = candidates;
   if (candidates.length !== 1 || !only) {
@@ -1449,6 +1491,25 @@ export function uniqueQuoteCandidate(
   )
     ? only
     : undefined;
+}
+/**
+ * Combien de lignes réelles distinctes du fichier cité portent la citation,
+ * sans la borne de longueur qui écarte une ligne non citable. `weakWitnessLines`
+ * ne garde que les lignes citables, donc un identifiant porté par trois lignes
+ * dont deux dépassent `QUOTE_MAX_CHARS` n'y laisse qu'un candidat : compter les
+ * porteuses réelles est ce qui rend l'ambiguïté visible avant d'écrire.
+ */
+function weakWitnessCarrierCount(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext
+): number {
+  const carriers = new Set<string>();
+  for (const { text } of fileContentLines(requirement, context)) {
+    if (quoteAppears(text, requirement.quote)) {
+      carriers.add(normalizeQuoteText(text));
+    }
+  }
+  return carriers.size;
 }
 /**
  * Le fragment réel qui porte TOUS les mots de la copie, aligné sur des jetons

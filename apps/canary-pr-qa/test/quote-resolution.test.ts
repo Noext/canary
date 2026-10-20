@@ -10,6 +10,7 @@ import {
   ungroundedRequirements,
   uniqueQuoteCandidate,
   validateCoverage,
+  weakWitnessLines,
 } from "../src/policy.js";
 import {
   quotePickCorrection,
@@ -549,5 +550,154 @@ describe("trace de la résolution", () => {
       scenario: "cash-balanced-closure",
       sourceFile: PAGE,
     });
+  });
+});
+
+/**
+ * Deux vues partielles du fichier cité que le vérificateur de l'étape 2 a
+ * mesurées : un fichier plus long que `CITED_LINES_EXAMINED` cache la vraie
+ * ligne derrière un sosie, et un identifiant nu porté par trois lignes dont deux
+ * dépassent la borne de suggestion n'en laisse qu'un candidat. Dans les deux cas
+ * `quoteResolutionCandidates` offre UN candidat — donc le gate écrirait — alors
+ * que le fichier ne prouve pas l'unicité. Le refus d'aujourd'hui reste rendu.
+ */
+describe("vues partielles du fichier cité", () => {
+  /** Le contexte d'un fichier donné ligne à ligne, source complète aux deux révisions. */
+  function contextFromLines(
+    file: string,
+    lines: { line: number; text: string }[]
+  ): PrContext {
+    const byLine = new Map(lines.map((item) => [item.line, item.text]));
+    const size = Math.max(...byLine.keys());
+    const content = Array.from(
+      { length: size },
+      (_, index) => byLine.get(index + 1) ?? `  const filler${index + 1}=0;`
+    ).join("\n");
+    const base = contextFor(file);
+    return {
+      ...base,
+      files: [{ filename: file, patch: "", status: "modified" }],
+      context: [
+        { content, path: file, ref: SHA },
+        { content, path: file, ref: base.baseSha },
+      ],
+    };
+  }
+  it("n'écrit pas la ligne sosie quand la vraie ligne dépasse le plafond de lecture", () => {
+    const fuzzLine = `  const label = \`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""}\`;`;
+    // La ligne 2005 est la seule qui porte la citation mesurée, mais
+    // `CITED_LINES_EXAMINED` s'arrête à 2000 : seul le sosie de la ligne 1500 est
+    // lu. Écrire 1500 nommerait une ligne qui ne prouve pas le comportement.
+    const context = contextFromLines(PAGE, [
+      { line: 350, text: pageLine(350) },
+      { line: 1500, text: fuzzLine },
+      { line: 2005, text: pageLine(368) },
+    ]);
+    const plan = planWith(UNIT_QUOTE_07429B97);
+    // Le candidat unique existe dans la vue tronquée : c'est le piège mesuré.
+    expect(
+      quoteResolutionCandidates(
+        { quote: UNIT_QUOTE_07429B97, sourceFile: PAGE },
+        context,
+        amputationScans()
+      ).map((candidate) => candidate.line)
+    ).toEqual([1500]);
+    expect(
+      uniqueQuoteCandidate(
+        { quote: UNIT_QUOTE_07429B97, sourceFile: PAGE },
+        context
+      )
+    ).toBeUndefined();
+    expect(
+      resolveQuotesWithoutAsking(plan, policy, context, config, "cap")
+    ).toEqual([]);
+    expect(plan.scenarios[0]?.requirements[1]?.quote).toBe(UNIT_QUOTE_07429B97);
+    expect(() => validateCoverage(plan, context, policy, config)).toThrow(
+      "No source witness"
+    );
+  });
+  it("n'écrit pas un identifiant porté par trois lignes dont deux hors de la suggestion", () => {
+    const short = "  if (ecart-a-justifier) { blocage(); }";
+    const long1 = `  const a = 1; // ${"x".repeat(120)} ecart-a-justifier`;
+    const long2 = `  const b = 2; // ${"y".repeat(120)} ecart-a-justifier`;
+    const context = contextFromLines(CASH, [
+      { line: 77, text: measuredLine(CASH, 77) },
+      { line: 100, text: long1 },
+      { line: 116, text: short },
+      { line: 146, text: long2 },
+    ]);
+    const plan = PlanSchema.parse({
+      ...planWith("ecart-a-justifier"),
+      scenarios: [
+        {
+          ...planWith("ecart-a-justifier").scenarios[0],
+          requirements: [
+            {
+              behavior: "Le statut des clôtures est défini",
+              quote: measuredLine(CASH, 77),
+              sourceFile: CASH,
+            },
+            {
+              behavior: "L'écart non justifié bloque la clôture",
+              quote: "ecart-a-justifier",
+              sourceFile: CASH,
+            },
+          ],
+          sourceFiles: [CASH],
+        },
+      ],
+    });
+    // Trois lignes réelles portent l'identifiant ; la borne de #62 les écarte
+    // toutes, mais la suggestion n'en garde qu'une — c'est le piège mesuré.
+    expect(
+      weakWitnessLines(
+        { quote: "ecart-a-justifier", sourceFile: CASH },
+        context
+      )
+    ).toEqual([]);
+    expect(
+      quoteResolutionCandidates(
+        { quote: "ecart-a-justifier", sourceFile: CASH },
+        context,
+        amputationScans()
+      ).map((candidate) => candidate.line)
+    ).toEqual([116]);
+    expect(
+      uniqueQuoteCandidate(
+        { quote: "ecart-a-justifier", sourceFile: CASH },
+        context
+      )
+    ).toBeUndefined();
+    expect(
+      resolveQuotesWithoutAsking(plan, policy, context, config, "weak3")
+    ).toEqual([]);
+    expect(plan.scenarios[0]?.requirements[1]?.quote).toBe("ecart-a-justifier");
+    expect(() => validateCoverage(plan, context, policy, config)).toThrow(
+      "Weak source witness"
+    );
+  });
+  it("résout encore un identifiant porté par deux lignes au texte identique", () => {
+    // Deux occurrences du même texte forment UNE réponse, pas une ambiguïté :
+    // l'ambiguïté se compte sur les textes distincts, comme `offer` dédoublonne.
+    const text = "  const unit = counted.totalUnits;";
+    const context = contextFromLines(PAGE, [
+      { line: 100, text },
+      { line: 350, text: pageLine(350) },
+      { line: 368, text },
+    ]);
+    const plan = planWith("counted.totalUnits");
+    const written = resolveQuotesWithoutAsking(
+      plan,
+      policy,
+      context,
+      config,
+      "duplicate"
+    );
+    expect(written).toHaveLength(1);
+    expect(written[0]?.to).toBe(text);
+    expect(plan.scenarios[0]?.requirements[1]?.quote).toBe(text);
+    expect(validateCoverage(plan, context, policy, config).gate).toBe(
+      "complete"
+    );
   });
 });
