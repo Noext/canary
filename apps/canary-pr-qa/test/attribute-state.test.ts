@@ -1310,6 +1310,39 @@ describe("cible sélectionnée par une valeur d'état, lue comme du texte", () =
     expect(scenario.steps).toEqual([]);
     expect(scenario.artifacts).toEqual([]);
   });
+
+  it("rend au planificateur et au diagnostic la cible visible, pas seulement le risque", async () => {
+    // Le refus du lot U expliquait le danger sans dire quoi cibler, et six
+    // scénarios du run 210357d8 ont été bloqués d'un coup. Le canal de
+    // correction et le diagnostic du run portent maintenant la cible
+    // suggérée — le conteneur d'état sans sa valeur épinglée — et le libellé
+    // attendu, qui est l'indice de l'élément qui le rend.
+    // Le plan refusé revient une seconde fois : c'est la réponse de correction
+    // que le planificateur reçoit, donc le message que le refus produit.
+    const f = await setup({
+      plans: [
+        PlanSchema.parse(pinnedStatePlan()),
+        PlanSchema.parse(pinnedStatePlan()),
+      ],
+    });
+    cashPage("ouvert");
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    const feedback = plannerFeedback(f).join(" ");
+    expect(feedback).toContain("Visible target for this plan");
+    expect(feedback).toContain(
+      'assertion a1_message expecting "Session clôturée : le comptage est verrouillé." → read [data-cash-state]'
+    );
+    // Le diagnostic publié porte la même phrase : la personne qui relance le
+    // test n'a pas besoin de lire le prompt pour savoir quoi corriger.
+    const scenario = result.scenarios[0]!;
+    expect(scenario.diagnostic?.hint).toContain("Visible target for this plan");
+    expect(scenario.diagnostic?.hint).toContain(
+      'expecting "Session clôturée : le comptage est verrouillé." → read [data-cash-state]'
+    );
+  });
 });
 
 describe("état de la caisse hérité d'un run antérieur", () => {

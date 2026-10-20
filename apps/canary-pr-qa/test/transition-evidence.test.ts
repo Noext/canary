@@ -250,3 +250,36 @@ it("limits ifPresent to an establishing step and names its two consequences", ()
     /A skipped establishing step cannot demonstrate a transition/i
   );
 });
+
+it("teaches where to read a text the view shows, instead of the state it pins", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Lot U : six scénarios du run 210357d8 bloqués par la règle née du run
+  // 76f7b2a9, parce que le prompt interdisait la forme sans dire quelle cible
+  // la remplace. Le contre-exemple mesuré et la cible positive sont donc dans
+  // la consigne : le conteneur sans sa valeur épinglée, ou l'élément que
+  // l'instantané nomme, et le libellé attendu comme indice de la cible.
+  expect(prompt).toMatch(
+    /Never read a target selected by a state VALUE either/i
+  );
+  expect(prompt).toMatch(/run 210357d8/);
+  expect(prompt).toContain(
+    'assertion units read [data-cash-state="ouvert"] while expecting "6 unités comptées"'
+  );
+  expect(prompt).toMatch(
+    /The text you expect names the element that renders it/i
+  );
+  expect(prompt).toMatch(
+    /the container with its presence form \[data-cash-state\] — no value, so it exists in every state/i
+  );
+  expect(prompt).toMatch(
+    /named by its role and accessible name from the discovery snapshot/i
+  );
+  expect(prompt).toMatch(
+    /Never read \[data-\*="value"\] on a state attribute/i
+  );
+  // La consigne ne bannit pas les crochets stables : [data-testid="total"] est
+  // une cible mesurée, acceptée par le gate.
+  expect(prompt).toMatch(
+    /A data attribute the source defines as a stable hook stays a fine target/i
+  );
+});
