@@ -575,9 +575,10 @@ function closingDelimiter(text: string, open: number): number {
  * Un littéral est une chaîne entre guillemets simples, doubles ou backticks :
  * son contenu est rendu TEL QUEL, sans ses guillemets et sans interprétation —
  * une interpolation garde ses `${...}` et un échappement son antislash, parce
- * que le gate ne calcule rien, il lit ce que la ligne écrit. Une valeur
- * composée au rendu n'est donc jamais produite par cette lecture : c'est la
- * limite mesurée de la forme, pas un défaut à corriger.
+ * que le gate ne calcule rien, il lit ce que la ligne écrit. Une ligne dont le
+ * littéral porte ce que le navigateur évalue — un antislash, une interpolation
+ * de gabarit — ne désigne donc aucune valeur : la graphie source n'y est pas le
+ * texte rendu, et `resolveExpectedLiteral` la refuse au lieu de la persister.
  */
 function lineLiterals(text: string): LineLiteral[] {
   const literals: LineLiteral[] = [];
@@ -651,12 +652,13 @@ export type ExpectedLiteralResolution =
  *
  * Le contrat est celui d'une lecture, pas d'une composition : seul le littéral
  * de chaîne UNIQUE de la ligne est écrit, tel quel et sans guillemets. Une ligne
- * qui n'en porte aucun, qui en porte plusieurs, ou dont le littéral dépasse le
- * plafond de citation ne désigne donc aucune valeur, et le refus le dit avec le
- * numéro demandé et ce que la ligne porte réellement — jamais une valeur
- * devinée, jamais la ligne entière. Le plafond est celui de la citation parce
- * que la forme désigne un fragment de source : au-delà, écrire `expected` comme
- * chaîne reste la voie.
+ * qui n'en porte aucun, qui en porte plusieurs, dont le littéral porte ce que le
+ * navigateur évalue (antislash, interpolation de gabarit), ou dont le littéral
+ * dépasse le plafond de citation ne désigne donc aucune valeur, et le refus le
+ * dit avec le numéro demandé et ce que la ligne porte réellement — jamais une
+ * valeur devinée, jamais la ligne entière. Le plafond est celui de la citation
+ * parce que la forme désigne un fragment de source : au-delà, écrire `expected`
+ * comme chaîne reste la voie.
  */
 export function resolveExpectedLiteral(
   sourceFile: string,
@@ -698,6 +700,16 @@ export function resolveExpectedLiteral(
   if (literals.length > 1) {
     return {
       refusal: `Line ${line} of ${sourceFile} carries ${literals.length} string literals (${namedLiterals(literals)}), so it designates no single expected value: name the line that carries only the one, or write the value itself in expected.`,
+    };
+  }
+  if (only.literal.includes("\\")) {
+    return {
+      refusal: `The string literal on line ${line} of ${sourceFile} carries a backslash: an escape or a line continuation, so the characters this line spells are not the text the browser renders (\\n is a newline there, not two characters). Designating it would persist a value the page never displays, so write the value the page displays in expected instead.`,
+    };
+  }
+  if (only.delimiter === "`" && only.literal.includes("${")) {
+    return {
+      refusal: `The string literal on line ${line} of ${sourceFile} is a template carrying a \`\${...}\` interpolation, which the view evaluates at render, and this reading writes the interpolation unevaluated: designating it would persist a value the page never displays. Write the value the page displays in expected instead.`,
     };
   }
   if (only.literal.length > QUOTE_MAX_CHARS) {

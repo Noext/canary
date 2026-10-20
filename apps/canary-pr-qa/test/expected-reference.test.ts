@@ -184,34 +184,57 @@ describe("résolution d'un expected désigné par sa ligne", () => {
     expect(missingExpectationRefusals(plan)).toEqual([]);
   });
 
-  it("garde les interpolations et les échappements du littéral, sans les interpréter", () => {
+  it("refuse un littéral que le navigateur évalue : antislash ou interpolation", () => {
     const material = materialFor(PAGE, PAGE_TS_LINES);
-    const literal = resolveExpectedLiteral(PAGE, 354, material);
-    // La ligne 354 porte quatre littéraux : elle ne désigne donc aucune valeur.
-    expect(literal).toHaveProperty("refusal");
+    // La ligne 354 porte quatre littéraux : elle ne désigne aucune valeur, avant
+    // même d'en venir à ce que le littéral du message porte.
+    expect(resolveExpectedLiteral(PAGE, 354, material)).toHaveProperty(
+      "refusal"
+    );
+    // Un gabarit interpolé persisterait `${...}` non évalué : une valeur que la
+    // page n'affiche jamais, donc un rouge fabriqué par la lecture. Refusé.
     const template =
       // biome-ignore lint/suspicious/noTemplateCurlyInString: la ligne citée porte un littéral, pas un gabarit à interpoler.
       "  const message = `Écart de ${formatAmountFr(centsToEuros(closure.varianceCents))} : une justification écrite est obligatoire avant clôture.`;";
-    const only = resolveExpectedLiteral(
-      PAGE,
-      12,
-      materialFor(PAGE, [{ line: 12, text: template }])
-    );
-    // Rien n'est calculé : le littéral garde `${...}` tel que la ligne l'écrit.
-    expect(only).toEqual({
-      literal:
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: le littéral attendu garde son interpolation, non évaluée.
-        "Écart de ${formatAmountFr(centsToEuros(closure.varianceCents))} : une justification écrite est obligatoire avant clôture.",
+    expect(
+      resolveExpectedLiteral(
+        PAGE,
+        12,
+        materialFor(PAGE, [{ line: 12, text: template }])
+      )
+    ).toEqual({
+      refusal: `The string literal on line 12 of ${PAGE} is a template carrying a \`\${...}\` interpolation, which the view evaluates at render, and this reading writes the interpolation unevaluated: designating it would persist a value the page never displays. Write the value the page displays in expected instead.`,
     });
-    const escaped = resolveExpectedLiteral(
-      PAGE,
-      13,
-      materialFor(PAGE, [
-        { line: 13, text: "  onChange({ reason: 'il a dit \\\"non\\\"' });" },
-      ])
-    );
-    // L'échappement reste celui de la ligne : le gate ne retire aucun antislash.
-    expect(escaped).toEqual({ literal: 'il a dit \\"non\\"' });
+    // Un échappement persisterait l'antislash que la ligne écrit : le navigateur
+    // rend `"`, donc l'attendu ne matcherait aucune page correcte. Refusé aussi.
+    expect(
+      resolveExpectedLiteral(
+        PAGE,
+        13,
+        materialFor(PAGE, [
+          { line: 13, text: "  onChange({ reason: 'il a dit \\\"non\\\"' });" },
+        ])
+      )
+    ).toEqual({
+      refusal: `The string literal on line 13 of ${PAGE} carries a backslash: an escape or a line continuation, so the characters this line spells are not the text the browser renders (\\n is a newline there, not two characters). Designating it would persist a value the page never displays, so write the value the page displays in expected instead.`,
+    });
+  });
+
+  it("garde `${` dans un littéral simple, où il n'est pas une interpolation", () => {
+    // Une chaîne entre apostrophes rend `${...}` tel quel : rien n'y est évalué,
+    // donc la lecture y est fidèle et la forme reste acceptée. Seul le gabarit
+    // (backticks) interpole.
+    const line =
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: la ligne citée porte un `${` que rien n'évalue.
+      "  label = 'Total ${counted}'";
+    expect(
+      resolveExpectedLiteral(
+        CASH,
+        212,
+        materialFor(CASH, [{ line: 212, text: line }])
+      )
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: la valeur attendue garde le `${` du littéral simple.
+    ).toEqual({ literal: "Total ${counted}" });
   });
 
   it("lit un littéral délimité par des guillemets simples", () => {
@@ -348,6 +371,42 @@ describe("refus d'une référence de littéral : la ligne demandée, puis ce qu'
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
       `The string literal on line 210 of ${CASH} is empty or blank`
+    );
+  });
+
+  it("refuse au plan entier un littéral échappé : aucun faux rouge ne peut être persisté", () => {
+    // Le cas du relecteur : `setMessage("line 1\nline 2")`. La graphie source
+    // porte deux caractères après l'antislash, le navigateur rend un saut de
+    // ligne ; persister la graphie accepterait le plan puis ferait échouer
+    // l'assertion sur une UI correcte. Le plan est donc refusé, pas persisté.
+    const resolved = resolve(
+      referenceSubmission(CASH, "text", 210),
+      materialFor(CASH, [
+        { line: 210, text: '  setMessage("line 1\\nline 2");' },
+      ])
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `The string literal on line 210 of ${CASH} carries a backslash`
+    );
+    expect(resolved.refusal).toContain(
+      "write the value the page displays in expected instead"
+    );
+  });
+
+  it("refuse une ligne coupée par une continuation : elle ne porte aucun littéral clos", () => {
+    // La continuation (`"écart \` + retour à la ligne + `justifié"`) coupe le
+    // littéral sur deux lignes du fichier : la ligne du matériel n'en porte
+    // donc aucun, et le refus existant la refuse avant la lecture de contenu.
+    const resolved = resolve(
+      referenceSubmission(CASH, "text", 211),
+      materialFor(CASH, [
+        { line: 211, text: '  const reason = "écart justifié \\' },
+      ])
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `Line 211 of ${CASH} carries no string literal at all`
     );
   });
 });
@@ -508,10 +567,17 @@ describe("le prompt enseigne la forme référence, sans l'imposer", () => {
     // Composé de l'autre : le montant calculé et le total compté, qu'aucun
     // littéral ne porte.
     expect(prompt).toMatch(/a computed amount, a counted total/);
-    // Désigner n'est pas un passe-droit : la ligne doit porter le seul littéral.
+    // Désigner n'est pas un passe-droit : la ligne doit porter le seul littéral,
+    // et ce littéral ne doit pas être ce que le navigateur évalue — un
+    // échappement ou une interpolation produiraient une valeur que la page
+    // n'affiche jamais, donc un rouge fabriqué par la lecture.
     expect(prompt).toMatch(
       /A designated line must carry exactly one string literal, inside the 1000-character cap/
     );
+    expect(prompt).toMatch(
+      /so are the literals the browser evaluates instead of displaying — one carrying a backslash/
+    );
+    expect(prompt).toMatch(/a template carrying `\$\{\.\.\.\}`/);
   });
 
   it("laisse la forme chaîne libre pour une valeur composée au rendu", () => {
