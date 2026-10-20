@@ -11,7 +11,7 @@ import {
   validateCoverage,
   weakWitnessLines,
 } from "../src/policy.js";
-import { quotePickCorrection } from "../src/runner.js";
+import { coverageFatalClasses, quotePickCorrection } from "../src/runner.js";
 import { PlanSchema } from "../src/schema.js";
 import { lineAt } from "./fixture.js";
 import { CASH_TS_LINES, LOT_V_PLAN, PAGE_TS_LINES } from "./lot-v-replay.js";
@@ -222,4 +222,26 @@ it("keeps every refused requirement in the pick, and never a bare identifier", (
   // par indice ne peut pas le résoudre, donc le refus d'aujourd'hui est rendu
   // au lieu d'une question sans réponse.
   expect(correction).toBeUndefined();
+});
+
+/**
+ * La moitié `runner.ts` du correctif : la tête fatale apparie la citation fautive
+ * à la ligne réelle qui la porte. C'est le texte qui survit à la troncature du
+ * canal de correction quand les classes fatales saturent le préambule, là où le
+ * détail par exigence peut disparaître.
+ */
+it("pairs the fatal class fault with the real line, not only the class advice", () => {
+  const context = measuredContext();
+  const fatal = coverageFatalClasses(
+    measuredPlan(),
+    context,
+    policy,
+    amputationScans()
+  ).find((item) => item.code === "REQUIREMENT_UNGROUNDED");
+  expect(fatal?.faults).toHaveLength(1);
+  expect(fatal?.faults?.[0]?.quote).toBe("ecart-a-justifier");
+  // La ligne mesurée, écrite comme le planificateur la reçoit.
+  expect(fatal?.faults?.[0]?.remedy).toContain(
+    `116: ${JSON.stringify(cashLine(116))}`
+  );
 });
