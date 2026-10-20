@@ -62,6 +62,84 @@ function faults(): Fault[] {
   return found;
 }
 
+/**
+ * L'instantané d'entrée de la vue de caisse, dans l'état que le scénario de
+ * fermeture atteint : l'avis de clôture est rendu par l'unique région `status`
+ * de la vue, donc le refus peut le nommer par son rôle — à condition que rien
+ * n'ait changé la page depuis la découverte.
+ */
+const CLOSED_MESSAGE = "Session clôturée : le comptage est verrouillé.";
+/** La page que la découverte a capturée : un `goto` vers elle ne la quitte pas. */
+const PREVIEW_URL = "https://preview.example.com/";
+const CLOSED_VIEW_ARIA = `- main [ref=e1]:
+  - heading "Caisse et Coffre · DEMO17" [ref=e5]
+  - status [ref=e6]: ${CLOSED_MESSAGE}
+  - paragraph: Session clôturée`;
+
+type Steps = Plan["scenarios"][number]["steps"];
+
+function step(id: string, action: Steps[number]["action"]): Steps[number] {
+  return { id, description: id, action };
+}
+
+const goto = (id: string): Steps[number] =>
+  step(id, { type: "goto", path: "/" });
+
+/**
+ * Un plan dont la seule lecture fautive est l'avis de clôture lu sur la valeur
+ * épinglée. `before` est le préfixe d'étapes choisi par le test et `anchor` la
+ * dernière d'entre elles, celle que l'assertion suit : c'est exactement la
+ * différence entre une lecture faite sur la page de découverte et une lecture
+ * faite après qu'une action l'a changée.
+ */
+function closurePlan(before: Steps, anchor: string): Plan {
+  return PlanSchema.parse({
+    summary: "The closure notice announces the locked count.",
+    scenarios: [
+      {
+        id: "cash-closure-message",
+        title: "The closure notice announces the locked count",
+        rationale: "Reads the notice the view displays once the count closes.",
+        kind: "happy_path",
+        sourceFiles: ["apps/web/app/page.tsx"],
+        preconditions: [],
+        steps: [
+          ...before,
+          step("check-message", {
+            type: "assert",
+            assertionId: "closed-message",
+          }),
+        ],
+        requirements: [
+          {
+            sourceFile: "apps/web/app/page.tsx",
+            quote: CLOSED_MESSAGE,
+            behavior: "The closure notice announces the locked count.",
+          },
+        ],
+        assertions: [
+          {
+            id: "closed-message",
+            description: "The closure notice announces the locked count",
+            kind: "text",
+            expected: CLOSED_MESSAGE,
+            target: { by: "css", value: '[data-cash-state="cloture"]' },
+            afterStep: anchor,
+            verification: "state",
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  });
+}
+
+const hintOf = (plan: Plan): string =>
+  stateTargetReadRefusals(plan, {
+    url: PREVIEW_URL,
+    aria: CLOSED_VIEW_ARIA,
+  })[0]?.error.hint ?? "";
+
 describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
   it("compte les lectures fautives du run : six scénarios, dix-sept assertions", () => {
     // La mesure du lot U, refaite sur l'artefact : six scénarios bloqués, et
@@ -84,7 +162,10 @@ describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
       "cash-invalid-expected-amount",
     ].map((id) => [id] as const)
   )("refuse le scénario %s et nomme sa lecture d'origine", (id) => {
-    const refused = stateTargetReadRefusals(plan(), VIEW_ARIA);
+    const refused = stateTargetReadRefusals(plan(), {
+      url: PREVIEW_URL,
+      aria: VIEW_ARIA,
+    });
     const scenario = refused.find((item) => item.scenario.id === id);
     expect(scenario?.error.code).toBe("PLAN_STATE_TARGET_READ_AS_TEXT");
     for (const fault of faults().filter((item) => item.scenario === id)) {
@@ -99,7 +180,10 @@ describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
       (fault) => [`${fault.scenario}/${fault.assertion}`, fault] as const
     )
   )("nomme la cible visible de %s", (_id, fault) => {
-    const refused = stateTargetReadRefusals(plan(), VIEW_ARIA);
+    const refused = stateTargetReadRefusals(plan(), {
+      url: PREVIEW_URL,
+      aria: VIEW_ARIA,
+    });
     const scenario = refused.find(
       (item) => item.scenario.id === fault.scenario
     );
@@ -113,62 +197,71 @@ describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
     );
   });
 
-  it("nomme le rôle et le nom que l'instantané rend, quand il les rend", () => {
-    const refused = stateTargetReadRefusals(plan(), VIEW_ARIA);
-    const hintOf = (scenario: string) =>
-      refused.find((item) => item.scenario.id === scenario)?.error.hint ?? "";
-    // Le statut du comptage est rendu par l'unique région `status` de la vue :
-    // le contenu qui suit ses attributs EST le texte que `text` lit, et le
-    // refus la nomme.
-    expect(hintOf("cash-balanced-close-reopen")).toContain(
-      'assertion status expecting "Comptage juste" → read [data-cash-state] or role=status name=""'
-    );
-    // Le titre de la pharmacie n'est porté que par le NOM accessible de son
-    // `heading`, sans contenu rendu : ce nom n'est pas ce que `innerText` lit,
-    // donc le refus ne le propose pas (mesuré : un bouton
-    // `aria-label="Enregistrer le comptage"` rend « 💾 »).
-    expect(hintOf("cash-per-pharmacy-separation")).toContain(
-      'assertion demo17-label expecting "Caisse et Coffre · DEMO17" → read [data-cash-state]'
-    );
-    expect(hintOf("cash-per-pharmacy-separation")).not.toContain(
-      "role=heading"
-    );
-    // Un libellé que l'instantané ne rend pas, ou qu'un rôle nombreux rend
-    // (« 6 unités comptées » dans un paragraphe), n'invente aucune cible.
-    expect(hintOf("cash-balanced-close-reopen")).toContain(
-      'assertion units expecting "6 unités comptées" → read [data-cash-state] ;'
-    );
-    expect(hintOf("cash-invalid-quantity")).toContain(
-      'assertion invalid-status expecting "Quantité à corriger" → read [data-cash-state] ;'
-    );
+  it("ne propose aucun rôle quand une action a changé la page depuis la découverte", () => {
+    // Les dix-sept lectures du run lisent toutes APRÈS une action (clic
+    // d'ouverture, saisie, clôture) : l'instantané de découverte décrit la page
+    // d'entrée, pas celle que l'assertion lit. Le refus nomme donc la règle et
+    // le sélecteur fautif, et n'invente aucune cible : un rôle tiré de la
+    // découverte enverrait le planificateur sur un nœud qui n'existe plus.
+    const refused = stateTargetReadRefusals(plan(), {
+      url: PREVIEW_URL,
+      aria: VIEW_ARIA,
+    });
+    const interactions = new Set(["check", "click", "fill", "press", "select"]);
+    for (const scenario of plan().scenarios) {
+      const touched = scenario.steps.some((step) =>
+        interactions.has(step.action.type)
+      );
+      expect(touched, scenario.id).toBe(true);
+    }
+    for (const fault of faults()) {
+      const hint =
+        refused.find((item) => item.scenario.id === fault.scenario)?.error
+          .hint ?? "";
+      // La présence reste proposée dans les deux cas : elle se déduit du
+      // sélecteur et existe dans tous les états.
+      expect(hint, fault.assertion).toContain(
+        `assertion ${fault.assertion} expecting ${JSON.stringify(fault.expected)} → read [data-cash-state]`
+      );
+      expect(hint, fault.assertion).not.toContain("role=status name=");
+    }
   });
 
   it("n'offre ni un nœud texte ni un nom accessible comme cible de lecture", () => {
     // Deux formes que l'instantané porte et qui ne sont PAS une cible `text` :
     // `- text:` n'est pas un rôle (`role=text` résout 0 élément sur la page de
     // référence), et un nom accessible peut différer du contenu rendu. Le refus
-    // ne doit nommer que le nœud dont le contenu porte le libellé.
+    // ne doit nommer que le nœud dont le contenu porte le libellé. Le scénario
+    // n'a que son `goto` avant l'assertion : la découverte décrit bien la page
+    // lue, donc la suggestion de rôle est ouverte.
     const snapshot = [
       "- main:",
-      "  - text: Comptage juste",
-      '  - button "Comptage juste": ⚙️',
-      "  - status: Comptage juste",
+      `  - text: ${CLOSED_MESSAGE}`,
+      `  - button "${CLOSED_MESSAGE}": ⚙️`,
+      `  - status: ${CLOSED_MESSAGE}`,
     ].join("\n");
-    const refused = stateTargetReadRefusals(plan(), snapshot);
+    const refused = stateTargetReadRefusals(
+      closurePlan([goto("open")], "open"),
+      {
+        url: PREVIEW_URL,
+        aria: snapshot,
+      }
+    );
     const hint = refused[0]?.error.hint ?? "";
     expect(hint).toContain(
-      'expecting "Comptage juste" → read [data-cash-state] or role=status name=""'
+      `expecting ${JSON.stringify(CLOSED_MESSAGE)} → read [data-cash-state] or role=status name=""`
     );
     expect(hint).not.toContain("role=text");
     expect(hint).not.toContain("role=button");
-    // Le refus reste prononcé : la règle ne s'ouvre pas avec ce matériel.
-    expect(refused).toHaveLength(6);
   });
 
   it("refuse la cible épinglée avec ou sans matériel : la règle ne s'ouvre pas", () => {
     // Le gate n'accepte toujours AUCUNE lecture sur un sélecteur d'état
     // épinglé : le matériel enrichit le message, il ne relâche pas le refus.
-    const withViews = stateTargetReadRefusals(plan(), VIEW_ARIA);
+    const withViews = stateTargetReadRefusals(plan(), {
+      url: PREVIEW_URL,
+      aria: VIEW_ARIA,
+    });
     const withoutViews = stateTargetReadRefusals(plan());
     expect(withViews).toHaveLength(6);
     expect(withoutViews).toHaveLength(6);
@@ -201,7 +294,10 @@ describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
       }),
     }));
     expect(
-      stateTargetReadRefusals(PlanSchema.parse(corrected), VIEW_ARIA)
+      stateTargetReadRefusals(PlanSchema.parse(corrected), {
+        url: PREVIEW_URL,
+        aria: VIEW_ARIA,
+      })
     ).toEqual([]);
     // Aucune assertion du plan corrigé ne lit plus un attribut d'état épinglé,
     // et la forme qui les remplace est celle que le corpus mesure : 924
@@ -218,5 +314,109 @@ describe("rejeu du run 210357d8 (lot U), six scénarios bloqués", () => {
             PINNED.test(assertion.target.value)
         )
     ).toEqual([]);
+  });
+});
+
+describe("suggestion de rôle et page changée depuis la découverte", () => {
+  it("retire la suggestion quand une action a changé la page avant l'assertion", () => {
+    const hint = hintOf(
+      closurePlan(
+        [
+          goto("go"),
+          step("close", {
+            type: "click",
+            locator: { by: "role", value: "button", name: "Clôturer" },
+          }),
+        ],
+        "close"
+      )
+    );
+    // La lecture garde la présence (elle existe dans tous les états) et le
+    // sélecteur fautif, mais aucune cible tirée de la découverte : le nœud que
+    // l'instantané nomme peut avoir disparu après le clic.
+    expect(hint).toContain(
+      `assertion closed-message expecting ${JSON.stringify(CLOSED_MESSAGE)} → read [data-cash-state]`
+    );
+    expect(hint).not.toContain("role=status");
+    expect(hint).not.toContain("the discovery snapshot renders this label");
+    // Le refus reste prononcé : la règle ne s'ouvre pas, seul le conseil change.
+    expect(
+      stateTargetReadRefusals(closurePlan([goto("go")], "go"))
+    ).toHaveLength(1);
+  });
+
+  it("garde la suggestion quand l'assertion n'a aucune interaction avant elle", () => {
+    const hint = hintOf(
+      closurePlan([goto("go"), step("look", { type: "observe" })], "look")
+    );
+    // Seules des étapes de lecture précèdent : la page que la découverte a
+    // capturée est toujours celle que l'assertion lit.
+    expect(hint).toContain(
+      `assertion closed-message expecting ${JSON.stringify(CLOSED_MESSAGE)} → read [data-cash-state] or role=status name=""`
+    );
+    expect(hint).toContain("(the discovery snapshot renders this label there)");
+  });
+
+  it("garde la suggestion quand le scénario ne fait que naviguer avant l'assertion", () => {
+    const hint = hintOf(closurePlan([goto("go")], "go"));
+    // L'instantané est capturé par le seul `goto` d'entrée de la découverte
+    // (`discover` dans `runner.ts`), donc un `goto` qui recharge cette page ne
+    // la quitte pas (`staysOnDiscoveryPage`) et la suggestion reste valable.
+    expect(hint).toContain('or role=status name=""');
+    expect(hint).toContain("(the discovery snapshot renders this label there)");
+  });
+
+  it("retire la suggestion quand le goto quitte la page de découverte", () => {
+    const hint = hintOf(
+      closurePlan([step("go", { type: "goto", path: "/caisse" })], "go")
+    );
+    // Même gate que le contrôle d'évidence : un `goto` vers une autre route
+    // rend la page inconnue, donc le rôle que l'instantané nomme n'est plus
+    // prouvé — seule la présence, qui se déduit du sélecteur, reste proposée.
+    expect(hint).toContain(
+      `assertion closed-message expecting ${JSON.stringify(CLOSED_MESSAGE)} → read [data-cash-state]`
+    );
+    expect(hint).not.toContain("role=status name=");
+  });
+
+  it.each([
+    [
+      "fill",
+      {
+        type: "fill" as const,
+        locator: { by: "css" as const, value: "#units" },
+        value: "2",
+      },
+    ],
+    [
+      "select",
+      {
+        type: "select" as const,
+        locator: { by: "css" as const, value: "#pharmacy" },
+        value: "DEMO17",
+      },
+    ],
+    [
+      "press",
+      {
+        type: "press" as const,
+        locator: { by: "css" as const, value: "#units" },
+        key: "Enter",
+      },
+    ],
+    [
+      "check",
+      {
+        type: "check" as const,
+        locator: { by: "css" as const, value: "#confirmed" },
+        checked: true,
+      },
+    ],
+  ])("retire aussi la suggestion après une action %s", (_type, action) => {
+    // Chaque action qui peut changer la page est couverte, pas seulement le
+    // clic : la borne est la nature de l'action, pas l'exemple mesuré.
+    const hint = hintOf(closurePlan([goto("go"), step("act", action)], "act"));
+    expect(hint).toContain("→ read [data-cash-state]");
+    expect(hint).not.toContain("role=status name=");
   });
 });

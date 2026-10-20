@@ -851,6 +851,8 @@ interface StateTargetReadFault {
   /** Phrase du message : assertion, étape, sélecteur et libellé. */
   line: string;
   presence: string;
+  /** Vrai quand la page que la découverte a capturée est encore celle que la lecture lit. */
+  unchangedFromDiscovery: boolean;
 }
 /**
  * Ce qu'une assertion de `text` ou `value` doit à un élément SÉLECTIONNÉ PAR UNE
@@ -891,7 +893,7 @@ interface StateTargetReadFault {
  */
 function stateTargetReadFault(
   assertion: Scenario["assertions"][number]
-): StateTargetReadFault | undefined {
+): Omit<StateTargetReadFault, "unchangedFromDiscovery"> | undefined {
   const target = assertion.target;
   if (assertion.kind !== "text" && assertion.kind !== "value") {
     return;
@@ -1038,9 +1040,11 @@ function renderedTargets(
  * La cible visible de chaque lecture fautive, dite à partir du matériel : la
  * forme de seule présence du même attribut d'état — présente dans tous les
  * états, donc jamais conditionnelle — et, quand l'instantané de découverte rend
- * le libellé attendu sur un nœud unique, ce nœud nommé par son rôle et son nom.
- * Rien n'est deviné : sans instantané, la phrase ne nomme que la présence, qui
- * se déduit du sélecteur lui-même.
+ * le libellé attendu sur un nœud unique ET que la page soit encore celle de la
+ * découverte, ce nœud nommé par son rôle et son nom. Rien n'est deviné : sans
+ * instantané, ou après une étape qui a pu changer la page, la phrase ne nomme
+ * que la présence, qui se déduit du sélecteur lui-même (voir
+ * `StateTargetReadFault.unchangedFromDiscovery`).
  */
 function visibleTargetAdvice(
   faults: StateTargetReadFault[],
@@ -1059,7 +1063,11 @@ function visibleTargetAdvice(
       typeof fault.expected === "string"
         ? ` expecting ${JSON.stringify(fault.expected)}`
         : "";
-    const named = renderedTargets(nodes, fault.expected);
+    // La découverte ne propose un rôle que sur la page qu'elle a capturée :
+    // sinon le nœud qu'elle nomme peut avoir disparu.
+    const named = fault.unchangedFromDiscovery
+      ? renderedTargets(nodes, fault.expected)
+      : [];
     // `value` lit un champ : la présence d'un attribut d'état ne désigne pas
     // un champ, donc elle n'est offerte que comme preuve de l'état, jamais
     // comme cible de lecture.
@@ -1080,21 +1088,38 @@ function visibleTargetAdvice(
  * scénario, nommant l'assertion, le sélecteur, l'attendu et la voie correcte, et
  * `runner.ts` le rejoue avant la première étape navigateur.
  *
- * Le second argument est l'instantané de découverte déjà capturé pour la
+ * Le second argument est le matériel de découverte déjà capturé pour la
  * validation d'évidence : le refus s'en sert pour nommer la cible visible que
  * la page expose, comme `planEvidenceDiagnostic` nomme la cible exposée à la
- * place d'une cible absente. Sans lui, le refus nomme la présence du même
- * attribut, qui se déduit du sélecteur.
+ * place d'une cible absente. Le rôle n'est nommé que sur une page que rien n'a
+ * changée depuis la découverte ; sans matériel, le refus nomme la présence du
+ * même attribut, qui se déduit du sélecteur.
  */
 export function stateTargetReadRefusals(
   plan: Plan,
-  aria?: string
+  evidence?: DiscoveryEvidence
 ): { error: QaError; scenario: Scenario }[] {
   const refusals: { error: QaError; scenario: Scenario }[] = [];
   for (const scenario of plan.scenarios) {
-    const faults = scenario.assertions
-      .map((assertion) => stateTargetReadFault(assertion))
-      .filter((fault): fault is StateTargetReadFault => fault !== undefined);
+    // Le même gate que le contrôle d'évidence : `pageUnchangedByStep` dit, étape
+    // par étape, si la page est encore celle de la découverte — une interaction
+    // (`CONTAMINATING`) la rend inconnue pour tout ce qui suit, un `goto` qui la
+    // recharge la laisse identique, un `goto` qui la quitte aussi — et
+    // `assertionReadIndex` donne l'étape où l'assertion lit sa cible.
+    const pageUnchanged =
+      evidence === undefined ? [] : pageUnchangedByStep(scenario, evidence.url);
+    const faults = scenario.assertions.flatMap((assertion) => {
+      const fault = stateTargetReadFault(assertion);
+      return fault === undefined
+        ? []
+        : [
+            {
+              ...fault,
+              unchangedFromDiscovery:
+                pageUnchanged[assertionReadIndex(scenario, assertion)] ?? false,
+            },
+          ];
+    });
     if (faults.length === 0) {
       continue;
     }
@@ -1103,7 +1128,7 @@ export function stateTargetReadRefusals(
       error: new QaError(
         "PLAN_STATE_TARGET_READ_AS_TEXT",
         `Scenario ${scenario.id} reads an element selected by a state value as if it carried text: ${faults.map((fault) => fault.line).join(" ; ")}`,
-        `An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (measured: run 76f7b2a9 waited 5000 ms for [data-cash-state="cloture"] at innerText). Prove the state by presence instead — [data-cash-state="cloture"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-cash-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value. Visible target for this plan: ${visibleTargetAdvice(faults, aria)}.`
+        `An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (measured: run 76f7b2a9 waited 5000 ms for [data-cash-state="cloture"] at innerText). Prove the state by presence instead — [data-cash-state="cloture"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-cash-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value. Visible target for this plan: ${visibleTargetAdvice(faults, evidence?.aria)}.`
       ),
     });
   }
