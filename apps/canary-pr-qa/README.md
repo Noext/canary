@@ -179,6 +179,9 @@ seule et ignorés par Git. Une fixture est un service de données de test contr�
 `Idempotency-Key`. Il doit créer/supprimer exclusivement les données du namespace.
 Le token vient de `tokenEnv`, jamais du modèle. Préconditions acceptées :
 `fixture:checkout`, `role:member`. Toute précondition en prose reste bloquante.
+Un choix que la page offre déjà — profil sélectionné, pharmacie active, option
+d'un sélecteur — n'est pas une précondition : c'est une étape, conduite par
+`select` ou `click` sur ce contrôle.
 
 Un rôle référence une variable d'environnement contenant le storage state
 Playwright `{cookies:[],origins:[]}`. Les domaines/origines sont vérifiés avant
