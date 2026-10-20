@@ -70,12 +70,13 @@ import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
   type Outcome,
   type Plan,
-  PlanSchema,
   type Preview,
   type Publication,
+  plannerPlanSchema,
   type RunResult,
   type Scenario,
   type ScenarioResult,
+  type SourceLineMaterial,
 } from "./schema.js";
 import { traced } from "./telemetry.js";
 
@@ -760,10 +761,11 @@ function refusalDiagnostic(
  * Le message du planificateur : le contexte figé de la PR, la page de
  * découverte, le catalogue de fixtures, puis les lignes RÉELLES des fichiers
  * modifiés numérotées dans le nouveau fichier (voir `numberedSourceLines`). Ce
- * matériel est ce que le planificateur doit recopier : le numéro qu'un refus
- * nomme est celui qu'il porte, donc un remède « cite la ligne 368 » se résout
- * sans retaper la ligne — la cause mesurée des copies altérées (`b-altered`),
- * y compris sur les runs où le refus nommait déjà la bonne ligne.
+ * matériel est ce que le planificateur DÉSIGNE par son numéro, et non plus ce
+ * qu'il recopie : le gate y relit la ligne et écrit son texte dans `quote`
+ * (voir `plannerPlanSchema`), ce qui supprime la cause mesurée des copies
+ * altérées (`b-altered`) — y compris sur les runs où le refus nommait déjà la
+ * bonne ligne, et où le planificateur la retapait quand même.
  *
  * Le matériel numéroté prend la place que la borne de contexte laisse libre,
  * jamais plus : un PR volumineux garde son run au lieu d'être refusé pour un
@@ -784,10 +786,7 @@ export function planPayload(
     maxScenarios: config.QA_MAX_SCENARIOS,
     pr: context,
     preview,
-    sourceLines: [] as {
-      lines: { line: number; text: string }[];
-      path: string;
-    }[],
+    sourceLines: [] as SourceLineMaterial[],
   };
   const limit = config.QA_CONTEXT_CHARS + 30_000;
   payload.sourceLines = numberedSourceLines(
@@ -1245,7 +1244,10 @@ async function executePlan(
   result.plan = await model.json(
     PLANNER_PROMPT,
     payload,
-    PlanSchema,
+    // La résolution lit le matériel EXACTEMENT tel qu'il part dans le message :
+    // une référence `line` est résolue contre les lignes que le planificateur a
+    // reçues, jamais contre une vue plus large du fichier.
+    plannerPlanSchema(payload.sourceLines),
     config.QA_PLAN_MAX_TOKENS,
     (candidate) => {
       // Le planificateur reçoit les refus et dispose d'une tentative de
