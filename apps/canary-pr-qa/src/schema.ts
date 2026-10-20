@@ -539,10 +539,12 @@ const LITERAL_DELIMITERS = new Set(["'", '"', "`"]);
  * entre deux apostrophes de mots.
  */
 const IDENTIFIER_CHAR = /[\p{L}\p{N}_$]/u;
-/** Un littéral trouvé sur une ligne : ses guillemets et son contenu, guillemets exclus. */
+/** Un littéral trouvé sur une ligne : ses guillemets, son contenu et sa place, guillemets exclus. */
 interface LineLiteral {
+  close: number;
   delimiter: string;
   literal: string;
+  start: number;
 }
 /**
  * Littéraux nommés dans un refus, et longueur de l'extrait qui les nomme : le
@@ -598,10 +600,38 @@ function lineLiterals(text: string): LineLiteral[] {
       index += 1;
       continue;
     }
-    literals.push({ delimiter, literal: text.slice(index + 1, close) });
+    literals.push({
+      close,
+      delimiter,
+      literal: text.slice(index + 1, close),
+      start: index,
+    });
     index = close + 1;
   }
   return literals;
+}
+/**
+ * Un guillemet orphelin hors du littéral retenu : la ligne en porte un que RIEN
+ * n'a apparié — le guillemet d'une regex, par exemple — donc l'appariement a pu
+ * traverser ce guillemet et rendre une tranche qui n'est pas une chaîne. Une
+ * ligne regex comme `if (/\"/.test(value)) setMessage("Ready")` ne porte pas
+ * `/.test(value)) setMessage(`, elle porte `Ready` seulement ; ce garde refuse
+ * la ligne au lieu de persister une valeur que la page n'affiche jamais. La
+ * lecture reste lexicale : au-delà de ce cas, un pathologique reste possible.
+ */
+function carriesStrayDelimiter(text: string, literal: LineLiteral): boolean {
+  const rest = text.slice(0, literal.start) + text.slice(literal.close + 1);
+  for (let index = 0; index < rest.length; index += 1) {
+    const delimiter = rest.charAt(index);
+    if (!LITERAL_DELIMITERS.has(delimiter)) {
+      continue;
+    }
+    if (delimiter === "'" && IDENTIFIER_CHAR.test(rest.charAt(index - 1))) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 /**
  * Les littéraux d'une ligne, nommés dans un refus : bornés en nombre et en
@@ -652,11 +682,12 @@ export type ExpectedLiteralResolution =
  *
  * Le contrat est celui d'une lecture, pas d'une composition : seul le littéral
  * de chaîne UNIQUE de la ligne est écrit, tel quel et sans guillemets. Une ligne
- * qui n'en porte aucun, qui en porte plusieurs, dont le littéral porte ce que le
- * navigateur évalue (antislash, interpolation de gabarit), ou dont le littéral
- * dépasse le plafond de citation ne désigne donc aucune valeur, et le refus le
- * dit avec le numéro demandé et ce que la ligne porte réellement — jamais une
- * valeur devinée, jamais la ligne entière. Le plafond est celui de la citation
+ * qui n'en porte aucun, qui en porte plusieurs, dont un guillemet reste orphelin
+ * hors du littéral (le guillemet d'une regex, voir `carriesStrayDelimiter`),
+ * dont le littéral porte ce que le navigateur évalue (antislash, interpolation
+ * de gabarit), ou dont le littéral dépasse le plafond de citation ne désigne
+ * donc aucune valeur, et le refus le dit avec le numéro demandé et ce que la
+ * ligne porte réellement — jamais une valeur devinée, jamais la ligne entière. Le plafond est celui de la citation
  * parce que la forme désigne un fragment de source : au-delà, écrire `expected`
  * comme chaîne reste la voie.
  */
@@ -700,6 +731,11 @@ export function resolveExpectedLiteral(
   if (literals.length > 1) {
     return {
       refusal: `Line ${line} of ${sourceFile} carries ${literals.length} string literals (${namedLiterals(literals)}), so it designates no single expected value: name the line that carries only the one, or write the value itself in expected.`,
+    };
+  }
+  if (carriesStrayDelimiter(found.text, only)) {
+    return {
+      refusal: `The line around the only string literal on line ${line} of ${sourceFile} carries an unpaired quote character — a quote inside a regular expression or a comment does not open a string — so the fragment this reading would take is not a string the view displays. Write the value the page displays in expected instead; a \`quote\` requirement for this file's changed behavior is unaffected.`,
     };
   }
   if (only.literal.includes("\\")) {

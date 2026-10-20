@@ -220,6 +220,56 @@ describe("résolution d'un expected désigné par sa ligne", () => {
     });
   });
 
+  it("refuse une ligne dont un guillemet de regex a été apparié au littéral", () => {
+    // Le cas du relecteur : `if (/"/.test(value)) setMessage("Ready")` apparie le
+    // guillemet de la regex avec celui qui ouvre `"Ready"`, et la lecture rend
+    // `/.test(value)) setMessage(` — une valeur qu'aucune page n'affiche. Le
+    // guillemet resté orphelin après le littéral retenu fait refuser la ligne.
+    const regex = resolveExpectedLiteral(
+      CASH,
+      213,
+      materialFor(CASH, [
+        { line: 213, text: '  if (/"/.test(value)) setMessage("Ready");' },
+      ])
+    );
+    expect(regex).toEqual({
+      refusal: `The line around the only string literal on line 213 of ${CASH} carries an unpaired quote character — a quote inside a regular expression or a comment does not open a string — so the fragment this reading would take is not a string the view displays. Write the value the page displays in expected instead; a \`quote\` requirement for this file's changed behavior is unaffected.`,
+    });
+    // Même traversée par une classe de caractères.
+    expect(
+      resolveExpectedLiteral(
+        CASH,
+        214,
+        materialFor(CASH, [
+          { line: 214, text: '  if (/["]/.test(value)) setMessage("Ready");' },
+        ])
+      )
+    ).toHaveProperty("refusal");
+  });
+
+  it("n'ajoute aucun refus aux lignes que le garde ne concerne pas", () => {
+    // Le garde ne coûte aucune ligne réelle : ces huit formes portent un seul
+    // littéral, un reste sans guillemet orphelin, et restent résolues.
+    const cases = [
+      '  setMessage("Ready");',
+      '  return "Session clôturée";',
+      "  if (value === 'cloture') return true;",
+      "  const s = `Comptage juste`;",
+      '  const r = a / b; setMessage("Total");',
+      '  // l\'écart justifié : setMessage("Ready");',
+      '  const ratio = total / count; // setMessage("Ready");',
+      '  onChange({ reason: "ecart-justifie" });',
+    ];
+    for (const [index, text] of cases.entries()) {
+      const resolved = resolveExpectedLiteral(
+        CASH,
+        300 + index,
+        materialFor(CASH, [{ line: 300 + index, text }])
+      );
+      expect(resolved, text).toHaveProperty("literal");
+    }
+  });
+
   it("garde `${` dans un littéral simple, où il n'est pas une interpolation", () => {
     // Une chaîne entre apostrophes rend `${...}` tel quel : rien n'y est évalué,
     // donc la lecture y est fidèle et la forme reste acceptée. Seul le gabarit
