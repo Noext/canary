@@ -577,15 +577,41 @@ function fileContentLines(
   requirement: Pick<Requirement, "sourceFile">,
   context: PrContext
 ): PostChangeLine[] {
+  return allFileContentLines(requirement, context).slice(
+    0,
+    CITED_LINES_EXAMINED
+  );
+}
+/**
+ * Le chemin et les révisions dont `allFileContentLines` tire le fichier cité :
+ * la révision de tête du chemin de tête, ou la révision de base du
+ * `previous_filename` quand la PR supprime le fichier — la seule où il existe
+ * encore.
+ */
+function citedSourceRevision(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): { path: string; refs: string[] } {
+  const file = context.files.find(
+    (item) => item.filename === requirement.sourceFile
+  );
+  return file?.status === "removed"
+    ? {
+        path: file.previous_filename ?? requirement.sourceFile,
+        refs: [context.baseSha],
+      }
+    : { path: requirement.sourceFile, refs: [context.sha] };
+}
+/** Toutes les lignes réelles du fichier cité, sans le plafond de lecture. */
+function allFileContentLines(
+  requirement: Pick<Requirement, "sourceFile">,
+  context: PrContext
+): PostChangeLine[] {
   const file = context.files.find(
     (item) => item.filename === requirement.sourceFile
   );
   const lines = file?.patch ? postChangeHunks(file.patch).flat() : [];
-  const removed = file?.status === "removed";
-  const refs = removed ? [context.baseSha] : [context.sha];
-  const path = removed
-    ? (file?.previous_filename ?? requirement.sourceFile)
-    : requirement.sourceFile;
+  const { path, refs } = citedSourceRevision(requirement, context);
   for (const item of context.context) {
     if (item.path !== path || !refs.includes(item.ref)) {
       continue;
@@ -596,7 +622,7 @@ function fileContentLines(
         .map((text, index) => ({ line: index + 1, text }))
     );
   }
-  return lines.slice(0, CITED_LINES_EXAMINED);
+  return lines;
 }
 /**
  * Lignes réelles du contenu après changement, numérotées dans le nouveau

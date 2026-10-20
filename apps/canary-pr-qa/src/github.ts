@@ -38,6 +38,23 @@ const fileSchema = z.object({
   patch: z.string().optional(),
   previous_filename: z.string().optional(),
 });
+/**
+ * Avertissements de contexte qui disent qu'un fichier du dépôt n'a été lu
+ * qu'en partie : contenu coupé au plafond de caractères par fichier, contenu
+ * indisponible, ou plafonds de collecte épuisés avant sa lecture. Ils sont
+ * nommés ici, une seule fois, parce qu'ils ne servent pas qu'au journal : les
+ * lecteurs qui en dépendent les interprètent (voir `completeSource`, runner.ts).
+ */
+export const DEPENDENCY_CONTEXT_LIMIT_WARNING =
+  "Dependency context limit (256) exhausted";
+export const CONTEXT_BUDGET_EXHAUSTED_WARNING =
+  "Repository context budget exhausted";
+export function truncatedContextWarning(path: string, ref: string): string {
+  return `Truncated context: ${path} at ${ref}`;
+}
+export function unavailableContextWarning(path: string, ref: string): string {
+  return `Unavailable context: ${path} at ${ref}`;
+}
 export interface PrContext {
   baseSha: string;
   body: string;
@@ -223,11 +240,11 @@ export class GitHub {
       }
       visited.add(key);
       if (visited.size > 256) {
-        contextWarnings.push("Dependency context limit (256) exhausted");
+        contextWarnings.push(DEPENDENCY_CONTEXT_LIMIT_WARNING);
         break;
       }
       if (remaining <= 0) {
-        contextWarnings.push("Repository context budget exhausted");
+        contextWarnings.push(CONTEXT_BUDGET_EXHAUSTED_WARNING);
         break;
       }
       try {
@@ -242,7 +259,7 @@ export class GitHub {
         const selected = decoded.slice(0, Math.min(remaining, 16_000));
         if (selected.length < decoded.length) {
           contextWarnings.push(
-            `Truncated context: ${candidate.path} at ${candidate.ref}`
+            truncatedContextWarning(candidate.path, candidate.ref)
           );
         }
         context.push({
@@ -259,7 +276,7 @@ export class GitHub {
         }
       } catch {
         contextWarnings.push(
-          `Unavailable context: ${candidate.path} at ${candidate.ref}`
+          unavailableContextWarning(candidate.path, candidate.ref)
         );
       }
     }

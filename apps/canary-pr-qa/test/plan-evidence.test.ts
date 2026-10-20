@@ -2066,11 +2066,15 @@ describe("attendu manquant sur le chemin de lecture", () => {
 /**
  * Lot T, run 9add286d rejoué de bout en bout. La copie refusée du planificateur
  * est celle du run, octet pour octet : les 56 premiers caractères de la ligne 368
- * puis `:""` inséré avant l'accolade qui ferme l'interpolation. Le tour de
- * correction ne demande plus de la recopier — la boucle mesurée ne convergeait
- * pas — mais un INDICE parmi les portions réelles du fichier, que le gate écrit.
+ * puis `:""` inséré avant l'accolade qui ferme l'interpolation.
+ *
+ * Lot X, après le retrait de l'écriture automatique : cette copie n'est pas une
+ * portion verbatim de la ligne 368, donc le gate ne la remplace pas lui-même. Le
+ * run paie le tour de correction par indice — deux appels, comme la mesure du
+ * run 07429b97 — et le planificateur choisit la portion réelle. Le refus
+ * d'aujourd'hui reste le sien quand sa réponse ne résout rien.
  */
-describe("correction contrainte d'une citation refusée (run 9add286d)", () => {
+describe("résolution d'une citation refusée (run 9add286d)", () => {
   /** Ligne 368 du fichier du run, octet pour octet. */
   const REAL_LINE = `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`;
   /** La citation refusée : un préfixe exact, puis `:""` inséré, puis l'arrêt. */
@@ -2080,7 +2084,15 @@ describe("correction contrainte d'une citation refusée (run 9add286d)", () => {
     REAL_LINE.indexOf("${"),
     REAL_LINE.indexOf("}") + 1
   );
-  function alteredPlan(): Plan {
+  /**
+   * Deux lignes réelles du fichier qui portent le même identifiant : la citation
+   * faible y est ambiguë, donc le gate n'écrit rien et la correction par indice
+   * s'ouvre — c'est la borne mesurée de `ecart-a-justifier` (lignes 116 et 146).
+   */
+  const AMBIGUOUS_A = "  const varianceCents=closure?.varianceCents??null;";
+  const AMBIGUOUS_B =
+    '  if (varianceCents===null) { setMessage("Écart non calculable"); return; }';
+  function planWith(quote: string): Plan {
     const plan = readOnlyPlan({
       by: "role",
       value: "heading",
@@ -2094,7 +2106,7 @@ describe("correction contrainte d'une citation refusée (run 9add286d)", () => {
       },
       {
         behavior: "Le badge accorde le pluriel des unités comptées",
-        quote: REFUSED_QUOTE,
+        quote,
         sourceFile: "src/form.ts",
       },
     ];
@@ -2114,32 +2126,63 @@ describe("correction contrainte d'une citation refusée (run 9add286d)", () => {
       )?.at(-1)?.content ?? ""
     );
   }
-  it("résout la citation par indice, sans la retaper, puis exécute le scénario", async () => {
+  it("n'écrit pas la copie refusée à sa place et la fait résoudre par l'indice", async () => {
     const f = await setup({
       formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
-      plans: [alteredPlan(), pickAnswer(1)],
+      // Deuxième appel scripté : la question à indices. Le gate ne choisit rien
+      // pour le planificateur, il lui montre la ligne réelle.
+      plans: [planWith(REFUSED_QUOTE), pickAnswer(1)],
     });
     stubCanary(ARIA);
     const result = await runQa(
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    // Le tour de correction a posé la question à indices, pas le plan à réécrire.
+    // Deux appels modèle : la génération, puis la question à indices — la mesure
+    // du run 07429b97 avant le retrait (2 appels, 0 reprise, blocked), ici
+    // résolue.
+    expect(f.modelRequests).toHaveLength(2);
     expect(lastPrompt(f)).toContain("picks");
     expect(lastPrompt(f)).not.toContain("Return the complete corrected plan");
-    // La citation persistée est le texte réel choisi, jamais l'indice.
+    // La citation persistée est le texte réel choisi, portion verbatim de la
+    // ligne 368 — jamais la copie altérée du planificateur.
     const quote = result.plan?.scenarios[0]?.requirements[1]?.quote ?? "";
     expect(REAL_LINE).toContain(quote);
     expect(quote).not.toBe(REFUSED_QUOTE);
-    expect(quote.length).toBeGreaterThan(8);
-    // Et le run exécute le scénario corrigé au lieu de bloquer sur la citation.
+    // La copie refusée insérait `:""` dans le premier ternaire : la ligne réelle
+    // porte `?"s":""`, jamais `?"s":"":""`.
+    expect(quote).not.toContain('"s":"":""');
+    expect(quote).toContain('counted.totalUnits>1?"s":""');
+    // Et le plan résolu passe la couverture au lieu de bloquer sur sa citation.
+    expect(result.coverage?.gate).toBe("complete");
     expect(result.outcome).toBe("passed");
     expect(result.scenarios[0]?.outcome).toBe("passed");
   });
+  it("garde la question à indices quand deux portions réelles se disputent la citation", async () => {
+    const f = await setup({
+      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}\n@@ -380,1 +380,2 @@\n+${AMBIGUOUS_A}\n+${AMBIGUOUS_B}`,
+      plans: [planWith("varianceCents"), pickAnswer(1)],
+    });
+    stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Deux candidats : le gate ne choisit pas, il pose la question à indices.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(lastPrompt(f)).toContain("picks");
+    expect(lastPrompt(f)).toContain(JSON.stringify(AMBIGUOUS_A));
+    expect(lastPrompt(f)).toContain(JSON.stringify(AMBIGUOUS_B));
+    expect(lastPrompt(f)).not.toContain("Return the complete corrected plan");
+    // La citation persistée est le texte réel choisi, jamais l'indice.
+    const quote = result.plan?.scenarios[0]?.requirements[1]?.quote ?? "";
+    expect([AMBIGUOUS_A, AMBIGUOUS_B]).toContain(quote);
+    expect(result.outcome).toBe("passed");
+  });
   it("garde le refus d'aujourd'hui quand la réponse contrainte ne résout rien", async () => {
     const f = await setup({
-      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
-      plans: [alteredPlan(), pickAnswer(99)],
+      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}\n@@ -380,1 +380,2 @@\n+${AMBIGUOUS_A}\n+${AMBIGUOUS_B}`,
+      plans: [planWith("varianceCents"), pickAnswer(99)],
     });
     stubCanary(ARIA);
     const result = await runQa(
@@ -2150,7 +2193,7 @@ describe("correction contrainte d'une citation refusée (run 9add286d)", () => {
     // refusée reste celle que le planificateur avait écrite.
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("REQUIREMENT_UNGROUNDED");
-    expect(result.error).toContain(JSON.stringify(REFUSED_QUOTE));
+    expect(result.error).toContain(JSON.stringify("varianceCents"));
     expect(result.error).toContain("(requirement 2)");
     expect(result.scenarios).toEqual([]);
   });

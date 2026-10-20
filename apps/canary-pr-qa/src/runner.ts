@@ -19,7 +19,7 @@ import {
   type TrustedCatalog,
   trustedCatalog,
 } from "./fixtures.js";
-import { GitHub, type PrContext } from "./github.js";
+import { GitHub, type PrContext, truncatedContextWarning } from "./github.js";
 import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
@@ -131,7 +131,7 @@ function completeSource(context: PrContext, path: string, ref: string) {
       item.path === path &&
       item.ref === ref &&
       !context.contextWarnings.includes(
-        `Truncated context: ${item.path} at ${item.ref}`
+        truncatedContextWarning(item.path, item.ref)
       )
   );
 }
@@ -1076,6 +1076,25 @@ function applyQuotePicks(
   return resolved;
 }
 /**
+ * Paires (scénario, fichier) qu'une citation faible couvre dès que sa
+ * substitution est écrite dans le plan : le refus de couverture dérivé de la
+ * même citation tombe avec elle quand l'indice choisi nomme la ligne réelle
+ * (voir `quotePickCorrection`). Une citation absente n'y entre pas : sa ligne
+ * réelle n'est pas son seul remède, et la substitution n'a pas à choisir.
+ */
+function weakWitnessPairs(
+  faults: { requirement: Requirement; scenarioId: string }[],
+  context: PrContext
+): Set<string> {
+  return new Set(
+    faults
+      .filter((fault) => hasWeakWitness(fault.requirement, context))
+      .map((fault) =>
+        witnessPairKey(fault.scenarioId, fault.requirement.sourceFile)
+      )
+  );
+}
+/**
  * Correction contrainte d'une citation refusée. Le défaut mesuré du run
  * 9add286d n'est pas un faux refus : la copie reproduit 56 caractères de la
  * ligne 368, puis insère `:""` avant l'accolade qui ferme l'interpolation et
@@ -1117,13 +1136,6 @@ export function quotePickCorrection(
   // refus de couverture dérivé de la même citation tombe avec elle. Une citation
   // absente garde son remède détaillé et son refus : sa ligne réelle n'est pas
   // le seul remède, et la correction n'y a pas à choisir à sa place.
-  const resolved = new Set(
-    faults
-      .filter((fault) => hasWeakWitness(fault.requirement, context))
-      .map((fault) =>
-        witnessPairKey(fault.scenarioId, fault.requirement.sourceFile)
-      )
-  );
   const parts = planRefusalParts(
     candidate,
     policy,
@@ -1132,7 +1144,7 @@ export function quotePickCorrection(
     catalog,
     scans,
     undefined,
-    resolved
+    weakWitnessPairs(faults, context)
   );
   if (
     parts.reserved.length > 0 ||
