@@ -52,6 +52,7 @@ import {
   unwitnessedSources,
   validateCoverage,
   validateProvider,
+  weakWitnessSuggestion,
   writeEvidenceRefusals,
 } from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
@@ -457,7 +458,11 @@ function ungroundedRemedy(
   scans: AmputationScans
 ): string {
   if (hasWeakWitness(requirement, context)) {
-    return UNGROUNDED_WEAK_REMEDY;
+    // Le préambule fatal survit à la troncature et le détail par exigence non :
+    // la ligne réelle qui porte l'identifiant voyage donc avec le remède de la
+    // classe, sinon le planificateur ne reçoit, à l'endroit qui survit, qu'un
+    // conseil qui ne nomme aucune ligne.
+    return `${UNGROUNDED_WEAK_REMEDY}${weakWitnessSuggestion(requirement, context)}`;
   }
   return (
     absentRequirementRemedy(requirement, context, scans).trim() ||

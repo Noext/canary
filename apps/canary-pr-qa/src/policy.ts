@@ -363,7 +363,10 @@ export const UNGROUNDED_WEAK_REMEDY =
  * qui ne nomme que le scénario et le fichier laisse le planificateur deviner
  * laquelle de ses exigences est fausse, et lui fait reconstruire la même
  * citation. Le cas absent y ajoute où la citation vit réellement, ou l'aveu
- * qu'aucun fichier que la PR change ne la porte (voir `witnessLocation`).
+ * qu'aucun fichier que la PR change ne la porte (voir `witnessLocation`) ; le cas
+ * faible y ajoute la ligne réelle qui porte l'identifiant (voir
+ * `weakWitnessSuggestion`), sans quoi le conseil « cite un fragment
+ * substantiel » ne nomme rien et le planificateur renvoie le même identifiant.
  */
 export function ungroundedRequirement(
   scenarioId: string,
@@ -378,7 +381,7 @@ export function ungroundedRequirement(
     return new QaError(
       "REQUIREMENT_UNGROUNDED",
       `Weak source witness for ${fault}`,
-      `The quote exists in ${requirement.sourceFile} but carries no visible code content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit and a code structure (an operator, a bracket, a quote, or the blank between two words; an identifier's underscore, hyphen, dot, colon or slash does not count), so a bare identifier, a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.`
+      `The quote exists in ${requirement.sourceFile} but carries no visible code content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit and a code structure (an operator, a bracket, a quote, or the blank between two words; an identifier's underscore, hyphen, dot, colon or slash does not count), so a bare identifier, a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.${weakWitnessSuggestion(requirement, context)}`
     );
   }
   return new QaError(
@@ -724,14 +727,89 @@ export function quoteSuggestion(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext
 ): string {
-  const candidates = suggestedQuoteLines(requirement, context);
-  if (candidates.length === 0) {
+  return lineSuggestion(
+    suggestedQuoteLines(requirement, context),
+    requirement.sourceFile
+  );
+}
+/**
+ * Les lignes réelles à citer à la place d'une citation refusée, sous la forme
+ * que le planificateur reçoit : « 116: "…" ». Une liste vide rend une chaîne
+ * vide, jamais un remède qui ne nomme rien.
+ */
+function lineSuggestion(
+  lines: { line: number; text: string }[],
+  sourceFile: string
+): string {
+  if (lines.length === 0) {
     return "";
   }
-  const listed = candidates
+  const listed = lines
     .map(({ line, text }) => `${line}: ${JSON.stringify(text)}`)
     .join(", ");
-  return ` Real lines of ${requirement.sourceFile} to quote instead: ${listed}.`;
+  return ` Real lines of ${sourceFile} to quote instead: ${listed}.`;
+}
+/**
+ * Lignes réelles du fichier cité qui PORTENT la citation refusée à l'identique :
+ * le témoin évident d'une citation trop pauvre est la ligne qui la contient, et
+ * elle porte forcément la structure de code qui manquait à l'identifiant nu.
+ *
+ * C'est la piste qui manquait au refus « Weak source witness ». Le remède de la
+ * citation absente s'appuie sur le recouvrement de jetons
+ * (`suggestedQuoteLines`), qui exige trois jetons partagés et une ligne de moins
+ * de 120 caractères : `counted.totalUnits` (deux jetons) et `ecart-justifie`
+ * n'obtenaient donc AUCUN candidat et AUCUNE piste — mesuré sur les runs
+ * 9ee36233 et b132c982 —, et `ecart-a-justifier` n'en obtenait que par la grâce
+ * de ses trois jetons. Ici le critère n'est pas une ressemblance de jetons mais
+ * la présence EXACTE de la citation dans la ligne, et le candidat est la ligne
+ * ENTIÈRE : il porte donc toujours le contenu et la structure que le gate
+ * exige. La règle de témoin, elle, ne bouge pas — un identifiant nu reste
+ * refusé ; seule la piste vers sa ligne réelle est nouvelle.
+ *
+ * Vide pour une citation qui porte déjà du contenu : ce diagnostic ne concerne
+ * que le témoin trop pauvre, et sa liste n'élargit jamais l'acceptation.
+ */
+export function weakWitnessLines(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext
+): { line: number; text: string }[] {
+  if (quoteCarriesContent(requirement.quote)) {
+    return [];
+  }
+  const found: { line: number; text: string }[] = [];
+  const seen = new Set<string>();
+  for (const { line, text } of fileContentLines(requirement, context)) {
+    const key = normalizeQuoteText(text);
+    // Une ligne que le gate refuserait comme citation — trop longue, ou sans
+    // contenu visible — n'est jamais proposée : elle n'apprendrait rien au
+    // planificateur, qui la verrait refusée au tour suivant.
+    if (
+      seen.has(key) ||
+      text.length > QUOTE_MAX_CHARS ||
+      !quoteCarriesContent(text) ||
+      !quoteAppears(text, requirement.quote)
+    ) {
+      continue;
+    }
+    seen.add(key);
+    found.push({ line, text });
+  }
+  return found.slice(0, SUGGESTED_QUOTE_LIMIT);
+}
+/**
+ * Remède d'un témoin trop pauvre : les lignes réelles qui portent la citation,
+ * au plus deux. Il remplace, pour ce défaut, la similitude de jetons du remède
+ * de citation absente — la citation existe, seule sa substance manque, et la
+ * ligne qui la porte est la réponse exacte.
+ */
+export function weakWitnessSuggestion(
+  requirement: Pick<Requirement, "quote" | "sourceFile">,
+  context: PrContext
+): string {
+  return lineSuggestion(
+    weakWitnessLines(requirement, context),
+    requirement.sourceFile
+  );
 }
 /**
  * Un fragment d'une citation recousue, retrouvé tel quel sur une ligne réelle du
@@ -1252,11 +1330,14 @@ export function quoteDivergence(
  * runner.ts) : le planificateur choisit un indice, le gate écrit le texte, donc
  * la boucle de correction ne peut plus reproduire l'altération qu'elle corrige.
  *
- * Quatre sources, dans cet ordre : l'endroit où la copie s'écarte de sa ligne
+ * Cinq sources, dans cet ordre : l'endroit où la copie s'écarte de sa ligne
  * (`quoteDivergence`), la ligne dont elle est une amputation
- * (`amputatedQuote`), les lignes qui recouvrent le plus ses jetons
- * (`suggestedQuoteLines`), et — seulement quand les trois premières se taisent —
- * la ligne dont les mots sont exactement les siens (`wordAlignedFragment`).
+ * (`amputatedQuote`), les lignes qui portent la citation à l'identique — le
+ * remède propre au témoin trop pauvre (`weakWitnessLines`), que le recouvrement
+ * de jetons ne trouve pas — puis les lignes qui recouvrent le plus ses jetons
+ * (`suggestedQuoteLines`), et — seulement quand toutes les précédentes se
+ * taisent — la ligne dont les mots sont exactement les siens
+ * (`wordAlignedFragment`).
  * Chaque candidat est vérifié comme témoin du fichier cité avant d'être proposé
  * — un candidat que le gate refuserait ne dirigerait le planificateur nulle part
  * — et la liste est dédoublonnée sur son texte normalisé, donc deux diagnostics
@@ -1291,6 +1372,13 @@ export function quoteResolutionCandidates(
   }
   if (scan?.amputation) {
     offer(scan.amputation.line, scan.amputation.candidate);
+  }
+  // Le témoin trop pauvre passe en tête : sa réponse est la ligne qui porte
+  // l'identifiant, pas une ressemblance de jetons. Elle est offerte avant la
+  // suggestion de recouvrement, qui pour `counted.totalUnits` ne propose rien
+  // (deux jetons) et pour une ligne de plus de 120 caractères se taît aussi.
+  for (const item of weakWitnessLines(requirement, context)) {
+    offer(item.line, item.text);
   }
   for (const item of suggestedQuoteLines(requirement, context)) {
     offer(item.line, item.text);
@@ -1997,9 +2085,16 @@ export function ungroundedPlanRefusals(
         detailed && amputated === "" && divergent === "" && stitched === ""
           ? quoteSuggestion(requirement, context)
           : "";
+      // Le conseil du témoin trop pauvre porte déjà sa ligne réelle (voir
+      // `weakWitnessSuggestion`) : la similitude de jetons la répéterait mot
+      // pour mot. Quand ce diagnostic ne trouve aucune ligne — la citation
+      // n'existe alors que sur plusieurs lignes recousues — l'ancienne
+      // suggestion reste le seul secours, donc elle est gardée.
+      const weak = hasWeakWitness(requirement, context);
+      const lead = weak && weakWitnessLines(requirement, context).length > 0;
       const remedy = stitched
         ? `${stitched} ${error.hint}`
-        : `${error.hint}${suggestion}`;
+        : `${error.hint}${lead ? "" : suggestion}`;
       return `${error.message}. ${remedy}`;
     }
   );
