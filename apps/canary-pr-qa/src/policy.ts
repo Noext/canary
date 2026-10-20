@@ -382,7 +382,7 @@ export function ungroundedRequirement(
     return new QaError(
       "REQUIREMENT_UNGROUNDED",
       `Weak source witness for ${fault}`,
-      `The quote exists in ${requirement.sourceFile} but carries no visible code content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit and a code structure (an operator, a bracket, a double quote, or the blank between two words; neither an identifier's underscore, hyphen, dot, colon or slash nor the apostrophe of a lifetime such as 'dangerous counts), so a bare identifier, a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.${weakWitnessSuggestion(requirement, context)}`
+      `The quote exists in ${requirement.sourceFile} but carries no visible code content: a witness must carry at least ${QUOTE_MIN_WORD_CHARS} letter or digit and a code structure (an operator, a bracket, a double quote, the blank between two words, or a pair of apostrophes around a literal; neither an identifier's underscore, hyphen, dot, colon or slash nor the lone apostrophe of a lifetime such as 'dangerous counts), so a bare identifier, a punctuation fragment, a run of invisibles or a default-ignorable letter copied in passing cannot prove it. Quote a substantial fragment of ${requirement.sourceFile}${criticalSkipRefused(policy, requirement.sourceFile) ? ", or get the file's skip approved in .canary/qa.json on the trusted base branch" : ""}.${weakWitnessSuggestion(requirement, context)}`
     );
   }
   return new QaError(

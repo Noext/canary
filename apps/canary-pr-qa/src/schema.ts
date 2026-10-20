@@ -70,18 +70,19 @@ export function normalizeQuoteText(value: string): string {
  * du décompte, comme `$` et `#` qui forment eux aussi des identifiants
  * JavaScript (`$foo`, `#field`).
  *
- * L'apostrophe est exclue pour la même raison, par l'autre bout : elle ne
- * sépare rien, elle PRÉCÈDE un identifiant (le lifetime Rust `'dangerous`,
- * `'static`, le caractère `'a'`) ou elle délimite un contenu dont les lettres
- * et le blanc rendent déjà compte. Compter le sigil laissait donc un
- * identifiant nu redevenir témoin sous une autre écriture : `'dangerous`
- * (10 caractères, des lettres, une apostrophe) couvrait un fichier `.rs` d'un
- * dépôt où une PR non fiable pilote le planificateur. Les cas légitimes ne sont
- * pas refusés pour autant, parce qu'ils passent par les autres caractères :
- * `let c = 'a';` porte `=` et `;` plus le blanc entre deux mots, `'bonjour le
- * monde'` porte ce même blanc, et `data-cash-state={closed?"cloture":"ouvert"}`
- * porte accolades, `=` et `?`. Le guillemet interne, lui, reste compté : c'est
- * une des formes du contrat.
+ * L'apostrophe demande une règle à part, parce qu'elle a deux rôles. Comme
+ * SIGIL, elle précède un identifiant — le lifetime Rust `'dangerous`, `'static`,
+ * le caractère `'a` — et ne sépare rien : la compter laissait un identifiant nu
+ * redevenir témoin sous une autre écriture, `'dangerous` (10 caractères, des
+ * lettres, une apostrophe) couvrant un fichier `.rs` d'un dépôt où une PR non
+ * fiable pilote le planificateur. Comme DÉLIMITEUR, elle entoure une chaîne de
+ * caractères — `'cloture'`, `'completed'` —, qui est du code au même titre que
+ * `"cloture"`, et l'exclure entièrement refuserait une citation exacte que le
+ * planificateur produit réellement, donc ferait dépendre le verdict du style de
+ * guillemet. Le compteur ne retient donc que la paire qui délimite un contenu
+ * non vide (voir `QUOTED_SPAN`) : `'dangerous` n'en porte aucune et reste sans
+ * structure, `'cloture'` en porte une et reste un témoin. Un modèle qui cite
+ * `'dangerous'` entre apostrophes cite une chaîne, comme `"dangerous"`.
  *
  * Le seuil de structure vaut UN et non deux : des contrats déjà tenus par la
  * suite acceptent une citation dont c'est le seul caractère de structure —
@@ -108,8 +109,9 @@ export const QUOTE_MIN_TEXT_CHARS = 8;
 export const QUOTE_MIN_WORD_CHARS = 1;
 /**
  * Caractères de structure de code exigés d'une citation : au moins un symbole
- * de la liste explicite `STRUCTURE_CHARS`, ou un blanc entre deux mots. Ni
- * lettre, ni chiffre, ni caractère de liaison d'identifiant.
+ * de la liste explicite `STRUCTURE_CHARS`, un blanc entre deux mots, ou une
+ * paire d'apostrophes qui délimite un contenu. Ni lettre, ni chiffre, ni
+ * caractère de liaison d'identifiant, ni apostrophe de sigil.
  */
 export const QUOTE_MIN_STRUCTURE_CHARS = 1;
 const WORD_CHARS = /[\p{L}\p{N}]/gu;
@@ -121,11 +123,20 @@ const WORD_CHARS = /[\p{L}\p{N}]/gu;
  * (`snake_case`, `kebab-case`, `a.b.c`, `a:b`, `a/b`), donc les compter
  * accepterait un identifiant nu comme témoin. `$` et `#` le sont aussi parce
  * qu'ils forment des identifiants JavaScript (`$foo`, `#field`). L'apostrophe
- * l'est enfin : c'est un sigil qui précède un identifiant — le lifetime Rust
- * `'dangerous` — ou un délimiteur dont le contenu compte par ses lettres et
- * ses blancs, donc un identifiant nu préfixé passait pour une expression.
+ * l'est aussi, mais elle n'est pas perdue : c'est un SIGIL quand elle précède
+ * un identifiant (le lifetime Rust `'dangerous`) et un DÉLIMITEUR quand elle
+ * entoure une chaîne (`'cloture'`). Seul le délimiteur compte, par `QUOTED_SPAN`.
  */
 const STRUCTURE_CHARS = /[{}()[\]=!<>,;"`|&?+*%^~]/gu;
+/**
+ * La paire d'apostrophes qui délimite un contenu non vide : une chaîne de
+ * caractères, donc une structure de code, quel que soit le style de guillemet
+ * choisi par la source citée. Un apostrophe isolé n'y entre pas — c'est le
+ * sigil d'un lifetime ou d'un caractère Rust —, sinon `'dangerous` redevenait
+ * un témoin. `'a'` en est une paire, mais trois caractères restent sous le
+ * plancher de longueur : c'est la ligne qui le porte qui témoigne.
+ */
+const QUOTED_SPAN = /'[^']+'/gu;
 /**
  * Le blanc qui sépare deux mots : une suite de blancs bordée d'un mot de part
  * et d'autre. Un blanc voisin d'une ponctuation ne compte pas — c'est la
@@ -155,15 +166,17 @@ function visibleWordChars(value: string): number {
 }
 /**
  * Caractères de structure d'une chaîne qui s'affichent réellement : les
- * symboles de `STRUCTURE_CHARS`, plus un pour chaque blanc qui sépare deux
- * mots. Un zéro-largeur ne compte pas comme une ponctuation.
+ * symboles de `STRUCTURE_CHARS`, plus un pour chaque blanc qui sépare deux mots,
+ * plus un pour chaque paire d'apostrophes qui délimite un contenu. Un
+ * zéro-largeur ne compte pas comme une ponctuation.
  */
 function visibleStructureChars(value: string): number {
   const symbols = (value.match(STRUCTURE_CHARS) ?? []).filter(
     (char) => !DEFAULT_IGNORABLE.test(char)
   ).length;
   const separators = (value.match(WORD_SEPARATING_SPACE) ?? []).length;
-  return symbols + separators;
+  const delimited = (value.match(QUOTED_SPAN) ?? []).length;
+  return symbols + separators + delimited;
 }
 /**
  * Plafond de longueur d'une citation, en caractères. Le schéma le pose et le
