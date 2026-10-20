@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertionMatches } from "../src/canary.js";
+import { PLANNER_PROMPT } from "../src/model.js";
 import { missingExpectationRefusals } from "../src/plan-evidence.js";
 import {
   type Plan,
@@ -470,5 +471,64 @@ describe("rejeu des rouges composés : hors d'atteinte de cette forme", () => {
     // échoue toujours, parce que la valeur attendue est calculée au rendu.
     expect(expectedOf(plan)).toBe(COMPOSED);
     expect(assertion && assertionMatches(assertion, RENDERED)).toBe(false);
+  });
+});
+
+/**
+ * Le prompt est le seul endroit où le planificateur peut découvrir la forme :
+ * sans la consigne, il retape la valeur attendue, donc il peut l'inventer — les
+ * deux rouges qui ont motivé cette forme écrivaient l'écart supposé au lieu de
+ * celui que leur scénario produisait. Chaque point ci-dessous tombe si sa
+ * consigne disparaît du prompt.
+ */
+describe("le prompt enseigne la forme référence, sans l'imposer", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+
+  it("enseigne la forme référence pour un attendu qui est un littéral du code", () => {
+    // Le champ et sa forme, pour que le modèle ne cherche pas une troisième
+    // écriture : ce qu'il écrit dans expected, tel quel.
+    expect(prompt).toMatch(
+      /For a text or value expected that is a literal the code writes, designate its line — `"expected":\{"sourceFile":"changed\/path","line":368\}` — instead of retyping the text/
+    );
+    // La lecture est celle de la référence de ligne d'une exigence : le gate
+    // écrit le littéral, et aucun caractère ne passe par le modèle.
+    expect(prompt).toMatch(
+      /the gate writes the single string literal that line of `sourceLines` carries, quotes excluded, exactly as a requirement's `line` does/
+    );
+  });
+
+  it("énonce la frontière, avec l'exemple littéral et l'exemple composé", () => {
+    expect(prompt).toMatch(
+      /The boundary is whether one literal holds the value/
+    );
+    // Littéral d'un côté : la ligne mesurée qui écrit le statut.
+    expect(prompt).toMatch(
+      /line 144 of `packages\/domain\/src\/cash\.ts` writes `status: "ecart-justifie"`, so designating that line IS the expected `ecart-justifie`/
+    );
+    // Composé de l'autre : le montant calculé et le total compté, qu'aucun
+    // littéral ne porte.
+    expect(prompt).toMatch(/a computed amount, a counted total/);
+    // Désigner n'est pas un passe-droit : la ligne doit porter le seul littéral.
+    expect(prompt).toMatch(
+      /A designated line must carry exactly one string literal, inside the 1000-character cap/
+    );
+  });
+
+  it("laisse la forme chaîne libre pour une valeur composée au rendu", () => {
+    expect(prompt).toMatch(
+      /are composed at render — a computed amount, a counted total — so no literal holds them and you write them out/
+    );
+    // Jamais obligatoire : aucun plan légitime n'est refusé faute de référence.
+    expect(prompt).toMatch(
+      /This form is never mandatory: a composed value has no literal to designate, so the string form stays accepted for every kind, and no assertion is refused for writing it/
+    );
+  });
+
+  it("montre les deux formes dans le squelette JSON", () => {
+    // La forme chaîne libre reste dans le squelette, à côté de la référence.
+    expect(prompt).toContain('"expected":"concrete expected value"');
+    expect(prompt).toContain(
+      '"expected":{"sourceFile":"changed/path","line":368}'
+    );
   });
 });
