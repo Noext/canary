@@ -237,58 +237,130 @@ const expectedText = z
     "expected is required and cannot be blank: this kind compares the observed value to it, so an empty expected can never be satisfied (text would match any page)."
   )
   .max(2000);
-export const AssertionSchema = z.discriminatedUnion("kind", [
-  z
-    .object({ ...assertionBase, kind: z.literal("visual"), expected: text })
-    .strict(),
-  z
-    .object({
-      ...assertionBase,
-      kind: z.literal("download"),
-      expected: expectedText,
-    })
-    .strict(),
-  z
-    .object({ ...assertionBase, kind: z.literal("popup"), expected: text })
-    .strict(),
-  z
-    .object({
-      ...assertionBase,
-      kind: z.literal("text"),
-      expected: expectedText,
-    })
-    .strict(),
-  z
-    .object({
-      ...assertionBase,
-      kind: z.literal("value"),
-      // Pas de `.min(1)` ici, contrairement aux autres kinds à valeur : `""`
-      // est la forme mesurée de « le champ est vide ». 27 assertions de ce kind
-      // sur 26 runs du corpus portent un attendu vide, 25 passent, et toutes
-      // décrivent un champ vierge (comptage d'une pharmacie non hérité d'une
-      // autre). `actual === ""` compare à quelque chose de précis, donc la
-      // présence de `expected` suffit ; la règle de lecture vit dans
-      // `missingExpectationRefusals` (plan-evidence.ts).
-      expected: z.string().max(2000),
-    })
-    .strict(),
-  z
-    .object({
-      ...assertionBase,
-      kind: z.literal("url"),
-      expected: expectedText,
-    })
-    .strict(),
-  z
-    .object({
-      ...assertionBase,
-      kind: z.literal("count"),
-      expected: z.number().int().min(0).max(10_000),
-    })
-    .strict(),
-  z.object({ ...assertionBase, kind: z.literal("visible") }).strict(),
-  z.object({ ...assertionBase, kind: z.literal("hidden") }).strict(),
-]);
+/**
+ * L'attendu désigné par sa LIGNE : le gate lit le littéral de chaîne unique de
+ * cette ligne du matériel et l'écrit dans `expected` (voir
+ * `resolveExpectedLiteral`). Aucun caractère ne traverse le planificateur, donc
+ * aucune valeur ne peut être altérée ni inventée. Une forme d'ENTRÉE, comme la
+ * référence `line` d'une exigence : le plan persisté ne porte que du texte.
+ */
+const expectedLineReference = z
+  .object({ sourceFile: text, line: z.number().int().min(1) })
+  .strict();
+/**
+ * L'attendu, tel que le planificateur le produit : la chaîne libre — acceptée
+ * exactement comme avant, sans aucun refus nouveau — ou la référence de ligne,
+ * que le gate résout dans le matériel avant toute validation de plan.
+ *
+ * Résoudre ici, dans le champ lui-même, borne la portée de la forme : seuls
+ * `text` et `value` reçoivent cette union. `url`, `download`, `popup` et
+ * `visual` nomment une URL, un fichier ou une baseline que la source n'écrit
+ * pas comme un littéral, et `count` est un nombre.
+ */
+function submittedExpected(
+  material: SourceLineMaterial[],
+  kind: "text" | "value"
+) {
+  return z
+    .union([
+      expectedLineReference,
+      kind === "text" ? expectedText : z.string().max(2000),
+    ])
+    .transform((value, ctx) => {
+      if (typeof value === "string") {
+        return value;
+      }
+      const resolution = resolveExpectedLiteral(
+        value.sourceFile,
+        value.line,
+        material
+      );
+      if ("refusal" in resolution) {
+        // Le refus est prononcé : la valeur rendue ci-dessous n'est jamais
+        // persistée, un plan portant une issue n'étant pas rendu.
+        ctx.addIssue({ code: "custom", message: resolution.refusal });
+        return "";
+      }
+      // `text` rogne son attendu et matche toute page avec `""` : un littéral
+      // vide n'y prouve rien, comme la forme chaîne le refuse déjà. `value`
+      // garde le vide, qui y est la forme mesurée de « le champ est vide ».
+      if (kind === "text" && resolution.literal.trim() === "") {
+        ctx.addIssue({
+          code: "custom",
+          message: `The string literal on line ${value.line} of ${value.sourceFile} is empty or blank, and a text expected cannot be blank: text trims its expected, so a blank one is satisfied by any page. Write the value itself in expected, or designate the line that carries the text the view displays.`,
+        });
+        return "";
+      }
+      return resolution.literal;
+    });
+}
+/**
+ * Les huit kinds d'assertion, avec l'attendu que la forme courante accepte pour
+ * `text` et `value` : le plan persisté n'y met que la chaîne, la forme du
+ * planificateur y accepte en plus la référence de ligne
+ * (`submittedAssertion`).
+ */
+function assertionVariants(expectation: {
+  text: z.ZodTypeAny;
+  value: z.ZodTypeAny;
+}) {
+  return z.discriminatedUnion("kind", [
+    z
+      .object({ ...assertionBase, kind: z.literal("visual"), expected: text })
+      .strict(),
+    z
+      .object({
+        ...assertionBase,
+        kind: z.literal("download"),
+        expected: expectedText,
+      })
+      .strict(),
+    z
+      .object({ ...assertionBase, kind: z.literal("popup"), expected: text })
+      .strict(),
+    z
+      .object({
+        ...assertionBase,
+        kind: z.literal("text"),
+        expected: expectation.text,
+      })
+      .strict(),
+    z
+      .object({
+        ...assertionBase,
+        kind: z.literal("value"),
+        // Pas de `.min(1)` ici, contrairement aux autres kinds à valeur : `""`
+        // est la forme mesurée de « le champ est vide ». 27 assertions de ce kind
+        // sur 26 runs du corpus portent un attendu vide, 25 passent, et toutes
+        // décrivent un champ vierge (comptage d'une pharmacie non hérité d'une
+        // autre). `actual === ""` compare à quelque chose de précis, donc la
+        // présence de `expected` suffit ; la règle de lecture vit dans
+        // `missingExpectationRefusals` (plan-evidence.ts).
+        expected: expectation.value,
+      })
+      .strict(),
+    z
+      .object({
+        ...assertionBase,
+        kind: z.literal("url"),
+        expected: expectedText,
+      })
+      .strict(),
+    z
+      .object({
+        ...assertionBase,
+        kind: z.literal("count"),
+        expected: z.number().int().min(0).max(10_000),
+      })
+      .strict(),
+    z.object({ ...assertionBase, kind: z.literal("visible") }).strict(),
+    z.object({ ...assertionBase, kind: z.literal("hidden") }).strict(),
+  ]);
+}
+export const AssertionSchema = assertionVariants({
+  text: expectedText,
+  value: z.string().max(2000),
+});
 export const ActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("observe") }).strict(),
   z
@@ -458,6 +530,231 @@ export function resolveLineReference(
   }
   return { text: found.text };
 }
+/** Guillemets qui délimitent un littéral de chaîne dans le matériel cité. */
+const LITERAL_DELIMITERS = new Set(["'", '"', "`"]);
+/**
+ * Caractère d'identifiant : l'apostrophe qui le suit appartient au mot, comme
+ * dans `l'utilisateur` ou `d'espèces`, et n'ouvre donc aucun littéral. Sans
+ * cette règle, une ligne de prose française rendrait un faux littéral pris
+ * entre deux apostrophes de mots.
+ */
+const IDENTIFIER_CHAR = /[\p{L}\p{N}_$]/u;
+/** Un littéral trouvé sur une ligne : ses guillemets, son contenu et sa place, guillemets exclus. */
+interface LineLiteral {
+  close: number;
+  delimiter: string;
+  literal: string;
+  start: number;
+}
+/**
+ * Littéraux nommés dans un refus, et longueur de l'extrait qui les nomme : le
+ * refus part au planificateur dans le budget de `model.ts` (2000 caractères,
+ * `readContent`), donc quatre extraits bornés disent ce que la ligne porte sans
+ * que le refus soit coupé avant sa fin.
+ */
+const REFERENCE_NAMED_LITERALS = 4;
+const REFERENCE_LITERAL_EXCERPT = 60;
+/**
+ * Le guillemet qui ferme le littéral ouvert en `open`, ou -1 quand la ligne
+ * n'en porte pas : une apostrophe isolée — le lifetime Rust `'a`, la prose
+ * `l'écart` — n'ouvre alors rien. Un antislash échappe le caractère suivant,
+ * comme dans le code cité.
+ */
+function closingDelimiter(text: string, open: number): number {
+  const delimiter = text.charAt(open);
+  for (let index = open + 1; index < text.length; index += 1) {
+    if (text.charAt(index) === "\\") {
+      index += 1;
+    } else if (text.charAt(index) === delimiter) {
+      return index;
+    }
+  }
+  return -1;
+}
+/**
+ * Les littéraux de chaîne qu'une ligne porte, dans l'ordre où elle les porte.
+ *
+ * Un littéral est une chaîne entre guillemets simples, doubles ou backticks :
+ * son contenu est rendu TEL QUEL, sans ses guillemets et sans interprétation —
+ * une interpolation garde ses `${...}` et un échappement son antislash, parce
+ * que le gate ne calcule rien, il lit ce que la ligne écrit. Une ligne dont le
+ * littéral porte ce que le navigateur évalue — un antislash, une interpolation
+ * de gabarit — ne désigne donc aucune valeur : la graphie source n'y est pas le
+ * texte rendu, et `resolveExpectedLiteral` la refuse au lieu de la persister.
+ */
+function lineLiterals(text: string): LineLiteral[] {
+  const literals: LineLiteral[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const delimiter = text.charAt(index);
+    if (!LITERAL_DELIMITERS.has(delimiter)) {
+      index += 1;
+      continue;
+    }
+    if (delimiter === "'" && IDENTIFIER_CHAR.test(text.charAt(index - 1))) {
+      index += 1;
+      continue;
+    }
+    const close = closingDelimiter(text, index);
+    if (close < 0) {
+      index += 1;
+      continue;
+    }
+    literals.push({
+      close,
+      delimiter,
+      literal: text.slice(index + 1, close),
+      start: index,
+    });
+    index = close + 1;
+  }
+  return literals;
+}
+/**
+ * Un guillemet orphelin hors du littéral retenu : la ligne en porte un que RIEN
+ * n'a apparié — le guillemet d'une regex, par exemple — donc l'appariement a pu
+ * traverser ce guillemet et rendre une tranche qui n'est pas une chaîne. Une
+ * ligne regex comme `if (/\"/.test(value)) setMessage("Ready")` ne porte pas
+ * `/.test(value)) setMessage(`, elle porte `Ready` seulement ; ce garde refuse
+ * la ligne au lieu de persister une valeur que la page n'affiche jamais. La
+ * lecture reste lexicale : au-delà de ce cas, un pathologique reste possible.
+ */
+function carriesStrayDelimiter(text: string, literal: LineLiteral): boolean {
+  const rest = text.slice(0, literal.start) + text.slice(literal.close + 1);
+  for (let index = 0; index < rest.length; index += 1) {
+    const delimiter = rest.charAt(index);
+    if (!LITERAL_DELIMITERS.has(delimiter)) {
+      continue;
+    }
+    if (delimiter === "'" && IDENTIFIER_CHAR.test(rest.charAt(index - 1))) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+/**
+ * Les littéraux d'une ligne, nommés dans un refus : bornés en nombre et en
+ * longueur, pour que le refus dise ce que la ligne porte réellement sans jamais
+ * déverser la ligne entière dans un diagnostic.
+ */
+function namedLiterals(literals: LineLiteral[]): string {
+  const shown = literals.slice(0, REFERENCE_NAMED_LITERALS).map((item) => {
+    const excerpt =
+      item.literal.length > REFERENCE_LITERAL_EXCERPT
+        ? `${item.literal.slice(0, REFERENCE_LITERAL_EXCERPT)}…`
+        : item.literal;
+    return `${item.delimiter}${excerpt}${item.delimiter}`;
+  });
+  const rest = literals.length - REFERENCE_NAMED_LITERALS;
+  return `${shown.join(", ")}${rest > 0 ? ` (+${rest} more)` : ""}`;
+}
+/**
+ * Les lignes les plus proches qui portent, elles, exactement un littéral : une
+ * ligne qui n'en porte aucun ne désigne rien, donc le refus nomme les voisines
+ * qui le peuvent au lieu de renvoyer le planificateur vers la même ligne.
+ */
+function singleLiteralLines(
+  lines: { line: number; text: string }[],
+  line: number
+): number[] {
+  return lines
+    .filter(
+      (item) => item.line !== line && lineLiterals(item.text).length === 1
+    )
+    .sort(
+      (left, right) =>
+        Math.abs(left.line - line) - Math.abs(right.line - line) ||
+        left.line - right.line
+    )
+    .slice(0, REFERENCE_CARRIER_LINES)
+    .map((item) => item.line);
+}
+/**
+ * Ce que donne une référence `expected: {sourceFile, line}` : le littéral que la
+ * ligne porte, ou le refus qui dit pourquoi elle n'en désigne pas un seul.
+ */
+export type ExpectedLiteralResolution =
+  | { literal: string }
+  | { refusal: string };
+/**
+ * Résolution d'un `expected` désigné par sa ligne dans le matériel numéroté.
+ *
+ * Le contrat est celui d'une lecture, pas d'une composition : seul le littéral
+ * de chaîne UNIQUE de la ligne est écrit, tel quel et sans guillemets. Une ligne
+ * qui n'en porte aucun, qui en porte plusieurs, dont un guillemet reste orphelin
+ * hors du littéral (le guillemet d'une regex, voir `carriesStrayDelimiter`),
+ * dont le littéral porte ce que le navigateur évalue (antislash, interpolation
+ * de gabarit), ou dont le littéral dépasse le plafond de citation ne désigne
+ * donc aucune valeur, et le refus le dit avec le numéro demandé et ce que la
+ * ligne porte réellement — jamais une valeur devinée, jamais la ligne entière. Le plafond est celui de la citation
+ * parce que la forme désigne un fragment de source : au-delà, écrire `expected`
+ * comme chaîne reste la voie.
+ */
+export function resolveExpectedLiteral(
+  sourceFile: string,
+  line: number,
+  material: SourceLineMaterial[]
+): ExpectedLiteralResolution {
+  const file = material.find((item) => item.path === sourceFile);
+  if (file && file.lines.length === 0) {
+    return {
+      refusal: `No numbered line for ${sourceFile}: sourceLines lists that file but no line of it, because its diff carries no added or context line. Write the value itself in expected instead.`,
+    };
+  }
+  if (!file) {
+    const listed = material.map((item) => item.path);
+    return {
+      refusal: `No numbered line for ${sourceFile}: sourceLines lists no such file${listed.length === 0 ? " (it lists no file)" : ` (it lists ${namedList(listed)})`}. Designate a line of a listed file whose single string literal is the value, or write the value itself in expected.`,
+    };
+  }
+  const matches = file.lines.filter((item) => item.line === line);
+  if (matches.length > 1) {
+    return {
+      refusal: `Line ${line} of ${sourceFile} is ambiguous: sourceLines lists it ${matches.length} times, so it designates no single literal. Write the value itself in expected instead, since preference cannot be measured.`,
+    };
+  }
+  const found = matches[0];
+  if (!found) {
+    return {
+      refusal: `Line ${line} of ${sourceFile} is not in the numbered material: sourceLines lists ${neighbouringLines(file.lines, line)} (it carries the lines of the patch hunks, not every line of the file, and the context budget can cut that list short). Designate one of the listed numbers, or write the value itself in expected.`,
+    };
+  }
+  const literals = lineLiterals(found.text);
+  const [only] = literals;
+  if (!only) {
+    const carriers = singleLiteralLines(file.lines, line);
+    return {
+      refusal: `Line ${line} of ${sourceFile} carries no string literal at all: nothing between single quotes, double quotes or backticks, so it designates no expected value. ${carriers.length === 0 ? "" : `Lines that carry exactly one string literal: ${carriers.join(", ")}. `}Designate one of them, or write the value itself in expected.`,
+    };
+  }
+  if (literals.length > 1) {
+    return {
+      refusal: `Line ${line} of ${sourceFile} carries ${literals.length} string literals (${namedLiterals(literals)}), so it designates no single expected value: name the line that carries only the one, or write the value itself in expected.`,
+    };
+  }
+  if (carriesStrayDelimiter(found.text, only)) {
+    return {
+      refusal: `The line around the only string literal on line ${line} of ${sourceFile} carries an unpaired quote character — a quote inside a regular expression or a comment does not open a string — so the fragment this reading would take is not a string the view displays. Write the value the page displays in expected instead; a \`quote\` requirement for this file's changed behavior is unaffected.`,
+    };
+  }
+  if (only.literal.includes("\\")) {
+    return {
+      refusal: `The string literal on line ${line} of ${sourceFile} carries a backslash: an escape or a line continuation, so the characters this line spells are not the text the browser renders (\\n is a newline there, not two characters). Designating it would persist a value the page never displays, so write the value the page displays in expected instead.`,
+    };
+  }
+  if (only.delimiter === "`" && only.literal.includes("${")) {
+    return {
+      refusal: `The string literal on line ${line} of ${sourceFile} is a template carrying a \`\${...}\` interpolation, which the view evaluates at render, and this reading writes the interpolation unevaluated: designating it would persist a value the page never displays. Write the value the page displays in expected instead.`,
+    };
+  }
+  if (only.literal.length > QUOTE_MAX_CHARS) {
+    return {
+      refusal: `The string literal on line ${line} of ${sourceFile} holds ${only.literal.length} characters, beyond the ${QUOTE_MAX_CHARS}-character citation cap, so it cannot be designated: write the value itself in expected instead.`,
+    };
+  }
+  return { literal: only.literal };
+}
 /**
  * L'exigence du plan PERSISTÉ : une citation texte, toujours. Toute la lecture
  * en aval — couverture, témoin, rapport, UI — ne connaît que cette forme.
@@ -529,11 +826,14 @@ function submittedRequirement(material: SourceLineMaterial[]) {
     }));
 }
 /**
- * Les clés d'un scénario, indépendantes de la forme d'une exigence : le
- * planificateur en produit une (citation ou référence), le plan persisté n'en
- * garde qu'une citation texte.
+ * Les clés d'un scénario, indépendantes des formes que le planificateur produit
+ * et que le plan persisté garde : une exigence citée ou désignée, un attendu
+ * écrit ou désigné.
  */
-function scenarioSchema<T extends z.ZodTypeAny>(requirement: T) {
+function scenarioSchema<T extends z.ZodTypeAny, A extends z.ZodTypeAny>(
+  requirement: T,
+  assertion: A
+) {
   return z
     .object({
       id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
@@ -555,11 +855,14 @@ function scenarioSchema<T extends z.ZodTypeAny>(requirement: T) {
         .min(1)
         .max(40),
       requirements: z.array(requirement).min(1).max(20),
-      assertions: z.array(AssertionSchema).min(1).max(10),
+      assertions: z.array(assertion).min(1).max(10),
     })
     .strict();
 }
-export const ScenarioSchema = scenarioSchema(persistedRequirement);
+export const ScenarioSchema = scenarioSchema(
+  persistedRequirement,
+  AssertionSchema
+);
 /**
  * Actions MÉTIER : elles déplacent la donnée que le scénario prétend prouver.
  * Un clic tolérant placé après elles n'établit plus un état de départ, il
@@ -628,16 +931,19 @@ export function establishingClickFault(
   return;
 }
 /**
- * Le contrat d'un plan, indépendant de la forme d'une exigence — voir
- * `scenarioSchema`. Le planificateur est validé par la forme qui accepte une
- * référence `line` ; tout le reste — couverture, rapport, rejeu — lit le plan
- * persisté, qui ne porte que des citations texte.
+ * Le contrat d'un plan, indépendant des formes produites et persistées — voir
+ * `scenarioSchema`. Le planificateur est validé par la forme qui accepte les
+ * références de ligne, d'une exigence comme d'un `expected` ; tout le reste —
+ * couverture, rapport, rejeu — lit le plan persisté, qui ne porte que du texte.
  */
-function planSchema<T extends z.ZodTypeAny>(requirement: T) {
+function planSchema<T extends z.ZodTypeAny, A extends z.ZodTypeAny>(
+  requirement: T,
+  assertion: A
+) {
   return z
     .object({
       summary: text,
-      scenarios: z.array(scenarioSchema(requirement)).max(20),
+      scenarios: z.array(scenarioSchema(requirement, assertion)).max(20),
       skipped: z
         .array(z.object({ sourceFile: text, reason: text }).strict())
         .max(100),
@@ -653,16 +959,32 @@ function planSchema<T extends z.ZodTypeAny>(requirement: T) {
       }
     });
 }
-export const PlanSchema = planSchema(persistedRequirement);
+export const PlanSchema = planSchema(persistedRequirement, AssertionSchema);
 /**
- * Le schéma de la RÉPONSE du planificateur : la forme persistée, plus la
- * référence `line` qu'un gate résout dans le matériel reçu (`sourceLines`).
- * C'est le point d'entrée unique de la résolution : elle a donc lieu avant
- * toute validation de couverture, et un plan accepté ne peut pas porter une
- * citation recopiée que le modèle aurait altérée.
+ * L'assertion telle que le planificateur la PRODUIT : les formes du plan
+ * persisté, plus la référence de ligne qu'un `expected` de kind `text` ou
+ * `value` accepte. La résolution a lieu dans le champ lui-même, donc le plan
+ * rendu porte un attendu texte comme celui d'une chaîne écrite.
+ */
+function submittedAssertion(material: SourceLineMaterial[]) {
+  return assertionVariants({
+    text: submittedExpected(material, "text"),
+    value: submittedExpected(material, "value"),
+  });
+}
+/**
+ * Le schéma de la RÉPONSE du planificateur : la forme persistée, plus les
+ * références qu'un gate résout dans le matériel reçu (`sourceLines`) — une
+ * ligne pour le texte d'une exigence, une ligne pour le littéral d'un
+ * `expected`. C'est le point d'entrée unique de la résolution : elle a donc
+ * lieu avant toute validation de couverture, et un plan accepté ne peut porter
+ * ni une citation ni une valeur attendue que le modèle aurait altérée.
  */
 export function plannerPlanSchema(material: SourceLineMaterial[]) {
-  return planSchema(submittedRequirement(material));
+  return planSchema(
+    submittedRequirement(material),
+    submittedAssertion(material)
+  );
 }
 function validateContractAssertion(
   scenario: z.infer<typeof ScenarioSchema>,
