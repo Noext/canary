@@ -90,24 +90,114 @@ export const NO_DECLARED_PRECONDITIONS: TrustedCatalog = {
  */
 const PRECONDITION_REMEDY =
   "Only a declared precondition can be satisfied: fixture:name seeds isolated data through a controlled endpoint, role:name loads a stored browser state through an environment variable the operator sets, and an undeclared name has neither behind it. A choice the page itself offers — selected profile, active pharmacy, dropdown option — is a step, not a precondition: drop it from preconditions and drive that control with select or click, then let an assertion prove the switch.";
-/** Borne des noms cités : un refus reste lisible et la correction du planificateur est tronquée à 2000 caractères. */
-const DECLARED_LISTED = 12;
-const SCENARIOS_LISTED = 6;
-const CONDITIONS_LISTED = 3;
+/**
+ * Budget d'un message de précondition, en caractères. `model.ts` tronque la
+ * correction du planificateur à 2000 caractères : borner le NOMBRE de noms ne
+ * suffisait pas, puisque rien ne borne la longueur d'un nom. Mesuré : 20
+ * scénarios × 10 préconditions de 1990 caractères font 36 774 caractères, et la
+ * troncature emportait alors le catalogue ET le remède — le planificateur
+ * recevait une liste de noms sans rien pour la corriger. Ce budget laisse 500
+ * caractères sous la troncature pour l'enveloppe du refus et un préambule fatal.
+ */
+export const PRECONDITION_MESSAGE_CHARS = 1500;
+/**
+ * Part réservée à la phrase qui dit ce que le catalogue contient réellement —
+ * priorité 1 du message : elle survit entière, seule sa liste de noms s'abrège.
+ */
+const CATALOG_LISTED_CHARS = 400;
+/** Plafond d'un nom cité : le schéma accepte des noms de 2000 caractères. */
+const NAME_SHOWN_CHARS = 120;
+/** Part réservée aux conditions d'un scénario dans le refus agrégé : de quoi
+ * montrer le début d'un nom, jamais rien. */
+const CONDITIONS_SHOWN_CHARS = 140;
+/** Plafond d'une entrée du refus agrégé : identifiant (60 au plus) et conditions. */
+const OFFENDER_SHOWN_CHARS = 200;
 function declaredPreconditionNames(catalog: TrustedCatalog): string[] {
   return [
     ...Object.keys(catalog.fixtures).map((name) => `fixture:${name}`),
     ...catalog.roles.map((name) => `role:${name}`),
   ];
 }
-function listedDeclared(catalog: TrustedCatalog, repo: string): string {
+function shownName(name: string, cap = NAME_SHOWN_CHARS): string {
+  return name.length > cap ? `${name.slice(0, cap)}…` : name;
+}
+/**
+ * Une liste dans une place donnée, en caractères : les entrées gardées dans
+ * l'ordre tant qu'elles tiennent, chacune plafonnée, et la marque « … (+N more) »
+ * pour ce qui reste dehors. Une liste coupée le dit toujours : elle n'est jamais
+ * silencieusement plus courte que ce qu'elle annonce, et la marque est comptée
+ * dans la place pour ne pas pousser dehors la dernière entrée affichée.
+ */
+function boundedList(
+  items: string[],
+  budget: number,
+  separator: string,
+  cap = NAME_SHOWN_CHARS
+): string {
+  const shown: string[] = [];
+  let used = 0;
+  for (const [index, item] of items.entries()) {
+    const capped = shownName(item, cap);
+    const addition = `${shown.length > 0 ? separator : ""}${capped}`;
+    const rest = items.length - index - 1;
+    const marker = rest > 0 ? ` … (+${rest} more)` : "";
+    if (used + addition.length + marker.length > budget) {
+      break;
+    }
+    shown.push(capped);
+    used += addition.length;
+  }
+  const rest = items.length - shown.length;
+  if (rest === 0) {
+    return shown.join(separator);
+  }
+  const marker = `… (+${rest} more)`;
+  return shown.length === 0 ? marker : `${shown.join(separator)} ${marker}`;
+}
+/**
+ * Ce que le catalogue porte réellement pour ce dépôt, et sous quelle forme un
+ * nom se déclare quand il en porte aucun. Priorité 1 : la phrase survit à la
+ * troncature ; au-delà de `CATALOG_LISTED_CHARS`, c'est sa liste de noms qui
+ * s'abrège et le dit, jamais elle.
+ */
+function declaredSentence(catalog: TrustedCatalog, repo: string): string {
   const declared = declaredPreconditionNames(catalog);
   if (declared.length === 0) {
     return `The trusted catalog declares nothing for ${repo}: no precondition can run until QA_FIXTURES_FILE declares one.`;
   }
-  const listed = declared.slice(0, DECLARED_LISTED);
-  const rest = declared.length - listed.length;
-  return `The trusted catalog declares this for ${repo}: ${listed.join(", ")}${rest > 0 ? ` (+${rest} more)` : ""}.`;
+  const head = `The trusted catalog declares this for ${repo}: `;
+  return `${head}${boundedList(declared, CATALOG_LISTED_CHARS - head.length - 1, ", ")}.`;
+}
+/**
+ * Le refus complet, borné en caractères. La liste des manquements reçoit la place
+ * qui reste après le texte fixe, donc c'est elle seule qui se tronque — dans cet
+ * ordre de priorité : (1) ce que le catalogue contient réellement, (2) le remède
+ * qui dit qu'un choix offert par la page est une étape, (3) les scénarios
+ * fautifs. `reserve` est le texte fixe joint au message par l'appelant : le
+ * remède voyage dans `hint` pour un refus par scénario, et la place lui est
+ * réservée ici comme s'il était déjà écrit.
+ */
+function boundedRefusal(
+  head: string,
+  items: string[],
+  tail: string,
+  reserve: string,
+  separator: string,
+  cap = NAME_SHOWN_CHARS
+): string {
+  const budget =
+    PRECONDITION_MESSAGE_CHARS - head.length - tail.length - reserve.length;
+  return `${head}${boundedList(items, budget, separator, cap)}${tail}`;
+}
+/**
+ * L'entrée que le catalogue déclare pour ce nom, et rien d'autre : une propriété
+ * PROPRE, jamais héritée. `'toString' in {}` est vrai et `{}.constructor` aussi,
+ * donc `in` et l'indexation laisseraient passer `fixture:toString`,
+ * `fixture:hasOwnProperty` ou `role:__proto__` pour des noms déclarés :
+ * l'invention traverserait le gate jusqu'à l'exécution.
+ */
+function ownEntry<T>(record: Record<string, T>, name: string): T | undefined {
+  return Object.hasOwn(record, name) ? record[name] : undefined;
 }
 /**
  * Les préconditions qu'un scénario déclare sans que le catalogue les porte :
@@ -120,7 +210,7 @@ function unbackedConditions(
 ): string[] {
   return scenario.preconditions.filter((condition) => {
     if (condition.startsWith("fixture:")) {
-      return !(condition.slice(8) in catalog.fixtures);
+      return ownEntry(catalog.fixtures, condition.slice(8)) === undefined;
     }
     if (condition.startsWith("role:")) {
       return !catalog.roles.includes(condition.slice(5));
@@ -137,7 +227,6 @@ export function preconditionRefusals(
   catalog: TrustedCatalog,
   repo: string
 ): { error: QaError; scenario: Scenario }[] {
-  const declared = listedDeclared(catalog, repo);
   const refusals: { error: QaError; scenario: Scenario }[] = [];
   for (const scenario of plan.scenarios) {
     const offenders = unbackedConditions(scenario, catalog);
@@ -148,7 +237,13 @@ export function preconditionRefusals(
       scenario,
       error: new QaError(
         "PRECONDITION_UNVERIFIED",
-        `Scenario ${scenario.id} declares preconditions this run cannot satisfy: ${offenders.join(", ")}. ${declared}`,
+        boundedRefusal(
+          `Scenario ${scenario.id} declares preconditions this run cannot satisfy: `,
+          offenders,
+          `. ${declaredSentence(catalog, repo)}`,
+          `. ${PRECONDITION_REMEDY}`,
+          ", "
+        ),
         PRECONDITION_REMEDY
       ),
     });
@@ -174,13 +269,18 @@ export function preconditionPlanRefusal(
   if (offenders.length === 0) {
     return;
   }
-  const listed = offenders.slice(0, SCENARIOS_LISTED).map((entry) => {
-    const shown = entry.conditions.slice(0, CONDITIONS_LISTED);
-    const rest = entry.conditions.length - shown.length;
-    return `${entry.id} (${shown.join(", ")}${rest > 0 ? `, +${rest} more` : ""})`;
-  });
-  const rest = offenders.length - listed.length;
-  return `Preconditions no scenario can satisfy: ${listed.join(" ; ")}${rest > 0 ? ` ; +${rest} more scenarios` : ""}. ${listedDeclared(catalog, repo)} ${PRECONDITION_REMEDY}`;
+  const entries = offenders.map(
+    (entry) =>
+      `${entry.id} (${boundedList(entry.conditions, CONDITIONS_SHOWN_CHARS, ", ")})`
+  );
+  return boundedRefusal(
+    "Preconditions no scenario can satisfy: ",
+    entries,
+    `. ${declaredSentence(catalog, repo)} ${PRECONDITION_REMEDY}`,
+    "",
+    " ; ",
+    OFFENDER_SHOWN_CHARS
+  );
 }
 export async function prepareScenario(
   scenario: Scenario,
@@ -197,8 +297,8 @@ export async function prepareScenario(
   const seeded: string[] = [];
   let auth: BrowserAuth | undefined;
   async function call(name: string, cleanup = false) {
-    const entry = catalog.fixtures[name];
-    if (!entry) {
+    const entry = ownEntry(catalog.fixtures, name);
+    if (entry === undefined) {
       throw unbackedPrecondition(`fixture:${name}`, trusted, repo);
     }
     const token = process.env[entry.tokenEnv];
@@ -230,8 +330,8 @@ export async function prepareScenario(
       }
       if (condition.startsWith("role:")) {
         const name = condition.slice(5);
-        const env = catalog.roles[name];
-        if (!env) {
+        const env = ownEntry(catalog.roles, name);
+        if (env === undefined) {
           throw unbackedPrecondition(condition, trusted, repo);
         }
         if (!process.env[env]) {
@@ -260,7 +360,7 @@ function unbackedPrecondition(
 ): QaError {
   return new QaError(
     "PRECONDITION_UNVERIFIED",
-    `Precondition ${condition} is not declared in the trusted catalog. ${listedDeclared(catalog, repo)}`,
+    `Precondition ${shownName(condition)} is not declared in the trusted catalog. ${declaredSentence(catalog, repo)}`,
     PRECONDITION_REMEDY
   );
 }

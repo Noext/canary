@@ -2230,6 +2230,54 @@ describe("runner false-green regressions", () => {
     expect(preludeEnd).toBeLessThan(1900);
   }, 60_000);
   /**
+   * Défaut signalé par la revue de la PR #63 : un refus de précondition garanti
+   * dans SON budget de 1 500 caractères ne l'était pas dans la correction, parce
+   * que le préambule fatal (1 860) puis les citations non fondées le précédaient.
+   * Sous onze classes fatales saturées ET une précondition absente, le refus de
+   * précondition passe donc en tête de la correction : il reste lisible dans la
+   * fenêtre de 2 000, entier, avec son catalogue et son remède. Replacé derrière
+   * le préambule, ce test tombe.
+   */
+  it("keeps the precondition refusal ahead of a saturated fatal prelude", async () => {
+    const saturated = saturatedFatalCandidate();
+    saturated.scenarios[0]!.preconditions = ["role:Administrateur démo 1"];
+    const f = await setup({ plans: [saturated, plan] });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    const messages = f.modelRequests.at(-1)!.messages as {
+      content: string;
+      role: string;
+    }[];
+    const correction = messages.at(-1)!.content;
+    // Le préambule fatal sature à lui seul la fenêtre : la correction est
+    // tronquée.
+    expect(correction).toHaveLength(2000);
+    // Le refus de précondition est en tête, avant tout diagnostic.
+    expect(
+      correction.startsWith(
+        "Plan rejected: Preconditions no scenario can satisfy"
+      )
+    ).toBe(true);
+    // Ce que le catalogue porte et le remède qui débloque le plan y sont, dans
+    // la fenêtre, alors qu'ils disparaîtraient derrière les 1 860 caractères du
+    // préambule.
+    const catalogue = correction.indexOf(
+      "The trusted catalog declares nothing for fixture/app"
+    );
+    const remedy = correction.indexOf("is a step, not a precondition");
+    expect(catalogue).toBeGreaterThan(0);
+    expect(remedy).toBeGreaterThan(catalogue);
+    // L'en-tête du préambule fatal reste visible derrière le refus, donc le
+    // planificateur lit encore les codes fatals que sa correction doit couvrir.
+    expect(correction).toContain(
+      "Fatal refusals (each one blocks the whole run):"
+    );
+  }, 60_000);
+  /**
    * La citation fautive est le détail que le planificateur doit lire : elle
    * passe en tête de la ligne de sa classe, avant le remède et les valeurs
    * fautives, et le préambule réserve la place de son extrait entier avant de

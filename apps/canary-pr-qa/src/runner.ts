@@ -833,6 +833,7 @@ function planRefusals(
     evidence
   );
   return [
+    ...parts.reserved,
     ...fatalPrelude(parts.fatal),
     ...parts.before,
     ...parts.ungrounded,
@@ -841,12 +842,12 @@ function planRefusals(
 }
 /**
  * Les refus d'un plan candidat, séparés par ce que la correction contrainte a le
- * droit de traiter : les classes fatales, les refus qui précèdent la citation
- * dans le message d'aujourd'hui, les refus de citation eux-mêmes, puis les
- * refus de lecture. `planRefusals` les recompose dans cet ordre, donc le message
- * rendu au planificateur est inchangé ; `quotePickCorrection` lit la même
- * décomposition pour savoir si la citation est le SEUL défaut du plan — la
- * condition de la correction par indice.
+ * droit de traiter : les refus de précondition qui passent en tête, les classes
+ * fatales, les refus qui précèdent la citation dans le message d'aujourd'hui,
+ * les refus de citation eux-mêmes, puis les refus de lecture. `planRefusals` les
+ * recompose dans cet ordre, donc le message rendu au planificateur est inchangé ;
+ * `quotePickCorrection` lit la même décomposition pour savoir si la citation est
+ * le SEUL défaut du plan — la condition de la correction par indice.
  */
 function planRefusalParts(
   candidate: Plan,
@@ -858,6 +859,13 @@ function planRefusalParts(
   evidence?: DiscoveryEvidence,
   resolved: ReadonlySet<string> = new Set()
 ): {
+  /**
+   * Refus rendus en tête de la correction, avant tout diagnostic qui peut
+   * saturer la fenêtre de 2 000 : une précondition hors catalogue y reste
+   * lisible même quand le préambule fatal et les citations non fondées pèsent
+   * déjà leur maximum.
+   */
+  reserved: string[];
   fatal: FatalClass[];
   before: string[];
   ungrounded: string[];
@@ -874,6 +882,14 @@ function planRefusalParts(
     context.ref.repo
   );
   return {
+    // Une précondition hors catalogue bloque CHAQUE scénario qui la porte, sans
+    // qu'aucune étape navigateur ne soit dépensée : rendue ici, elle laisse au
+    // planificateur sa tentative de correction, et un plan non corrigé est
+    // arrêté par `preconditionRefusals` avant la première étape. Elle passe
+    // avant le préambule fatal : placée après lui, elle disparaîtrait de la
+    // fenêtre de 2 000 dès que les classes fatales saturent leurs 1 860
+    // caractères, c'est-à-dire dans le plan qui a le plus besoin de la lire.
+    reserved: precondition ? [precondition] : [],
     fatal: [
       ...coverageFatalClasses(candidate, context, policy, scans, resolved),
       ...contextFatalClasses(candidate, context),
@@ -892,9 +908,6 @@ function planRefusalParts(
     ],
     ungrounded: ungroundedPlanRefusals(candidate, context, policy, scans),
     after: [
-      // En tête du groupe : une liste de citations longue ne doit pas la pousser
-      // hors des 2000 caractères de la correction.
-      ...(precondition ? [precondition] : []),
       ...writeEvidenceRefusals(candidate, policy).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
@@ -1121,7 +1134,11 @@ export function quotePickCorrection(
     undefined,
     resolved
   );
-  if (parts.before.length > 0 || parts.after.length > 0) {
+  if (
+    parts.reserved.length > 0 ||
+    parts.before.length > 0 ||
+    parts.after.length > 0
+  ) {
     return;
   }
   if (
