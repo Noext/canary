@@ -30,6 +30,7 @@ import {
   ungroundedRequirements,
   unwitnessedPlanRefusals,
   validateCoverage,
+  weakWitnessLines,
   witnessFiles,
 } from "../src/policy.js";
 import {
@@ -869,6 +870,47 @@ it("offers the real line carrying a bare identifier as the remedy", () => {
   );
   expect(refusal.hint).toContain(`2: ${JSON.stringify(lines[1])}`);
   expect(quoteCarriesContent("snake_case_name")).toBe(false);
+});
+
+/**
+ * Finding P1 de la revue : un identifiant commun (`function`, `return`) vit sur
+ * des dizaines de lignes sans rapport avec l'exigence. En offrir deux laisserait
+ * la correction par indice écrire dans le plan une ligne réelle mais étrangère
+ * au comportement décrit, que le gate accepterait comme preuve. Au-delà d'une
+ * ligne par candidat offert, aucune piste n'est proposée : le refus d'aujourd'hui
+ * est rendu, et le planificateur le corrige en réécrivant.
+ */
+it("offers no weak-witness candidate when the identifier is ambiguous", () => {
+  const file = "src/logic.ts";
+  const lines = [
+    "export function alpha() {",
+    "export function beta() {",
+    "export function gamma() {",
+  ];
+  const scenarioContext = contextWith([
+    {
+      filename: file,
+      patch: `@@ -1,3 +1,3 @@\n${lines.map((line) => `+${line}`).join("\n")}`,
+    },
+  ]);
+  const requirement = { quote: "function", sourceFile: file };
+  expect(requirementHasWitness(requirement, scenarioContext)).toBe(false);
+  expect(weakWitnessLines(requirement, scenarioContext)).toEqual([]);
+  // Aucun candidat ne sort non plus par une autre source : la correction par
+  // indice ne peut donc pas écrire une de ces trois lignes dans le plan.
+  expect(quoteResolutionCandidates(requirement, scenarioContext)).toEqual([]);
+  const refusal = refusalOfPlan(
+    planWithWitnesses([
+      {
+        id: "logic",
+        sourceFiles: [file],
+        requirements: [{ sourceFile: file, quote: "function" }],
+      },
+    ]),
+    scenarioContext,
+    policyFor()
+  );
+  expect(refusal.message).toContain('Rejected quote: "function"');
 });
 
 /**

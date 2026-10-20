@@ -768,6 +768,14 @@ function lineSuggestion(
  *
  * Vide pour une citation qui porte déjà du contenu : ce diagnostic ne concerne
  * que le témoin trop pauvre, et sa liste n'élargit jamais l'acceptation.
+ *
+ * Vide aussi dès que la citation apparaît sur plus de lignes que la liste n'en
+ * offre : un identifiant commun (`function`, `return`) vit sur des dizaines de
+ * lignes sans rapport avec l'exigence, et la correction par indice écrirait
+ * alors l'une d'elles dans le plan — le gate accepterait une ligne réelle comme
+ * preuve d'un comportement qu'elle ne porte pas. La borne est donc
+ * l'ambiguïté : au plus une ligne par candidat offert, sinon aucune piste et le
+ * refus d'aujourd'hui, que le planificateur corrige en réécrivant.
  */
 export function weakWitnessLines(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
@@ -794,7 +802,9 @@ export function weakWitnessLines(
     seen.add(key);
     found.push({ line, text });
   }
-  return found.slice(0, SUGGESTED_QUOTE_LIMIT);
+  return found.length > SUGGESTED_QUOTE_LIMIT
+    ? []
+    : found.slice(0, SUGGESTED_QUOTE_LIMIT);
 }
 /**
  * Remède d'un témoin trop pauvre : les lignes réelles qui portent la citation,
