@@ -2196,6 +2196,70 @@ describe("résolution d'une citation refusée (run 9add286d)", () => {
     expect(result.error).toContain(JSON.stringify("varianceCents"));
     expect(result.error).toContain("(requirement 2)");
     expect(result.scenarios).toEqual([]);
+    // Et rien n'est écrit dans le plan persisté : la citation faible du
+    // planificateur reste l'identifiant nu qu'il a désigné.
+    expect(result.plan?.scenarios[0]?.requirements[1]?.quote).toBe(
+      "varianceCents"
+    );
+  });
+  it("demande l'indice pour un identifiant nu porté par une seule ligne réelle", async () => {
+    const f = await setup({
+      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
+      plans: [planWith("counted.totalUnits"), pickAnswer(1)],
+    });
+    stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // La famille que #62 a mesurée : UNE seule ligne réelle porte l'identifiant,
+    // donc l'écriture automatique retirée par #64 le remplaçait sans rien
+    // demander, en un appel modèle. Le run paie ici le tour d'indice et persiste
+    // la ligne réelle que le planificateur a choisie.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(lastPrompt(f)).toContain("picks");
+    expect(lastPrompt(f)).toContain(JSON.stringify(REAL_LINE));
+    expect(lastPrompt(f)).not.toContain("Return the complete corrected plan");
+    expect(result.plan?.scenarios[0]?.requirements[1]?.quote).toBe(REAL_LINE);
+    expect(result.coverage?.gate).toBe("complete");
+    expect(result.outcome).toBe("passed");
+  });
+  it("demande l'indice quand la vue du fichier déclaré est coupée, sans écrire", async () => {
+    // Contenu de tête plus long que le plafond de `collectContext` : le fichier
+    // cité n'est lu qu'en partie, comme un fichier de production plus gros que
+    // 16 000 caractères. La vue partielle ne légitime aucune écriture — l'ancien
+    // mécanisme s'en abstenu, le gate d'aujourd'hui demande l'indice.
+    const body = Array.from(
+      { length: 1200 },
+      (_, index) => `  const filler${index}=0;`
+    ).join("\n");
+    const f = await setup({
+      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
+      headContent: `${body}\n// au-delà du plafond de lecture`,
+      plans: [planWith(REFUSED_QUOTE), pickAnswer(1)],
+    });
+    stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // La vue était bien partielle : la coupure du fichier cité est dans le
+    // premier envoi au planificateur, et la fin du fichier n'y est pas.
+    expect(JSON.stringify(f.modelRequests[0])).toContain(
+      "Truncated context: src/form.ts"
+    );
+    expect(JSON.stringify(f.modelRequests[0])).not.toContain(
+      "au-delà du plafond de lecture"
+    );
+    // Deux appels : la génération puis la question à indices. Une écriture
+    // automatique sur cette vue partielle se contenterait d'un seul appel.
+    expect(f.modelRequests).toHaveLength(2);
+    expect(lastPrompt(f)).toContain("picks");
+    expect(lastPrompt(f)).not.toContain("Return the complete corrected plan");
+    const quote = result.plan?.scenarios[0]?.requirements[1]?.quote ?? "";
+    expect(REAL_LINE).toContain(quote);
+    expect(quote).not.toBe(REFUSED_QUOTE);
+    expect(result.outcome).toBe("passed");
   });
 });
 /**

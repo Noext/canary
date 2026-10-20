@@ -178,6 +178,13 @@ export async function fixture(
     plans?: Plan[];
     /** Patch de `src/form.ts`, pour un témoin exact mais sans contenu visible. */
     formPatch?: string;
+    /**
+     * Contenu servi par `/contents/` au lieu de la phrase par défaut. Une valeur
+     * plus longue que le plafond de `collectContext` rend le contexte du fichier
+     * cité partiel, exactement comme un fichier de production plus gros que
+     * 16 000 caractères.
+     */
+    headContent?: string;
     /** Second fichier changé, pour déclarer une source sans exigence témoignée. */
     secondChangedFile?: string;
     requireWriteEvidence?: boolean;
@@ -458,7 +465,8 @@ export async function fixture(
       json(res, {
         encoding: "base64",
         content: Buffer.from(
-          "Use the Name textbox and Save button; status displays Welcome <name>"
+          options.headContent ??
+            "Use the Name textbox and Save button; status displays Welcome <name>"
         ).toString("base64"),
       });
       return;
