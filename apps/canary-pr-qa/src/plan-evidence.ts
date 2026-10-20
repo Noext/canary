@@ -754,6 +754,31 @@ function stateAttributeTarget(
 }
 
 /**
+ * La cible que le refus propose : celle que le plan sélectionne, privée de ses
+ * SEULES valeurs d'état épinglées. `[data-cash-state="cloture"] p` devient
+ * `[data-cash-state] p`, `[data-state] button[aria-expanded=true]` devient
+ * `[data-state] button[aria-expanded]`, et un sélecteur qui épingle deux valeurs
+ * les perd toutes les deux : la partie de la vue que le plan visait reste
+ * visée. Remplacer tout le sélecteur par le conteneur perdrait ce ciblage, et
+ * un conteneur plus large peut même satisfaire un `text` par un autre passage
+ * de la vue.
+ */
+function presenceSelector(selector: string): string {
+  let presence = selector;
+  for (const block of bracketBlocks(selector)) {
+    const match = ATTRIBUTE_TEST.exec(block);
+    const attribute = match?.[1];
+    if (
+      !(attribute && carriesStateValue(attribute) && match[2] !== undefined)
+    ) {
+      continue;
+    }
+    presence = presence.split(block).join(`[${attribute}]`);
+  }
+  return normalizeText(presence);
+}
+
+/**
  * Forme d'un JETON d'identifiant : un seul mot, minuscules ASCII, chiffres,
  * `_` ou `-`. Une valeur d'attribut est écrite ainsi (`ouvert`, `cloture`,
  * `pr`). Un libellé visible, lui, est de la prose : espaces, accents,
@@ -850,6 +875,7 @@ interface StateTargetReadFault {
   kind: string;
   /** Phrase du message : assertion, étape, sélecteur et libellé. */
   line: string;
+  /** La cible du plan privée de sa seule valeur d'état épinglée. */
   presence: string;
   /** Vrai quand la page que la découverte a capturée est encore celle que la lecture lit. */
   unchangedFromDiscovery: boolean;
@@ -918,7 +944,7 @@ function stateTargetReadFault(
   return {
     assertion: assertion.id,
     kind: assertion.kind,
-    presence: `[${state.attribute}]`,
+    presence: presenceSelector(selector),
     expected,
     line: `assertion ${assertion.id} (after ${assertion.afterStep ?? "no step"}, kind ${assertion.kind}) reads ${selector}, an element that exists only while that state holds${expectation}`,
   };
@@ -993,58 +1019,131 @@ function snapshotTextNodes(aria: string): SnapshotTextNode[] {
   return nodes;
 }
 /**
- * Cibles que l'instantané nomme pour un texte attendu : le nœud qui REND ce
- * libellé, écrit comme le plan écrit un locator (`role=status name=""`), et
- * seulement quand ce couple ne désigne qu'un élément de la page. Un libellé que
- * l'instantané ne rend pas, ou qu'un rôle porté par plusieurs nœuds rend, ne
- * produit aucune cible : le relevé ne choisit pas à la place du planificateur.
+ * Ce que l'instantané de découverte peut nommer pour un texte attendu : les
+ * locators qu'il ne désigne qu'une fois, et les formes qu'il rend ambiguës,
+ * dites par leur compteur. Un libellé que l'instantané ne rend pas ne produit
+ * ni cible ni ambiguïté : le relevé ne choisit pas à la place du planificateur.
+ */
+interface RenderedTargetAdvice {
+  /** Formes rendues par plusieurs nœuds : nommées par leur compte, jamais choisies. */
+  ambiguous: string[];
+  /** Formes de locator qui ne résolvent qu'un élément de la page, deux au plus. */
+  targets: string[];
+}
+/**
+ * Longueur maximale d'un nom accessible recopié dans un conseil : au-delà, ce
+ * n'est plus l'étiquette d'un contrôle mais du texte de la page.
+ */
+const PUBLISHED_NAME_CHARS = 80;
+/**
+ * Forme de locator que le relevé propose pour un nœud qui rend le libellé,
+ * `undefined` quand le nœud ne se désigne pas sans recopier un nom que la page
+ * seule porte. Un nom vide ne dit rien, et un nom identique au libellé du plan
+ * ne dit rien de plus que lui ; tout autre nom reste dehors.
+ */
+function offeredTarget(
+  node: SnapshotTextNode,
+  label: string
+): string | undefined {
+  const name = normalizeText(node.name);
+  if (name === "") {
+    return `role=${node.role} name=""`;
+  }
+  if (name !== label || name.length > PUBLISHED_NAME_CHARS) {
+    return;
+  }
+  return `role=${node.role} name=${JSON.stringify(name)}`;
+}
+/**
+ * La remarque qui accompagne la cible d'une assertion : ce que la découverte a
+ * trouvé, dit par un compte et jamais par le texte de la page.
+ */
+function adviceNote(advice: RenderedTargetAdvice): string {
+  if (advice.targets.length > 0) {
+    return " (the discovery snapshot renders this label there)";
+  }
+  if (advice.ambiguous.length > 0) {
+    return ` (the discovery snapshot cannot name a single element for it: ${advice.ambiguous.join(", ")})`;
+  }
+  return "";
+}
+/**
+ * Cibles que l'instantané nomme pour un texte attendu, écrites comme le plan
+ * écrit un locator (`role=status name=""`), et seulement quand cette forme ne
+ * désigne qu'un élément de la page. Le compte porte sur TOUS les nœuds de
+ * l'instantané, pas seulement sur ceux qui rendent un texte : `- status: Ready`
+ * suivi d'un `- status` vide ne rend le libellé qu'une fois, mais
+ * `role=status name=""` résout les deux, et le plan corrigé échouerait en
+ * strict mode. Un compte supérieur à un ne choisit aucune cible : l'ambiguïté
+ * est dite par son compteur.
+ *
+ * Le nom d'un locator n'est recopié que s'il ne dit RIEN de plus que le plan :
+ * vide, ou exactement le libellé attendu et court. Un nom que la page seule
+ * porte — un compte, une adresse — reste hors du conseil, donc hors du
+ * diagnostic publié (voir `reportMarkdown`).
  */
 function renderedTargets(
   nodes: SnapshotTextNode[],
+  inventory: AriaNameNode[],
   expected: unknown
-): string[] {
+): RenderedTargetAdvice {
+  const targets = new Set<string>();
+  const ambiguous = new Map<string, number>();
   if (typeof expected !== "string") {
-    return [];
+    return { targets: [], ambiguous: [] };
   }
   const label = normalizeText(expected);
   if (label === "") {
-    return [];
+    return { targets: [], ambiguous: [] };
   }
   const roles = new Map<string, number>();
   const pairs = new Map<string, number>();
-  for (const node of nodes) {
+  for (const node of inventory) {
     roles.set(node.role, (roles.get(node.role) ?? 0) + 1);
     const pair = `${node.role}\u0000${normalizeText(node.name)}`;
     pairs.set(pair, (pairs.get(pair) ?? 0) + 1);
   }
-  const targets = new Set<string>();
   for (const node of nodes) {
     if (!node.rendered.includes(label)) {
       continue;
     }
-    const unique =
-      node.name === ""
-        ? roles.get(node.role) === 1
-        : pairs.get(`${node.role}\u0000${normalizeText(node.name)}`) === 1;
-    if (!unique) {
+    const name = normalizeText(node.name);
+    const matches = pairs.get(`${node.role}\u0000${name}`) ?? 0;
+    if (matches !== 1) {
+      ambiguous.set(`role=${node.role}`, matches);
       continue;
     }
-    targets.add(`role=${node.role} name=${JSON.stringify(node.name)}`);
+    const shape = offeredTarget(node, label);
+    const count = roles.get(node.role) ?? 0;
+    if (shape !== undefined) {
+      targets.add(shape);
+    } else if (count === 1) {
+      // Le rôle nu ne vaut que s'il ne résout qu'un élément : sinon la
+      // suggestion désignerait plusieurs nœuds.
+      targets.add(`role=${node.role}`);
+    } else {
+      ambiguous.set(`role=${node.role}`, count);
+    }
     if (targets.size === 2) {
       break;
     }
   }
-  return [...targets];
+  return {
+    targets: [...targets],
+    ambiguous: [...ambiguous].map(
+      ([shape, count]) => `${shape} (${count} nodes)`
+    ),
+  };
 }
 /**
  * La cible visible de chaque lecture fautive, dite à partir du matériel : la
- * forme de seule présence du même attribut d'état — présente dans tous les
- * états, donc jamais conditionnelle — et, quand l'instantané de découverte rend
- * le libellé attendu sur un nœud unique ET que la page soit encore celle de la
- * découverte, ce nœud nommé par son rôle et son nom. Rien n'est deviné : sans
- * instantané, ou après une étape qui a pu changer la page, la phrase ne nomme
- * que la présence, qui se déduit du sélecteur lui-même (voir
- * `StateTargetReadFault.unchangedFromDiscovery`).
+ * cible du plan privée de sa seule valeur d'état épinglée — présente dans tous
+ * les états, donc jamais conditionnelle — et, quand l'instantané de découverte
+ * rend le libellé attendu sur un nœud qu'il ne désigne qu'une fois ET que la
+ * page soit encore celle de la découverte, ce nœud nommé par son rôle et son
+ * nom. Rien n'est deviné : sans instantané, ou après une étape qui a pu changer
+ * la page, la phrase ne nomme que la cible qui se déduit du sélecteur lui-même
+ * (voir `StateTargetReadFault.unchangedFromDiscovery`).
  */
 function visibleTargetAdvice(
   faults: StateTargetReadFault[],
@@ -1052,6 +1151,7 @@ function visibleTargetAdvice(
 ): string {
   // L'instantané est lu une fois pour tout le scénario, pas une fois par
   // assertion fautive.
+  const inventory = aria === undefined ? [] : ariaRoleNameNodes(aria);
   const nodes =
     aria === undefined
       ? []
@@ -1065,17 +1165,17 @@ function visibleTargetAdvice(
         : "";
     // La découverte ne propose un rôle que sur la page qu'elle a capturée :
     // sinon le nœud qu'elle nomme peut avoir disparu.
-    const named = fault.unchangedFromDiscovery
-      ? renderedTargets(nodes, fault.expected)
-      : [];
+    const advice = fault.unchangedFromDiscovery
+      ? renderedTargets(nodes, inventory, fault.expected)
+      : { targets: [], ambiguous: [] };
     // `value` lit un champ : la présence d'un attribut d'état ne désigne pas
     // un champ, donc elle n'est offerte que comme preuve de l'état, jamais
     // comme cible de lecture.
     if (fault.kind === "value") {
       return `assertion ${fault.assertion} reads a field${label} → target the input itself by its label or its role, and prove the state with ${fault.presence}`;
     }
-    const targets = [fault.presence, ...named];
-    return `assertion ${fault.assertion}${label} → read ${targets.join(" or ")}${named.length > 0 ? " (the discovery snapshot renders this label there)" : ""}`;
+    const targets = [fault.presence, ...advice.targets];
+    return `assertion ${fault.assertion}${label} → read ${targets.join(" or ")}${adviceNote(advice)}`;
   });
   const presence = [...new Set(faults.map((fault) => fault.presence))].join(
     ", "

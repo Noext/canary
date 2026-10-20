@@ -92,7 +92,11 @@ const goto = (id: string): Steps[number] =>
  * différence entre une lecture faite sur la page de découverte et une lecture
  * faite après qu'une action l'a changée.
  */
-function closurePlan(before: Steps, anchor: string): Plan {
+function closurePlan(
+  before: Steps,
+  anchor: string,
+  expected: string = CLOSED_MESSAGE
+): Plan {
   return PlanSchema.parse({
     summary: "The closure notice announces the locked count.",
     scenarios: [
@@ -122,7 +126,7 @@ function closurePlan(before: Steps, anchor: string): Plan {
             id: "closed-message",
             description: "The closure notice announces the locked count",
             kind: "text",
-            expected: CLOSED_MESSAGE,
+            expected,
             target: { by: "css", value: '[data-cash-state="cloture"]' },
             afterStep: anchor,
             verification: "state",
@@ -418,5 +422,105 @@ describe("suggestion de rôle et page changée depuis la découverte", () => {
     const hint = hintOf(closurePlan([goto("go"), step("act", action)], "act"));
     expect(hint).toContain("→ read [data-cash-state]");
     expect(hint).not.toContain("role=status name=");
+  });
+});
+
+/**
+ * Le conseil de cible est le seul endroit où le refus lit l'instantané de
+ * découverte : son compte décide de l'unicité, son sélecteur décide du ciblage,
+ * et son texte ne doit jamais ressortir. Les trois règles sont vérifiées ici,
+ * chacune sur la forme qui les faisait échouer.
+ */
+describe("conseil de cible : compte, ciblage et contenu publié", () => {
+  const hintOfSnapshot = (aria: string, expected?: string): string => {
+    const plan = closurePlan([goto("open")], "open", expected);
+    return (
+      stateTargetReadRefusals(plan, { url: PREVIEW_URL, aria })[0]?.error
+        .hint ?? ""
+    );
+  };
+
+  it("compte TOUS les nœuds du rôle : un status vide rend la suggestion ambiguë", () => {
+    // Un `- status` vide ne REND aucun texte, donc il était filtré avant le
+    // compte : la suggestion appelait `role=status name=""` unique alors que
+    // Playwright y résout deux éléments, et le plan corrigé échouait en strict
+    // mode. L'ambiguïté est maintenant nommée par son compteur, sans choisir.
+    const hint = hintOfSnapshot(
+      ["- main:", `  - status: ${CLOSED_MESSAGE}`, "  - status:"].join("\n")
+    );
+    expect(hint).not.toContain('role=status name=""');
+    expect(hint).toContain("role=status (2 nodes)");
+    // Le reste du conseil ne bouge pas : la cible qui se déduit du sélecteur
+    // reste proposée.
+    expect(hint).toContain(
+      `assertion closed-message expecting ${JSON.stringify(CLOSED_MESSAGE)} → read [data-cash-state]`
+    );
+  });
+
+  it.each([
+    ['[data-cash-state="cloture"] p', "[data-cash-state] p"],
+    [
+      "[data-state] button[aria-expanded=true]",
+      "[data-state] button[aria-expanded]",
+    ],
+    [
+      "[aria-hidden=false] [data-state] p[aria-selected=true]",
+      "[aria-hidden] [data-state] p[aria-selected]",
+    ],
+  ])("garde l'élément sélectionné par %s : seule la valeur épinglée tombe", (selector, advice) => {
+    // Remplacer tout le sélecteur par le conteneur perdait la partie de la vue
+    // que le plan visait — et un conteneur plus large peut satisfaire un
+    // `text` par un autre passage de la page.
+    const plan = closurePlan([goto("go")], "go");
+    const assertion = plan.scenarios[0]?.assertions[0];
+    if (assertion) {
+      assertion.target = { by: "css", value: selector };
+    }
+    const hint = stateTargetReadRefusals(plan)[0]?.error.hint ?? "";
+    expect(hint).toContain(`→ read ${advice}`);
+    expect(hint).not.toContain(selector);
+  });
+
+  it("ne publie aucun texte de l'instantané dans le diagnostic sérialisé", () => {
+    // Le nom accessible d'un nœud est du texte de la page : recopié dans
+    // `diagnostic.hint`, il part dans le commentaire publié par
+    // `reportMarkdown`. Le libellé attendu du plan est le seul texte autorisé,
+    // et un nom plus long que lui n'est pas recopié du tout.
+    const label = "Comptage juste";
+    const pageOnly = `${label} · DEMO17`;
+    // Le nom égale le texte rendu : c'est la forme que le relevé accepte, donc
+    // celle qui portait le nom de la page jusqu'au diagnostic.
+    const aria = ["- main:", `  - status "${pageOnly}": ${pageOnly}`].join(
+      "\n"
+    );
+    const diagnostic = stateTargetReadRefusals(
+      closurePlan([goto("open")], "open", label),
+      { url: PREVIEW_URL, aria }
+    )[0]?.error;
+    expect(diagnostic?.code).toBe("PLAN_STATE_TARGET_READ_AS_TEXT");
+    const published = JSON.stringify({
+      code: diagnostic?.code,
+      message: diagnostic?.message,
+      hint: diagnostic?.hint,
+    });
+    expect(published).not.toContain("DEMO17");
+    expect(published).not.toContain(pageOnly);
+    // La cible reste donnée, sans son nom : le rôle ne résout qu'un élément de
+    // la page de découverte.
+    expect(diagnostic?.hint).toContain(
+      "→ read [data-cash-state] or role=status"
+    );
+    expect(diagnostic?.hint).not.toContain("role=status name=");
+  });
+
+  it("recopie un nom qui EST le libellé du plan, borné comme lui", () => {
+    // Borner ne veut pas dire renoncer : un nom identique au libellé attendu ne
+    // dit rien que le refus ne dise déjà, donc il reste proposé.
+    const label = "Comptage juste";
+    const hint = hintOfSnapshot(
+      ["- main:", `  - status "${label}": ${label}`].join("\n"),
+      label
+    );
+    expect(hint).toContain(`or role=status name=${JSON.stringify(label)}`);
   });
 });
