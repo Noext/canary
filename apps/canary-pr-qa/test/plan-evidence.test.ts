@@ -2198,3 +2198,89 @@ describe("résolution d'une citation refusée (run 9add286d)", () => {
     expect(result.scenarios).toEqual([]);
   });
 });
+/**
+ * La forme RÉFÉRENCE, de bout en bout : le planificateur désigne la ligne 368 du
+ * fichier changé au lieu de la recopier, et le gate écrit son texte. Aucun tour
+ * de correction n'est payé, puisque rien n'a été recopié donc rien n'a pu être
+ * altéré — c'est la cause mesurée des runs 9add286d et 07429b97 qui disparaît.
+ */
+describe("résolution d'une référence de ligne (run 9add286d, forme sans recopie)", () => {
+  /** Ligne 368 du fichier du run, octet pour octet. */
+  const REAL_LINE = `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`;
+  /** Le même plan, mais son exigence désigne la ligne au lieu de la citer. */
+  function designatedPlan(): Plan {
+    const plan = readOnlyPlan({
+      by: "role",
+      value: "heading",
+      name: "Pilotage",
+    });
+    plan.scenarios[0]!.requirements = [
+      {
+        behavior: "Le badge compte les unités comptées",
+        line: 368,
+        sourceFile: "src/form.ts",
+      },
+    ] as unknown as Plan["scenarios"][number]["requirements"];
+    return plan;
+  }
+  it("écrit la ligne réelle et ne paie aucun tour de correction", async () => {
+    const f = await setup({
+      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
+      plans: [designatedPlan()],
+    });
+    stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Un seul appel modèle : la génération. La ligne était dans le matériel
+    // numéroté du message, et le gate l'a lue lui-même.
+    expect(f.modelRequests).toHaveLength(1);
+    const sent = f.modelRequests[0]?.messages as { content: string }[];
+    const payload = JSON.parse(sent[1]?.content ?? "{}") as {
+      sourceLines: { lines: { line: number; text: string }[]; path: string }[];
+    };
+    expect(payload.sourceLines).toEqual([
+      { lines: [{ line: 368, text: REAL_LINE }], path: "src/form.ts" },
+    ]);
+    // La citation persistée est la ligne du fichier, octet pour octet.
+    expect(result.plan?.scenarios[0]?.requirements[0]?.quote).toBe(REAL_LINE);
+    expect(result.coverage?.gate).toBe("complete");
+    expect(result.outcome).toBe("passed");
+    expect(result.diagnostic).toBeUndefined();
+  });
+  it("refuse une ligne absente du matériel en nommant ce qu'il porte", async () => {
+    const plan = designatedPlan();
+    plan.scenarios[0]!.requirements = [
+      {
+        behavior: "Le badge compte les unités comptées",
+        line: 400,
+        sourceFile: "src/form.ts",
+      },
+    ] as unknown as Plan["scenarios"][number]["requirements"];
+    const f = await setup({
+      formPatch: `@@ -368,1 +368,1 @@\n+${REAL_LINE}`,
+      plans: [plan],
+    });
+    stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    // Le refus est celui du schéma d'entrée, rendu au planificateur avec la
+    // ligne demandée et le numéro que le matériel porte réellement. Le plan
+    // n'est jamais corrigé en silence : la même réponse invalide est refusée
+    // jusqu'à la fin de la tentative.
+    const correction = (
+      f.modelRequests[1]?.messages as { content: string }[] | undefined
+    )?.at(-1)?.content;
+    expect(correction).toContain("Invalid JSON or schema:");
+    expect(correction).toContain(
+      "requirements.0.line: Line 400 of src/form.ts is not in the numbered material"
+    );
+    expect(correction).toContain("368 before it");
+    // Rien n'a été inventé pour autant : le plan refusé est bloqué.
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("MODEL_JSON_INVALID");
+  });
+});

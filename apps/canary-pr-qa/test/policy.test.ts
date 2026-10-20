@@ -4110,6 +4110,35 @@ it("keeps the planner message inside the context budget with its numbered materi
   // chemin réel du payload : `sourceLines` à la racine (voir
   // `unit.test.ts`, qui vérifie que tout chemin cité existe dans le message).
   expect(PLANNER_PROMPT).toContain("`sourceLines`");
+  // Le prompt enseigne la forme qui supprime la recopie : désigner la ligne que
+  // `sourceLines` liste, et laisser le gate en écrire le texte. La recopie reste
+  // permise pour la forme `quote`, jamais recommandée.
+  expect(PLANNER_PROMPT).toMatch(
+    /Reference the line instead of copying it: write `"line": <number>`/
+  );
+  expect(PLANNER_PROMPT).toMatch(
+    /the gate reads that line from the material and writes its text as the requirement's quote/
+  );
+  expect(PLANNER_PROMPT).toMatch(
+    /This is the recommended form; a `quote` you copy stays accepted/
+  );
+  // L'exemple est celui du run mesuré, et il mène au remède : la ligne 368 était
+  // dans le matériel, donc la désigner ne laisse rien à altérer.
+  expect(PLANNER_PROMPT).toMatch(
+    /designating `"line": 368` is resolved by the gate/
+  );
+  expect(PLANNER_PROMPT).toMatch(
+    /Never send `quote` and `line` together: they are alternatives, and the pair is refused/
+  );
+  // Les refus d'une référence sont annoncés avec leurs familles, pour que le
+  // planificateur sache quoi corriger sans recevoir de texte.
+  expect(PLANNER_PROMPT).toMatch(
+    /a file `sourceLines` does not list, a number it does not list \(the refusal names the numbers it does list around yours\), a number it lists twice, a blank or punctuation-only line, or a line longer than the 1000-character cap/
+  );
+  // Le squelette JSON du prompt ne demande plus une citation à recopier.
+  expect(PLANNER_PROMPT).toContain(
+    '"requirements":[{"sourceFile":"changed/path","line":368,"behavior":"required changed behavior"}]'
+  );
   // Un contexte qui remplit la borne : le matériel se réduit, le message tient.
   const saturated: PrContext = {
     ...contextWith([
