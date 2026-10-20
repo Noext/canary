@@ -806,6 +806,126 @@ it("refuses an identifier linked by underscores, hyphens, dots, colons or slashe
 });
 
 /**
+ * P2 de sécurité de la revue de la PR #55 (18/10) : l'apostrophe comptait comme
+ * structure de code, donc un identifiant nu PRÉFIXÉ d'un sigil redevenait témoin
+ * sous une autre écriture. Un lifetime Rust — `'dangerous` : 10 caractères,
+ * 9 lettres, une apostrophe — franchissait le plancher de longueur, le compteur
+ * de lettres et le compteur de structure, et couvrait un fichier `.rs` d'un
+ * dépôt où une PR non fiable pilote le planificateur.
+ *
+ * L'apostrophe ne compte plus : elle ne sépare rien, elle précède un identifiant
+ * (`'dangerous`, `'static`, `'a`) ou délimite un contenu dont les lettres et le
+ * blanc rendent déjà compte. La règle ne rouvre pas de faux refus, parce que les
+ * cas légitimes portent les autres caractères : `let marker = 'a';` (17
+ * caractères, `=` et `;`), la ligne qui porte le lifetime (parenthèses,
+ * chevrons, `&`) et `'le comptage est verrouillé'` (le blanc entre deux mots).
+ * Aucune des copies déjà tenues ci-dessus — `WHITESPACE_FREE_QUOTES`, `total=17`,
+ * `value 12` — ne contient d'apostrophe : leur verdict ne bouge pas.
+ */
+const RUST_SOURCE = [
+  "pub struct Request<'dangerous> {",
+  "    pub path: &'dangerous str,",
+  "}",
+  "pub fn leak<'static>(value: &'static str) -> &'static str {",
+  "    value",
+  "}",
+  "pub fn marker() -> char {",
+  "    let marker = 'a';",
+  "    marker",
+  "}",
+].join("\n");
+const CHAR_LITERAL_LINE = "let marker = 'a';";
+it("refuses a Rust lifetime as a witness and keeps the code that carries one", () => {
+  // Les trois formes nommées par la revue. `'static` (7) et `'a` (2) tombent
+  // sous le plancher de longueur du schéma comme du gate, avant comme après la
+  // correction ; `'dangerous` (10) est la seule que l'apostrophe seule faisait
+  // passer, donc c'est elle qui mesure le correctif.
+  expect("'dangerous").toHaveLength(10);
+  expect("'static").toHaveLength(7);
+  expect("'a").toHaveLength(2);
+  for (const lifetime of ["'dangerous", "'static", "'a"]) {
+    expect(quoteCarriesContent(lifetime), `${lifetime}: contenu`).toBe(false);
+    // Le lifetime est dans le fichier, verbatim : c'est la structure de code qui
+    // manque, pas la présence.
+    expect(
+      quoteHasWitness(RUST_SOURCE, lifetime),
+      `${lifetime}: présence`
+    ).toBe(false);
+  }
+  // Le schéma garde le plancher de longueur : il refuse déjà les deux plus
+  // courts avant même le gate, et laisse `'dangerous` au gate.
+  for (const lifetime of ["'static", "'a"]) {
+    expect(
+      () =>
+        planWithWitnesses([
+          {
+            id: "borrow",
+            sourceFiles: ["src/request.rs"],
+            requirements: [{ sourceFile: "src/request.rs", quote: lifetime }],
+          },
+        ]),
+      `${lifetime}: schéma`
+    ).toThrow();
+  }
+  const file = "src/request.rs";
+  const scenarioContext = contextWith([
+    {
+      filename: file,
+      patch: RUST_SOURCE.split("\n")
+        .map((line) => `+${line}`)
+        .join("\n"),
+    },
+  ]);
+  // `'dangerous` passe le schéma (10 caractères) : c'est le gate de témoin qui
+  // le refuse, avec le message qui nomme le fichier et la règle.
+  expect(quoteHasWitness(RUST_SOURCE, "'dangerous")).toBe(false);
+  const poisoned = planWithWitnesses([
+    {
+      id: "borrow",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: "'dangerous" }],
+    },
+  ]);
+  expect(ungroundedRequirements(poisoned, scenarioContext)).toHaveLength(1);
+  const refusal = refusalOfPlan(poisoned, scenarioContext, policyFor());
+  expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+  expect(refusal.message).toBe(
+    `Weak source witness for borrow: ${file} (requirement 1). Rejected quote: "'dangerous"`
+  );
+  expect(refusal.hint).toContain("apostrophe");
+  // Le fichier n'est pas bloqué pour autant : la ligne qui PORTE le lifetime et
+  // le caractère Rust `'a'` restent des témoins, par leurs autres caractères.
+  for (const quote of [
+    "pub fn leak<'static>(value: &'static str) -> &'static str {",
+    CHAR_LITERAL_LINE,
+    "pub path: &'dangerous str,",
+  ]) {
+    expect(quoteCarriesContent(quote), `${quote}: contenu`).toBe(true);
+    expect(quoteHasWitness(RUST_SOURCE, quote), `${quote}: témoin`).toBe(true);
+    expect(
+      requirementHasWitness({ quote, sourceFile: file }, scenarioContext),
+      `${quote}: gate`
+    ).toBe(true);
+  }
+  // Un caractère seul (`'a'`, 3 caractères) reste sous le plancher : c'est la
+  // LIGNE qui le porte qui est un témoin, pas le littéral.
+  expect("'a'").toHaveLength(3);
+  expect(quoteCarriesContent("'a'")).toBe(false);
+  // Une chaîne entre apostrophes reste un témoin quand elle est substantielle :
+  // le blanc entre deux mots suffit, sans que l'apostrophe compte.
+  expect(quoteCarriesContent("'le comptage est verrouillé'")).toBe(true);
+  // Contre-épreuve : la règle resserrée ne rouvre aucun faux refus déjà fermé.
+  for (const quote of [
+    ...WHITESPACE_FREE_QUOTES,
+    "total=17",
+    "value 12",
+    "if (x) {",
+  ]) {
+    expect(quoteCarriesContent(quote), quote).toBe(true);
+  }
+});
+
+/**
  * Lots U et V, première moitié : le refus « Weak source witness » ne nommait
  * aucune ligne. La correction par indice d'un identifiant nu n'obtenait aucun
  * candidat, parce que le remède de citation absente s'appuie sur le recouvrement
