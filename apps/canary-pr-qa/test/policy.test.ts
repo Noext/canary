@@ -30,6 +30,7 @@ import {
   ungroundedRequirements,
   unwitnessedPlanRefusals,
   validateCoverage,
+  weakWitnessLines,
   witnessFiles,
 } from "../src/policy.js";
 import {
@@ -802,6 +803,114 @@ it("refuses an identifier linked by underscores, hyphens, dots, colons or slashe
   for (const quote of [...WHITESPACE_FREE_QUOTES, "total=17", "value 12"]) {
     expect(quoteCarriesContent(quote), quote).toBe(true);
   }
+});
+
+/**
+ * Lots U et V, première moitié : le refus « Weak source witness » ne nommait
+ * aucune ligne. La correction par indice d'un identifiant nu n'obtenait aucun
+ * candidat, parce que le remède de citation absente s'appuie sur le recouvrement
+ * de jetons — trois jetons partagés, une ligne de moins de 120 caractères — et
+ * qu'un identifiant n'en porte qu'un. `user_id` et `snake_case_name` (runs du
+ * lot V) partaient donc au planificateur avec le seul conseil « cite un
+ * fragment substantiel ». Le candidat est maintenant la ligne réelle qui PORTE
+ * l'identifiant : elle est entière, donc elle porte la structure qui manquait.
+ */
+it("offers the real line carrying a bare identifier as the remedy", () => {
+  const file = "src/logic.ts";
+  const lines = [
+    "export function compute() {",
+    "const snake_case_name = readName();",
+    "const user_id = session.id;",
+  ];
+  const scenarioContext = contextWith([
+    {
+      filename: file,
+      patch: `@@ -1,3 +1,3 @@\n${lines.map((line) => `+${line}`).join("\n")}`,
+    },
+  ]);
+  const cases = [
+    { line: 1, quote: "function" },
+    { line: 2, quote: "snake_case_name" },
+    { line: 3, quote: "user_id" },
+  ];
+  for (const item of cases) {
+    const requirement = { quote: item.quote, sourceFile: file };
+    // Rien n'est accepté du premier coup : l'identifiant nu reste refusé.
+    expect(
+      requirementHasWitness(requirement, scenarioContext),
+      item.quote
+    ).toBe(false);
+    const candidates = quoteResolutionCandidates(requirement, scenarioContext);
+    expect(candidates, item.quote).toHaveLength(1);
+    const [candidate] = candidates;
+    expect(candidate?.line, item.quote).toBe(item.line);
+    expect(candidate?.text, item.quote).toBe(lines[item.line - 1]);
+    // Le candidat proposé est un témoin que le gate accepte : la correction par
+    // indice ne peut pas renvoyer le plan vers un texte refusé au tour suivant.
+    expect(
+      requirementHasWitness(
+        { quote: candidate?.text ?? "", sourceFile: file },
+        scenarioContext
+      ),
+      item.quote
+    ).toBe(true);
+  }
+  // Le conseil nomme la ligne réelle, et le message reste celui du témoin trop
+  // pauvre : aucune tolérance n'a été ajoutée à la règle.
+  const plan = planWithWitnesses([
+    {
+      id: "logic",
+      sourceFiles: [file],
+      requirements: [{ sourceFile: file, quote: "snake_case_name" }],
+    },
+  ]);
+  const refusal = refusalOfPlan(plan, scenarioContext, policyFor());
+  expect(refusal.message).toBe(
+    `Weak source witness for logic: ${file} (requirement 1). Rejected quote: "snake_case_name"`
+  );
+  expect(refusal.hint).toContain(`2: ${JSON.stringify(lines[1])}`);
+  expect(quoteCarriesContent("snake_case_name")).toBe(false);
+});
+
+/**
+ * Finding P1 de la revue : un identifiant commun (`function`, `return`) vit sur
+ * des dizaines de lignes sans rapport avec l'exigence. En offrir deux laisserait
+ * la correction par indice écrire dans le plan une ligne réelle mais étrangère
+ * au comportement décrit, que le gate accepterait comme preuve. Au-delà d'une
+ * ligne par candidat offert, aucune piste n'est proposée : le refus d'aujourd'hui
+ * est rendu, et le planificateur le corrige en réécrivant.
+ */
+it("offers no weak-witness candidate when the identifier is ambiguous", () => {
+  const file = "src/logic.ts";
+  const lines = [
+    "export function alpha() {",
+    "export function beta() {",
+    "export function gamma() {",
+  ];
+  const scenarioContext = contextWith([
+    {
+      filename: file,
+      patch: `@@ -1,3 +1,3 @@\n${lines.map((line) => `+${line}`).join("\n")}`,
+    },
+  ]);
+  const requirement = { quote: "function", sourceFile: file };
+  expect(requirementHasWitness(requirement, scenarioContext)).toBe(false);
+  expect(weakWitnessLines(requirement, scenarioContext)).toEqual([]);
+  // Aucun candidat ne sort non plus par une autre source : la correction par
+  // indice ne peut donc pas écrire une de ces trois lignes dans le plan.
+  expect(quoteResolutionCandidates(requirement, scenarioContext)).toEqual([]);
+  const refusal = refusalOfPlan(
+    planWithWitnesses([
+      {
+        id: "logic",
+        sourceFiles: [file],
+        requirements: [{ sourceFile: file, quote: "function" }],
+      },
+    ]),
+    scenarioContext,
+    policyFor()
+  );
+  expect(refusal.message).toContain('Rejected quote: "function"');
 });
 
 /**
