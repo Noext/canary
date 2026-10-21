@@ -65,7 +65,7 @@ export interface DeliveryRow {
   updated_at: Date;
 }
 export const SCHEMA_VERSION = 10;
-export const MIGRATION = `
+const MIGRATION = `
 CREATE TABLE IF NOT EXISTS qa_jobs (
  id uuid PRIMARY KEY, repo text NOT NULL, pr integer NOT NULL, sha text NOT NULL,
  owner text NOT NULL, idempotency_key text NOT NULL UNIQUE,

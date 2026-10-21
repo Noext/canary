@@ -357,7 +357,7 @@ function assertionVariants(expectation: {
     z.object({ ...assertionBase, kind: z.literal("hidden") }).strict(),
   ]);
 }
-export const AssertionSchema = assertionVariants({
+const AssertionSchema = assertionVariants({
   text: expectedText,
   value: z.string().max(2000),
 });

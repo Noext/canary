@@ -2,8 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolvedTargetName } from "./canary.js";
 import type { Config } from "./config.js";
-import type { Diagnostic } from "./diagnostics.js";
-import { redact } from "./diagnostics.js";
+import { type Diagnostic, redact } from "./diagnostics.js";
 import type { RunResult } from "./schema.js";
 
 export async function writeJson(path: string, data: unknown) {

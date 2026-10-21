@@ -33,7 +33,7 @@ interface Check {
   name: string;
   status: "passed" | "failed" | "skipped";
 }
-export function configSummary(config: Config) {
+function configSummary(config: Config) {
   return {
     node: process.version,
     platform: `${process.platform}/${process.arch}`,

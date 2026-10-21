@@ -19,7 +19,7 @@ CREATE INDEX IF NOT EXISTS qa_api_key_live ON qa_api_keys(revoked_at, created_at
  * Credential class of a service key. Distinct from the GitHub label so one
  * class of ciphertext never decrypts as the other.
  */
-export const API_KEYS_LABEL = "api-keys-v1";
+const API_KEYS_LABEL = "api-keys-v1";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * What a key may do. `viewer` reads the runs of its repositories; `operator`

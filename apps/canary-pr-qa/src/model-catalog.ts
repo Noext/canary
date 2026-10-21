@@ -33,7 +33,7 @@ export function assertProvider(config: Config) {
     );
   }
 }
-export function allowedModelIds(config: Config) {
+function allowedModelIds(config: Config) {
   return config.QA_ALLOWED_MODELS.split(",")
     .map((id) => id.trim())
     .filter(Boolean);
