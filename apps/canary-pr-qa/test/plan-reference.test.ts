@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
 import {
+  numberedSourceLines,
   PolicySchema,
+  quoteDivergence,
   requirementHasWitness,
+  sourceLineMaterial,
+  ungroundedRequirement,
   ungroundedRequirements,
   validateCoverage,
 } from "../src/policy.js";
@@ -269,16 +273,20 @@ describe("refus d'une référence : la ligne demandée, puis ce que le matériel
     const resolved = resolve(referenceSubmission(PAGE, 999), material);
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      `requirements.0.line: Line 999 of ${PAGE} is not in the numbered material`
+      `requirements.0.line: Line 999 of ${PAGE} is outside the material`
     );
     // Les numéros réellement listés autour, bornés : les trois derniers avant.
     expect(resolved.refusal).toContain("354, 368, 375 before it");
-    // La cause nommée est la vraie : le matériel ne porte que les lignes des
-    // hunks du patch (policy.ts, `numberedSourceLines`), pas le fichier entier ;
-    // le budget de contexte ne fait que tronquer cette liste.
+    // La cause nommée est la vraie : le matériel porte les lignes des hunks du
+    // patch (policy.ts, `sourceLineMaterial`), pas le fichier entier.
+    expect(resolved.refusal).toContain(
+      "the diff carries no numbered line 999 of it"
+    );
     expect(resolved.refusal).toContain(
       "it carries the lines of the patch hunks, not every line of the file"
     );
+    // Le remède est explicite : désigner une ligne DANS le diff, jamais deviner.
+    expect(resolved.refusal).toContain("Designate a line inside the diff");
   });
 
   it("nomme les lignes qui portent du code quand la ligne désignée n'en porte pas", () => {
@@ -304,7 +312,7 @@ describe("refus d'une référence : la ligne demandée, puis ce que le matériel
     const resolved = resolve(referenceSubmission(CASH, 116), ambiguous);
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      `Line 116 of ${CASH} is ambiguous: sourceLines lists it 2 times`
+      `Line 116 of ${CASH} is ambiguous: the material lists it 2 times`
     );
   });
 
@@ -316,9 +324,9 @@ describe("refus d'une référence : la ligne demandée, puis ce que le matériel
     );
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      "No numbered line for src/absent.ts: sourceLines lists no such file"
+      "No numbered line for src/absent.ts: the diff carries no such file"
     );
-    expect(resolved.refusal).toContain(`(it lists ${PAGE})`);
+    expect(resolved.refusal).toContain(`(it changes ${PAGE})`);
   });
 
   it("refuse un fichier listé sans aucune ligne, plutôt que de deviner", () => {
@@ -326,7 +334,7 @@ describe("refus d'une référence : la ligne demandée, puis ce que le matériel
     const resolved = resolve(referenceSubmission(PAGE, 1), material);
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      `No numbered line for ${PAGE}: sourceLines lists that file but no line of it`
+      `No numbered line for ${PAGE}: the material lists that file but no line of it`
     );
   });
 
@@ -483,5 +491,160 @@ describe("compatibilité : la forme citation est inchangée", () => {
     const resolved = resolve(quotedSubmission(PAGE, "court"), []);
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain("requirements.0.quote");
+  });
+});
+
+/**
+ * REJEU du run 76249900 (PR pharmania/arpilabe-pilotage#17, scénario
+ * `caisse-quantite-decimale-refusee`) : le plan a recopié la ligne 71 du fichier
+ * de caisse, et son apostrophe typographique `’` (U+2019) là où le fichier écrit
+ * `'` (U+0027) a suffi à la refuser — à juste titre, la copie ne correspond pas
+ * à l'octet près. Le refus, lui, renvoyait le planificateur recopier la ligne, et
+ * la ligne n'était même pas dans le matériel affiché : 838 caractères de marge,
+ * un fichier sur dix, le fichier cité absent.
+ *
+ * Les deux bornes sont tenues ici : la copie reste refusée (aucune tolérance
+ * n'est ajoutée), son remède ne demande plus de recopier mais de DÉSIGNER le
+ * numéro, et cette désignation écrit la ligne exacte du fichier — le gate la
+ * lit, le modèle n'en touche aucun caractère.
+ */
+describe("rejeu du run 76249900 : une apostrophe dérivée ne coûte plus le run", () => {
+  /** La ligne 71 du fichier du run : le fichier y écrit l'apostrophe ASCII. */
+  const REAL_LINE_71 = " * « 3,5 » : une demi-coupure n'existe pas.";
+  /** La ligne 70, réelle elle aussi, pour que le patch ait deux hunks. */
+  const REAL_LINE_70 =
+    " * « 3,5 » : la quantité doit être un entier de coupures.";
+  /** La copie du plan mesuré, octet pour octet : apostrophe typographique. */
+  const COPIED_LINE_71 = " * « 3,5 » : une demi-coupure n’existe pas.";
+  const traced = contextFor(CASH, [
+    { line: 70, text: REAL_LINE_70 },
+    { line: 71, text: REAL_LINE_71 },
+  ]);
+  /** Le contrat d'API du fichier, hors du matériel du diff (une seule ligne). */
+  const API_ONLY_LINE = "export const COUNT_CASH_MAX_CENTS = 100_000;";
+
+  it("refuse la copie dérivée et ne lui oppose plus une recopie", () => {
+    expect(COPIED_LINE_71).not.toBe(REAL_LINE_71);
+    const resolved = resolve(
+      quotedSubmission(CASH, COPIED_LINE_71),
+      sourceLineMaterial(traced)
+    );
+    const plan = resolved.plan as Plan;
+    // La forme citation traverse le schéma sans réparation : la copie dérivée
+    // arrive telle quelle au gate de témoin, qui la refuse.
+    expect(plan.scenarios[0]?.requirements[0]?.quote).toBe(COPIED_LINE_71);
+    expect(
+      requirementHasWitness({ quote: COPIED_LINE_71, sourceFile: CASH }, traced)
+    ).toBe(false);
+    const [ungrounded] = ungroundedRequirements(plan, traced);
+    if (!ungrounded) {
+      throw new Error("La copie dérivée doit laisser une exigence sans témoin");
+    }
+    const refusal = ungroundedRequirement(
+      ungrounded.scenarioId,
+      ungrounded.requirement,
+      traced,
+      policy,
+      ungrounded.rank
+    );
+    expect(refusal.code).toBe("REQUIREMENT_UNGROUNDED");
+    // Le refus nomme la ligne, et le caractère attendu : ce que le fichier écrit
+    // là où la copie a dérivé.
+    const divergence = quoteDivergence(
+      { quote: COPIED_LINE_71, sourceFile: CASH },
+      traced
+    );
+    expect(divergence?.line).toBe(71);
+    expect(divergence?.kind).toBe("invented");
+    for (const fault of divergence?.faults ?? []) {
+      expect(refusal.hint).toContain(JSON.stringify(fault.real));
+      expect(refusal.hint).toContain(JSON.stringify(fault.copy));
+    }
+    expect(refusal.hint).toContain(`line 71 of ${CASH}`);
+    // Le remède est la DÉSIGNATION, plus la recopie : le gate écrit la ligne.
+    expect(refusal.hint).toContain(
+      `send "line": 71 for ${CASH} and the gate writes that line itself`
+    );
+    expect(refusal.hint).not.toContain(
+      "quote that whole line from its first character"
+    );
+    expect(refusal.hint).not.toContain(JSON.stringify(REAL_LINE_71));
+  });
+
+  it("accepte la même exigence en forme référence, avec la ligne du fichier", () => {
+    const resolved = resolve(
+      referenceSubmission(CASH, 71),
+      sourceLineMaterial(traced)
+    );
+    expect(resolved.refusal).toBeUndefined();
+    const requirement = (resolved.plan as Plan).scenarios[0]?.requirements[0];
+    // Le texte persisté est celui du fichier, octet pour octet : l'apostrophe
+    // ASCII, et aucune trace de la copie dérivée.
+    expect(requirement?.quote).toBe(REAL_LINE_71);
+    expect(requirement?.quote.includes("\u2019")).toBe(false);
+    expect(
+      requirementHasWitness(
+        requirement ?? { quote: "", sourceFile: CASH },
+        traced
+      )
+    ).toBe(true);
+    expect(
+      validateCoverage(resolved.plan as Plan, traced, policy, config).gate
+    ).toBe("complete");
+  });
+
+  it("atteint la ligne que le matériel AFFICHÉ ne porte plus", () => {
+    // La borne qui a coûté le run : le matériel affiché s'arrête avant le
+    // fichier cité, et la ligne 71 n'y est pas.
+    const shown = numberedSourceLines(traced, 200);
+    expect(shown.flatMap((file) => file.lines)).not.toContainEqual({
+      line: 71,
+      text: REAL_LINE_71,
+    });
+    // La résolution lit le diff entier : la ligne reste désignable, et le texte
+    // est celui du fichier, pas celui de l'affichage.
+    expect(resolveLineReference(CASH, 71, sourceLineMaterial(traced))).toEqual({
+      text: REAL_LINE_71,
+    });
+  });
+
+  it("refuse explicitement une ligne que le diff ne porte pas", () => {
+    const resolved = resolve(
+      referenceSubmission(CASH, 200),
+      sourceLineMaterial(traced)
+    );
+    expect(resolved.plan).toBeUndefined();
+    expect(resolved.refusal).toContain(
+      `Line 200 of ${CASH} is outside the material`
+    );
+    expect(resolved.refusal).toContain("Designate a line inside the diff");
+  });
+
+  it("laisse la forme quote témoigner d'une ligne que le diff ne porte pas", () => {
+    // L'API du fichier n'est pas dans le diff — la PR ajoute une ligne de
+    // commentaire, pas ce contrat — mais le contenu de tête la porte : la forme
+    // `quote` garde son sens pour ce que le matériel annonce ne pas couvrir.
+    const withApi: PrContext = {
+      ...traced,
+      context: [
+        {
+          content: [REAL_LINE_71, "", "", API_ONLY_LINE].join("\n"),
+          path: CASH,
+          ref: traced.sha,
+        },
+      ],
+    };
+    const resolved = resolve(quotedSubmission(CASH, API_ONLY_LINE), []);
+    expect(resolved.refusal).toBeUndefined();
+    expect(
+      requirementHasWitness({ quote: API_ONLY_LINE, sourceFile: CASH }, withApi)
+    ).toBe(true);
+    // La même ligne n'est pas désignable : le diff ne la porte pas, et le gate
+    // ne la devine pas.
+    expect(resolveLineReference(CASH, 4, sourceLineMaterial(withApi))).toEqual({
+      refusal: expect.stringContaining(
+        "is outside the material"
+      ) as unknown as string,
+    });
   });
 });

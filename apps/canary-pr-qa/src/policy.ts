@@ -9,6 +9,7 @@ import {
   QUOTE_MIN_TEXT_CHARS,
   QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
+  resolveLineReference,
   type Scenario,
   type SourceLineMaterial,
 } from "./schema.js";
@@ -626,24 +627,50 @@ function allFileContentLines(
   return lines;
 }
 /**
- * Lignes réelles du contenu après changement, numérotées dans le nouveau
- * fichier : c'est le matériel que le planificateur reçoit et DÉSIGNE par son
- * numéro (voir `planPayload`, runner.ts, et `plannerPlanSchema`, schema.ts). Le
- * numéro est celui que les refus nomment — la ligne « 368: "..." » d'un remède
- * se retrouve telle quelle ici —, donc une référence « line: 368 » se résout
- * sans recopier la ligne. Jamais de texte inventé : chaque ligne vient du
- * patch, sans son préfixe.
+ * Le matériel numéroté COMPLET du diff : chaque fichier modifié avec les lignes
+ * réelles de ses hunks, numérotées dans le nouveau fichier. C'est ce que le gate
+ * lit pour résoudre une référence `line` (voir `resolveLineReference`,
+ * schema.ts) : le numéro que les refus nomment — la ligne « 71: "..." » d'un
+ * remède — se retrouve ici, donc une référence `line: 71` se résout sans que
+ * rien ne soit recopié. Jamais de texte inventé : chaque ligne vient du patch,
+ * sans son préfixe.
  *
- * Borné par le budget que l'appelant peut encore envoyer : au-delà, la ligne
- * n'est pas montrée et le patch reste la source du planificateur. Le coût d'une
- * ligne est sa taille sérialisée plus `SOURCE_LINE_COST_CHARS`, celui d'un
- * fichier la taille SÉRIALISÉE de son chemin plus `SOURCE_FILE_COST_CHARS` ; ces
- * marges couvrent les accolades et les virgules, donc le total sérialisé tient
- * dans le budget reçu. Le chemin n'y échappe pas : git accepte un guillemet ou
- * un antislash dans un nom de fichier, que JSON échappe, donc la longueur brute
- * du nom sous-estime la place qu'il prend. Compter la longueur brute laissait
- * entrer une ligne de trop, et `planPayload` rejetait alors un payload passé
- * au-dessus de sa limite.
+ * C'est la SEULE numérotation. Le message en affiche la part que le budget
+ * laisse (`sourceLines`, voir `numberedSourceLines`), mais les deux listes
+ * sortent des mêmes hunks (`postChangeHunks`) et de la même base — l'en-tête
+ * `@@ … +N` de chaque hunk — donc un numéro désigne la même ligne dans les deux,
+ * et un fichier absent de l'affichage reste résoluble.
+ */
+export function sourceLineMaterial(context: PrContext): SourceLineMaterial[] {
+  const files: SourceLineMaterial[] = [];
+  for (const file of context.files) {
+    if (!file.patch) {
+      continue;
+    }
+    const lines = postChangeHunks(file.patch).flat();
+    if (lines.length === 0) {
+      continue;
+    }
+    files.push({ lines, path: file.filename });
+  }
+  return files;
+}
+/**
+ * La part du matériel que le message AFFICHE : celle qui tient dans le budget
+ * que l'appelant lui alloue, fichiers entiers, dans l'ordre du diff. Au-delà,
+ * la ligne n'est pas montrée — elle reste néanmoins résoluble, le matériel de
+ * résolution étant le diff entier (voir `sourceLineMaterial`) : la troncature
+ * de l'affichage ne ferme aucune ligne au planificateur, elle l'oblige
+ * seulement à désigner un numéro qu'il n'a pas lu ligne à ligne.
+ *
+ * Le coût d'une ligne est sa taille sérialisée plus `SOURCE_LINE_COST_CHARS`,
+ * celui d'un fichier la taille SÉRIALISÉE de son chemin plus
+ * `SOURCE_FILE_COST_CHARS` ; ces marges couvrent les accolades et les virgules,
+ * donc le total sérialisé tient dans le budget reçu. Le chemin n'y échappe pas :
+ * git accepte un guillemet ou un antislash dans un nom de fichier, que JSON
+ * échappe, donc la longueur brute du nom sous-estime la place qu'il prend.
+ * Compter la longueur brute laissait entrer une ligne de trop, et `planPayload`
+ * rejetait alors un payload passé au-dessus de sa limite.
  */
 export function numberedSourceLines(
   context: PrContext,
@@ -651,17 +678,14 @@ export function numberedSourceLines(
 ): SourceLineMaterial[] {
   const files: SourceLineMaterial[] = [];
   let used = 0;
-  for (const file of context.files) {
-    if (!file.patch) {
-      continue;
-    }
-    const cost = JSON.stringify(file.filename).length + SOURCE_FILE_COST_CHARS;
+  for (const file of sourceLineMaterial(context)) {
+    const cost = JSON.stringify(file.path).length + SOURCE_FILE_COST_CHARS;
     if (used + cost > budget) {
       continue;
     }
     const lines: { line: number; text: string }[] = [];
     let taken = cost;
-    for (const item of postChangeHunks(file.patch).flat()) {
+    for (const item of file.lines) {
       const entry =
         JSON.stringify({ line: item.line, text: item.text }).length +
         SOURCE_LINE_COST_CHARS;
@@ -675,7 +699,7 @@ export function numberedSourceLines(
       continue;
     }
     used += taken;
-    files.push({ path: file.filename, lines });
+    files.push({ path: file.path, lines });
   }
   return files;
 }
@@ -1154,16 +1178,53 @@ const AMPUTATION_READING: Record<QuoteAmputation, string> = {
  * borne de `quote`, sinon la fenêtre de jetons ENTIERS que `quoteableFragment`
  * en a extraite — nommée comme un fragment, jamais comme la ligne entière, pour
  * qu'une consigne ne demande pas de citer « cette ligne » en donnant un fragment
- * pris au milieu d'elle.
+ * pris au milieu d'elle. Quand la ligne est désignable dans le matériel de
+ * résolution, `designation` passe devant : le gate écrit le texte lui-même, donc
+ * le remède n'a plus rien à faire recopier.
  */
 function quoteRepair(
   line: number,
   candidate: string,
-  wholeLine: boolean
+  wholeLine: boolean,
+  designation: string
 ): string {
+  if (designation !== "") {
+    return designation;
+  }
   return wholeLine
     ? `quote that whole line from its first character instead: ${line}: ${JSON.stringify(candidate)}.`
     : `that line is too long to quote whole, so quote this exact fragment of it instead: ${line}: ${JSON.stringify(candidate)}.`;
+}
+/**
+ * La ligne que le planificateur peut DÉSIGNER au lieu de la recopier : quand le
+ * matériel de résolution la porte, le remède ne rend aucun texte — il donne le
+ * numéro, et le gate écrit lui-même la ligne du diff (voir
+ * `resolveLineReference`). C'est la sortie du mode d'échec mesuré du run
+ * 76249900 : le refus disait « quote that whole line from its first character
+ * instead », le planificateur la recopiait, et un seul caractère dérivé — une
+ * apostrophe typographique là où le fichier écrit `'` — suffisait à la refuser
+ * de nouveau.
+ *
+ * Vide quand la ligne n'est pas dans le matériel — contenu de tête d'un fichier
+ * que la PR ne change pas, contexte importé — ou quand le gate refuserait la
+ * référence elle-même, parce qu'elle est trop longue ou vide de code : le remède
+ * retombe alors sur la portion exacte à citer, seule voie qui reste pour cette
+ * ligne.
+ */
+function designatedLineRemedy(
+  sourceFile: string,
+  line: number,
+  context: PrContext
+): string {
+  const resolution = resolveLineReference(
+    sourceFile,
+    line,
+    sourceLineMaterial(context)
+  );
+  if ("refusal" in resolution) {
+    return "";
+  }
+  return `send "line": ${line} for ${sourceFile} and the gate writes that line itself.`;
 }
 /** Un bord d'un découpage : le fragment recopié et sa forme normalisée. */
 interface AmputationEdge {
@@ -1577,7 +1638,9 @@ function scanAmputation(
 }
 /**
  * Remède d'une copie amputée : la ligne réelle dont elle est recopiée, la partie
- * que la copie a laissée de côté, puis la portion exacte à citer à la place.
+ * que la copie a laissée de côté, puis la réparation — le numéro à DÉSIGNER
+ * quand le matériel de résolution porte la ligne (voir `designatedLineRemedy`),
+ * la portion exacte à citer sinon.
  * Quand la copie est en plus ALTÉRÉE à l'intérieur de cette ligne, le refus
  * nomme aussi la divergence avant la partie perdue : c'est elle qui a fait
  * refuser la copie, et sans elle le planificateur recopie la même altération. La
@@ -1601,7 +1664,7 @@ export function amputatedQuoteRemedy(
   const fault = divergence
     ? `${divergenceFault(divergence)}, and ${AMPUTATION_FAULT[amputated.kind]}`
     : `${AMPUTATION_FAULT[amputated.kind]}, ${AMPUTATION_READING[amputated.kind]}`;
-  return `Your quote is copied from line ${amputated.line} of ${requirement.sourceFile} but ${fault}; ${quoteRepair(amputated.line, amputated.candidate, amputated.wholeLine)}`;
+  return `Your quote is copied from line ${amputated.line} of ${requirement.sourceFile} but ${fault}; ${quoteRepair(amputated.line, amputated.candidate, amputated.wholeLine, designatedLineRemedy(requirement.sourceFile, amputated.line, context))}`;
 }
 /** Le sens d'une divergence : des caractères inventés, ou seuls les blancs qui diffèrent. */
 export type QuoteDivergenceKind = "invented" | "whitespace";
@@ -1964,7 +2027,9 @@ function divergenceFault(divergence: QuoteDivergence): string {
 /**
  * Remède d'une copie qui s'écarte d'une ligne réelle sans en être une amputation
  * de bord : la ligne, la première différence avec elle — ce que le fichier écrit
- * là où la copie a autre chose — puis la portion exacte à citer à la place. C'est
+ * là où la copie a autre chose — puis la réparation : le numéro à DÉSIGNER quand
+ * le matériel de résolution porte la ligne (voir `designatedLineRemedy`), la
+ * portion exacte à citer sinon. C'est
  * le défaut que le remède générique ne nommait pas : une copie retapée caractère
  * par caractère, dont les blancs ou une expression diffèrent, est refusée à juste
  * titre, mais son remède doit dire CE QUI DIFFÈRE, sinon le planificateur
@@ -1980,7 +2045,7 @@ function divergentQuoteRemedy(
   if (!divergence) {
     return "";
   }
-  return `Your quote is copied from line ${divergence.line} of ${requirement.sourceFile} but ${divergenceFault(divergence)}; ${quoteRepair(divergence.line, divergence.candidate, divergence.wholeLine)}`;
+  return `Your quote is copied from line ${divergence.line} of ${requirement.sourceFile} but ${divergenceFault(divergence)}; ${quoteRepair(divergence.line, divergence.candidate, divergence.wholeLine, designatedLineRemedy(requirement.sourceFile, divergence.line, context))}`;
 }
 /**
  * Remède unique d'une exigence dont la citation n'a aucun témoin : quand la
