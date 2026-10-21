@@ -772,6 +772,29 @@ export class Model {
   }
 
   /**
+   * Réserve d'une tentative qui n'a rien produit, selon ce qui l'a interrompue.
+   *
+   * Un refus explicite de l'endpoint (503, 429) est une réponse, pas une
+   * coupure : rien n'a été perdu en vol, donc aucune génération ne peut lui être
+   * imputée, et l'entrée du prompt — toujours due, la requête est partie — est
+   * toute la dépense engagée. Réserver la borne de sortie d'un appel que
+   * l'endpoint a refusé compterait une génération qui n'a pas eu lieu, et sur une
+   * enveloppe dimensionnée pour un seul appel, ce faux débit refusait la reprise
+   * que ce refus rend nécessaire. Une coupure, elle, garde la réserve crédible :
+   * des tokens ont pu être générés sans être transmis.
+   */
+  private lostAttemptReservation(
+    code: string,
+    messages: { content: string; role: string }[],
+    maxTokens: number,
+    delivered: DeliveredTrial | undefined
+  ): { costUsd: number; tokens: number } {
+    return RETRYABLE_HTTP_CODES.has(code)
+      ? this.reservation(messages, 0)
+      : this.credibleReservation(messages, maxTokens, delivered);
+  }
+
+  /**
    * Comptabilise la réserve crédible d'une tentative perdue à part de l'usage
    * rapporté, y compris quand elle est la dernière — reprises épuisées ou
    * plafond d'appels atteint. Elle est jugée avec l'usage consommé par
@@ -817,7 +840,7 @@ export class Model {
         const scope = runScope.getStore();
         const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
         this.reserveLost(
-          this.credibleReservation(messages, maxTokens, delivered)
+          this.lostAttemptReservation(code, messages, maxTokens, delivered)
         );
         // Cette réserve est plafonnée par le pire cas de la tentative admise,
         // sauf quand l'endpoint y déclare un total plus lourd ; le plus grand

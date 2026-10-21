@@ -50,6 +50,19 @@ function refusalStatus(status: number, retryAfter?: string): Response {
   );
 }
 
+/**
+ * Matériel de planification du volume réel d'une PR : c'est la taille de prompt
+ * qui rend l'enveloppe d'un run serrée face à deux pires cas.
+ */
+function planningMaterial(): Record<string, string> {
+  return { context: "m".repeat(120_000) };
+}
+
+/** Une connexion coupée avant toute réponse : rien n'a pu être observé. */
+function lostConnection(): Error {
+  return Object.assign(new Error("terminated"), { code: "ECONNRESET" });
+}
+
 function streamed(events: Record<string, unknown>[]): Response {
   const encoder = new TextEncoder();
   return new Response(
@@ -71,7 +84,7 @@ function streamed(events: Record<string, unknown>[]): Response {
  * Réponses servies dans l'ordre, une par envoi. Un envoi au-delà du script est
  * une erreur de transport : le test voit l'échec au lieu d'un succès tardif.
  */
-function scriptedFetch(responses: Response[]): number[] {
+function scriptedFetch(responses: (Error | Response)[]): number[] {
   const queue = [...responses];
   const sent: number[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -80,14 +93,18 @@ function scriptedFetch(responses: Response[]): number[] {
     if (!next) {
       throw new Error("unexpected model call");
     }
+    if (next instanceof Error) {
+      throw next;
+    }
     return next;
   });
   return sent;
 }
 
-/** Le périmètre d'un run : c'est lui qui porte `retries` et `calls`. */
+/** Le périmètre d'un run : c'est lui qui porte `retries`, `calls` et les réserves. */
 async function inRun<T>(
-  run: (scope: RunScope) => Promise<T>
+  run: (scope: RunScope) => Promise<T>,
+  envelope: Partial<RunScope> = {}
 ): Promise<{ scope: RunScope; value: T }> {
   const scope: RunScope = {
     calls: 0,
@@ -99,6 +116,7 @@ async function inRun<T>(
     reservedTokens: 0,
     signal: new AbortController().signal,
     tokens: 0,
+    ...envelope,
   };
   return { scope, value: await runScope.run(scope, () => run(scope)) };
 }
@@ -290,6 +308,116 @@ describe("reprise d'un statut HTTP transitoire du modèle", () => {
       expect(seeded + (scope.retries ?? 0) + 2).toBeGreaterThan(
         MAX_MODEL_CALLS_PER_RUN
       );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("ne réserve que l'entrée d'un 503, pas une génération qui n'a pas eu lieu", async () => {
+    // Un refus est une réponse : l'endpoint n'a pas servi la requête. Réserver sa
+    // borne de sortie compterait une génération fictive, et sur une enveloppe
+    // dimensionnée pour un seul appel, ce faux débit refuserait la reprise que ce
+    // refus rend nécessaire. Une coupure, elle, garde le pire cas : des tokens ont
+    // pu être générés sans être transmis.
+    const cfg = config(1);
+    const outputBound = Math.min(
+      cfg.QA_PLAN_MAX_TOKENS,
+      cfg.QA_CALL_MAX_TOKENS
+    );
+    try {
+      const replayedSends = scriptedFetch([refusalStatus(503), served()]);
+      const replayed = await inRun(() =>
+        new Model(cfg).json("JSON", planningMaterial(), plan)
+      );
+      expect(replayed.value).toEqual({ ok: true });
+      expect(replayedSends).toHaveLength(2);
+      vi.restoreAllMocks();
+      // Sans reprise : la réserve d'une coupure se lit sur une seule tentative.
+      const lostSends = scriptedFetch([lostConnection()]);
+      const lost = await inRun(() =>
+        refusal(() =>
+          new Model(config(0)).json("JSON", planningMaterial(), plan)
+        )
+      );
+      expect(lostSends).toHaveLength(1);
+      // Ce qu'un refus a réellement engagé : l'entrée. La différence avec une
+      // tentative perdue est exactement la borne de sortie d'un appel non servi.
+      expect(replayed.scope.reservedTokens).toBeLessThan(
+        lost.scope.reservedTokens
+      );
+      expect(lost.scope.reservedTokens - replayed.scope.reservedTokens).toBe(
+        outputBound
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("rejoue un 503 sur un gros prompt quand l'enveloppe ne couvre qu'un appel", async () => {
+    // Le gros prompt de planification est le cas où le défaut mord : l'enveloppe
+    // couvre un appel complet, jamais deux. Après le 503, la reprise doit partir
+    // au lieu d'être refusée à l'admission pour une génération qui n'a pas eu
+    // lieu.
+    const material = planningMaterial();
+    try {
+      scriptedFetch([lostConnection()]);
+      const lost = await inRun(() =>
+        refusal(() => new Model(config(0)).json("JSON", material, plan))
+      );
+      vi.restoreAllMocks();
+      scriptedFetch([refusalStatus(503)]);
+      const refused = await inRun(() =>
+        refusal(() => new Model(config(0)).json("JSON", material, plan))
+      );
+      const inputOnly = refused.scope.reservedTokens;
+      expect(refused.value.code).toBe("HTTP_503");
+      // Un appel complet tient dans l'enveloppe de ce run, deux non : c'est
+      // exactement la marge où la reprise était refusée avant ce correctif
+      // (pire cas du refus + pire cas de la reprise > enveloppe).
+      const envelope = lost.scope.reservedTokens + inputOnly;
+      expect(envelope).toBeLessThan(2 * lost.scope.reservedTokens);
+      vi.restoreAllMocks();
+      const sends = scriptedFetch([refusalStatus(503), served()]);
+      const replayed = await inRun(
+        () => new Model(config(1)).json("JSON", material, plan),
+        { maxTokens: envelope }
+      );
+      // La reprise est partie et le second envoi a servi la réponse.
+      expect(sends).toHaveLength(2);
+      expect(replayed.scope.retries).toBe(1);
+      expect(replayed.scope.calls).toBe(1);
+      expect(replayed.value).toEqual({ ok: true });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("refuse toujours la reprise quand l'enveloppe ne couvre aucun appel", async () => {
+    // Enveloppe sous l'entrée du prompt : la première tentative ne part même pas.
+    // Juste au-dessus d'un appel complet : la reprise, elle, ne tient plus dans
+    // ce qui reste, et le refus reste nommé comme avant.
+    try {
+      scriptedFetch([lostConnection()]);
+      const lost = await inRun(() =>
+        refusal(() =>
+          new Model(config(0)).json("JSON", planningMaterial(), plan)
+        )
+      );
+      const oneCall = lost.scope.reservedTokens;
+      vi.restoreAllMocks();
+      const sends = scriptedFetch([refusalStatus(503)]);
+      const blocked = await inRun(
+        () =>
+          refusal(() =>
+            new Model(config(1)).json("JSON", planningMaterial(), plan)
+          ),
+        { maxTokens: oneCall }
+      );
+      expect(blocked.value.code).toBe("RUN_BUDGET_EXCEEDED");
+      expect(blocked.value.message).toContain("budget exhausted");
+      // L'envoi refusé est parti, la reprise n'a jamais été engagée.
+      expect(sends).toHaveLength(1);
+      expect(blocked.scope.retries).toBeUndefined();
     } finally {
       vi.restoreAllMocks();
     }
