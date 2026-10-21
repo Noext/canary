@@ -1,11 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Config } from "./config.js";
-import {
-  AdminSetup,
-  Credentials,
-  type LocalAuth,
-  localCookie,
-} from "./local-auth.js";
+import { AdminSetup, Credentials } from "./local-accounts.js";
+import { type LocalAuth, localCookie } from "./local-auth.js";
 import type { Queue } from "./queue.js";
 
 export function authRoutes(

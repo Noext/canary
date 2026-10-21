@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { Principal } from "./access.js";
 import type { AccountPayload, AccountsPayload } from "./dashboard/contracts.js";
 import { QaError } from "./diagnostics.js";
-import { AccountCreate, AccountUpdate, type LocalAuth } from "./local-auth.js";
+import { AccountCreate, AccountUpdate } from "./local-accounts.js";
+import type { LocalAuth } from "./local-auth.js";
 import type { Queue } from "./queue.js";
 
 const AccountId = z.string().uuid();
