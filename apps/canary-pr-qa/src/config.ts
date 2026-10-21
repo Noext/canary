@@ -172,9 +172,11 @@ const envSchema = z.object({
     .max(900)
     .default(120),
   /**
-   * Reprises d'un appel modèle interrompu par le transport (reset, timeout,
-   * connexion coupée). 0 désactive le repli ; les délais 1/4/10 s restent dans
-   * le client modèle, et un plafond absolu d'appels par run borne la dépense.
+   * Reprises d'un appel modèle qui n'a rien produit : transport interrompu
+   * (reset, timeout, connexion coupée), ou statut transitoire de l'endpoint
+   * (503, 429). 0 désactive le repli ; les délais 1/4/10 s restent dans le client
+   * modèle — un `Retry-After` reçu sur le 503 ou le 429 est suivi quand il reste
+   * sous son plafond —, et un plafond absolu d'appels par run borne la dépense.
    */
   QA_MODEL_RETRIES: z.coerce.number().int().min(0).max(5).default(3),
   QA_CONTEXT_CHARS: z.coerce

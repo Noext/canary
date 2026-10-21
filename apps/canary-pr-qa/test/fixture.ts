@@ -83,8 +83,13 @@ export async function body(
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
-export function json(res: ServerResponse, value: unknown, status = 200) {
-  res.writeHead(status, { "Content-Type": "application/json" });
+export function json(
+  res: ServerResponse,
+  value: unknown,
+  status = 200,
+  headers: Record<string, string> = {}
+) {
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(value));
 }
 /**
@@ -216,6 +221,14 @@ export async function fixture(
     modelOverBound?: number;
     /** Statut HTTP servi par `chat/completions` au lieu d'une réponse de plan. */
     completionsStatus?: number;
+    /**
+     * Statuts HTTP servis à la place de la réponse de plan, un par envoi, dans
+     * l'ordre : une séquence dit qu'un gateway a refusé N tentatives avant de
+     * servir la bonne, ce qu'un statut unique ne peut pas exprimer.
+     */
+    completionsStatuses?: number[];
+    /** En-tête `Retry-After` posé sur ces refus, quand l'endpoint en envoie un. */
+    retryAfter?: string;
     /** Variables d'environnement ajoutées à la configuration du fixture. */
     env?: Record<string, string>;
   } = {}
@@ -228,6 +241,9 @@ export async function fixture(
   let prReads = 0;
   let planRequests = 0;
   let modelResets = options.modelResets ?? 0;
+  const completionsStatuses = [...(options.completionsStatuses ?? [])];
+  /** Envois reçus par `chat/completions`, réponse ou refus confondus. */
+  let completionRequests = 0;
   let modelTruncations = options.modelTruncations ?? 0;
   let modelIncomplete = options.modelIncomplete ?? 0;
   let modelUnreadable = options.modelUnreadable ?? 0;
@@ -480,6 +496,7 @@ export async function fixture(
       return;
     }
     if (path === "/v1/chat/completions") {
+      completionRequests++;
       if (modelResets > 0) {
         modelResets -= 1;
         // Une socket détruite avant toute réponse : c'est le ECONNRESET réel,
@@ -488,13 +505,15 @@ export async function fixture(
         return;
       }
       const payload = await body(req);
-      if (options.completionsStatus) {
+      const refused = completionsStatuses.shift() ?? options.completionsStatus;
+      if (refused) {
         // Le corps est lu avant la réponse, comme un vrai endpoint : la requête
         // n'est pas un plan, elle n'est donc pas enregistrée dans modelRequests.
         json(
           res,
           { error: { message: "fixture refusal" } },
-          options.completionsStatus
+          refused,
+          options.retryAfter ? { "Retry-After": options.retryAfter } : undefined
         );
         return;
       }
@@ -659,6 +678,8 @@ export async function fixture(
     baseUrl,
     outgoing,
     modelRequests,
+    /** Nombre d'envois reçus par `chat/completions`, réponse ou refus confondus. */
+    completionRequests: () => completionRequests,
     catalogRequests,
     dataDir,
     close: () =>

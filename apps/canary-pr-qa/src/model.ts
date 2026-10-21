@@ -63,6 +63,16 @@ const TRANSPORT_CODES = new Set([
 ]);
 
 /**
+ * Statuts HTTP rejouables : l'endpoint était momentanément indisponible (503,
+ * celui qu'un gateway renvoie quand son amont refuse la requête) ou appliquait
+ * sa fenêtre de débit (429). La requête est partie sans produire de contenu utile
+ * — la même situation qu'une connexion coupée —, donc la reprise est sans effet
+ * de bord. Tout autre statut reste définitif : un 4xx de requête (400, 401, 403,
+ * 404) ne s'améliore pas au second essai.
+ */
+const RETRYABLE_HTTP_CODES = new Set(["HTTP_429", "HTTP_503"]);
+
+/**
  * Codes d'un contenu inexploitable, rejoués une fois : l'endpoint a répondu,
  * mais sa réponse ne peut pas servir de plan — vide ou coupée par sa propre
  * borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou complète mais hors schéma
@@ -70,8 +80,8 @@ const TRANSPORT_CODES = new Set([
  * ne distingue une coupure de transport d'une dérive du modèle, et un endpoint
  * qui alterne les deux ne se voit pas. Une reprise unique tranche ce doute pour
  * le prix d'un appel, là où le run entier est perdu. Tout autre code reste
- * définitif : un refus de plan, un `MODEL_STREAM_ERROR`, un HTTP 4xx/5xx ou un
- * échec d'authentification ne changent pas au second essai.
+ * définitif : un refus de plan, un `MODEL_STREAM_ERROR`, un HTTP 4xx de requête ou
+ * un échec d'authentification ne changent pas au second essai.
  */
 const CONTENT_RETRY_CODES = new Set([
   "MODEL_OUTPUT_INCOMPLETE",
@@ -129,7 +139,9 @@ function failedAttempt(
   return new QaError(
     code,
     `${message} (after ${attempt} retries)`,
-    "The model endpoint reset the connection; the run retried with backoff before giving up. Check the endpoint and its proxy, then relaunch."
+    RETRYABLE_HTTP_CODES.has(code)
+      ? "The model endpoint answered with a transient status; the run retried with backoff before giving up. Check the endpoint and its quota, then relaunch."
+      : "The model endpoint reset the connection; the run retried with backoff before giving up. Check the endpoint and its proxy, then relaunch."
   );
 }
 
@@ -155,7 +167,10 @@ export function transportCode(error: unknown): string | undefined {
     (error as { cause?: { code?: string } } | undefined)?.cause,
   ]) {
     const code = (candidate as { code?: unknown } | undefined)?.code;
-    if (typeof code === "string" && TRANSPORT_CODES.has(code)) {
+    if (
+      typeof code === "string" &&
+      (TRANSPORT_CODES.has(code) || RETRYABLE_HTTP_CODES.has(code))
+    ) {
       return code;
     }
   }
@@ -757,6 +772,29 @@ export class Model {
   }
 
   /**
+   * Réserve d'une tentative qui n'a rien produit, selon ce qui l'a interrompue.
+   *
+   * Un refus explicite de l'endpoint (503, 429) est une réponse, pas une
+   * coupure : rien n'a été perdu en vol, donc aucune génération ne peut lui être
+   * imputée, et l'entrée du prompt — toujours due, la requête est partie — est
+   * toute la dépense engagée. Réserver la borne de sortie d'un appel que
+   * l'endpoint a refusé compterait une génération qui n'a pas eu lieu, et sur une
+   * enveloppe dimensionnée pour un seul appel, ce faux débit refusait la reprise
+   * que ce refus rend nécessaire. Une coupure, elle, garde la réserve crédible :
+   * des tokens ont pu être générés sans être transmis.
+   */
+  private lostAttemptReservation(
+    code: string,
+    messages: { content: string; role: string }[],
+    maxTokens: number,
+    delivered: DeliveredTrial | undefined
+  ): { costUsd: number; tokens: number } {
+    return RETRYABLE_HTTP_CODES.has(code)
+      ? this.reservation(messages, 0)
+      : this.credibleReservation(messages, maxTokens, delivered);
+  }
+
+  /**
    * Comptabilise la réserve crédible d'une tentative perdue à part de l'usage
    * rapporté, y compris quand elle est la dernière — reprises épuisées ou
    * plafond d'appels atteint. Elle est jugée avec l'usage consommé par
@@ -776,9 +814,10 @@ export class Model {
   }
 
   /**
-   * Un appel modèle rejoué sur place quand le transport casse : même prompt,
-   * même contexte, aucun effet de bord. Le contenu partiel d'un flux interrompu
-   * est jeté — un flux troué n'est jamais accepté comme plan.
+   * Un appel modèle rejoué sur place quand la tentative n'a rien produit : le
+   * transport a cassé, ou l'endpoint a répondu un statut transitoire (503, 429).
+   * Même prompt, même contexte, aucun effet de bord. Le contenu partiel d'un flux
+   * interrompu est jeté — un flux troué n'est jamais accepté comme plan.
    */
   private async completionWithRetries(
     messages: { content: string; role: string }[],
@@ -801,7 +840,7 @@ export class Model {
         const scope = runScope.getStore();
         const used = (scope?.calls ?? 0) + (scope?.retries ?? 0);
         this.reserveLost(
-          this.credibleReservation(messages, maxTokens, delivered)
+          this.lostAttemptReservation(code, messages, maxTokens, delivered)
         );
         // Cette réserve est plafonnée par le pire cas de la tentative admise,
         // sauf quand l'endpoint y déclare un total plus lourd ; le plus grand
@@ -816,20 +855,32 @@ export class Model {
           scope.retries = (scope.retries ?? 0) + 1;
           scope.onRetry?.({ attempt: attempt + 1, max, code });
         }
-        await this.pause(this.retryDelay(attempt));
+        await this.pause(
+          this.retryDelay(
+            attempt,
+            error instanceof QaError ? error.retryAfterMs : undefined
+          )
+        );
       }
     }
   }
 
   /**
-   * Délai de repli de la reprise `attempt`, avec le jitter qui évite la rafale.
-   * Le dernier délai connu porte les reprises suivantes.
+   * Délai avant la reprise `attempt` : celui que l'endpoint a lui-même demandé
+   * quand sa réponse porte un `Retry-After` exploitable — déjà borné par
+   * `parseRetryAfter` —, le repli 1/4/10 s sinon, dans les deux cas avec le
+   * jitter qui évite la rafale. Le dernier délai connu porte les reprises
+   * suivantes.
    */
-  private retryDelay(attempt: number): number {
+  private retryDelay(attempt: number, retryAfterMs?: number): number {
+    const jitter = Math.floor(Math.random() * 250);
+    if (retryAfterMs !== undefined) {
+      return retryAfterMs + jitter;
+    }
     return (
       (MODEL_RETRY_DELAYS_MS[
         Math.min(attempt, MODEL_RETRY_DELAYS_MS.length - 1)
-      ] ?? 10_000) + Math.floor(Math.random() * 250)
+      ] ?? 10_000) + jitter
     );
   }
 

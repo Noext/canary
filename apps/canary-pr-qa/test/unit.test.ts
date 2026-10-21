@@ -2722,6 +2722,59 @@ describe("runner false-green regressions", () => {
     expect(result.usage?.calls).toBe(0);
     expect(f.modelRequests).toHaveLength(0);
   }, 60_000);
+  it("replays a model call the gateway refuses with 503, and counts it", async () => {
+    const f = await setup({
+      completionsStatuses: [503],
+      env: { QA_MODEL_RETRIES: "1" },
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("passed");
+    expect(result.usage?.retries).toBe(1);
+    // Le refus et la reprise : deux envois pour un seul appel répondu.
+    expect(f.completionRequests()).toBe(2);
+    const events = await readFile(
+      join(f.dataDir, result.id, "events.jsonl"),
+      "utf8"
+    );
+    expect(events).toContain('"retry":{"attempt":1,"max":1,"code":"HTTP_503"}');
+  }, 40_000);
+  it("blocks on a permanent 503 with the original code and the retry count", async () => {
+    const f = await setup({
+      completionsStatus: 503,
+      env: { QA_MODEL_RETRIES: "2" },
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("HTTP_503");
+    expect(result.error).toContain("(after 2 retries)");
+    expect(result.usage?.retries).toBe(2);
+    expect(result.usage?.calls).toBe(0);
+    // L'envoi refusé et ses deux reprises, puis plus rien.
+    expect(f.completionRequests()).toBe(3);
+  }, 40_000);
+  it("never replays a request the endpoint rejects with a 4xx", async () => {
+    const f = await setup({
+      completionsStatus: 400,
+      env: { QA_MODEL_RETRIES: "3" },
+    });
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      f.config
+    );
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("HTTP_400");
+    expect(result.usage?.retries).toBe(0);
+    expect(f.completionRequests()).toBe(1);
+  }, 40_000);
   it("never spends the transport budget on a semantic refusal", async () => {
     const ungrounded = structuredClone(plan);
     ungrounded.scenarios[0]!.requirements[0]!.quote = "show('Welcome '+nom)";
