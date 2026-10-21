@@ -2340,7 +2340,7 @@ describe("résolution d'une référence de ligne (run 9add286d, forme sans recop
     )?.at(-1)?.content;
     expect(correction).toContain("Invalid JSON or schema:");
     expect(correction).toContain(
-      "requirements.0.line: Line 400 of src/form.ts is not in the numbered material"
+      "requirements.0.line: Line 400 of src/form.ts is outside the material"
     );
     expect(correction).toContain("368 before it");
     // Rien n'a été inventé pour autant : le plan refusé est bloqué.

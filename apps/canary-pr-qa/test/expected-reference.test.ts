@@ -318,9 +318,10 @@ describe("refus d'une référence de littéral : la ligne demandée, puis ce qu'
     );
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      `scenarios.0.assertions.0.expected: Line 999 of ${PAGE} is not in the numbered material`
+      `scenarios.0.assertions.0.expected: Line 999 of ${PAGE} is outside the material`
     );
     expect(resolved.refusal).toContain("354, 368, 375 before it");
+    expect(resolved.refusal).toContain("Designate a line inside the diff");
     expect(resolved.refusal).toContain("write the value itself in expected");
   });
 
@@ -387,7 +388,7 @@ describe("refus d'une référence de littéral : la ligne demandée, puis ce qu'
     );
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      `Line 144 of ${CASH} is ambiguous: sourceLines lists it 2 times`
+      `Line 144 of ${CASH} is ambiguous: the material lists it 2 times`
     );
   });
 
@@ -398,9 +399,9 @@ describe("refus d'une référence de littéral : la ligne demandée, puis ce qu'
     );
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      "No numbered line for src/absent.ts: sourceLines lists no such file"
+      "No numbered line for src/absent.ts: the diff carries no such file"
     );
-    expect(resolved.refusal).toContain(`(it lists ${PAGE})`);
+    expect(resolved.refusal).toContain(`(it changes ${PAGE})`);
   });
 
   it("refuse un fichier listé sans aucune ligne, plutôt que de deviner", () => {
@@ -409,7 +410,7 @@ describe("refus d'une référence de littéral : la ligne demandée, puis ce qu'
     ]);
     expect(resolved.plan).toBeUndefined();
     expect(resolved.refusal).toContain(
-      `No numbered line for ${PAGE}: sourceLines lists that file but no line of it`
+      `No numbered line for ${PAGE}: the material lists that file but no line of it`
     );
   });
 
@@ -602,7 +603,7 @@ describe("le prompt enseigne la forme référence, sans l'imposer", () => {
     // La lecture est celle de la référence de ligne d'une exigence : le gate
     // écrit le littéral, et aucun caractère ne passe par le modèle.
     expect(prompt).toMatch(
-      /the gate writes the single string literal that line of `sourceLines` carries, quotes excluded, exactly as a requirement's `line` does/
+      /the gate writes the single string literal that line of the diff carries, quotes excluded, exactly as a requirement's `line` does/
     );
   });
 

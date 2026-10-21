@@ -48,6 +48,7 @@ import {
   type Requirement,
   repairRequirementAttribution,
   requirementSourceRefusal,
+  sourceLineMaterial,
   trustedPolicy,
   UNGROUNDED_ABSENT_REMEDY,
   UNGROUNDED_WEAK_REMEDY,
@@ -1244,10 +1245,13 @@ async function executePlan(
   result.plan = await model.json(
     PLANNER_PROMPT,
     payload,
-    // La résolution lit le matériel EXACTEMENT tel qu'il part dans le message :
-    // une référence `line` est résolue contre les lignes que le planificateur a
-    // reçues, jamais contre une vue plus large du fichier.
-    plannerPlanSchema(payload.sourceLines),
+    // La résolution lit le matériel numéroté de TOUT le diff : une référence
+    // `line` est résolue contre les hunks du patch — ceux que le message porte
+    // dans `pr.files` — et non contre la seule part que `sourceLines` affiche.
+    // Les deux vues sortent des mêmes hunks et de la même base de numérotation
+    // (voir `sourceLineMaterial`), donc une ligne coupée par le budget reste
+    // désignable et aucun numéro ne désigne deux lignes différentes.
+    plannerPlanSchema(sourceLineMaterial(context)),
     config.QA_PLAN_MAX_TOKENS,
     (candidate) => {
       // Le planificateur reçoit les refus et dispose d'une tentative de

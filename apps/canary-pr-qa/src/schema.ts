@@ -402,11 +402,19 @@ export const ActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("blocked"), explanation: text }).strict(),
 ]);
 /**
- * Le matériel numéroté que le planificateur reçoit (`sourceLines` du message,
- * voir `planPayload` dans runner.ts) : les lignes réelles de chaque fichier
- * modifié, avec leur numéro dans le nouveau fichier. C'est la SEULE source d'une
- * référence `line` : le gate y lit le texte qu'il écrit dans `quote`, donc rien
- * de ce que le planificateur devait recopier n'est plus recopié.
+ * Le matériel numéroté du diff : les lignes réelles de chaque fichier modifié,
+ * avec leur numéro dans le nouveau fichier. C'est la SEULE numérotation dont une
+ * référence `line` puisse sortir, et le gate y lit le texte qu'il écrit dans
+ * `quote` — donc rien de ce que le planificateur devait recopier n'est recopié.
+ *
+ * Deux vues descendent de cette liste, produite par `sourceLineMaterial`
+ * (policy.ts). La RÉSOLUTION lit tout le diff ; le message n'en AFFICHE que la
+ * part que le budget laisse (`sourceLines`, voir `numberedSourceLines`), parce
+ * qu'un PR volumineux doit garder son run. Les deux vues sortent des mêmes
+ * hunks et de la même base de numérotation — l'en-tête `@@ … +N` — donc un
+ * numéro y désigne la même ligne : afficher moins n'ouvre aucune seconde
+ * numérotation qui pourrait diverger de celle du message, et une ligne coupée de
+ * l'affichage reste désignable par son numéro.
  */
 export interface SourceLineMaterial {
   lines: { line: number; text: string }[];
@@ -481,12 +489,14 @@ export type LineReferenceResolution = { refusal: string } | { text: string };
  *
  * Le texte écrit dans `quote` est celui du matériel, octet pour octet : une
  * référence ne peut donc pas porter une copie altérée, ce qui est la cause
- * mesurée de la famille de refus (ligne 368 retapée avec `:""` inséré, alors
- * qu'elle était dans `sourceLines`). Aucune tolérance n'est ajoutée pour
- * autant : la ligne est LUE, jamais recréée ni rognée, et une ligne absente du
- * matériel, ambiguë, vide de code ou au-delà du plafond de citation est refusée
- * avec le numéro demandé et les numéros que le matériel porte autour — sans
- * jamais citer de texte de page.
+ * mesurée de la famille de refus (ligne 368 retapée avec `:""` inséré, et ligne
+ * 71 recopiée avec une apostrophe typographique là où le fichier écrit `'`).
+ * Aucune tolérance n'est ajoutée pour autant : la ligne est LUE, jamais recréée
+ * ni rognée, et une ligne ambiguë, vide de code ou au-delà du plafond de
+ * citation est refusée avec le numéro demandé et les numéros que le matériel
+ * porte autour — sans jamais citer de texte de page. Une ligne que le diff ne
+ * porte pas est refusée comme EXTÉRIEURE au matériel : le gate ne la devine pas
+ * et ne rouvre pas l'auto-résolution heuristique qui a été retirée.
  */
 export function resolveLineReference(
   sourceFile: string,
@@ -496,25 +506,25 @@ export function resolveLineReference(
   const file = material.find((item) => item.path === sourceFile);
   if (file && file.lines.length === 0) {
     return {
-      refusal: `No numbered line for ${sourceFile}: sourceLines lists that file but no line of it, because its diff carries no added or context line. Quote exact text from it instead.`,
+      refusal: `No numbered line for ${sourceFile}: the material lists that file but no line of it, because its diff carries no added or context line. Quote exact text from it instead.`,
     };
   }
   if (!file) {
     const listed = material.map((item) => item.path);
     return {
-      refusal: `No numbered line for ${sourceFile}: sourceLines lists no such file${listed.length === 0 ? " (it lists no file)" : ` (it lists ${namedList(listed)})`}. Designate a line of a file it lists, or quote exact text from ${sourceFile} with quote.`,
+      refusal: `No numbered line for ${sourceFile}: the diff carries no such file${listed.length === 0 ? " (it changes no file)" : ` (it changes ${namedList(listed)})`}. Designate a line inside the diff, or quote exact text from ${sourceFile} with quote.`,
     };
   }
   const matches = file.lines.filter((item) => item.line === line);
   if (matches.length > 1) {
     return {
-      refusal: `Line ${line} of ${sourceFile} is ambiguous: sourceLines lists it ${matches.length} times, so it designates no single fragment. Quote the exact text instead, since preference cannot be measured.`,
+      refusal: `Line ${line} of ${sourceFile} is ambiguous: the material lists it ${matches.length} times, so it designates no single fragment. Quote the exact text instead, since preference cannot be measured.`,
     };
   }
   const found = matches[0];
   if (!found) {
     return {
-      refusal: `Line ${line} of ${sourceFile} is not in the numbered material: sourceLines lists ${neighbouringLines(file.lines, line)} (it carries the lines of the patch hunks, not every line of the file, and the context budget can cut that list short). Designate one of the listed numbers, or quote exact text from that file.`,
+      refusal: `Line ${line} of ${sourceFile} is outside the material: the diff carries no numbered line ${line} of it, and the material lists ${neighbouringLines(file.lines, line)} (it carries the lines of the patch hunks, not every line of the file). Designate a line inside the diff, or quote exact text from that file.`,
     };
   }
   if (found.text.length > QUOTE_MAX_CHARS) {
@@ -699,25 +709,25 @@ export function resolveExpectedLiteral(
   const file = material.find((item) => item.path === sourceFile);
   if (file && file.lines.length === 0) {
     return {
-      refusal: `No numbered line for ${sourceFile}: sourceLines lists that file but no line of it, because its diff carries no added or context line. Write the value itself in expected instead.`,
+      refusal: `No numbered line for ${sourceFile}: the material lists that file but no line of it, because its diff carries no added or context line. Write the value itself in expected instead.`,
     };
   }
   if (!file) {
     const listed = material.map((item) => item.path);
     return {
-      refusal: `No numbered line for ${sourceFile}: sourceLines lists no such file${listed.length === 0 ? " (it lists no file)" : ` (it lists ${namedList(listed)})`}. Designate a line of a listed file whose single string literal is the value, or write the value itself in expected.`,
+      refusal: `No numbered line for ${sourceFile}: the diff carries no such file${listed.length === 0 ? " (it changes no file)" : ` (it changes ${namedList(listed)})`}. Designate a line inside the diff whose single string literal is the value, or write the value itself in expected.`,
     };
   }
   const matches = file.lines.filter((item) => item.line === line);
   if (matches.length > 1) {
     return {
-      refusal: `Line ${line} of ${sourceFile} is ambiguous: sourceLines lists it ${matches.length} times, so it designates no single literal. Write the value itself in expected instead, since preference cannot be measured.`,
+      refusal: `Line ${line} of ${sourceFile} is ambiguous: the material lists it ${matches.length} times, so it designates no single literal. Write the value itself in expected instead, since preference cannot be measured.`,
     };
   }
   const found = matches[0];
   if (!found) {
     return {
-      refusal: `Line ${line} of ${sourceFile} is not in the numbered material: sourceLines lists ${neighbouringLines(file.lines, line)} (it carries the lines of the patch hunks, not every line of the file, and the context budget can cut that list short). Designate one of the listed numbers, or write the value itself in expected.`,
+      refusal: `Line ${line} of ${sourceFile} is outside the material: the diff carries no numbered line ${line} of it, and the material lists ${neighbouringLines(file.lines, line)} (it carries the lines of the patch hunks, not every line of the file). Designate a line inside the diff, or write the value itself in expected.`,
     };
   }
   const literals = lineLiterals(found.text);
@@ -789,7 +799,7 @@ function submittedRequirement(material: SourceLineMaterial[]) {
         ctx.addIssue({
           code: "custom",
           path: ["quote"],
-          message: `A requirement needs a source reference: "line", the number of a line sourceLines lists for ${value.sourceFile}, or "quote", the exact text itself.`,
+          message: `A requirement needs a source reference: "line", the number of a line inside the diff of ${value.sourceFile}, or "quote", the exact text itself.`,
         });
         return;
       }
@@ -974,11 +984,16 @@ function submittedAssertion(material: SourceLineMaterial[]) {
 }
 /**
  * Le schéma de la RÉPONSE du planificateur : la forme persistée, plus les
- * références qu'un gate résout dans le matériel reçu (`sourceLines`) — une
- * ligne pour le texte d'une exigence, une ligne pour le littéral d'un
- * `expected`. C'est le point d'entrée unique de la résolution : elle a donc
- * lieu avant toute validation de couverture, et un plan accepté ne peut porter
- * ni une citation ni une valeur attendue que le modèle aurait altérée.
+ * références qu'un gate résout dans le matériel numéroté du diff — une ligne
+ * pour le texte d'une exigence, une ligne pour le littéral d'un `expected`.
+ * C'est le point d'entrée unique de la résolution : elle a donc lieu avant toute
+ * validation de couverture, et un plan accepté ne peut porter ni une citation ni
+ * une valeur attendue que le modèle aurait altérée.
+ *
+ * Le matériel reçu est celui de TOUT le diff (`sourceLineMaterial`, policy.ts),
+ * pas la seule part que le message affiche : une ligne que le budget a coupée de
+ * `sourceLines` reste résoluble par son numéro, et rien n'est deviné pour
+ * autant — une ligne que le diff ne porte pas est refusée.
  */
 export function plannerPlanSchema(material: SourceLineMaterial[]) {
   return planSchema(

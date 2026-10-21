@@ -20,6 +20,7 @@ import {
   repairRequirementAttribution,
   requirementEvidence,
   requirementHasWitness,
+  sourceLineMaterial,
   stitchedQuoteFragments,
   stitchedQuoteRemedy,
   suggestedQuoteLines,
@@ -47,6 +48,7 @@ import {
   QUOTE_MIN_TEXT_CHARS,
   QUOTE_MIN_WORD_CHARS,
   quoteCarriesContent,
+  resolveLineReference,
 } from "../src/schema.js";
 import {
   lineAt,
@@ -2285,11 +2287,19 @@ it("names the real line and the missing beginning of an amputated quote", () => 
   // citer — jamais la citation fautive elle-même.
   expect(refusal.hint).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
   expect(refusal.hint).toContain("its beginning is missing");
-  expect(refusal.hint).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  // Le remède ne rend plus la ligne à recopier : il donne le numéro à
+  // DÉSIGNER, et le gate écrit lui-même la ligne du diff.
+  expect(refusal.hint).toContain(
+    `send "line": 12 for ${COUNTED_PAGE_PATH} and the gate writes that line itself`
+  );
+  expect(refusal.hint).not.toContain(JSON.stringify(COUNTED_LINE_TEXT));
   const [line = ""] = ungroundedPlanRefusals(plan, countedContext, policyFor());
   expect(line).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
   expect(line).toContain("its beginning is missing");
-  expect(line).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  expect(line).toContain(
+    `send "line": 12 for ${COUNTED_PAGE_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(COUNTED_LINE_TEXT));
   // Une seule suggestion par citation : la ligne réelle n'est pas répétée par le
   // recouvrement de jetons, ni par un diagnostic de recousure que la copie n'a
   // pas (ses deux moitiés vivent sur la même ligne).
@@ -2303,10 +2313,18 @@ it("names the real line of a quote truncated at its end", () => {
   const refusal = refusalOfPlan(plan, countedContext, policyFor());
   expect(refusal.hint).toContain(`line 12 of ${COUNTED_PAGE_PATH}`);
   expect(refusal.hint).toContain("its end is missing");
-  expect(refusal.hint).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  // Le remède ne rend plus la ligne à recopier : il donne le numéro à
+  // DÉSIGNER, et le gate écrit lui-même la ligne du diff.
+  expect(refusal.hint).toContain(
+    `send "line": 12 for ${COUNTED_PAGE_PATH} and the gate writes that line itself`
+  );
+  expect(refusal.hint).not.toContain(JSON.stringify(COUNTED_LINE_TEXT));
   const [line = ""] = ungroundedPlanRefusals(plan, countedContext, policyFor());
   expect(line).toContain("its end is missing");
-  expect(line).toContain(`12: ${JSON.stringify(COUNTED_LINE_TEXT)}`);
+  expect(line).toContain(
+    `send "line": 12 for ${COUNTED_PAGE_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(COUNTED_LINE_TEXT));
   expect(line).not.toContain("Real lines of");
 });
 
@@ -2368,17 +2386,32 @@ it("reads the three shapes of an amputated copy on a real line", () => {
  * sur cette ligne et se tait sur le premier caractère de la ligne, qu'il ne
  * demande pas de citer — la consigne et le candidat ne peuvent pas se
  * contredire.
+ *
+ * La ligne vit dans le contexte importé, jamais dans le diff : aucune référence
+ * `line` ne peut la désigner (voir `sourceLineMaterial`), donc la forme `quote`
+ * reste la seule voie et c'est elle que ce test couvre. Une ligne du même genre
+ * portée par le diff reçoit, elle, le numéro à désigner.
  */
 const LONG_PAGE_PATH = "apps/web/app/page.tsx";
 const LONG_LINE = `  const total = reducePrices(items, (sum, item) => sum + item.price, 0); // ${"x".repeat(60)}`;
 /** Une copie commencée par un texte inventé, mais dont la fin est celle de la ligne. */
 const LONG_LINE_QUOTE = `  const x = reducePrices(items, (sum, item) => sum + item.price, 0); // ${"x".repeat(60)}`;
-const longLineContext: PrContext = contextWith([
-  {
-    filename: LONG_PAGE_PATH,
-    patch: ["@@ -20,2 +20,3 @@", "   // totaux", `+${LONG_LINE}`].join("\n"),
-  },
-]);
+const longLineContext: PrContext = {
+  ...context,
+  context: [
+    {
+      content: [
+        ...Array.from(
+          { length: 20 },
+          (_, index) => `  // ligne ${index + 1} du fichier`
+        ),
+        LONG_LINE,
+      ].join("\n"),
+      path: LONG_PAGE_PATH,
+      ref: context.sha,
+    },
+  ],
+};
 it("names a fragment of a line too long to quote whole", () => {
   const requirement = { quote: LONG_LINE_QUOTE, sourceFile: LONG_PAGE_PATH };
   const amputated = amputatedQuote(requirement, longLineContext);
@@ -2479,7 +2512,10 @@ it("names the real line and the retyped interpolation of a template literal", ()
   expect(line).toContain(
     `the file writes ${JSON.stringify(' > 1 ? "s" : ""}` : null}')} where your copy has ${JSON.stringify(">")}`
   );
-  expect(line).toContain(`12: ${JSON.stringify(RETYPED_TEMPLATE_LINE)}`);
+  expect(line).toContain(
+    `send "line": 12 for ${RETYPED_TEMPLATE_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(RETYPED_TEMPLATE_LINE));
   // La cause réelle est nommée AVANT l'amputation de bord : c'est la divergence
   // qui a fait refuser la copie, et c'est elle que le planificateur doit lire en
   // premier — l'inverse était le défaut mesuré du lot K.
@@ -2538,7 +2574,10 @@ it("names the whitespace a retyped interpolation changed, without a false amputa
   expect(line).toContain(
     `the file writes ${JSON.stringify("totalUnits > 1")} where your copy has ${JSON.stringify("totalUnits>1")}`
   );
-  expect(line).toContain(`12: ${JSON.stringify(RETYPED_TEMPLATE_LINE)}`);
+  expect(line).toContain(
+    `send "line": 12 for ${RETYPED_TEMPLATE_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(RETYPED_TEMPLATE_LINE));
   // La cause d'amputation qui était nommée à tort disparaît : la copie couvre
   // toute la ligne, elle n'en est pas un bord tronqué.
   expect(line).not.toContain("its end is missing");
@@ -2635,7 +2674,10 @@ it("names the real line of a retyped typed arrow and quotes it whole", () => {
   expect(line).toContain(
     `the file writes ${JSON.stringify(" }));")} where your copy has ${JSON.stringify("}))")}`
   );
-  expect(line).toContain(`31: ${JSON.stringify(RETYPED_ARROW_LINE)}`);
+  expect(line).toContain(
+    `send "line": 31 for ${RETYPED_ARROW_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(RETYPED_ARROW_LINE));
   // Aucun diagnostic d'amputation ici — la copie n'a pas de bord à nommer — et
   // pas de suggestion par-dessus : le remède porte la ligne réelle.
   expect(line).not.toContain("its end is missing");
@@ -2673,7 +2715,10 @@ it("names the real line of the arrow copy the report shows, cut mid-token", () =
   // est nommée, et le refus ne revendique aucun bord manquant qu'il n'a pas lu.
   expect(line).toContain(`copied from line 31 of ${RETYPED_ARROW_PATH}`);
   expect(line).toContain("only in whitespace");
-  expect(line).toContain(`31: ${JSON.stringify(RETYPED_ARROW_LINE)}`);
+  expect(line).toContain(
+    `send "line": 31 for ${RETYPED_ARROW_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(RETYPED_ARROW_LINE));
   expect(line).not.toContain("its end is missing");
   expect(line).not.toContain("its beginning is missing");
 });
@@ -2730,7 +2775,10 @@ it("names the characters invented inside a copy of a real line", () => {
   expect(line).toContain(
     `the file writes ${JSON.stringify(',2" });')} where your copy has ${JSON.stringify(',3" });')}`
   );
-  expect(line).toContain(`41: ${JSON.stringify(INVENTED_CHAR_LINE)}`);
+  expect(line).toContain(
+    `send "line": 41 for ${INVENTED_CHAR_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(INVENTED_CHAR_LINE));
 });
 /**
  * Une copie qui change À LA FOIS un blanc et un signe : la première divergence
@@ -2794,7 +2842,10 @@ it("reports both the whitespace and the changed character of a retyped copy", ()
     `the file writes ${JSON.stringify("alpha = beta")} where your copy has ${JSON.stringify("alpha=beta")}, and the file writes ${JSON.stringify("beta + gamma")} where your copy has ${JSON.stringify("beta - gamma")}`
   );
   expect(line).not.toContain("only in whitespace");
-  expect(line).toContain(`61: ${JSON.stringify(BOTH_KINDS_LINE)}`);
+  expect(line).toContain(
+    `send "line": 61 for ${BOTH_KINDS_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(BOTH_KINDS_LINE));
 });
 /**
  * La ponctuation d'avant le premier mot commun : la suite commune commence au
@@ -2855,7 +2906,10 @@ it("names the leading delimiter a retyped copy changed", () => {
     `the file writes ${JSON.stringify("[")} where your copy has ${JSON.stringify("(")}`
   );
   expect(line).not.toContain("only in whitespace");
-  expect(line).toContain(`61: ${JSON.stringify(LEAD_DELIMITER_LINE)}`);
+  expect(line).toContain(
+    `send "line": 61 for ${LEAD_DELIMITER_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(LEAD_DELIMITER_LINE));
 });
 /**
  * Les deux préfixes, quand la suite commune ne commence au premier mot d'aucun
@@ -2917,7 +2971,10 @@ it("names the prefix a copy rewrote at a different word offset", () => {
     `the file writes ${JSON.stringify("const extra ")} where your copy has ${JSON.stringify("let ")}`
   );
   expect(line).not.toContain("only in whitespace");
-  expect(line).toContain(`61: ${JSON.stringify(OFFSET_PREFIX_LINE)}`);
+  expect(line).toContain(
+    `send "line": 61 for ${OFFSET_PREFIX_PATH} and the gate writes that line itself`
+  );
+  expect(line).not.toContain(JSON.stringify(OFFSET_PREFIX_LINE));
 });
 /**
  * Ligne réelle plus longue que la borne de `quoteableFragment`, avec une copie
@@ -2929,16 +2986,24 @@ const LONG_DIVERGENT_PATH = "apps/web/app/page.tsx";
 const LONG_DIVERGENT_LINE = `  const total = countCash({ "500": "3,5" }) + countCash({ "200": "1,2" }) + countCash({ "100": "0,9" }) + countCash({ "050": "0,4" });`;
 /** La même ligne sans ses espaces : la copie s'en écarte partout à la fois. */
 const LONG_DIVERGENT_QUOTE = `const total=countCash({ "500": "3,5" })+countCash({ "200": "1,2" })+countCash({ "100": "0,9" })+countCash({ "050": "0,4" });`;
-const longDivergentContext: PrContext = contextWith([
-  {
-    filename: LONG_DIVERGENT_PATH,
-    patch: [
-      "@@ -50,2 +50,3 @@",
-      "   // total long",
-      `+${LONG_DIVERGENT_LINE}`,
-    ].join("\n"),
-  },
-]);
+/** Ici la ligne longue est dans le contexte importé, donc indésignable : la
+ * fenêtre de jetons reste le seul remède possible. */
+const longDivergentContext: PrContext = {
+  ...context,
+  context: [
+    {
+      content: [
+        ...Array.from(
+          { length: 50 },
+          (_, index) => `  // ligne ${index + 1} du fichier`
+        ),
+        LONG_DIVERGENT_LINE,
+      ].join("\n"),
+      path: LONG_DIVERGENT_PATH,
+      ref: context.sha,
+    },
+  ],
+};
 it("proposes a whole-token window when the divergent line is too long to quote whole", () => {
   const requirement = {
     quote: LONG_DIVERGENT_QUOTE,
@@ -3766,6 +3831,17 @@ function proposedFragment(hint: string): string | null {
     return null;
   }
 }
+/**
+ * La ligne que le remède fait DÉSIGNER au lieu de la faire recopier : quand elle
+ * est dans le matériel de résolution, le remède donne son numéro et aucun texte
+ * — c'est la forme que le run 76249900 réclamait, où la recopie d'une seule
+ * apostrophe a coûté le run. Un remède qui désigne doit désigner une ligne que
+ * le gate sait écrire, sinon il enverrait le planificateur vers un refus.
+ */
+function designatedLine(hint: string): number | null {
+  const match = hint.match(/send "line": (\d+) for /);
+  return match?.[1] === undefined ? null : Number(match[1]);
+}
 /** Ce que le refus mesuré doit dire de la ligne réelle de cette copie. */
 function measuredRemedy(measured: MeasuredCopyRefusal): string {
   if (measured.remedy === "names-line") {
@@ -3779,6 +3855,7 @@ function measuredRemedy(measured: MeasuredCopyRefusal): string {
 it("replays every measured ungrounded refusal against the real line", () => {
   const measuredPolicy = policyFor();
   let withRealLine = 0;
+  let withDesignation = 0;
   let withProposal = 0;
   let accepted = 0;
   let refused = 0;
@@ -3862,6 +3939,34 @@ it("replays every measured ungrounded refusal against the real line", () => {
     expect(refusal.hint, `${label}: cause mesurée`).toContain(
       measuredRemedy(measured)
     );
+    const designated = designatedLine(refusal.hint);
+    if (designated !== null) {
+      withDesignation += 1;
+      // Le remède ne rend aucun texte : le numéro qu'il donne se résout, et la
+      // ligne que le gate écrirait est un témoin du fichier déclaré.
+      const resolution = resolveLineReference(
+        measured.declaredFile,
+        designated,
+        sourceLineMaterial(context)
+      );
+      expect(
+        "text" in resolution,
+        `${label}: la ligne désignée ne se résout pas`
+      ).toBe(true);
+      expect(String(refusal.hint)).not.toContain(
+        JSON.stringify(measured.realLine)
+      );
+      expect(
+        requirementHasWitness(
+          {
+            quote: (resolution as { text: string }).text,
+            sourceFile: measured.declaredFile,
+          },
+          context
+        ),
+        `${label}: la ligne désignée n'est pas un témoin`
+      ).toBe(true);
+    }
     const proposed = proposedFragment(refusal.hint);
     if (proposed === null) {
       continue;
@@ -3879,7 +3984,11 @@ it("replays every measured ungrounded refusal against the real line", () => {
   expect(accepted).toBe(4);
   expect(refused).toBe(16);
   expect(withRealLine).toBe(19);
-  expect(withProposal).toBe(13);
+  // Chaque remède qui propose une réparation la propose dans une des deux
+  // formes que le gate accepte : un numéro qui se résout, ou un fragment témoin.
+  // Le compte est inchangé — la réparation reste offerte pour le même nombre de
+  // refus mesurés —, seule sa forme change pour les lignes du diff.
+  expect(withDesignation + withProposal).toBe(13);
 });
 
 /**
@@ -4273,15 +4382,24 @@ it("keeps the planner message inside the context budget with its numbered materi
     /Never send `quote` and `line` together: they are alternatives, and the pair is refused/
   );
   // Les refus d'une référence sont annoncés avec leurs familles, pour que le
-  // planificateur sache quoi corriger sans recevoir de texte.
+  // planificateur sache quoi corriger sans recevoir de texte. Les familles sont
+  // celles du DIFF : le gate résout dans tout le diff, donc une ligne que
+  // `sourceLines` n'affiche pas reste désignable, et le prompt le dit.
   expect(PLANNER_PROMPT).toMatch(
-    /a file `sourceLines` does not list, a number it does not list \(the refusal names the numbers it does list around yours\), a number it lists twice, a blank or punctuation-only line, or a line longer than the 1000-character cap/
+    /a file the diff does not change, a number the diff carries in no hunk \(the refusal names the numbers it does carry around yours\), a number it carries twice, a blank or punctuation-only line, or a line longer than the 1000-character cap/
+  );
+  expect(PLANNER_PROMPT).toMatch(
+    /A line the diff carries is resolvable even when the budget cut it from `sourceLines`/
+  );
+  expect(PLANNER_PROMPT).toMatch(
+    /resolved against the diff itself, so designate its number instead of retyping its text/
   );
   // Le squelette JSON du prompt ne demande plus une citation à recopier.
   expect(PLANNER_PROMPT).toContain(
     '"requirements":[{"sourceFile":"changed/path","line":368,"behavior":"required changed behavior"}]'
   );
-  // Un contexte qui remplit la borne : le matériel se réduit, le message tient.
+  // Un contexte qui remplit la borne : le message tient dans une borne qui
+  // compte désormais le diff et la réserve du matériel, séparément.
   const saturated: PrContext = {
     ...contextWith([
       {
