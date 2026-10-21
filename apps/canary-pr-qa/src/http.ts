@@ -2,6 +2,32 @@ import { diagnose, QaError } from "./diagnostics.js";
 import { requestSignal } from "./run-scope.js";
 import { sseEventData, takeSseEvents } from "./sse.js";
 
+/**
+ * Plafond d'un `Retry-After` honoré. Au-delà, l'endpoint demande une pause plus
+ * longue que ce qu'un run peut tenir : la valeur n'est pas retenue et le délai
+ * de repli du client modèle s'applique. Un endpoint qui demande une heure
+ * d'arrêt ne doit pas figer un run dont le délai modèle est de 15 minutes.
+ */
+export const RETRY_AFTER_MAX_MS = 30_000;
+
+/**
+ * `Retry-After` d'une réponse fautive, en millisecondes : secondes entières ou
+ * date HTTP, les deux formes que la norme définit. Une valeur illisible, passée
+ * ou au-delà de `RETRY_AFTER_MAX_MS` n'est pas retenue.
+ */
+export function parseRetryAfter(value: string | null): number | undefined {
+  if (value === null) {
+    return;
+  }
+  const trimmed = value.trim();
+  const ms = /^\d+$/.test(trimmed)
+    ? Number(trimmed) * 1000
+    : Date.parse(trimmed) - Date.now();
+  return Number.isFinite(ms) && ms >= 0 && ms <= RETRY_AFTER_MAX_MS
+    ? ms
+    : undefined;
+}
+
 /** Ouvre la requête et traduit tout échec en diagnostic nommé, comme le reste du harnais. */
 async function open(
   url: string | URL,
@@ -32,13 +58,14 @@ async function open(
       401: "Check that the configured provider/GitHub token is valid and has not expired.",
       403: "Check repository/token permissions, organization approval or SSO, rate limits and protected preview access.",
       404: "Check the endpoint path (/v1 if required), repository access and preview URL; private GitHub resources also return 404 without access.",
-      429: "The dependency rate limit was reached. Check its quota and retry after the rate-limit window; POST operations are not blindly retried.",
+      429: "The dependency rate limit was reached. Check its quota and the rate-limit window, and honour the Retry-After header it sends: the model endpoint is retried with backoff, other POST operations are not.",
     };
     throw new QaError(
       `HTTP_${response.status}`,
       `HTTP ${response.status} from ${target.host}${target.pathname}${requestId ? ` (request ${requestId})` : ""}`,
       hints[response.status] ??
-        "Inspect the dependency's availability and logs; this request did not return a successful response."
+        "Inspect the dependency's availability and logs; this request did not return a successful response.",
+      parseRetryAfter(response.headers.get("retry-after"))
     );
   }
   if (!response.body) {

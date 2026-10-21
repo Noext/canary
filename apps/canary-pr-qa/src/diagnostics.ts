@@ -8,11 +8,23 @@ export interface Diagnostic {
 export class QaError extends Error {
   readonly code: string;
   readonly hint: string;
-  constructor(code: string, message: string, hint: string) {
+  /**
+   * Attente demandée par la réponse fautive (`Retry-After`), quand elle en porte
+   * une. Elle ne change jamais le diagnostic : elle ne pilote que le délai avant
+   * une reprise, et seulement pour un statut qui en admet une.
+   */
+  readonly retryAfterMs?: number;
+  constructor(
+    code: string,
+    message: string,
+    hint: string,
+    retryAfterMs?: number
+  ) {
     super(message);
     this.name = "QaError";
     this.code = code;
     this.hint = hint;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 export function redact(value: string, config?: Config): string {
