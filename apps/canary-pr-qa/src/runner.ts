@@ -759,6 +759,39 @@ function refusalDiagnostic(
   return diagnostic;
 }
 /**
+ * La réserve du matériel numéroté dans le message du planificateur. Sa taille est
+ * enfin GARANTIE : la borne d'envoi l'additionne au lieu de la déduire d'un
+ * reliquat, donc les patches déjà présents dans `pr` ne la dépensent plus avant
+ * le premier affichage (voir `planPayload`).
+ *
+ * C'est le chiffre qui manquait au run 76249900 : borné à `QA_CONTEXT_CHARS +
+ * 30_000`, le message pesait 149 162 caractères avec un contexte de dépendances
+ * saturé, donc 838 caractères de matériel — un fichier sur dix, sans le fichier
+ * cité, et aucune ligne désignable. Le contenu du diff n'est compté par aucune
+ * borne (`QA_CONTEXT_CHARS` borne les fichiers de contexte lus par
+ * `collectContext`), donc il était déjà là, déjà payé, déjà dépensé.
+ */
+const SOURCE_LINES_RESERVE_CHARS = 30_000;
+/**
+ * Ce que le message du planificateur a le droit de peser : la borne du contexte
+ * de dépendances (`QA_CONTEXT_CHARS`, appliquée par `collectContext`), le diff
+ * lui-même — `pr.files` porte ses patches, que cette borne ne compte pas — et la
+ * réserve du matériel numéroté.
+ *
+ * Compter deux fois le même texte, en revanche, n'était pas une marge : c'était
+ * un budget faux. La borne supposait le message hors matériel aussi léger que le
+ * contexte qu'elle borne, alors qu'il porte en plus les patches ; la réserve
+ * annoncée par `QA_CONTEXT_CHARS + 30_000` était donc déjà consommée par ce qui
+ * était dans le message depuis le début.
+ */
+function plannerPayloadLimit(context: PrContext, config: Config): number {
+  return (
+    config.QA_CONTEXT_CHARS +
+    JSON.stringify(context.files).length +
+    SOURCE_LINES_RESERVE_CHARS
+  );
+}
+/**
  * Le message du planificateur : le contexte figé de la PR, la page de
  * découverte, le catalogue de fixtures, puis les lignes RÉELLES des fichiers
  * modifiés numérotées dans le nouveau fichier (voir `numberedSourceLines`). Ce
@@ -768,10 +801,14 @@ function refusalDiagnostic(
  * altérées (`b-altered`) — y compris sur les runs où le refus nommait déjà la
  * bonne ligne, et où le planificateur la retapait quand même.
  *
- * Le matériel numéroté prend la place que la borne de contexte laisse libre,
- * jamais plus : un PR volumineux garde son run au lieu d'être refusé pour un
- * prompt trop lourd, et le contrôle de budget reste celui d'avant — le message
- * ne peut pas être plus long qu'avant l'ajout du matériel.
+ * L'affichage est borné par une réserve qui existe : elle est ajoutée à la borne
+ * d'envoi (voir `plannerPayloadLimit`) et le matériel en reçoit ce qui reste
+ * après le reste du message, jamais plus que la réserve. Un message déjà trop
+ * lourd se replie donc sur un matériel plus court au lieu de faire refuser un
+ * run qui passait avant, et un PR volumineux garde son run. CETTE TRONCATURE
+ * N'EST PLUS UNE BORNE DE RÉSOLUTION : le gate résout une référence `line` dans
+ * tout le diff (voir `sourceLineMaterial`), donc une ligne que l'affichage a
+ * coupée reste désignable par son numéro.
  */
 export function planPayload(
   context: PrContext,
@@ -789,10 +826,16 @@ export function planPayload(
     preview,
     sourceLines: [] as SourceLineMaterial[],
   };
-  const limit = config.QA_CONTEXT_CHARS + 30_000;
+  const limit = plannerPayloadLimit(context, config);
   payload.sourceLines = numberedSourceLines(
     context,
-    Math.max(0, limit - JSON.stringify(payload).length)
+    Math.max(
+      0,
+      Math.min(
+        SOURCE_LINES_RESERVE_CHARS,
+        limit - JSON.stringify(payload).length
+      )
+    )
   );
   if (JSON.stringify(payload).length > limit) {
     throw new Error(

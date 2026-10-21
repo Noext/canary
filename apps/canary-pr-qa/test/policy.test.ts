@@ -4327,6 +4327,27 @@ const PLAN_PAGE: Observation = {
   url: "https://preview.example/",
 };
 const PLAN_FIXTURES = { fixtures: {}, roles: [], visuals: [] };
+/** La réserve que le message garantit au matériel numéroté (`runner.ts`). */
+const MATERIAL_RESERVE_CHARS = 30_000;
+/**
+ * La ligne 71 du fichier cité du run 76249900 : le fichier y écrit l'apostrophe
+ * ASCII `'`, et la copie du plan portait l'apostrophe typographique `’`
+ * (U+2019). C'est ce seul caractère qui a fait perdre le run : le refus était
+ * correct sur le fond, et son remède renvoyait le planificateur recopier.
+ */
+const CASH_LINE_71 = " * « 3,5 » : une demi-coupure n'existe pas.";
+/**
+ * La borne du message du planificateur, telle que `planPayload` la calcule : le
+ * contexte de dépendances (`QA_CONTEXT_CHARS`), le diff — que cette borne ne
+ * compte pas — puis la réserve du matériel. Les deux chiffres sont relus ici,
+ * jamais recopiés de l'implémentation.
+ */
+function plannerPayloadBound(
+  files: PrContext["files"],
+  contextChars: number = config.QA_CONTEXT_CHARS
+): number {
+  return contextChars + JSON.stringify(files).length + MATERIAL_RESERVE_CHARS;
+}
 
 /**
  * Le message envoyé au planificateur porte le matériel numéroté, et sa taille
@@ -4423,7 +4444,7 @@ it("keeps the planner message inside the context budget with its numbered materi
     config
   );
   expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(
-    config.QA_CONTEXT_CHARS + 30_000
+    plannerPayloadBound(bounded.pr.files)
   );
   expect(bounded.sourceLines[0]?.lines.length).toBeGreaterThan(0);
   // La borne reste celle d'avant l'ajout du matériel : un contexte plus lourd
@@ -4446,6 +4467,104 @@ it("keeps the planner message inside the context budget with its numbered materi
       config
     )
   ).toThrow();
+});
+
+/**
+ * Le compte mesuré du run 76249900 : la borne annonçait `QA_CONTEXT_CHARS +
+ * 30_000`, mais le message portait déjà les patches du diff dans `pr`, que
+ * `QA_CONTEXT_CHARS` ne compte pas — elle borne les fichiers de contexte lus par
+ * `collectContext`. La réserve de 30 000 était donc dépensée avant le premier
+ * affichage : 838 caractères de matériel, un fichier sur dix, et le fichier cité
+ * absent. Ce test tient le correctif par les deux bouts : le compte d'avant ne
+ * laissait rien, celui d'aujourd'hui donne au matériel sa réserve entière, avec
+ * le dernier fichier du diff et sa ligne.
+ */
+it("gives the numbered material its reserve even when the diff fills the budget", () => {
+  // Le fichier cité est le DERNIER du diff : la troncature de l'affichage le
+  // perdait en premier.
+  const cited = "packages/domain/src/cash.ts";
+  const filler = Array.from(
+    { length: 9 },
+    (_, index) => `src/module-${index + 1}.ts` // nom du fichier du diff
+  );
+  const files = [
+    ...filler.map((filename) => ({
+      filename,
+      patch: `@@ -1,1 +1,40 @@\n${Array.from(
+        { length: 40 },
+        (_, index) =>
+          `+export const value${index} = compute(${index}); // ligne réelle du module`
+      ).join("\n")}`,
+    })),
+    {
+      filename: cited,
+      patch: `@@ -1,0 +1,80 @@\n${Array.from(
+        { length: 80 },
+        (_, index) =>
+          `+ * ligne de documentation ${index + 1} du module de caisse`
+      )
+        .join("\n")
+        .replace(
+          "+ * ligne de documentation 71 du module de caisse",
+          `+${CASH_LINE_71}`
+        )}`,
+    },
+  ];
+  const saturatedContext: PrContext = {
+    ...contextWith(files),
+    context: [
+      {
+        // La collecte réelle remplit sa borne au caractère près.
+        content: "z".repeat(config.QA_CONTEXT_CHARS),
+        path: cited,
+        ref: context.sha,
+      },
+    ],
+  };
+  const payload = planPayload(
+    saturatedContext,
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  // Le message tient dans la borne, qui compte maintenant séparément le
+  // contexte, le diff et la réserve du matériel.
+  expect(JSON.stringify(payload).length).toBeLessThanOrEqual(
+    plannerPayloadBound(saturatedContext.files)
+  );
+  // Le compte d'AVANT ne laissait presque rien : les patches étaient déjà là,
+  // donc `QA_CONTEXT_CHARS + 30_000` était presque tout dépensé avant le premier
+  // affichage — 838 caractères mesurés sur le run 76249900.
+  const withoutMaterial = JSON.stringify({
+    ...payload,
+    sourceLines: [],
+  }).length;
+  const oldRemainder = Math.max(
+    0,
+    config.QA_CONTEXT_CHARS + MATERIAL_RESERVE_CHARS - withoutMaterial
+  );
+  expect(oldRemainder).toBeLessThan(2000);
+  // Sous ce compte-là, le fichier cité n'était même pas listé : la troncature
+  // perlait le matériel avant le dernier fichier du diff.
+  expect(
+    numberedSourceLines(saturatedContext, oldRemainder).map((file) => file.path)
+  ).not.toContain(cited);
+  // La réserve existe donc réellement : le matériel occupe sa part et couvre
+  // sept fichiers sur dix, là où le compte d'avant n'en laissait aucun — le
+  // fichier cité compris.
+  const material = JSON.stringify(payload.sourceLines);
+  expect(material.length).toBeGreaterThan(20_000);
+  expect(material.length).toBeLessThanOrEqual(MATERIAL_RESERVE_CHARS);
+  const shown = payload.sourceLines.map((file) => file.path);
+  expect(shown.length).toBeGreaterThan(1);
+  // L'affichage reste BORNÉ et ne montre pas le fichier cité : c'est pourtant
+  // toujours lui que la référence `line` atteint, parce que la résolution lit
+  // tout le diff (`sourceLineMaterial`) et non la seule part affichée.
+  expect(shown).not.toContain(cited);
+  expect(
+    resolveLineReference(cited, 71, sourceLineMaterial(saturatedContext))
+  ).toEqual({ text: CASH_LINE_71 });
 });
 
 /**
