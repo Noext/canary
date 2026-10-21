@@ -89,11 +89,8 @@ const CONSUME_STATE =
  * the envelope, so one class of credentials never decrypts as another. The
  * GitHub label is the historical value and must not change.
  */
-export const GITHUB_CREDENTIALS_LABEL = "github-app-v1";
-export function cryptKey(
-  config: Config,
-  label = GITHUB_CREDENTIALS_LABEL
-): Buffer {
+const GITHUB_CREDENTIALS_LABEL = "github-app-v1";
+function cryptKey(config: Config, label = GITHUB_CREDENTIALS_LABEL): Buffer {
   if (config.QA_API_TOKEN.length < 24) {
     throw failure(
       "GITHUB_ENCRYPTION_KEY",

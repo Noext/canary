@@ -89,7 +89,7 @@ const CONTENT_RETRY_CODES = new Set([
 ]);
 
 /** Délais entre deux reprises ; le nombre de reprises vient de QA_MODEL_RETRIES. */
-export const MODEL_RETRY_DELAYS_MS = [1000, 4000, 10_000];
+const MODEL_RETRY_DELAYS_MS = [1000, 4000, 10_000];
 
 /**
  * Reprises d'un contenu inexploitable par tentative de plan, quel que soit

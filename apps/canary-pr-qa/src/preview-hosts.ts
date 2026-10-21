@@ -32,11 +32,11 @@ CREATE TABLE IF NOT EXISTS qa_preview_hosts (
 `;
 /** File the API publishes for the browser and egress containers (inside `QA_POLICY_DIR`). */
 export const PREVIEW_POLICY_FILE = "preview-hosts.json";
-export const MAX_PREVIEW_HOSTS = 50;
+const MAX_PREVIEW_HOSTS = 50;
 export const MAX_HOST_LENGTH = 253;
 const HOST =
   /^(?:\*\.)?(?<name>\[[0-9a-f:.]+\]|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?::(?<port>\d{1,5}))?$/;
-export const previewPolicySchema = z
+const previewPolicySchema = z
   .object({
     hosts: z.array(z.string()),
     updatedAt: z.string(),
@@ -171,7 +171,7 @@ export class PreviewPolicyUnpublishedError extends QaError {
  * reported to the caller: the EGRESS proxy would keep refusing a host the
  * dashboard now accepts, which must not be silent.
  */
-export async function publishPreviewPolicy(
+async function publishPreviewPolicy(
   config: Config,
   hosts: string[],
   actor: string
@@ -204,11 +204,6 @@ async function readPolicy(config: Config): Promise<string[] | undefined> {
   return normalizePreviewHosts(
     previewPolicySchema.parse(JSON.parse(raw)).hosts
   );
-}
-
-/** The published list, or `undefined` when nothing was published yet. */
-export function publishedPreviewHosts(config: Config) {
-  return readPolicy(config);
 }
 
 /**

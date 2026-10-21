@@ -102,7 +102,7 @@ function segmentsMatch(pattern: string[], file: string[]): boolean {
  * gate, so it approves nothing and the run is refused exactly like an
  * unapproved skip.
  */
-export function approvedSkipCovers(pattern: string, file: string): boolean {
+function approvedSkipCovers(pattern: string, file: string): boolean {
   const segments = pattern.split("/").filter(Boolean);
   if (
     segments.length === 0 ||
@@ -122,7 +122,7 @@ export function approvedSkipCovers(pattern: string, file: string): boolean {
  * porte des citations exactes pauvres en alphanumériques qu'il serait injuste
  * de refuser.
  */
-export function isCriticalPath(policy: Policy, file: string): boolean {
+function isCriticalPath(policy: Policy, file: string): boolean {
   return (
     !isDocumentationPath(file) &&
     policy.criticalPaths.some((prefix) => file.startsWith(prefix))
@@ -750,7 +750,7 @@ export function suggestedQuoteLines(
  * protège de la troncature, là où le détail par exigence qui la portait
  * disparaissait sous des classes saturées.
  */
-export function quoteSuggestion(
+function quoteSuggestion(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext
 ): string {
@@ -1971,7 +1971,7 @@ function divergenceFault(divergence: QuoteDivergence): string {
  * reconstruit la même copie. Vide quand aucune ligne ne se vérifie, ou quand le
  * budget de la validation ne permet plus d'examiner cette citation.
  */
-export function divergentQuoteRemedy(
+function divergentQuoteRemedy(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext,
   scans: AmputationScans = amputationScans()
@@ -2174,7 +2174,7 @@ function coverWitnessedSourceFiles(
  * présente, mais de la rendre substantielle — sinon le planificateur renvoie
  * la même citation exacte et le fichier reste sans témoin.
  */
-export function unwitnessedRequirement(
+function unwitnessedRequirement(
   scenarioId: string,
   file: string,
   policy: Policy,
@@ -2291,7 +2291,7 @@ export function unwitnessedPlanRefusals(
  * que si la PR le change : hors du diff, la validation de forme refuserait la
  * déclaration et la tentative de correction serait consommée pour rien.
  */
-export function undeclaredRequirementSource(
+function undeclaredRequirementSource(
   scenarioId: string,
   file: string,
   declared: string[],
@@ -2383,7 +2383,7 @@ export function requirementSourceRefusal(
  * planificateur comme le refus d'attribution, et le contrôle final lève le
  * premier de la liste.
  */
-export function contractBudgetRefusal(
+function contractBudgetRefusal(
   scenario: Scenario,
   config: Config
 ): QaError | undefined {

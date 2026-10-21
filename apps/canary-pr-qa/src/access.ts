@@ -173,7 +173,7 @@ export function requireAccess(user: Principal, repo: string, write = false) {
 export function mayLaunch(user: Principal) {
   return user.apiKeyId ? user.canLaunch === true : user.role !== "viewer";
 }
-export function artifactSignature(
+function artifactSignature(
   id: string,
   path: string,
   expires: number,
