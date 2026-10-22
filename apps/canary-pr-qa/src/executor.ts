@@ -12,9 +12,19 @@ import {
 import type { Config } from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
-import { ariaRoleNameNodes, typographicTargetNote } from "./plan-evidence.js";
+import {
+  ariaRoleNameNodes,
+  observedTargetsNote,
+  typographicTargetNote,
+} from "./plan-evidence.js";
 import type { ProgressEvent } from "./progress.js";
-import type { Assertion, Locator, Scenario, ScenarioResult } from "./schema.js";
+import type {
+  Assertion,
+  Locator,
+  Scenario,
+  ScenarioResult,
+  SourceLineMaterial,
+} from "./schema.js";
 import { compareVisual } from "./visual.js";
 
 /** Locator qui porte un nom accessible : le seul concerné par la graphie d'un signe. */
@@ -39,13 +49,25 @@ function roleNameTarget(
 }
 
 /**
- * Une cible role+nom restée introuvable est expliquée avec le nom que la page
- * expose : Playwright compare le nom accessible caractère par caractère
- * (`exact: true`), et le plan recopie souvent la ponctuation de la source
- * (U+0027) là où l'application expose l'apostrophe typographique (U+2019), ou
- * l'inverse. Le relevé n'a lieu qu'après l'échec, n'énonce aucun refus et ne
- * bloque aucun run qui réussissait ; une page qui ne répond plus, aucun candidat
- * ou plusieurs candidats gardent le message générique.
+ * Une cible restée introuvable est expliquée avec ce que la page expose : une
+ * graphie jumelle quand il n'y en a qu'une (Playwright compare le nom accessible
+ * caractère par caractère, `exact: true`, et le plan recopie souvent la
+ * ponctuation de la source — U+0027 — là où l'application expose l'apostrophe
+ * typographique — U+2019), et à défaut les cibles réellement observées dans le
+ * DOM à cet instant, rôle et nom accessible, huit au plus. Le relevé n'a lieu
+ * qu'après l'échec, n'énonce aucun refus, ne choisit aucune cible et ne bloque
+ * aucun run qui réussissait : une page qui ne répond plus garde le message
+ * générique. Sans cette énumération, une cible inventée et une cible mal
+ * dérivée produisaient le même message, et la différence restait dans le
+ * snapshot que personne ne lisait.
+ *
+ * Rien de ce que la page expose ne se publie : `note` est la phrase qui part
+ * dans le message (donc dans le commentaire de PR et le résumé de support) et
+ * elle est CONSTANTE — ni nom, ni compte, ni cardinalité, sinon le commentaire
+ * répondrait à « ce libellé deviné existe-t-il ? » pour un auteur de PR qui
+ * contrôle le diff. `observedTargets` porte le compte et les noms, et ne va que
+ * dans l'artefact du run, sous `StepResult.observedTargets` (revue de sécurité
+ * du 22 oct. 2026).
  */
 async function explainMissingTarget(
   failure: unknown,
@@ -54,13 +76,18 @@ async function explainMissingTarget(
   scenario: Scenario,
   preview: string,
   canary: Canary,
-  config: Config
-): Promise<{ diagnostic: Diagnostic; note?: string }> {
+  config: Config,
+  material: SourceLineMaterial[]
+): Promise<{
+  diagnostic: Diagnostic;
+  note?: string;
+  observedTargets?: string;
+}> {
   const diagnostic = diagnose(failure, config);
-  const locator = roleNameTarget(scenario, step);
-  if (diagnostic.code !== "TARGET_NOT_FOUND" || !locator) {
+  if (diagnostic.code !== "TARGET_NOT_FOUND") {
     return { diagnostic };
   }
+  const locator = roleNameTarget(scenario, step);
   try {
     const current = await canary.act(
       sessionId,
@@ -69,18 +96,26 @@ async function explainMissingTarget(
         evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
       })
     );
-    const note = typographicTargetNote(
-      locator.name,
-      locator.value,
-      ariaRoleNameNodes(current.evidence ?? current.snapshot)
-    );
-    return note
+    const nodes = ariaRoleNameNodes(current.evidence ?? current.snapshot);
+    const note = locator
+      ? typographicTargetNote(locator.name, locator.value, nodes)
+      : undefined;
+    const observed = note
+      ? undefined
+      : observedTargetsNote(
+          nodes,
+          material,
+          locator?.by === "role" ? locator.value : undefined
+        );
+    const explanation = note ?? observed?.published;
+    return explanation
       ? {
           diagnostic: {
             ...diagnostic,
-            message: `${diagnostic.message} — ${note}`,
+            message: `${diagnostic.message} — ${explanation}`,
           },
-          note,
+          note: explanation,
+          observedTargets: observed?.detail,
         }
       : { diagnostic };
   } catch {
@@ -376,7 +411,8 @@ async function driveScenario(
   config: Config,
   canary: Canary,
   record: (event: ProgressEvent) => Promise<void>,
-  repo: string
+  repo: string,
+  material: SourceLineMaterial[]
 ) {
   await canary.act(
     sessionId,
@@ -443,7 +479,8 @@ async function driveScenario(
         result.scenario,
         preview,
         canary,
-        config
+        config,
+        material
       );
       result.steps.push({
         index,
@@ -452,6 +489,9 @@ async function driveScenario(
         ok: false,
         reason: explained.diagnostic.message,
         observation: explained.diagnostic.message,
+        // Les noms observés vivent ici, dans l'artefact du run, et nulle part
+        // dans ce qui se publie : `reportMarkdown` ne lit pas ce champ.
+        observedTargets: explained.observedTargets,
       });
       await record({
         phase: "execution",
@@ -498,7 +538,8 @@ export async function executeScenario(
   canary: Canary,
   record: (event: ProgressEvent) => Promise<void> = async () =>
     Promise.resolve(),
-  repo = ""
+  repo = "",
+  material: SourceLineMaterial[] = []
 ): Promise<ScenarioResult> {
   const result: ScenarioResult = {
     scenario,
@@ -524,7 +565,8 @@ export async function executeScenario(
       config,
       canary,
       record,
-      repo
+      repo,
+      material
     );
   } catch (error) {
     result.diagnostic = diagnose(error, config);

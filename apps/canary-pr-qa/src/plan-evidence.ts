@@ -17,6 +17,7 @@ import {
   type Locator,
   type Plan,
   type Scenario,
+  type SourceLineMaterial,
 } from "./schema.js";
 
 /**
@@ -280,6 +281,168 @@ function describeTarget(locator: Locator): string {
   return locator.by === "role"
     ? `${locator.by}=${locator.value} name=${JSON.stringify(locator.name)}`
     : `${locator.by}=${JSON.stringify(locator.value)}`;
+}
+
+/**
+ * Rôles qu'un plan sait viser nommément. L'énumération d'une cible introuvable
+ * s'y restreint : les nœuds de prose (`generic`, `paragraph`, `listitem`, `text`)
+ * portent le contenu de la page, et un run ne publie pas le contenu de la page.
+ * Un contrôle, un titre, un lien, un onglet ou une région d'état est exactement
+ * ce qu'un plan adresse. Les enfants d'une liste — `option`, `menuitem`,
+ * `treeitem`, `row` — en sont exclus : ils s'atteignent à travers leur liste, et
+ * sur la page mesurée du run 5b888618 ils occupaient les huit places sans rien
+ * apprendre sur la cible manquée.
+ */
+const TARGETABLE_ROLES = new Set([
+  "alert",
+  "button",
+  "checkbox",
+  "combobox",
+  "dialog",
+  "heading",
+  "img",
+  "link",
+  "radio",
+  "searchbox",
+  "slider",
+  "spinbutton",
+  "status",
+  "switch",
+  "tab",
+  "textbox",
+]);
+
+/** Nombre de cibles observées que le message d'une cible introuvable énumère. */
+const OBSERVED_TARGETS_SHOWN = 8;
+
+/**
+ * Rang d'un nœud observé dans l'énumération : le rôle visé d'abord, les
+ * contrôles de formulaire ensuite, le reste en dernier. Trois rangs, aucun
+ * score : l'ordre ne dit pas qu'une cible vaut mieux qu'une autre.
+ */
+function observationRank(role: string, wanted: string | undefined): number {
+  if (role === wanted) {
+    return 0;
+  }
+  return FORM_CONTROL_ROLES.has(role) ? 1 : 2;
+}
+
+/**
+ * Rôles qu'un `fill` ou un `select` adresse : les contrôles de formulaire. Ils
+ * passent avant le reste de l'énumération, quel que soit l'ordre du DOM, parce
+ * qu'une cible manquée est le plus souvent l'un d'eux — et sur la page mesurée
+ * les sept boutons de navigation précédaient les quinze champs de comptage.
+ */
+const FORM_CONTROL_ROLES = new Set([
+  "checkbox",
+  "combobox",
+  "radio",
+  "searchbox",
+  "slider",
+  "spinbutton",
+  "switch",
+  "textbox",
+]);
+
+/**
+ * Ce qu'un TARGET_NOT_FOUND peut dire d'une page : ce qui se publie, et ce qui
+ * ne sort pas de l'artefact du run.
+ */
+export interface ObservedTargetsNote {
+  /**
+   * Le compte et les couples rôle+nom observés. Ils vivent dans
+   * `StepResult.observedTargets`, c'est-à-dire dans `result.json` et le rapport
+   * HTML du run, derrière l'autorisation des artefacts — jamais dans
+   * `reportMarkdown`. Absent quand la page n'expose rien de déclaré.
+   */
+  detail?: string;
+  /**
+   * La phrase PUBLIQUE. Elle est CONSTANTE dès que le relevé a couru : ni nom,
+   * ni compte, ni cardinalité. Elle part dans le message du scénario, donc dans
+   * le commentaire de PR et dans le résumé de support.
+   */
+  published: string;
+}
+
+/**
+ * La phrase publiée : constante, donc sans information sur la page. Un relevé qui
+ * laisserait lire un compte, ou même sa seule présence, répondrait à la question
+ * « ce libellé deviné existe-t-il dans le DOM authentifié ? » — le filtre est
+ * indexé sur des littéraux du diff, donc contrôlés par l'auteur de la PR (revue
+ * de sécurité du 22 oct. 2026).
+ */
+const OBSERVED_TARGETS_PUBLISHED =
+  "cibles observées dans le DOM à cet instant : voir le détail du run";
+
+/**
+ * Les cibles réellement présentes dans le DOM à l'instant de l'échec : rôle et
+ * nom accessible, présentés comme OBSERVÉS, jamais comme la correction à
+ * appliquer. C'est la vérité mesurable dont dispose un run quand une cible ne
+ * résout pas, et elle était jetée : sur le run b7da97f1, la page exposait
+ * « Quantité · Billet de 20 € » là où le plan avait inventé une pièce de 20 €,
+ * et le message ne le disait pas. Sur le run 5b888618, le plan visait
+ * `by:label "Pièce de 2 €"` alors que les champs de comptage s'appelaient
+ * « Quantité · Pièce de 2 € » : le préfixe perdu ne se lisait nulle part.
+ *
+ * Un nom accessible observé ne se publie JAMAIS, quel qu'il soit : le message
+ * d'un scénario part dans le commentaire de PR, donc dans un dépôt, et le résumé
+ * de support promet de ne pas porter le DOM. Même un nom que le matériel source
+ * déclare est un libellé VIVANT de la page — un compte, un enregistrement, une
+ * région d'état peuvent porter le texte d'un littéral du diff — et un lecteur du
+ * dépôt n'a pas les identifiants de la preview. Ce qui se publie est une phrase
+ * CONSTANTE ; le compte et les noms restent dans l'artefact autorisé, sous
+ * `StepResult.observedTargets`.
+ *
+ * L'énumération ne choisit rien, ne corrige rien et ne convertit aucun
+ * TARGET_NOT_FOUND en succès : le scénario reste bloqué, il devient lisible.
+ * L'ordre est mécanique, sans ressemblance ni score : le rôle visé d'abord, les
+ * contrôles de formulaire ensuite, puis l'ordre du DOM ; huit au plus. Les noms
+ * vides (un `main`, un `status` sans texte) ne disent rien d'une cible manquée
+ * et sont écartés ; les doublons de couple rôle+nom aussi, puisqu'un locator
+ * role+nom ne distingue pas deux éléments qui le portent.
+ */
+export function observedTargetsNote(
+  nodes: AriaNameNode[],
+  material: SourceLineMaterial[],
+  role?: string,
+  limit = OBSERVED_TARGETS_SHOWN
+): ObservedTargetsNote | undefined {
+  const declared = declaredSourceNames(material);
+  if (declared.fragments.size === 0) {
+    // Sans matériel déclaré, le relevé ne court pas : mieux vaut le message
+    // générique qu'une phrase qui ne décrit rien.
+    return;
+  }
+  const wanted = role === undefined ? undefined : ariaRole(role);
+  const seen = new Set<string>();
+  const observed: { rank: number; target: string }[] = [];
+  for (const { role: nodeRole, name } of nodes) {
+    const normalized = normalizeText(name);
+    const target = `${nodeRole} ${JSON.stringify(normalized)}`;
+    if (
+      normalized === "" ||
+      seen.has(target) ||
+      !TARGETABLE_ROLES.has(nodeRole) ||
+      !sourceDeclaresName(normalized, declared)
+    ) {
+      continue;
+    }
+    seen.add(target);
+    observed.push({ rank: observationRank(nodeRole, wanted), target });
+  }
+  const ordered = observed
+    .map((item, index) => ({ ...item, index }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((item) => item.target);
+  const shown = ordered.slice(0, limit);
+  const rest = ordered.length - shown.length;
+  return {
+    published: OBSERVED_TARGETS_PUBLISHED,
+    detail:
+      ordered.length === 0
+        ? undefined
+        : `${ordered.length} cible${ordered.length > 1 ? "s" : ""} observée${ordered.length > 1 ? "s" : ""} dans le DOM à cet instant, rôle et nom accessible, toutes déclarées par la source : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`,
+  };
 }
 
 /** Mots d'un nom normalisé : la comparaison des libellés se fait mot à mot. */
@@ -670,6 +833,634 @@ export function unstableSelectorRefusals(
           )
           .join(" ; ")}`,
         'Target what the discovery snapshot shows instead: a role with its accessible name, an id, or a stable attribute the source defines. To prove an absence, use kind "hidden" or a count of 0 on a selector the page still carries. A class name or a color read in the source is not a stable target. A path built from combinators (">", a space, "+", "~") names a position instead of an element: it resolves several elements by construction as soon as two of them sit there, and Playwright then refuses the step in strict mode (a measured plan used aside > div, which resolved to 4 elements and blocked 4 scenarios of run 93cd4991). Name the element, or target the container the plan already names when the assertion only needs the text that container displays.'
+      ),
+    });
+  }
+  return refusals;
+}
+
+/**
+ * Ponctuation de CODE : un fragment de texte déclaré n'en porte pas, et une
+ * ligne de code en est pleine. Sans ce filtre, un gabarit mal découpé ou une
+ * apostrophe prise pour un délimiteur produisait un faux nom (`} active`),
+ * qu'un remplacement d'un mot pouvait ensuite présenter comme déclaré — donc
+ * un refus prononcé contre une cible réelle (« Pharmacie active »).
+ */
+const CODE_PUNCTUATION = /[{}<>();=&|$`\\]/;
+
+/**
+ * Fragments de texte qu'une ligne source déclare : littéral entre guillemets
+ * (`label: "Billet de 20 €"`), morceau de gabarit (le texte constant de
+ * `` `Quantité · ${d.label}` ``, découpé sur ses interpolations) et texte JSX
+ * entre `>` et `<`. Un fragment d'UN SEUL mot ne déclare aucune composition :
+ * tous les libellés partagent des mots ordinaires (`de`, `€`), donc l'accepter
+ * rendrait composable n'importe quel nom et le contrôle ne dirait plus rien.
+ * Seuls les fragments de deux mots et plus, sans ponctuation de code, entrent
+ * dans la composition.
+ */
+function declaredTextFragments(material: SourceLineMaterial[]): Set<string> {
+  const fragments = new Set<string>();
+  for (const file of material) {
+    for (const { text } of file.lines) {
+      for (const fragment of textFragmentsOfLine(text)) {
+        fragments.add(fragment);
+      }
+    }
+  }
+  return new Set(
+    [...fragments].filter((fragment) => words(fragment).length >= 2)
+  );
+}
+
+/**
+ * Fragments de texte d'UNE ligne, en deux familles que le filtre sépare :
+ *
+ * - ce qu'un guillemet DÉLIMITE est du texte par construction, et le garder tel
+ *   quel est le seul moyen de ne pas jeter un libellé réel : `aria-label="Save &
+ *   close"` porte une esperluette, `"Total (compté)"` une parenthèse, et le
+ *   filtre de ponctuation les aurait écartés — donc un nom déclaré serait
+ *   devenu un nom inventé, refusé à tort ;
+ * - ce qu'un gabarit ou du JSX laisse entre ses bornes est du texte NOYÉ dans du
+ *   code : c'est là que le découpage produit des fragments qui ne sont pas des
+ *   noms (`} active`), et c'est là que le filtre s'applique.
+ */
+function textFragmentsOfLine(text: string): string[] {
+  const quoted: string[] = [];
+  for (const [, value] of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    quoted.push(value ?? "");
+  }
+  for (const [, value] of text.matchAll(/'((?:[^'\\]|\\.)*)'/g)) {
+    quoted.push(value ?? "");
+  }
+  const embedded: string[] = [];
+  for (const [, value] of text.matchAll(/`([^`]*)`/g)) {
+    embedded.push(...(value ?? "").split(/\$\{[^}]*\}/));
+  }
+  for (const [, value] of text.matchAll(/>([^<>{}]+)</g)) {
+    embedded.push(value ?? "");
+  }
+  return [
+    ...quoted.map(normalizeText),
+    ...embedded
+      .map(normalizeText)
+      .filter((fragment) => !CODE_PUNCTUATION.test(fragment)),
+  ].filter((fragment) => fragment !== "");
+}
+
+/**
+ * Le matériel source déclaré, tel que le gate statique le lit : les fragments
+ * de texte que le diff déclare et le vocabulaire qu'ils portent.
+ *
+ * Une cible n'est déclarée que par ces fragments, jamais par une sous-chaîne
+ * quelconque du code : dans du JSX minifié, une sous-chaîne comme `} active`
+ * « existe » et n'est pas un nom. La conséquence est assumée et dite : un nom
+ * que l'application compose sans que le diff le déclare (un libellé venu d'un
+ * fichier hors diff) n'est pas reconnu comme déclaré, et le contrôle reste muet
+ * tant qu'aucun nom déclaré n'en diffère qu'à un mot.
+ */
+interface DeclaredSourceNames {
+  /** Fragments de deux mots et plus, seuls capables de composer un nom. */
+  fragments: Set<string>;
+  /**
+   * Le découpage des fragments qui peuvent fournir une substitution, calculé une
+   * fois par plan. `null` dit que le budget s'est épuisé pendant ce découpage.
+   */
+  neighbourPieces?: string[][] | null;
+}
+
+function declaredSourceNames(
+  material: SourceLineMaterial[]
+): DeclaredSourceNames {
+  return { fragments: declaredTextFragments(material) };
+}
+
+/**
+ * Un nom plus long n'est pas un nom d'interface : rien n'est mesuré, ni dans le
+ * relevé de la page ni dans la recherche de voisins. Les schémas autorisent des
+ * noms de 2 000 caractères et l'instantané d'accessibilité monte à 200 000 : le
+ * découpage est quadratique en la longueur du nom, donc un nom de plusieurs
+ * centaines de mots venu du modèle ou de la page ferait tourner le worker sans
+ * que l'échéance du run ni le battement de lease de 10 s ne puissent courir
+ * (revues de sécurité du 22 oct. 2026 : 1,4 s par cible à 239 mots, 12,1 s sur
+ * un nom répété de 4 000 caractères).
+ */
+const NAME_WORDS_MAX = 40;
+
+/**
+ * Le nom est-il déclaré par le matériel ? Une seule forme, jamais une
+ * ressemblance : il est la concaténation de fragments que le diff déclare —
+ * c'est exactement ce que fait un gabarit (`` `Quantité · ${d.label}` `` avec un
+ * libellé déclaré), donc « Quantité · Billet de 100 € » est déclaré, et
+ * « Quantité · Pièce de 20 € », qui demande une pièce de 20 € que le matériel
+ * n'énumère nulle part, ne l'est pas. Un nom qu'aucun fragment ne porte — même
+ * présent dans la prose du diff — n'est pas déclaré pour autant : c'est une
+ * ligne de code qui passe, pas un nom que l'interface expose.
+ *
+ * La borne de longueur est ICI, dans le matcher, et pas chez ses appelants :
+ * aucun d'eux ne peut l'oublier, et le découpage quadratique n'est jamais payé
+ * sur un nom qui n'en est pas un.
+ */
+function sourceDeclaresName(
+  name: string,
+  declared: DeclaredSourceNames
+): boolean {
+  const parts = words(name);
+  if (parts.length > NAME_WORDS_MAX) {
+    return false;
+  }
+  return composesFromFragments(parts, declared.fragments);
+}
+
+/**
+ * Une graphie que l'exécution sait résoudre est déclarée : `typographicVariants`
+ * énumère les apostrophes et les espaces que le repli de `canary.ts` essaie déjà,
+ * et un plan qui vise `Justification de l'écart` là où la source écrit
+ * `Justification de l’écart` aurait exécuté — le refuser bloquerait un scénario
+ * qui marchait, alors que le gate d'évidence, lui, l'accepte.
+ *
+ * Chaque graphie est un découpage quadratique de plus : cinq signes repliables
+ * en font 485 (revue de sécurité du 22 oct. 2026 : 9,0 s pour 10 cibles d'un nom
+ * de 40 mots), donc l'énumération et ses découpages passent par le budget
+ * partagé du plan comme le relevé de voisins. Épuisé, aucune graphie n'est
+ * essayée : le nom reste non déclaré, et comme le relevé de voisins se tait lui
+ * aussi, il n'est pas refusé — le gate se tait au lieu de refuser sur un travail
+ * qu'il n'a pas eu le droit de finir.
+ */
+function sourceDeclaresTarget(
+  name: string,
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
+): boolean {
+  if (segmentWithinBudget(name, declared, budget)) {
+    return true;
+  }
+  if (budget.spent > TARGET_WORK_MAX) {
+    return false;
+  }
+  const variants = typographicVariants(name);
+  if (variants.overflow) {
+    return false;
+  }
+  // L'énumération se paie aussi : chaque graphie est une chaîne de la longueur
+  // du nom, donc un plan qui multiplie ces cibles n'en paie qu'une seule.
+  budget.spent += variants.names.length * name.length;
+  if (budget.spent > TARGET_WORK_MAX) {
+    return false;
+  }
+  for (const variant of variants.names) {
+    if (budget.spent > TARGET_WORK_MAX) {
+      return false;
+    }
+    if (segmentWithinBudget(normalizeText(variant), declared, budget)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Un découpage, facturé au pire cas de son coût — le carré de la longueur du
+ * nom — avant de le payer. Au-delà du budget, rien n'est mesuré : le nom n'est
+ * pas déclaré, et aucun refus ne tombe sur cette réponse.
+ */
+function segmentWithinBudget(
+  name: string,
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
+): boolean {
+  const parts = words(name);
+  budget.spent += parts.length * parts.length;
+  if (budget.spent > TARGET_WORK_MAX) {
+    return false;
+  }
+  return composesFromFragments(parts, declared.fragments);
+}
+
+/**
+ * Les mots se découpent-ils en fragments que le matériel déclare ? C'est la
+ * seule forme de déclaration admise : `Quantité · Billet de 100 €` se compose du
+ * morceau de gabarit « Quantité · » et du libellé « Billet de 100 € », donc il
+ * est déclaré ; `Quantité · Pièce de 20 €` demande une pièce de 20 € que le
+ * matériel n'énumère nulle part. Le découpage est quadratique en la longueur du
+ * nom, donc les appelants bornent le nombre de mots qu'ils lui soumettent.
+ */
+function composesFromFragments(
+  parts: string[],
+  fragments: Set<string>
+): boolean {
+  const reachable: boolean[] = Array.from(
+    { length: parts.length + 1 },
+    () => false
+  );
+  reachable[0] = true;
+  for (let start = 0; start < parts.length; start += 1) {
+    if (!reachable[start]) {
+      continue;
+    }
+    for (let end = start + 2; end <= parts.length; end += 1) {
+      if (fragments.has(parts.slice(start, end).join(" "))) {
+        reachable[end] = true;
+      }
+    }
+  }
+  return reachable[parts.length] === true;
+}
+
+/**
+ * `result[i]` vaut vrai quand les i premiers mots se découpent en fragments
+ * déclarés : la moitié gauche d'un candidat, lue sans recomposition.
+ */
+function composablePrefixes(
+  parts: string[],
+  fragments: Set<string>
+): boolean[] {
+  const reachable = Array.from({ length: parts.length + 1 }, () => false);
+  reachable[0] = true;
+  for (let start = 0; start < parts.length; start += 1) {
+    if (!reachable[start]) {
+      continue;
+    }
+    for (let end = start + 2; end <= parts.length; end += 1) {
+      if (fragments.has(parts.slice(start, end).join(" "))) {
+        reachable[end] = true;
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * `result[i]` vaut vrai quand les mots à partir de i se découpent en fragments
+ * déclarés : la moitié droite d'un candidat.
+ */
+function composableSuffixes(
+  parts: string[],
+  fragments: Set<string>
+): boolean[] {
+  const reachable = Array.from({ length: parts.length + 1 }, () => false);
+  reachable[parts.length] = true;
+  for (let start = parts.length - 1; start >= 0; start -= 1) {
+    for (let end = start + 2; end <= parts.length; end += 1) {
+      if (reachable[end] && fragments.has(parts.slice(start, end).join(" "))) {
+        reachable[start] = true;
+        break;
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * Un fragment plus long n'entre pas dans la comparaison : un nom se compose de
+ * libellés, et le mot substitué vient de l'un d'eux.
+ */
+const NEIGHBOUR_FRAGMENT_WORDS = 12;
+/**
+ * Au-delà, le relevé renonce : un refus qui nomme plus de 64 candidats ne se lit
+ * plus, et le gate ne bloque pas un run sur une liste qu'il n'a pas su borner.
+ */
+const NEIGHBOUR_CANDIDATES_MAX = 64;
+/**
+ * Ce que la mesure d'un plan a le droit de dépenser, en couples de mots
+ * examinés : le découpage d'une graphie est facturé au carré de la longueur du
+ * nom, un alignement de voisin au nombre de mots qu'il compare. Le budget est
+ * partagé par tous les scénarios et par les deux chemins — le repli typographique
+ * et le relevé de voisins — parce que c'est la seule façon d'être sûr qu'aucun
+ * d'eux ne refuse quand l'autre a épuisé le budget : épuisé, la mesure se tait,
+ * elle ne refuse pas sur un travail qu'elle n'a pas eu le droit de finir, et
+ * elle ne devine pas non plus.
+ */
+const TARGET_WORK_MAX = 200_000;
+
+/** Ce qu'une mesure a déjà dépensé, partagé par le plan qu'elle sert. */
+interface TargetWorkBudget {
+  spent: number;
+}
+
+/**
+ * Noms que le matériel déclare et qui ne diffèrent du nom visé qu'à UN mot, au
+ * même rang. Aucune distance d'édition, aucun score de similarité, aucune
+ * ressemblance floue : le remplacement vient d'un mot qu'un fragment DÉCLARE, et
+ * le nom obtenu doit être déclaré à son tour.
+ *
+ * L'énumération est dérivée des fragments, jamais du vocabulaire : un nom
+ * déclaré est une concaténation de fragments, donc la position remplacée tombe
+ * dans l'un d'eux, et ce fragment donne à la fois le mot de remplacement et les
+ * positions inchangées. Chaque couple (fragment, alignement) est comparé UNE
+ * fois, et le coût est linéaire en le matériel du diff — jamais le produit du
+ * vocabulaire par une recomposition par candidat. C'est ce qui rend le relevé
+ * bornable : la revue de sécurité du 22 oct. 2026 a mesuré 1,4 s par cible pour
+ * un nom de 239 mots, du travail synchrone pendant lequel l'échéance du run et
+ * le battement de lease de 10 s ne pouvaient plus courir.
+ *
+ * Quatre plafonds le bornent, et aucun ne devine : la longueur du nom
+ * (`NAME_WORDS_MAX`, appliquée par `sourceDeclaresName`), la longueur du
+ * fragment qui fournit la substitution (`NEIGHBOUR_FRAGMENT_WORDS`), le nombre
+ * de candidats produits (`NEIGHBOUR_CANDIDATES_MAX`) et le coût total du plan
+ * (`TARGET_WORK_MAX`, partagé avec le repli typographique).
+ * Atteint, n'importe lequel rend la liste vide : pas de voisin, donc pas de
+ * refus. Un nom d'un seul mot n'a pas de candidat non plus — remplacer son
+ * unique mot ne partage plus rien avec lui — et un nom qui diffère par deux
+ * mots n'est pas un voisin.
+ */
+function declaredNeighbours(
+  parts: string[],
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
+): string[] {
+  if (parts.length < 2 || parts.length > NAME_WORDS_MAX) {
+    return [];
+  }
+  // Les deux tables se paient au pire cas, comme un découpage : le budget doit
+  // couvrir ce qu'elles coûtent, pas seulement ce qu'elles trouvent.
+  budget.spent += 2 * parts.length * parts.length;
+  if (budget.spent > TARGET_WORK_MAX) {
+    return [];
+  }
+  const prefixes = composablePrefixes(parts, declared.fragments);
+  const suffixes = composableSuffixes(parts, declared.fragments);
+  const candidates = new Set<string>();
+  const pieces = neighbourPieces(declared, budget);
+  if (pieces === null) {
+    return [];
+  }
+  for (const piece of pieces) {
+    for (let start = 0; start + piece.length <= parts.length; start += 1) {
+      budget.spent += piece.length;
+      if (budget.spent > TARGET_WORK_MAX) {
+        return [];
+      }
+      const candidate = oneWordCandidate(piece, start, {
+        parts,
+        prefixes,
+        suffixes,
+      });
+      if (candidate === undefined) {
+        continue;
+      }
+      candidates.add(candidate);
+      if (candidates.size > NEIGHBOUR_CANDIDATES_MAX) {
+        return [];
+      }
+    }
+  }
+  return [...candidates].sort();
+}
+
+/**
+ * Le découpage des fragments qui peuvent fournir une substitution : une fois par
+ * plan, et FACTURÉ, y compris pour les fragments écartés.
+ *
+ * La revue de sécurité du 22 oct. 2026 a mesuré ce trou : un fragment de plus de
+ * `NEIGHBOUR_FRAGMENT_WORDS` mots était découpé puis écarté AVANT que
+ * `budget.spent` ne change, donc chaque cible le redécoupait. 50 000 littéraux de
+ * 13 mots (1,35 Mo) et 192 cibles ont coûté 11,17 s de CPU synchrone alors que le
+ * budget n'enregistrait que 6 144 sur 200 000 ; pendant ces 11 s, l'échéance du
+ * run et le battement de lease de 10 s ne pouvaient plus courir. Facturer
+ * l'inspection et ne découper chaque fragment qu'une fois rend le coût linéaire
+ * en le matériel du diff, et l'arrêt anticipé quand le budget tombe.
+ *
+ * Budget épuisé : `null`, donc pas de voisin, donc pas de refus. On ne devine pas
+ * sur un travail qu'on n'a pas eu le droit de finir.
+ */
+function neighbourPieces(
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
+): string[][] | null {
+  if (declared.neighbourPieces !== undefined) {
+    return declared.neighbourPieces;
+  }
+  const pieces: string[][] = [];
+  for (const fragment of declared.fragments) {
+    const piece = words(fragment);
+    // Le découpage se paie même quand le fragment ne peut pas servir : c'est le
+    // coût qui manquait au budget.
+    budget.spent += piece.length + 1;
+    if (budget.spent > TARGET_WORK_MAX) {
+      declared.neighbourPieces = null;
+      return null;
+    }
+    if (piece.length >= 2 && piece.length <= NEIGHBOUR_FRAGMENT_WORDS) {
+      pieces.push(piece);
+    }
+  }
+  declared.neighbourPieces = pieces;
+  return pieces;
+}
+
+/**
+ * Le nom obtenu en remplaçant UN mot du nom visé par le mot du fragment à cet
+ * alignement, quand le reste du fragment s'y superpose exactement et que les
+ * deux moitiés autour sont déclarées. `undefined` dès que l'écart n'est pas
+ * exactement d'un mot.
+ */
+function oneWordCandidate(
+  piece: string[],
+  start: number,
+  alignment: { parts: string[]; prefixes: boolean[]; suffixes: boolean[] }
+): string | undefined {
+  let differing = -1;
+  for (const [at, word] of piece.entries()) {
+    if (word === alignment.parts[start + at]) {
+      continue;
+    }
+    if (differing >= 0) {
+      return;
+    }
+    differing = at;
+  }
+  if (differing < 0) {
+    return;
+  }
+  if (
+    !(alignment.prefixes[start] && alignment.suffixes[start + piece.length])
+  ) {
+    return;
+  }
+  return alignment.parts
+    .map((word, at) => (at === start + differing ? piece[differing] : word))
+    .join(" ");
+}
+
+/** Les noms candidats d'une cible, écrits comme la cible l'est : rôle + nom. */
+function namedNeighbours(locator: Locator, neighbours: string[]): string {
+  if (locator.by !== "role") {
+    return "";
+  }
+  return neighbours
+    .map(
+      (neighbour) => `role=${locator.value} name=${JSON.stringify(neighbour)}`
+    )
+    .join(", ");
+}
+
+/**
+ * Vrai quand l'assertion PROUVE une absence : `kind "hidden"`, ou un `count`
+ * qui attend zéro. Le nom visé doit alors être absent de l'application, donc il
+ * n'a rien à déclarer dans le matériel — refuser une telle cible reviendrait à
+ * interdire la preuve d'une suppression, que le hint du refus conseille
+ * lui-même. Seule la présence se déclare.
+ */
+function provesAbsence(assertion: Scenario["assertions"][number]): boolean {
+  return (
+    assertion.kind === "hidden" ||
+    (assertion.kind === "count" && assertion.expected === 0)
+  );
+}
+
+/**
+ * Un clic `ifPresent` est optionnel par contrat : il ne s'exécute pas quand sa
+ * cible est absente, et le gate exécutable exige déjà qu'une assertion vérifie
+ * l'état qu'il établit. Exiger en plus que son nom soit déclaré par la source
+ * refuserait un plan dont le cas nominal est l'absence du bouton — un contrôle
+ * « Rouvrir le compte » n'existe pas dans le diff quand le compte est ouvert
+ * (revue de code du 22 oct. 2026).
+ */
+function optionalClick(step: Scenario["steps"][number]): boolean {
+  return step.action.type === "click" && step.action.ifPresent === true;
+}
+
+/**
+ * Cible role+nom du scénario, avec le libellé qui la désigne dans le refus :
+ * l'étape qui la porte, ou l'étape et l'assertion quand c'est une assertion. Une
+ * assertion d'absence n'est pas une cible à déclarer : c'est son absence qui est
+ * le contrat.
+ */
+function scenarioTargets(
+  scenario: Scenario
+): { label: string; locator: Locator }[] {
+  return [
+    ...scenario.steps.flatMap((step) =>
+      "locator" in step.action && step.action.locator && !optionalClick(step)
+        ? [{ label: step.id, locator: step.action.locator }]
+        : []
+    ),
+    ...scenario.assertions
+      .filter((assertion) => !provesAbsence(assertion))
+      .flatMap((assertion) =>
+        assertion.target
+          ? [
+              {
+                label: `${assertion.afterStep ?? assertion.id} (assertion ${assertion.id})`,
+                locator: assertion.target,
+              },
+            ]
+          : []
+      ),
+  ];
+}
+
+/**
+ * Les cibles du scénario que le matériel ne déclare pas et dont un nom déclaré
+ * n'est distant que d'UN mot : celles qu'un refus peut nommer sans deviner.
+ */
+function undeclaredTargets(
+  scenario: Scenario,
+  declared: DeclaredSourceNames,
+  pageNames: Map<string, Set<string>>,
+  budget: TargetWorkBudget
+): { label: string; locator: Locator; neighbours: string[] }[] {
+  const undeclared: {
+    label: string;
+    locator: Locator;
+    neighbours: string[];
+  }[] = [];
+  for (const target of scenarioTargets(scenario)) {
+    if (target.locator.by !== "role") {
+      continue;
+    }
+    const name = normalizeText(target.locator.name);
+    const parts = words(name);
+    if (parts.length < 2 || parts.length > NAME_WORDS_MAX) {
+      // Un nom d'un seul mot n'a aucun voisin, et un nom de plus de 40 mots
+      // n'est pas un nom d'interface : dans les deux cas rien n'est mesuré,
+      // donc rien n'est refusé — et le découpage quadratique n'est pas payé.
+      continue;
+    }
+    if (sourceDeclaresTarget(name, declared, budget)) {
+      continue;
+    }
+    // La page de découverte nomme la cible : l'observation directe prime sur le
+    // silence du matériel. Un libellé que le diff ne porte pas parce qu'il vit
+    // dans un fichier hors hunk reste visible, donc vrai.
+    if (pageNames.get(ariaRole(target.locator.value))?.has(name)) {
+      continue;
+    }
+    const neighbours = declaredNeighbours(parts, declared, budget);
+    if (neighbours.length > 0) {
+      undeclared.push({ ...target, neighbours });
+    }
+  }
+  return undeclared;
+}
+
+/**
+ * Refus d'une cible role+nom qu'aucune source déclarée ne porte, alors qu'un nom
+ * déclaré n'en diffère qu'à un mot : le plan a inventé la cible, et le refus le
+ * dit AVANT toute étape navigateur, sur la seule foi du matériel.
+ *
+ * Ce contrôle ne dépend pas de la page, donc il tombe aussi sur les cibles qui
+ * suivent une interaction — celles que l'instantané de découverte ne peut plus
+ * trancher (21 des 27 cibles du plan du run b7da97f1). Mesuré sur le corpus du
+ * 22 oct. 2026 (200 runs, 184 plans, 1 166 scénarios, 28 cibles role+nom
+ * distinctes) : un seul refus, exactement l'invention « Quantité · Pièce de
+ * 20 € » des deux scénarios du run b7da97f1 (le bundle de la preview 814b671 ne
+ * déclare que « Billet de 20 € »), et aucun des 27 cibles réelles refusé. C'est
+ * une base minuscule : elle montre que le refus tombe juste, pas une précision
+ * démontrée.
+ *
+ * Le refus NOMME tous les noms déclarés à un mot, sans en privilégier un :
+ * l'invention mesurée a quatre voisins (« Quantité · Billet de 20 € », « Pièce
+ * de 1 € », « Pièce de 2 € », « Pièce de 20 c »), et choisir l'un d'eux à la
+ * place du plan serait la devinette que ce relevé n'a pas le droit de faire.
+ * Plusieurs voisins ne suppriment donc pas le refus ; ils interdisent seulement
+ * d'en désigner un. Un nom absent sans aucun voisin n'est jamais refusé : le
+ * matériel ne dit alors rien, et l'exécution reste le seul juge.
+ *
+ * Le matériel du diff n'est pas l'application entière : un libellé qui vit dans
+ * un fichier hors hunk n'y est pas déclaré. L'observation directe tranche donc
+ * avant le refus — une cible que l'instantané de découverte porte sous son
+ * couple rôle+nom est réelle, quels que soient les voisins déclarés — et le
+ * refus ne tombe que sur ce que ni le matériel ni la page ne nomment. Quand
+ * l'instantané ne dit rien de la cible (vue ouverte par un clic), c'est le
+ * matériel qui décide, et c'est ce silence-là que la limite mesurée documente.
+ */
+export function undeclaredTargetRefusals(
+  plan: Plan,
+  material: SourceLineMaterial[],
+  evidence?: DiscoveryEvidence
+): { error: QaError; scenario: Scenario }[] {
+  const declared = declaredSourceNames(material);
+  if (declared.fragments.size === 0) {
+    // Aucun fragment déclaré : le matériel ne dit rien, donc aucun refus.
+    return [];
+  }
+  const pageNames = evidence?.aria
+    ? ariaRoleNames(evidence.aria)
+    : new Map<string, Set<string>>();
+  // Un seul budget pour tout le plan : c'est lui qui borne le travail synchrone
+  // du gate quand le modèle multiplie les cibles longues.
+  const budget: TargetWorkBudget = { spent: 0 };
+  const refusals: { error: QaError; scenario: Scenario }[] = [];
+  for (const scenario of plan.scenarios) {
+    const targets = undeclaredTargets(scenario, declared, pageNames, budget);
+    if (targets.length === 0) {
+      continue;
+    }
+    refusals.push({
+      scenario,
+      error: new QaError(
+        "PLAN_TARGET_NOT_IN_SOURCE",
+        `Scenario ${scenario.id} targets an accessible name the declared source material never contains: ${targets
+          .map(
+            (target) => `${target.label} → ${describeTarget(target.locator)}`
+          )
+          .join(
+            " ; "
+          )}. Names the material DOES declare, each one word away, all named and none chosen in the target's place: ${targets
+          .map((target) => namedNeighbours(target.locator, target.neighbours))
+          .join(" ; ")}`,
+        "Target a name the source declares — a string literal, a template chunk, or a template filled with the values it declares — or drop the scenario. The candidates are what the material declares, not a repair: only the plan decides which name it meant, and none of them is accepted in the target's place. The gate reads the declared material alone, so a name the diff does not carry is refused only when at least one declared name differs by exactly one word; with no such neighbour it says nothing and execution decides. A name composed at runtime, from a value the diff never enumerates, falls in that same silence."
       ),
     });
   }

@@ -1154,6 +1154,14 @@ export interface StepResult {
   action: Action;
   index: number;
   observation: string;
+  /**
+   * Les cibles observées dans le DOM à l'instant d'un TARGET_NOT_FOUND, rôle et
+   * nom accessible. Elles vivent dans l'artefact du run (`result.json`, rapport
+   * HTML) et JAMAIS dans le message : `reportMarkdown` publie le message du
+   * scénario dans le commentaire de PR, pas ce champ, et le résumé de support ne
+   * le lit pas non plus.
+   */
+  observedTargets?: string;
   ok: boolean;
   reason: string;
   /**

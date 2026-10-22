@@ -31,6 +31,7 @@ import {
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
   stateTargetReadRefusals,
+  undeclaredTargetRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "./plan-evidence.js";
@@ -954,6 +955,11 @@ function planRefusalParts(
       ...writeEvidenceRefusals(candidate, policy).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
+      ...undeclaredTargetRefusals(
+        candidate,
+        sourceLineMaterial(context),
+        evidence
+      ).map((item) => `${item.error.message}. ${item.error.hint}`),
       ...unstableSelectorRefusals(candidate).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
@@ -1360,6 +1366,10 @@ async function executePlan(
     );
     await progress.record({ phase: "planning", diagnostic });
   }
+  // Le matériel du diff sert deux fois : au refus statique d'une cible que rien
+  // ne déclare, et au filtre des noms observés qu'un message d'exécution a le
+  // droit de publier. Une seule lecture, donc un seul contenu.
+  const material = sourceLineMaterial(context);
   result.coverage = validateCoverage(result.plan, context, policy, config);
   // Refus rendus au planificateur pendant la planification, rejoués ici : un
   // plan que le modèle n'a pas corrigé est bloqué, jamais exécuté. Cette table
@@ -1372,6 +1382,10 @@ async function executePlan(
       ...preconditionRefusals(result.plan, catalog, context.ref.repo),
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
+      ...undeclaredTargetRefusals(result.plan, material, {
+        url: initialPage.url,
+        aria: evidence,
+      }),
       ...attributeValueRefusals(result.plan),
       ...stateTargetReadRefusals(result.plan, {
         url: initialPage.url,
@@ -1408,7 +1422,8 @@ async function executePlan(
         config,
         canary,
         (event) => progress.record(event),
-        context.ref.repo
+        context.ref.repo,
+        material
       )
     );
     await saveReport(root, result, config);
@@ -1442,7 +1457,8 @@ async function executePlan(
           config,
           canary,
           (event) => progress.record(event),
-          context.ref.repo
+          context.ref.repo,
+          material
         )
       );
     }

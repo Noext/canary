@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
+import { supportSummary } from "../src/doctor.js";
 import { reportMarkdown } from "../src/report.js";
 import { runQa } from "../src/runner.js";
 import { fixture, PR_URL, plan } from "./fixture.js";
@@ -295,4 +296,147 @@ it("rend le nom réellement visé sur le rapport et le commentaire publié", asy
     request.path.endsWith("/comments")
   )?.payload.body;
   expect(String(published)).toContain(EXPOSED_NAME);
+});
+
+/**
+ * Le matériel source du run observé : la preview déclare ses libellés dans le
+ * diff, donc l'énumération a de quoi nommer. « Dossier de Mme Dupont » vit hors
+ * du diff : c'est un libellé VIVANT de la page, et le nom d'un dossier réel.
+ */
+const OBSERVED_NAMES_PATCH = [
+  "@@ -1,1 +1,4 @@",
+  "- show('Hello')",
+  "+ show('Welcome '+name)",
+  '+ aria-label="Quantité · Pièce de 2 €"',
+  '+ aria-label="Quantité · Billet de 100 €"',
+].join("\n");
+const OBSERVED_ARIA = [
+  "- main [ref=e1]:",
+  '  - textbox "Quantité · Pièce de 2 €" [ref=e2]',
+  '  - textbox "Quantité · Billet de 100 €" [ref=e3]',
+  '  - heading "Dossier de Mme Dupont" [ref=e4]',
+].join("\n");
+const UNRESOLVED_LABEL_TARGET =
+  "Canary action failed: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByLabel('Pièce de 2 €', { exact: true })";
+
+/**
+ * Le scénario observé : le plan vise `by:label "Pièce de 2 €"` là où les champs
+ * de comptage s'appellent « Quantité · Pièce de 2 € », après le clic qui ouvre
+ * la vue — donc l'instantané de découverte ne peut pas trancher la cible, et
+ * l'exécution va jusqu'au délai.
+ */
+function observedNamesPlan() {
+  const contract = structuredClone(plan);
+  const scenario = contract.scenarios[0]!;
+  scenario.steps.push(
+    {
+      id: "caisse",
+      description: "ouvrir la vue Caisse",
+      action: {
+        type: "click",
+        locator: { by: "role", value: "button", name: "Caisse" },
+      },
+    },
+    {
+      id: "comptage",
+      description: "compter les pièces de 2 €",
+      action: {
+        type: "fill",
+        locator: { by: "label", value: "Pièce de 2 €" },
+        value: "2",
+      },
+    }
+  );
+  return contract;
+}
+
+async function runMissingLabelTarget() {
+  const f = await fixture({
+    formPatch: OBSERVED_NAMES_PATCH,
+    plans: [observedNamesPlan()],
+  });
+  cleanups.push(f.close);
+  vi.spyOn(Canary.prototype, "start").mockResolvedValue("observed-names");
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_session, label) => {
+      if (label === "5-fill") {
+        throw new Error(UNRESOLVED_LABEL_TARGET);
+      }
+      return {
+        url: "http://fixture/",
+        snapshot: "textbox Name, button Save",
+        ...(label === "target-name-check" ? { evidence: OBSERVED_ARIA } : {}),
+        actual: label.startsWith("baseline-") ? "Welcome" : "Welcome Ada",
+      };
+    }
+  );
+  vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  return { result, f };
+}
+
+/**
+ * Le commentaire de PR est public sur un dépôt et le résumé de support promet de
+ * ne pas porter le DOM : un nom accessible observé n'y entre pas, MÊME quand le
+ * matériel source le déclare. Il reste dans l'artefact du run, derrière
+ * l'autorisation des artefacts, et le message publié est CONSTANT : ni nom, ni
+ * compte, ni cardinalité. Un compte suffirait à répondre à « ce libellé deviné
+ * existe-t-il dans le DOM authentifié ? » pour un auteur de PR qui contrôle le
+ * diff, et des runs publiés répétés formeraient un oracle d'appartenance.
+ */
+it("keeps observed DOM names out of the published comment", async () => {
+  const { result, f } = await runMissingLabelTarget();
+  const scenario = result.scenarios[0];
+  expect(scenario?.outcome).toBe("blocked");
+  expect(scenario?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+  // Le message public garde le code et la cause — ni les noms, ni le compte.
+  expect(scenario?.error).toContain("cibles observées dans le DOM");
+  expect(scenario?.error).toContain("voir le détail du run");
+  expect(String(scenario?.error)).not.toMatch(/\d+\s+cible/);
+  // L'artefact du run, lui, porte les noms : l'énumération est déplacée, jamais
+  // supprimée.
+  const stored = JSON.parse(
+    await readFile(join(f.dataDir, result.id, "result.json"), "utf8")
+  );
+  const step = stored.scenarios[0].steps.find(
+    (item: { stepId?: string }) => item.stepId === "comptage"
+  );
+  expect(String(step.observedTargets)).toContain(
+    'textbox "Quantité · Pièce de 2 €"'
+  );
+  expect(String(step.observedTargets)).toContain(
+    'textbox "Quantité · Billet de 100 €"'
+  );
+  // Le libellé hors diff n'est nommé nulle part : même l'artefact ne l'invente.
+  expect(String(step.observedTargets)).not.toContain("Dupont");
+  const published = f.outgoing.find((request) =>
+    request.path.endsWith("/comments")
+  )?.payload.body;
+  expect(typeof published).toBe("string");
+  expect(published).toContain(
+    "cibles observées dans le DOM à cet instant : voir le détail du run"
+  );
+  // Le compte reste dans l'artefact (vérifié ci-dessus via `observedTargets`),
+  // jamais dans la surface publique.
+  expect(published).not.toMatch(/\d+\s+cible/);
+  const summary = JSON.stringify(
+    await supportSummary(result.id, f.config),
+    null,
+    2
+  );
+  for (const surface of [
+    scenario?.error,
+    scenario?.diagnostic?.message,
+    scenario?.diagnostic?.hint,
+    reportMarkdown(result),
+    published,
+    summary,
+  ]) {
+    expect(String(surface)).not.toContain("Quantité · Pièce de 2 €");
+    expect(String(surface)).not.toContain("Quantité · Billet de 100 €");
+    expect(String(surface)).not.toContain("Dupont");
+  }
 });
