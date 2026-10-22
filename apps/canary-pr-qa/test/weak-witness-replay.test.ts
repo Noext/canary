@@ -6,6 +6,7 @@ import {
   PolicySchema,
   quoteResolutionCandidates,
   requirementHasWitness,
+  sourceLineMaterial,
   ungroundedRequirement,
   ungroundedRequirements,
   unwitnessedPlanRefusals,
@@ -14,7 +15,7 @@ import {
   weakWitnessLines,
 } from "../src/policy.js";
 import { coverageFatalClasses, quotePickCorrection } from "../src/runner.js";
-import { PlanSchema } from "../src/schema.js";
+import { PlanSchema, resolveLineReference } from "../src/schema.js";
 import { lineAt } from "./fixture.js";
 import { CASH_TS_LINES, LOT_V_PLAN, PAGE_TS_LINES } from "./lot-v-replay.js";
 
@@ -108,9 +109,16 @@ it("replays the weak-witness refusal of run 58e47755 and resolves it by pick", (
   expect(() => validateCoverage(plan, context, policy, config)).toThrow(
     MEASURED_MESSAGE
   );
-  // Le conseil nomme la ligne réelle qui porte l'identifiant : c'est la piste
-  // que le message mesuré ne donnait pas.
-  expect(refusal.hint).toContain(`116: ${JSON.stringify(cashLine(116))}`);
+  // Le conseil DÉSIGNE la ligne réelle qui porte l'identifiant : c'est la piste
+  // que le message mesuré ne donnait pas, et elle ne demande aucune recopie —
+  // la ligne de 65 caractères n'est pas offerte en texte.
+  expect(refusal.hint).toContain(
+    `send "line": 116 or "line": 146 for ${CASH},`
+  );
+  expect(refusal.hint).not.toContain(JSON.stringify(cashLine(116)));
+  expect(resolveLineReference(CASH, 116, sourceLineMaterial(context))).toEqual({
+    text: cashLine(116),
+  });
   const correction = quotePickCorrection(
     plan,
     policy,
@@ -242,10 +250,14 @@ it("pairs the fatal class fault with the real line, not only the class advice", 
   ).find((item) => item.code === "REQUIREMENT_UNGROUNDED");
   expect(fatal?.faults).toHaveLength(1);
   expect(fatal?.faults?.[0]?.quote).toBe("ecart-a-justifier");
-  // La ligne mesurée, écrite comme le planificateur la reçoit.
+  // La ligne mesurée, désignée comme le planificateur doit l'envoyer : le
+  // préambule fatal porte le numéro, pas un texte à recopier.
   expect(fatal?.faults?.[0]?.remedy).toContain(
-    `116: ${JSON.stringify(cashLine(116))}`
+    `send "line": 116 or "line": 146 for ${CASH},`
   );
+  expect(resolveLineReference(CASH, 116, sourceLineMaterial(context))).toEqual({
+    text: cashLine(116),
+  });
 });
 
 /**

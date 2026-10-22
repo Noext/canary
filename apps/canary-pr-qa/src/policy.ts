@@ -858,19 +858,61 @@ export function weakWitnessLines(
     : found.slice(0, SUGGESTED_QUOTE_LIMIT);
 }
 /**
- * Remède d'un témoin trop pauvre : les lignes réelles qui portent la citation,
- * au plus deux. Il remplace, pour ce défaut, la similitude de jetons du remède
- * de citation absente — la citation existe, seule sa substance manque, et la
- * ligne qui la porte est la réponse exacte.
+ * Remède d'un témoin trop pauvre : la ligne réelle qui porte la citation, au
+ * plus deux, DÉSIGNÉE par son numéro et non recopiée. Il remplace, pour ce
+ * défaut, la similitude de jetons du remède de citation absente — la citation
+ * existe, seule sa substance manque, et la ligne qui la porte est la réponse
+ * exacte.
+ *
+ * Mesuré au run d6679230 (pharmania/arpilabe-pilotage#17 @ 814b6713) :
+ * `caisse-comptage-ecart` ne vit que sur la ligne 15 de `apps/web/AGENTS.md`,
+ * une ligne de tableau de 442 caractères. Le refus la nommait déjà, mais en
+ * demandant de la RECOPIER (« Real lines … to quote instead ») : le
+ * planificateur devait retaper 442 caractères pour un témoin dont le numéro
+ * suffisait, et sa manche de correction n'a pas convergé. Depuis la PR #71 une
+ * exigence peut désigner `"line": N` et le gate lit le texte lui-même : le
+ * remède nomme donc la référence, et ne retombe sur le texte à recopier que
+ * quand aucune ligne n'est dans le matériel de résolution — en disant pourquoi
+ * (`resolveLineReference` nomme la cause : hors du diff, ambiguë, sans contenu),
+ * pour que le planificateur sache que la voie sûre lui est fermée.
  */
 export function weakWitnessSuggestion(
   requirement: Pick<Requirement, "quote" | "sourceFile">,
   context: PrContext
 ): string {
-  return lineSuggestion(
-    weakWitnessLines(requirement, context),
-    requirement.sourceFile
-  );
+  const lines = weakWitnessLines(requirement, context);
+  if (lines.length === 0) {
+    return "";
+  }
+  const material = sourceLineMaterial(context);
+  const designable: number[] = [];
+  let refusal = "";
+  for (const { line, text } of lines) {
+    const resolution = resolveLineReference(
+      requirement.sourceFile,
+      line,
+      material
+    );
+    // Le texte rendu doit être CELUI du candidat : une ligne que le matériel
+    // numérote autrement (contenu de tête vs contenu après changement) ne
+    // désigne pas la même preuve, donc elle n'est pas offerte comme référence.
+    if ("text" in resolution && resolution.text === text) {
+      designable.push(line);
+    } else if (refusal === "") {
+      refusal =
+        "refusal" in resolution
+          ? resolution.refusal
+          : `Line ${line} of ${requirement.sourceFile} carries other text in the numbered material, so the candidate is not what the gate would write.`;
+    }
+  }
+  if (designable.length > 0) {
+    const references = designable.map((line) => `"line": ${line}`).join(" or ");
+    return ` Designate it instead of retyping it: send ${references} for ${requirement.sourceFile}, and the gate writes that line itself.`;
+  }
+  const listed = lines
+    .map(({ line, text }) => `${line}: ${JSON.stringify(text)}`)
+    .join(", ");
+  return ` No "line" reference designates the real line that carries it: ${refusal} Quote its exact text instead: ${listed}.`;
 }
 /**
  * Un fragment d'une citation recousue, retrouvé tel quel sur une ligne réelle du
