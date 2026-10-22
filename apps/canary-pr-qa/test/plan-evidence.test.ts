@@ -2520,6 +2520,26 @@ describe("refus statique d'une cible que le matériel source ne déclare pas", (
       )
     ).toEqual([]);
   });
+  it("accepte une graphie que le repli d'exécution sait résoudre", () => {
+    // La source écrit l'apostrophe typographique, le plan l'apostrophe droite :
+    // `canary.ts` essaie les deux graphies, donc la cible s'exécutait. La
+    // refuser bloquerait un scénario qui marchait.
+    const material = [
+      {
+        path: "src/form.ts",
+        lines: [
+          { line: 1, text: 'aria-label="Justification de l’écart"' },
+          { line: 2, text: 'aria-label="Justification de la clôture"' },
+        ],
+      },
+    ];
+    expect(
+      undeclaredTargetRefusals(
+        PlanSchema.parse(inventedCashTargetPlan("Justification de l'écart")),
+        material
+      )
+    ).toEqual([]);
+  });
 });
 
 /**

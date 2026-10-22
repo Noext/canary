@@ -913,6 +913,29 @@ function sourceDeclaresName(
 }
 
 /**
+ * Une graphie que l'exécution sait résoudre est déclarée : `typographicVariants`
+ * énumère les apostrophes et les espaces que le repli de `canary.ts` essaie déjà,
+ * et un plan qui vise `Justification de l'écart` là où la source écrit
+ * `Justification de l’écart` aurait exécuté — le refuser bloquerait un scénario
+ * qui marchait, alors que le gate d'évidence, lui, l'accepte.
+ */
+function sourceDeclaresTarget(
+  name: string,
+  declared: DeclaredSourceNames
+): boolean {
+  if (sourceDeclaresName(name, declared)) {
+    return true;
+  }
+  const variants = typographicVariants(name);
+  if (variants.overflow) {
+    return false;
+  }
+  return variants.names.some((variant) =>
+    sourceDeclaresName(normalizeText(variant), declared)
+  );
+}
+
+/**
  * Les mots se découpent-ils en fragments que le matériel déclare ? C'est la
  * seule forme de déclaration admise : `Quantité · Billet de 100 €` se compose du
  * morceau de gabarit « Quantité · » et du libellé « Billet de 100 € », donc il
@@ -1178,7 +1201,7 @@ function undeclaredTargets(
       // donc rien n'est refusé — et le découpage quadratique n'est pas payé.
       continue;
     }
-    if (sourceDeclaresName(name, declared)) {
+    if (sourceDeclaresTarget(name, declared)) {
       continue;
     }
     // La page de découverte nomme la cible : l'observation directe prime sur le
