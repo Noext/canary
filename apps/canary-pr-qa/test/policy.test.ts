@@ -1012,7 +1012,13 @@ it("offers the real line carrying a bare identifier as the remedy", () => {
   expect(refusal.message).toBe(
     `Weak source witness for logic: ${file} (requirement 1). Rejected quote: "snake_case_name"`
   );
-  expect(refusal.hint).toContain(`2: ${JSON.stringify(lines[1])}`);
+  // Le remède ne demande plus de recopier la ligne : il la DÉSIGNE, et le
+  // numéro qu'il donne se résout sur la ligne réelle.
+  expect(refusal.hint).toContain(`send "line": 2 for ${file},`);
+  expect(refusal.hint).not.toContain(JSON.stringify(lines[1]));
+  expect(
+    resolveLineReference(file, 2, sourceLineMaterial(scenarioContext))
+  ).toEqual({ text: lines[1] });
   expect(quoteCarriesContent("snake_case_name")).toBe(false);
 });
 
