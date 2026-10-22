@@ -100,6 +100,8 @@ export const errorMessages: Record<string, string | undefined> = {
   STALE_HEAD: "Le commit testé n’est plus la tête de la pull request.",
   TRANSITION_NOT_OBSERVED:
     "Transition non observée : la valeur relevée après l’étape est identique à celle d’avant, donc le changement attendu n’a pas eu lieu. Ce n’est pas une régression prouvée de l’élément.",
+  TRANSITION_ON_INVARIANT:
+    "Le plan a exigé un changement sur une valeur qui ne doit pas changer : le relevé est le même avant et après l’étape, et c’est déjà la valeur attendue. L’application montre donc ce que l’assertion demande ; c’est la vérification du plan qui est fausse, pas la fonctionnalité.",
   WEBHOOK_RATE_LIMIT:
     "Le budget horaire de lancements automatiques de Canary (global ou par dépôt) est atteint.",
   WRITE_EVIDENCE_MISSING:
@@ -758,6 +760,8 @@ export const runAdvice: Record<string, string> = {
     "Ce commit n’est plus la tête de la pull request : relancez un test sur le commit courant.",
   TRANSITION_NOT_OBSERVED:
     "Pour affirmer une invariance après une interaction (l’élément est toujours là après le clic X), utilisez `verification: state` avec `afterStep` = l’étape d’interaction ; réservez `transition` aux valeurs qui doivent changer.",
+  TRANSITION_ON_INVARIANT:
+    "Vérifiez ce point avec `verification: state` et `afterStep` sur l’étape d’interaction, ou déplacez `transition` sur la sortie que l’étape déplace réellement : un invariant ne peut pas démontrer de transition.",
   WEBHOOK_RATE_LIMIT:
     "Attendez la prochaine fenêtre du quota horaire, ou lancez ce test depuis « Nouveau test ».",
   WRITE_EVIDENCE_MISSING:
