@@ -2540,6 +2540,38 @@ describe("refus statique d'une cible que le matériel source ne déclare pas", (
       )
     ).toEqual([]);
   });
+  it("laisse une assertion d'absence viser un nom que la source ne déclare plus", () => {
+    // Prouver qu'un bouton a disparu : le nom n'a rien à déclarer, c'est son
+    // absence qui est le contrat, et le hint du refus conseille lui-même cette
+    // forme pour établir une disparition.
+    const material = [
+      {
+        path: "src/form.ts",
+        lines: [{ line: 1, text: 'aria-label="Remove account"' }],
+      },
+    ];
+    const target = {
+      by: "role" as const,
+      value: "button",
+      name: "Delete account",
+    };
+    for (const assertion of [
+      { kind: "hidden" as const },
+      { kind: "count" as const, expected: 0 },
+    ]) {
+      const plan = readOnlyPlan(target);
+      Object.assign(plan.scenarios[0]!.assertions[0]!, assertion);
+      expect(
+        undeclaredTargetRefusals(PlanSchema.parse(plan), material)
+      ).toEqual([]);
+    }
+    // Mais une assertion de présence garde le refus : c'est la même cible, et
+    // elle y demande bien un nom que la source ne déclare pas.
+    const present = readOnlyPlan(target);
+    expect(
+      undeclaredTargetRefusals(PlanSchema.parse(present), material)
+    ).toHaveLength(1);
+  });
 });
 
 /**

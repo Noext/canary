@@ -1149,8 +1149,24 @@ function namedNeighbours(locator: Locator, neighbours: string[]): string {
 }
 
 /**
+ * Vrai quand l'assertion PROUVE une absence : `kind "hidden"`, ou un `count`
+ * qui attend zéro. Le nom visé doit alors être absent de l'application, donc il
+ * n'a rien à déclarer dans le matériel — refuser une telle cible reviendrait à
+ * interdire la preuve d'une suppression, que le hint du refus conseille
+ * lui-même. Seule la présence se déclare.
+ */
+function provesAbsence(assertion: Scenario["assertions"][number]): boolean {
+  return (
+    assertion.kind === "hidden" ||
+    (assertion.kind === "count" && assertion.expected === 0)
+  );
+}
+
+/**
  * Cible role+nom du scénario, avec le libellé qui la désigne dans le refus :
- * l'étape qui la porte, ou l'étape et l'assertion quand c'est une assertion.
+ * l'étape qui la porte, ou l'étape et l'assertion quand c'est une assertion. Une
+ * assertion d'absence n'est pas une cible à déclarer : c'est son absence qui est
+ * le contrat.
  */
 function scenarioTargets(
   scenario: Scenario
@@ -1161,16 +1177,18 @@ function scenarioTargets(
         ? [{ label: step.id, locator: step.action.locator }]
         : []
     ),
-    ...scenario.assertions.flatMap((assertion) =>
-      assertion.target
-        ? [
-            {
-              label: `${assertion.afterStep ?? assertion.id} (assertion ${assertion.id})`,
-              locator: assertion.target,
-            },
-          ]
-        : []
-    ),
+    ...scenario.assertions
+      .filter((assertion) => !provesAbsence(assertion))
+      .flatMap((assertion) =>
+        assertion.target
+          ? [
+              {
+                label: `${assertion.afterStep ?? assertion.id} (assertion ${assertion.id})`,
+                locator: assertion.target,
+              },
+            ]
+          : []
+      ),
   ];
 }
 
