@@ -961,21 +961,63 @@ function sourceDeclaresName(
  * et un plan qui vise `Justification de l'écart` là où la source écrit
  * `Justification de l’écart` aurait exécuté — le refuser bloquerait un scénario
  * qui marchait, alors que le gate d'évidence, lui, l'accepte.
+ *
+ * Chaque graphie est un découpage quadratique de plus : cinq signes repliables
+ * en font 485 (revue de sécurité du 22 oct. 2026 : 9,0 s pour 10 cibles d'un nom
+ * de 40 mots), donc l'énumération et ses découpages passent par le budget
+ * partagé du plan comme le relevé de voisins. Épuisé, aucune graphie n'est
+ * essayée : le nom reste non déclaré, et comme le relevé de voisins se tait lui
+ * aussi, il n'est pas refusé — le gate se tait au lieu de refuser sur un travail
+ * qu'il n'a pas eu le droit de finir.
  */
 function sourceDeclaresTarget(
   name: string,
-  declared: DeclaredSourceNames
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
 ): boolean {
-  if (sourceDeclaresName(name, declared)) {
+  if (segmentWithinBudget(name, declared, budget)) {
     return true;
+  }
+  if (budget.spent > TARGET_WORK_MAX) {
+    return false;
   }
   const variants = typographicVariants(name);
   if (variants.overflow) {
     return false;
   }
-  return variants.names.some((variant) =>
-    sourceDeclaresName(normalizeText(variant), declared)
-  );
+  // L'énumération se paie aussi : chaque graphie est une chaîne de la longueur
+  // du nom, donc un plan qui multiplie ces cibles n'en paie qu'une seule.
+  budget.spent += variants.names.length * name.length;
+  if (budget.spent > TARGET_WORK_MAX) {
+    return false;
+  }
+  for (const variant of variants.names) {
+    if (budget.spent > TARGET_WORK_MAX) {
+      return false;
+    }
+    if (segmentWithinBudget(normalizeText(variant), declared, budget)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Un découpage, facturé au pire cas de son coût — le carré de la longueur du
+ * nom — avant de le payer. Au-delà du budget, rien n'est mesuré : le nom n'est
+ * pas déclaré, et aucun refus ne tombe sur cette réponse.
+ */
+function segmentWithinBudget(
+  name: string,
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
+): boolean {
+  const parts = words(name);
+  budget.spent += parts.length * parts.length;
+  if (budget.spent > TARGET_WORK_MAX) {
+    return false;
+  }
+  return composesFromFragments(parts, declared.fragments);
 }
 
 /**
@@ -1063,17 +1105,20 @@ const NEIGHBOUR_FRAGMENT_WORDS = 12;
  */
 const NEIGHBOUR_CANDIDATES_MAX = 64;
 /**
- * Ce que le relevé de voisins a le droit de dépenser pour un PLAN ENTIER, en
- * couples de mots comparés. Le budget est partagé par tous les scénarios : c'est
- * le seul plafond qui borne le gate quand le plan multiplie les cibles longues.
- * Épuisé, le relevé se tait — il ne refuse pas sur un travail qu'il n'a pas eu
- * le droit de finir, et il ne devine pas non plus.
+ * Ce que la mesure d'un plan a le droit de dépenser, en couples de mots
+ * examinés : le découpage d'une graphie est facturé au carré de la longueur du
+ * nom, un alignement de voisin au nombre de mots qu'il compare. Le budget est
+ * partagé par tous les scénarios et par les deux chemins — le repli typographique
+ * et le relevé de voisins — parce que c'est la seule façon d'être sûr qu'aucun
+ * d'eux ne refuse quand l'autre a épuisé le budget : épuisé, la mesure se tait,
+ * elle ne refuse pas sur un travail qu'elle n'a pas eu le droit de finir, et
+ * elle ne devine pas non plus.
  */
-const NEIGHBOUR_WORK_MAX = 50_000;
+const TARGET_WORK_MAX = 200_000;
 
-/** Ce qu'un relevé a déjà dépensé, partagé par le plan qu'il sert. */
-interface NeighbourBudget {
-  compared: number;
+/** Ce qu'une mesure a déjà dépensé, partagé par le plan qu'elle sert. */
+interface TargetWorkBudget {
+  spent: number;
 }
 
 /**
@@ -1096,7 +1141,7 @@ interface NeighbourBudget {
  * (`NAME_WORDS_MAX`, appliquée par `sourceDeclaresName`), la longueur du
  * fragment qui fournit la substitution (`NEIGHBOUR_FRAGMENT_WORDS`), le nombre
  * de candidats produits (`NEIGHBOUR_CANDIDATES_MAX`) et le coût total du plan
- * (`NEIGHBOUR_WORK_MAX`).
+ * (`TARGET_WORK_MAX`, partagé avec le repli typographique).
  * Atteint, n'importe lequel rend la liste vide : pas de voisin, donc pas de
  * refus. Un nom d'un seul mot n'a pas de candidat non plus — remplacer son
  * unique mot ne partage plus rien avec lui — et un nom qui diffère par deux
@@ -1105,9 +1150,15 @@ interface NeighbourBudget {
 function declaredNeighbours(
   parts: string[],
   declared: DeclaredSourceNames,
-  budget: NeighbourBudget
+  budget: TargetWorkBudget
 ): string[] {
   if (parts.length < 2 || parts.length > NAME_WORDS_MAX) {
+    return [];
+  }
+  // Les deux tables se paient au pire cas, comme un découpage : le budget doit
+  // couvrir ce qu'elles coûtent, pas seulement ce qu'elles trouvent.
+  budget.spent += 2 * parts.length * parts.length;
+  if (budget.spent > TARGET_WORK_MAX) {
     return [];
   }
   const prefixes = composablePrefixes(parts, declared.fragments);
@@ -1119,8 +1170,8 @@ function declaredNeighbours(
       continue;
     }
     for (let start = 0; start + piece.length <= parts.length; start += 1) {
-      budget.compared += piece.length;
-      if (budget.compared > NEIGHBOUR_WORK_MAX) {
+      budget.spent += piece.length;
+      if (budget.spent > TARGET_WORK_MAX) {
         return [];
       }
       const candidate = oneWordCandidate(piece, start, {
@@ -1238,7 +1289,7 @@ function undeclaredTargets(
   scenario: Scenario,
   declared: DeclaredSourceNames,
   pageNames: Map<string, Set<string>>,
-  budget: NeighbourBudget
+  budget: TargetWorkBudget
 ): { label: string; locator: Locator; neighbours: string[] }[] {
   const undeclared: {
     label: string;
@@ -1257,7 +1308,7 @@ function undeclaredTargets(
       // donc rien n'est refusé — et le découpage quadratique n'est pas payé.
       continue;
     }
-    if (sourceDeclaresTarget(name, declared)) {
+    if (sourceDeclaresTarget(name, declared, budget)) {
       continue;
     }
     // La page de découverte nomme la cible : l'observation directe prime sur le
@@ -1320,7 +1371,7 @@ export function undeclaredTargetRefusals(
     : new Map<string, Set<string>>();
   // Un seul budget pour tout le plan : c'est lui qui borne le travail synchrone
   // du gate quand le modèle multiplie les cibles longues.
-  const budget: NeighbourBudget = { compared: 0 };
+  const budget: TargetWorkBudget = { spent: 0 };
   const refusals: { error: QaError; scenario: Scenario }[] = [];
   for (const scenario of plan.scenarios) {
     const targets = undeclaredTargets(scenario, declared, pageNames, budget);

@@ -2611,6 +2611,33 @@ function refusalsFor(name: string, material: SourceLineMaterial[]) {
   );
 }
 
+/**
+ * Un scénario par nom visé, dans l'ordre donné : la mesure partage son budget
+ * entre les scénarios, donc l'ordre du plan est l'ordre des dépenses.
+ */
+function scenarioPerName(names: string[]): Plan {
+  const scenario = inventedCashTargetPlan(names[0] as string).scenarios[0];
+  return {
+    summary: "Bornes de la mesure d'un plan",
+    scenarios: names.map((name, index) => {
+      const clone = structuredClone(scenario) as Plan["scenarios"][number];
+      clone.id = `cible-${index}`;
+      for (const step of clone.steps) {
+        if ("locator" in step.action && step.action.locator?.by === "role") {
+          step.action.locator.name = name;
+        }
+      }
+      for (const assertion of clone.assertions) {
+        if (assertion.target?.by === "role") {
+          assertion.target.name = name;
+        }
+      }
+      return clone;
+    }),
+    skipped: [],
+  };
+}
+
 describe("bornes du relevé de voisins d'une cible non déclarée", () => {
   it("s'arrête à la longueur de nom traitée, et le refuse juste en deçà", () => {
     // Le nom est le même bloc répété : à 40 mots le relevé trouve le voisin
@@ -2684,5 +2711,27 @@ describe("bornes du relevé de voisins d'une cible non déclarée", () => {
     ];
     expect(refusalsFor(name, withFillers(10))).toHaveLength(1);
     expect(refusalsFor(name, withFillers(2000))).toEqual([]);
+  });
+  it("facture le repli typographique au même budget que le relevé", () => {
+    // Quatre signes repliables font plus de 250 graphies, chacune un découpage
+    // quadratique : un nom de 40 mots épuise le budget du plan à lui seul, et
+    // le gate se tait — il ne refuse pas une cible sur un travail qu'il n'a pas
+    // payé (revue de sécurité du 22 oct. 2026 : 9,0 s pour 10 cibles de 40 mots).
+    const greedy = [
+      ...Array.from({ length: 4 }, () => "l'écart"),
+      ...Array.from({ length: 36 }, (_unused, index) => `z${index}`),
+    ].join(" ");
+    expect(greedy.split(" ")).toHaveLength(40);
+    // La cible voisine est refusée quand rien n'a mangé le budget…
+    expect(refusalsFor("alpha X gamma delta", NEIGHBOUR_MATERIAL)).toHaveLength(
+      1
+    );
+    // …et ne l'est plus après un nom dont les graphies coûtent plus que lui.
+    expect(
+      undeclaredTargetRefusals(
+        PlanSchema.parse(scenarioPerName([greedy, "alpha X gamma delta"])),
+        NEIGHBOUR_MATERIAL
+      )
+    ).toEqual([]);
   });
 });
