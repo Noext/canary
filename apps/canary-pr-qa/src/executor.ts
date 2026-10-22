@@ -125,12 +125,24 @@ async function explainMissingTarget(
   }
 }
 
+/**
+ * Le contrat joué doit être EXACTEMENT le contrat planifié : mêmes identifiants,
+ * même ordre. Comparer les longueurs laissait passer une étape jouée deux fois
+ * compensant une étape sautée, et surtout ne disait pas laquelle manquait : le
+ * hint nomme les étapes absentes du relevé.
+ */
 function finish(result: ScenarioResult) {
-  if (result.contract?.completedSteps.length !== result.scenario.steps.length) {
+  const planned = result.scenario.steps.map((step) => step.id);
+  const played = result.contract?.completedSteps ?? [];
+  if (
+    played.length !== planned.length ||
+    played.some((id, index) => id !== planned[index])
+  ) {
+    const missing = planned.filter((id) => !played.includes(id));
     throw new QaError(
       "CONTRACT_INCOMPLETE",
       "AI attempted to finish before all planned assertions and required steps completed",
-      "Execute the original ordered contract; do not omit actions or weaken assertions."
+      `Execute the original ordered contract; do not omit actions or weaken assertions.${missing.length > 0 ? ` Missing steps: ${missing.join(", ")}.` : ""}`
     );
   }
   if (
@@ -452,9 +464,14 @@ async function driveScenario(
         config,
         repo
       );
-      if (step.action.type !== "observe") {
-        result.contract?.completedSteps.push(step.id);
-      }
+      // Toute étape planifiée entre au contrat, `observe` compris. L'ancien
+      // exécuteur excluait `observe` parce qu'il s'agissait alors d'un coup
+      // d'œil libre du modèle, qui ne faisait pas avancer le contrat ; depuis
+      // que l'hôte joue le plan figé, c'est une étape planifiée comme une
+      // autre, et l'exclure faisait refuser par `finish()` un contrat pourtant
+      // joué en entier (run 91fb1e35 : 6 scénarios sur 6, zéro étape en échec,
+      // zéro assertion fausse).
+      result.contract?.completedSteps.push(step.id);
       const played = result.steps.at(-1);
       let stepOutcome = "ok";
       if (result.outcome === "failed") {
