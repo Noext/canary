@@ -444,6 +444,18 @@ it("teaches the two readable forms and when a transition is provable", () => {
   expect(prompt).toMatch(
     /verification "transition" is only for a step that genuinely moves the value/i
   );
+  // Lot AM : deux assertions mesurées ont exigé une transition sur une valeur qui
+  // reste. La consigne nomme les deux cas et la question qui tranche avant de
+  // choisir `transition`.
+  expect(prompt).toMatch(
+    /assertion s3-status of scenario cash-manque-justifie-cloture/
+  );
+  expect(prompt).toMatch(
+    /assertion s3-state of scenario caisse-manque-40-euros/
+  );
+  expect(prompt).toMatch(
+    /when the value you expect is the one already read before the step, or the one the description says stays, the verification is state with afterStep set to the interaction/i
+  );
   expect(prompt).toMatch(
     /\[role="status"\] is a region whose visible text IS its content, so kind "text" on it is fine/i
   );
