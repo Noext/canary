@@ -359,6 +359,85 @@ function runTypographicRead(
   return readSpelling(kind, plannedTarget, exposed);
 }
 
+/**
+ * Plan fautif du run 0cf58b5a : un clic `ifPresent` qui établit l'état de
+ * départ, et aucune assertion rattachée à cette étape. Le run vivait l'état
+ * ouvert sans jamais le prouver après un clic qui pouvait être sauté.
+ */
+function planWithoutEstablishingAssertion(): Plan {
+  const faulty = structuredClone(plan);
+  faulty.scenarios[0]!.steps.unshift({
+    id: "ensure-open",
+    description: "Reopen the counting session when it is closed",
+    action: {
+      type: "click",
+      locator: { by: "role", value: "button", name: "Reopen the count" },
+      ifPresent: true,
+    },
+  });
+  return faulty;
+}
+
+/**
+ * Plan fautif du run 1620bcfd : une étape `assert` qui cite un identifiant
+ * d'assertion inexistant. Le gate refuse le plan, à juste titre.
+ */
+function planWithUnknownAssertion(): Plan {
+  const faulty = structuredClone(plan);
+  faulty.scenarios[0]!.steps.push({
+    id: "verify-justification",
+    description: "Verify the written justification",
+    action: { type: "assert", assertionId: "justification-ecrite" },
+  });
+  return faulty;
+}
+/** La règle violée par `planWithoutEstablishingAssertion`, scénario et étape nommés. */
+const IF_PRESENT_RULE =
+  /Scenario welcome step ensure-open: ifPresent skips the step when its target is absent, so an assertion must verify the state it establishes: no assertion has afterStep ensure-open/;
+/** La règle violée par `planWithUnknownAssertion`, scénario et étape nommés. */
+const UNKNOWN_ASSERTION_RULE =
+  /Scenario welcome step verify-justification: Unknown contract assertion/;
+/**
+ * Le même plan fautif servi à chaque appel : le JSON est lisible, c'est le PLAN
+ * qui viole le contrat. Le run ne peut donc jamais obtenir un plan acceptable,
+ * et ce qu'il en dit est exactement ce que l'opérateur lit.
+ */
+async function contractRefusal(faulty: () => Plan) {
+  const f = await setup({ plans: [faulty(), faulty(), faulty()] });
+  fakeBrowser();
+  const result = await runQa(
+    { prUrl: PR_URL, previewUrl: f.baseUrl },
+    f.config
+  );
+  expect(result.outcome).toBe("blocked");
+  // Le plan fautif n'est jamais exécuté : aucun scénario ne paie une étape.
+  expect(result.scenarios).toEqual([]);
+  return { f, result };
+}
+/**
+ * Trois envois, comme aujourd'hui, mais aucun rejeu aveugle : chaque appel qui
+ * suit un refus porte une correction qui nomme la règle et l'étape fautives.
+ */
+function expectCallsWithTargetedCorrection(
+  f: Awaited<ReturnType<typeof fixture>>,
+  result: Awaited<ReturnType<typeof runQa>>,
+  rule: RegExp
+) {
+  expect(f.modelRequests).toHaveLength(3);
+  expect(result.usage?.retries).toBe(0);
+  const sent = (index: number) =>
+    (f.modelRequests[index]!.messages as { content: string; role: string }[])
+      .filter((item) => item.role === "user")
+      .at(-1)!.content;
+  expect(sent(1)).toContain("violates the contract");
+  expect(sent(1)).not.toContain("last correction round");
+  expect(sent(2)).toContain("violates the contract");
+  expect(sent(2)).toMatch(rule);
+  // Le dernier tour dit qu'il est le dernier : le troisième appel n'annonce
+  // plus la même chose que le deuxième.
+  expect(sent(2)).toContain("last correction round");
+}
+
 describe("validation and deterministic assertions", () => {
   it("supports an unnamed status role with its frozen assertion target", () => {
     const target = { by: "role" as const, value: "status", name: "" };
@@ -3166,6 +3245,23 @@ describe("runner false-green regressions", () => {
     expect(message).not.toContain("fixture-token");
     expect(message).not.toContain("You plan functional QA");
   }, 40_000);
+  it("names a readable plan whose ifPresent click proves nothing, and lets the model repair it", async () => {
+    const { f, result } = await contractRefusal(
+      planWithoutEstablishingAssertion
+    );
+    expect(result.diagnostic?.code).toBe("PLAN_SCHEMA_INVALID");
+    expect(result.diagnostic?.hint ?? "").toMatch(IF_PRESENT_RULE);
+    expect(result.diagnostic?.message ?? "").not.toContain(
+      "invalid structured output"
+    );
+    expectCallsWithTargetedCorrection(f, result, IF_PRESENT_RULE);
+  }, 60_000);
+  it("names a readable plan that cites an unknown assertion, and lets the model repair it", async () => {
+    const { f, result } = await contractRefusal(planWithUnknownAssertion);
+    expect(result.diagnostic?.code).toBe("PLAN_SCHEMA_INVALID");
+    expect(result.diagnostic?.hint ?? "").toMatch(UNKNOWN_ASSERTION_RULE);
+    expectCallsWithTargetedCorrection(f, result, UNKNOWN_ASSERTION_RULE);
+  }, 60_000);
   it("reserves the content replay on the request it actually sends", async () => {
     // Deux réponses illisibles d'affilée : la seconde place la reprise unique,
     // et la conversation porte alors le contenu fautif et son message correctif.

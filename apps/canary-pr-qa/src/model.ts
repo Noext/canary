@@ -75,13 +75,18 @@ const RETRYABLE_HTTP_CODES = new Set(["HTTP_429", "HTTP_503"]);
 /**
  * Codes d'un contenu inexploitable, rejoués une fois : l'endpoint a répondu,
  * mais sa réponse ne peut pas servir de plan — vide ou coupée par sa propre
- * borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou complète mais hors schéma
+ * borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou JSON illisible
  * (`MODEL_JSON_INVALID`). Ces deux échecs sont mesurés avec `retries: 0` : rien
  * ne distingue une coupure de transport d'une dérive du modèle, et un endpoint
  * qui alterne les deux ne se voit pas. Une reprise unique tranche ce doute pour
  * le prix d'un appel, là où le run entier est perdu. Tout autre code reste
  * définitif : un refus de plan, un `MODEL_STREAM_ERROR`, un HTTP 4xx de requête ou
  * un échec d'authentification ne changent pas au second essai.
+ *
+ * Un plan dont le JSON se lit mais qui viole le contrat n'est pas ici :
+ * `PLAN_SCHEMA_INVALID` n'a rien à gagner d'un rejeu de la même conversation,
+ * et il reçoit à la place une correction qui nomme la règle et l'étape fautives
+ * (`PLAN_CORRECTION_CALLS`).
  */
 const CONTENT_RETRY_CODES = new Set([
   "MODEL_OUTPUT_INCOMPLETE",
@@ -104,6 +109,18 @@ const CONTENT_RETRY_ATTEMPTS = 1;
  * qui accorde un appel de plus (`CONTENT_RETRY_ATTEMPTS`).
  */
 const PLAN_ATTEMPT_CALLS = 2;
+
+/**
+ * Appels d'une tentative de plan dont le JSON est lisible mais qui viole le
+ * contrat : la génération, puis deux corrections qui nomment la règle, le
+ * scénario et l'étape fautifs. Le total est celui d'hier — `PLAN_ATTEMPT_CALLS`
+ * plus la reprise d'un contenu inexploitable —, mais le troisième appel porte
+ * désormais la correction du second refus au lieu de rejouer la même
+ * conversation sans rien lui apprendre. Mesure du lot AK : `0cf58b5a` et
+ * `1620bcfd` ont chacun payé trois appels pour zéro scénario, le troisième
+ * apportant au modèle le message qu'il venait de recevoir.
+ */
+const PLAN_CORRECTION_CALLS = PLAN_ATTEMPT_CALLS + CONTENT_RETRY_ATTEMPTS;
 
 /**
  * Plafond absolu d'appels modèle par run : reprises de transport, reprise d'un
@@ -305,6 +322,21 @@ export interface ConstrainedCorrection<T> {
 }
 export type Correction<T> = string | ConstrainedCorrection<T>;
 
+/**
+ * Ce qu'une réponse refusée dit d'elle-même, et que le diagnostic doit
+ * distinguer : son JSON n'a pas pu être lu (`unreadable`), ou son JSON se lit
+ * parfaitement et c'est le PLAN qui viole le contrat (`schema`). Les deux
+ * causes n'ont ni le même code, ni le même remède : la première est une panne
+ * de forme côté modèle, la seconde un plan fautif que le modèle peut réparer si
+ * on lui dit quelle règle, quel scénario et quelle étape sont en cause. Mesure
+ * du lot AK : deux runs bloqués en `MODEL_JSON_INVALID` sur 199, tous deux des
+ * plans parfaitement lisibles, et l'opérateur envoyé chercher une panne de
+ * transport inexistante.
+ */
+type InvalidContent =
+  | { kind: "unreadable"; detail: string }
+  | { kind: "schema"; detail: string };
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -338,7 +370,6 @@ export class Model {
       },
       { role: "user", content: redact(JSON.stringify(payload), this.config) },
     ];
-    let validation = "";
     let refused: T | undefined;
     /**
      * Correction contrainte déposée dans la conversation : la réponse qui suit
@@ -464,34 +495,18 @@ export class Model {
         return refused as T;
       }
       if ("invalid" in read) {
-        validation = read.invalid;
-        // Le contenu illisible rejoint la conversation pour que l'appel rejoué
-        // sache ce qui n'a pas été lu, et cela AVANT toute réservation : la
-        // reprise réserve ce qu'elle envoie, jamais une conversation plus courte
-        // que celle qui partira.
-        messages.push({ role: "assistant", content });
-        messages.push({
-          role: "user",
-          content: `Invalid JSON or schema: ${validation}. Return only a JSON object matching the exact schema in the system message. Do not add fields. Preserve the original product requirements and assertion targets.`,
-        });
+        const refusal = await this.correctRefusedContent(
+          read.invalid,
+          content,
+          finishReason,
+          messages,
+          outputBound,
+          corrections + 1,
+          contentRetries
+        );
         corrections += 1;
-        if (corrections >= PLAN_ATTEMPT_CALLS) {
-          // Après la correction, il ne reste qu'un appel dans la tentative :
-          // c'est le seul moment où la reprise d'un contenu inexploitable peut
-          // encore sauver le run.
-          await this.replayUnusableContent(
-            new QaError(
-              "MODEL_JSON_INVALID",
-              `AI returned invalid structured output twice.${responseExcerpt(content, finishReason, this.config)}`,
-              `Validation: ${validation}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
-            ),
-            messages,
-            outputBound,
-            contentRetries
-          );
-          contentRetries += 1;
-          prepaid = true;
-        }
+        contentRetries = refusal.contentRetries;
+        prepaid = refusal.prepaid;
         continue;
       }
       const value = read.value;
@@ -511,6 +526,66 @@ export class Model {
         return refused;
       }
     }
+  }
+
+  /**
+   * Le sort d'un contenu refusé, décidé en un seul endroit.
+   *
+   * Le refus rejoint d'abord la conversation, avec la correction qui le nomme :
+   * un JSON illisible demande un JSON lisible, un plan hors contrat demande la
+   * réparation des violations nommées — règle, scénario, étape — sans rien
+   * relâcher. Puis la tentative continue dans ses bornes : un JSON illisible
+   * n'offre rien à corriger, sa reprise unique (`MODEL_JSON_INVALID`) est un
+   * nouvel essai de génération ; un plan lisible qui viole encore le contrat
+   * après ses deux manches de correction meurt en `PLAN_SCHEMA_INVALID`, parce
+   * que rejouer la même conversation n'apprend rien de plus au modèle.
+   *
+   * `corrections` est le compte APRÈS cette correction : l'appelant vient
+   * d'incrémenter le sien. Rend ce que la boucle reprend, la reprise de contenu
+   * déjà consommée et la réservation déjà déposée pour l'appel suivant.
+   */
+  private async correctRefusedContent(
+    invalid: InvalidContent,
+    content: string,
+    finishReason: string | undefined,
+    messages: { content: string; role: string }[],
+    outputBound: number,
+    corrections: number,
+    contentRetries: number
+  ): Promise<{ contentRetries: number; prepaid: boolean }> {
+    const { detail, kind } = invalid;
+    messages.push({ role: "assistant", content });
+    messages.push({
+      role: "user",
+      content:
+        kind === "unreadable"
+          ? `The response is not readable JSON: ${detail}. Return only a JSON object matching the exact schema in the system message, with the original product requirements and assertion targets.`
+          : `The JSON is readable but the plan violates the contract: ${detail}. Return the complete plan with each violation fixed, keeping every other scenario, step, assertion and expected value unchanged. Never weaken an assertion, drop a scenario or rename an id to satisfy the contract.${corrections + 1 >= PLAN_CORRECTION_CALLS ? " This is the last correction round: a plan that still violates the contract is refused and no scenario runs." : ""}`,
+    });
+    if (kind === "schema" && corrections >= PLAN_CORRECTION_CALLS) {
+      throw new QaError(
+        "PLAN_SCHEMA_INVALID",
+        `AI returned a readable plan that violates the contract; ${corrections - 1} corrective rounds did not fix it.${responseExcerpt(content, finishReason, this.config)}`,
+        `Validation: ${detail}. The plan was refused before any scenario ran: the contract is enforced, not relaxed. Fix the named scenario, step and rule; never weaken an assertion or drop a scenario to obtain a pass.`
+      );
+    }
+    if (kind === "unreadable" && corrections >= PLAN_ATTEMPT_CALLS) {
+      // Après la correction, il ne reste qu'un appel dans la tentative : c'est
+      // le seul moment où la reprise d'un contenu inexploitable peut encore
+      // sauver le run.
+      await this.replayUnusableContent(
+        new QaError(
+          "MODEL_JSON_INVALID",
+          `AI returned invalid structured output twice.${responseExcerpt(content, finishReason, this.config)}`,
+          `Validation: ${detail}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
+        ),
+        messages,
+        outputBound,
+        contentRetries
+      );
+      return { contentRetries: contentRetries + 1, prepaid: true };
+    }
+    return { contentRetries, prepaid: false };
   }
 
   /**
@@ -540,13 +615,13 @@ export class Model {
    * de la correction contrainte quand une question à indices est en attente. Une
    * réponse contrainte qui ne respecte pas son schéma ou qui ne résout rien est
    * `discarded` — le tour de correction s'arrête sans payer d'appel —, et un
-   * contenu illisible rend la validation que le canal de correction transmet.
+   * contenu refusé rend la validation que le canal de correction transmet.
    */
   private readContent<T>(
     content: string,
     schema: z.ZodType<T, z.ZodTypeDef, unknown>,
     constrained: ConstrainedCorrection<T> | undefined
-  ): { value: T } | { discarded: true } | { invalid: string } {
+  ): { value: T } | { discarded: true } | { invalid: InvalidContent } {
     let parsed: unknown;
     try {
       parsed = JSON.parse(content);
@@ -554,7 +629,12 @@ export class Model {
       if (constrained) {
         return { discarded: true };
       }
-      return { invalid: "Response content is not valid JSON" };
+      return {
+        invalid: {
+          kind: "unreadable",
+          detail: "Response content is not valid JSON",
+        },
+      };
     }
     if (constrained) {
       const answer = constrained.answer.safeParse(parsed);
@@ -575,7 +655,12 @@ export class Model {
               )
               .join("; ")
           : "Response content is not valid JSON";
-      return { invalid: redact(validation, this.config).slice(0, 2000) };
+      return {
+        invalid: {
+          kind: error instanceof z.ZodError ? "schema" : "unreadable",
+          detail: redact(validation, this.config).slice(0, 2000),
+        },
+      };
     }
   }
 
@@ -888,8 +973,8 @@ export class Model {
    * Rejoue une seule fois un contenu inexploitable, et remonte l'échec sinon.
    *
    * L'endpoint a répondu, mais sa réponse ne peut pas servir de plan : elle est
-   * vide ou coupée par la borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou
-   * complète mais hors schéma (`MODEL_JSON_INVALID`). Elle emprunte le mécanisme
+   * vide ou coupée par la borne de sortie (`MODEL_OUTPUT_INCOMPLETE`), ou son
+   * JSON ne se lit pas (`MODEL_JSON_INVALID`). Elle emprunte le mécanisme
    * de la reprise de transport — admission (`mayRetry`, plafond d'appels
    * partagé), réservation avant tout envoi, délai de repli, compteur
    * `usage.retries` et événement de progression — pour un seul appel de plus par
