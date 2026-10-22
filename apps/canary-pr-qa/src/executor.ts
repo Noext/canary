@@ -12,7 +12,11 @@ import {
 import type { Config } from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
-import { ariaRoleNameNodes, typographicTargetNote } from "./plan-evidence.js";
+import {
+  ariaRoleNameNodes,
+  observedTargetsNote,
+  typographicTargetNote,
+} from "./plan-evidence.js";
 import type { ProgressEvent } from "./progress.js";
 import type { Assertion, Locator, Scenario, ScenarioResult } from "./schema.js";
 import { compareVisual } from "./visual.js";
@@ -39,13 +43,17 @@ function roleNameTarget(
 }
 
 /**
- * Une cible role+nom restée introuvable est expliquée avec le nom que la page
- * expose : Playwright compare le nom accessible caractère par caractère
- * (`exact: true`), et le plan recopie souvent la ponctuation de la source
- * (U+0027) là où l'application expose l'apostrophe typographique (U+2019), ou
- * l'inverse. Le relevé n'a lieu qu'après l'échec, n'énonce aucun refus et ne
- * bloque aucun run qui réussissait ; une page qui ne répond plus, aucun candidat
- * ou plusieurs candidats gardent le message générique.
+ * Une cible restée introuvable est expliquée avec ce que la page expose : une
+ * graphie jumelle quand il n'y en a qu'une (Playwright compare le nom accessible
+ * caractère par caractère, `exact: true`, et le plan recopie souvent la
+ * ponctuation de la source — U+0027 — là où l'application expose l'apostrophe
+ * typographique — U+2019), et à défaut les cibles réellement observées dans le
+ * DOM à cet instant, rôle et nom accessible, huit au plus. Le relevé n'a lieu
+ * qu'après l'échec, n'énonce aucun refus, ne choisit aucune cible et ne bloque
+ * aucun run qui réussissait : une page qui ne répond plus garde le message
+ * générique. Sans cette énumération, une cible inventée et une cible mal
+ * dérivée produisaient le même message, et la différence restait dans le
+ * snapshot que personne ne lisait.
  */
 async function explainMissingTarget(
   failure: unknown,
@@ -57,10 +65,10 @@ async function explainMissingTarget(
   config: Config
 ): Promise<{ diagnostic: Diagnostic; note?: string }> {
   const diagnostic = diagnose(failure, config);
-  const locator = roleNameTarget(scenario, step);
-  if (diagnostic.code !== "TARGET_NOT_FOUND" || !locator) {
+  if (diagnostic.code !== "TARGET_NOT_FOUND") {
     return { diagnostic };
   }
+  const locator = roleNameTarget(scenario, step);
   try {
     const current = await canary.act(
       sessionId,
@@ -69,18 +77,24 @@ async function explainMissingTarget(
         evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
       })
     );
-    const note = typographicTargetNote(
-      locator.name,
-      locator.value,
-      ariaRoleNameNodes(current.evidence ?? current.snapshot)
-    );
-    return note
+    const nodes = ariaRoleNameNodes(current.evidence ?? current.snapshot);
+    const note = locator
+      ? typographicTargetNote(locator.name, locator.value, nodes)
+      : undefined;
+    const observed = note
+      ? undefined
+      : observedTargetsNote(
+          nodes,
+          locator?.by === "role" ? locator.value : undefined
+        );
+    const explanation = note ?? observed;
+    return explanation
       ? {
           diagnostic: {
             ...diagnostic,
-            message: `${diagnostic.message} — ${note}`,
+            message: `${diagnostic.message} — ${explanation}`,
           },
-          note,
+          note: explanation,
         }
       : { diagnostic };
   } catch {
