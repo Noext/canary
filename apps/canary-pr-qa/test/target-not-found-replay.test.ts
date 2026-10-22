@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
+import { QaError } from "../src/diagnostics.js";
+import { executeScenario } from "../src/executor.js";
 import {
   ariaRoleNameNodes,
   observedTargetsNote,
-  undeclaredTargetRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
-import { runQa } from "../src/runner.js";
 import {
   type Plan,
   PlanSchema,
   type SourceLineMaterial,
 } from "../src/schema.js";
-import { fixture, PR_URL } from "./fixture.js";
+import { fixture } from "./fixture.js";
 
 /**
  * Les deux scénarios RÉELS du run b7da97f1 (22 oct. 2026, PR 17 de
@@ -937,10 +937,31 @@ const INVENTED = 'role=textbox name="Quantité · Pièce de 20 €"';
 
 /**
  * Le message d'exécution du run b7da97f1, recopié de l'artefact : c'est ce que
- * l'opérateur lisait, et ce que le refus statique remplace.
+ * l'opérateur lisait, et ce que le refus statique remplaçait autrefois.
  */
 const MEASURED_FAILURE =
   "Canary action failed: Timeout 10000ms exceeded.\nCall log:\n  - waiting for getByRole('textbox', { name: 'Quantité · Pièce de 20 €', exact: true })";
+
+/**
+ * Les champs de comptage de l'instantané RÉEL du run b7da97f1, à l'instant du
+ * remplissage (« Quantité · Billet de 20 € » y figure, « Pièce de 20 € »
+ * n'existe pas) : les lignes sont recopiées de l'artefact, avec leurs refs.
+ */
+const OBSERVED_CASH_FIELDS = `- main [ref=e2]:
+  - button "Caisse et Coffre" [ref=e31]
+  - textbox "Quantité · Billet de 500 €" [active] [ref=e380]: "2"
+  - textbox "Quantité · Billet de 200 €" [ref=e384]
+  - textbox "Quantité · Billet de 100 €" [ref=e388]
+  - textbox "Quantité · Billet de 50 €" [ref=e392]
+  - textbox "Quantité · Billet de 20 €" [ref=e396]
+  - textbox "Quantité · Billet de 10 €" [ref=e400]
+  - textbox "Quantité · Billet de 5 €" [ref=e404]
+  - textbox "Quantité · Pièce de 2 €" [ref=e408]
+  - textbox "Quantité · Pièce de 1 €" [ref=e412]
+  - textbox "Quantité · Pièce de 50 c" [ref=e416]
+  - textbox "Quantité · Pièce de 20 c" [ref=e420]
+  - textbox "Montant d’espèces attendu" [ref=e440]: 1 240,00
+  - paragraph: Espace de travail`;
 
 describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", () => {
   it("montre le trou du contrôle d'évidence : la cible inventée reste non concluante", () => {
@@ -974,38 +995,20 @@ describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", (
     expect(MEASURED_FAILURE).not.toContain("cibles observées");
   });
 
-  it("refuse les deux scénarios avant exécution et nomme les noms déclarés", () => {
-    // APRÈS : le contrôle statique ne dépend pas de la page. Il lit le matériel
-    // du diff, y cherche le nom visé, ne l'y trouve pas, et nomme les noms que
-    // le matériel déclare à un mot — sans en choisir un.
-    const refusals = undeclaredTargetRefusals(MEASURED_PLAN, MATERIAL);
-    expect(refusals.map((item) => item.scenario.id)).toEqual([
-      "balanced-cash-closes-and-reopens",
-      "cash-count-survives-view-switch",
-    ]);
-    for (const refusal of refusals) {
-      expect(refusal.error.code).toBe("PLAN_TARGET_NOT_IN_SOURCE");
-      const message = String(refusal.error.message);
-      expect(message).toContain(INVENTED);
-      expect(message).toContain(
-        'role=textbox name="Quantité · Billet de 20 €", role=textbox name="Quantité · Pièce de 1 €", role=textbox name="Quantité · Pièce de 2 €", role=textbox name="Quantité · Pièce de 20 c"'
-      );
-      // Aucun autre scénario du plan mesuré n'est refusé : les cibles réelles
-      // de la vue (Clôturer la session, Montant d'espèces attendu…) passent.
-      expect(message).not.toContain("Clôturer la session");
-    }
-  });
-
-  it("bloque le scénario avant la première étape navigateur, jamais en succès", async () => {
-    // Le run rejoué ne change qu'UNE chose : la provenance des fichiers, parce
-    // que le fixture ne sert qu'un patch. Les cibles et leur ordre sont ceux du
-    // run — ouvrir la vue par un clic, puis remplir la pièce de 20 € inventée.
+  it("laisse le plan s'exécuter, et bloque la cible inventée à l'exécution", async () => {
+    // Le refus statique n'existe plus : une cible que le diff ne déclare pas
+    // n'est pas une cible inventée (la PR 20 l'a mesuré, voir le rejeu du run
+    // 20c3c29a). L'invention du run b7da97f1 reste attrapée — par l'exécution,
+    // qui la refusait déjà toute seule dans ce run — et son diagnostic nomme
+    // les cibles réellement observées dans le DOM, ce qu'aucun message ne
+    // faisait avant le lot AL.
     const scenario = structuredClone(MEASURED_PLAN.scenarios[0]!);
     const invented = scenario.steps.findIndex((step) => step.id === "fill-20");
     expect(invented).toBeGreaterThan(0);
     scenario.steps = scenario.steps.slice(0, invented + 1);
-    // Une seule assertion, celle qui relit l'étape du remplissage : le contrat
-    // exige au moins une assertion, et le refus la précède de toute façon.
+    // Une seule assertion, celle du remplissage : le contrat exige une étape
+    // ordonnée par assertion, et l'échec du remplissage l'interrompt de toute
+    // façon.
     scenario.assertions = scenario.assertions.filter(
       (assertion) => assertion.id === "s1-total-1240"
     );
@@ -1014,55 +1017,59 @@ describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", (
       description: "Vérifier le total compté",
       action: { type: "assert", assertionId: "s1-total-1240" },
     });
-    scenario.sourceFiles = ["src/form.ts"];
-    scenario.requirements = [
-      {
-        sourceFile: "src/form.ts",
-        quote: 'label: "Billet de 20 €"',
-        behavior: "La source énumère les dénominations comptées",
-      },
-    ];
-    const f = await fixture({
-      // Le patch porte son en-tête de hunk : sans lui, `postChangeHunks` ne
-      // lit aucune ligne et le matériel serait vide (le gate resterait muet).
-      formPatch: `@@ -1,1 +1,2 @@\n+  { cents: 2_000, label: "Billet de 20 €", kind: "billet" },\n+aria-label={\`Quantité · \${d.label}\`}`,
-      plans: [
-        {
-          summary: "Rejeu de la cible inventée du run b7da97f1",
-          scenarios: [scenario],
-          skipped: [],
-        },
-      ],
-    });
+    const f = await fixture();
     close.push(f.close);
     const actions: string[] = [];
-    vi.spyOn(Canary.prototype, "start").mockResolvedValue("target-in-source");
+    // Le run nomme ses appels par le rang de l'étape et son action : le
+    // remplissage du run y est `${rang de fill-20 + 1}-fill`.
+    const inventedCall = `${invented + 1}-fill`;
+    vi.spyOn(Canary.prototype, "start").mockResolvedValue("invented-target");
     vi.spyOn(Canary.prototype, "act").mockImplementation(
       async (_session, label) => {
         actions.push(label);
+        if (label === inventedCall) {
+          throw new QaError(
+            "TARGET_NOT_FOUND",
+            MEASURED_FAILURE,
+            "Check the target."
+          );
+        }
         return {
           url: "https://fixture/",
-          snapshot:
-            '- main [ref=e1]:\n  - button "Caisse et Coffre" [ref=e2]\n  - textbox "Quantité · Billet de 20 €" [ref=e3]',
-          evidence:
-            '- main [ref=e1]:\n  - button "Caisse et Coffre" [ref=e2]\n  - textbox "Quantité · Billet de 20 €" [ref=e3]',
-          actual: "Welcome",
+          snapshot: OBSERVED_CASH_FIELDS,
+          evidence: OBSERVED_CASH_FIELDS,
+          actual: true,
         };
       }
     );
     vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
-    const result = await runQa(
-      { prUrl: PR_URL, previewUrl: f.baseUrl },
-      f.config
+    const blocked = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      f.config,
+      new Canary(f.config),
+      undefined,
+      "",
+      MATERIAL
     );
-    const blocked = result.scenarios[0];
-    expect(blocked?.outcome).toBe("blocked");
-    expect(blocked?.diagnostic?.code).toBe("PLAN_TARGET_NOT_IN_SOURCE");
-    expect(String(blocked?.diagnostic?.message)).toContain(INVENTED);
-    // Le refus tombe sur le matériel : aucune étape du scénario n'a coûté un
-    // appel navigateur, et le scénario n'est jamais converti en succès.
-    expect(actions.some((label) => label.startsWith("2-fill"))).toBe(false);
-    expect(blocked?.steps).toEqual([]);
+    // Aucun refus statique ne devance l'exécution : l'étape de remplissage a
+    // bien coûté un appel navigateur, et c'est celui qui échoue.
+    expect(actions).toContain(inventedCall);
+    expect(blocked.outcome).toBe("blocked");
+    expect(blocked.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+    // Ce qui se publie est constant : le message dit qu'il y a des cibles
+    // observées, jamais lesquelles.
+    expect(String(blocked.diagnostic?.message)).toContain(
+      "cibles observées dans le DOM à cet instant : voir le détail du run"
+    );
+    // Le détail, lui, vit dans l'artefact et nomme les champs réels — dont le
+    // « Billet de 20 € » que la cible inventée cherchait.
+    const failed = blocked.steps.find((step) => step.stepId === "fill-20");
+    expect(failed?.observedTargets).toContain(
+      'textbox "Quantité · Billet de 20 €"'
+    );
+    expect(failed?.observedTargets).not.toContain("Pièce de 20 €");
   });
 });
 
