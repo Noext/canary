@@ -887,21 +887,12 @@ function textFragmentsOfLine(text: string): string[] {
 interface DeclaredSourceNames {
   /** Fragments de deux mots et plus, seuls capables de composer un nom. */
   fragments: Set<string>;
-  /** Mots qu'un fragment déclare : le vocabulaire des remplacements mesurés. */
-  words: Set<string>;
 }
 
 function declaredSourceNames(
   material: SourceLineMaterial[]
 ): DeclaredSourceNames {
-  const fragments = declaredTextFragments(material);
-  const wordsOf = new Set<string>();
-  for (const fragment of fragments) {
-    for (const word of words(fragment)) {
-      wordsOf.add(word);
-    }
-  }
-  return { fragments, words: wordsOf };
+  return { fragments: declaredTextFragments(material) };
 }
 
 /**
@@ -918,7 +909,21 @@ function sourceDeclaresName(
   name: string,
   declared: DeclaredSourceNames
 ): boolean {
-  const parts = words(name);
+  return composesFromFragments(words(name), declared.fragments);
+}
+
+/**
+ * Les mots se découpent-ils en fragments que le matériel déclare ? C'est la
+ * seule forme de déclaration admise : `Quantité · Billet de 100 €` se compose du
+ * morceau de gabarit « Quantité · » et du libellé « Billet de 100 € », donc il
+ * est déclaré ; `Quantité · Pièce de 20 €` demande une pièce de 20 € que le
+ * matériel n'énumère nulle part. Le découpage est quadratique en la longueur du
+ * nom, donc les appelants bornent le nombre de mots qu'ils lui soumettent.
+ */
+function composesFromFragments(
+  parts: string[],
+  fragments: Set<string>
+): boolean {
   const reachable: boolean[] = Array.from(
     { length: parts.length + 1 },
     () => false
@@ -929,7 +934,7 @@ function sourceDeclaresName(
       continue;
     }
     for (let end = start + 2; end <= parts.length; end += 1) {
-      if (declared.fragments.has(parts.slice(start, end).join(" "))) {
+      if (fragments.has(parts.slice(start, end).join(" "))) {
         reachable[end] = true;
       }
     }
@@ -938,36 +943,174 @@ function sourceDeclaresName(
 }
 
 /**
+ * `result[i]` vaut vrai quand les i premiers mots se découpent en fragments
+ * déclarés : la moitié gauche d'un candidat, lue sans recomposition.
+ */
+function composablePrefixes(
+  parts: string[],
+  fragments: Set<string>
+): boolean[] {
+  const reachable = Array.from({ length: parts.length + 1 }, () => false);
+  reachable[0] = true;
+  for (let start = 0; start < parts.length; start += 1) {
+    if (!reachable[start]) {
+      continue;
+    }
+    for (let end = start + 2; end <= parts.length; end += 1) {
+      if (fragments.has(parts.slice(start, end).join(" "))) {
+        reachable[end] = true;
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * `result[i]` vaut vrai quand les mots à partir de i se découpent en fragments
+ * déclarés : la moitié droite d'un candidat.
+ */
+function composableSuffixes(
+  parts: string[],
+  fragments: Set<string>
+): boolean[] {
+  const reachable = Array.from({ length: parts.length + 1 }, () => false);
+  reachable[parts.length] = true;
+  for (let start = parts.length - 1; start >= 0; start -= 1) {
+    for (let end = start + 2; end <= parts.length; end += 1) {
+      if (reachable[end] && fragments.has(parts.slice(start, end).join(" "))) {
+        reachable[start] = true;
+        break;
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * Un nom plus long n'est plus comparé à un voisin : au-delà, rien n'est mesuré
+ * et le refus se tait. Les schémas autorisent des noms de 2 000 caractères, donc
+ * un nom de plusieurs centaines de mots est du modèle, pas de l'interface.
+ */
+const NEIGHBOUR_NAME_WORDS = 40;
+/**
+ * Un fragment plus long n'entre pas dans la comparaison : un nom se compose de
+ * libellés, et le mot substitué vient de l'un d'eux.
+ */
+const NEIGHBOUR_FRAGMENT_WORDS = 12;
+/**
+ * Au-delà, le relevé renonce : un refus qui nomme plus de 64 candidats ne se lit
+ * plus, et le gate ne bloque pas un run sur une liste qu'il n'a pas su borner.
+ */
+const NEIGHBOUR_CANDIDATES_MAX = 64;
+/**
+ * Ce que le relevé de voisins a le droit de dépenser pour un PLAN ENTIER, en
+ * couples de mots comparés. Le budget est partagé par tous les scénarios : c'est
+ * le seul plafond qui borne le gate quand le plan multiplie les cibles longues.
+ * Épuisé, le relevé se tait — il ne refuse pas sur un travail qu'il n'a pas eu
+ * le droit de finir, et il ne devine pas non plus.
+ */
+const NEIGHBOUR_WORK_MAX = 50_000;
+
+/** Ce qu'un relevé a déjà dépensé, partagé par le plan qu'il sert. */
+interface NeighbourBudget {
+  compared: number;
+}
+
+/**
  * Noms que le matériel déclare et qui ne diffèrent du nom visé qu'à UN mot, au
- * même rang. Les remplacements sont tirés du vocabulaire des fragments — donc
- * de valeurs réellement déclarées — et chaque candidat doit être déclaré à son
- * tour : aucune distance d'édition, aucun score de similarité, aucune
- * ressemblance floue n'entre ici. Un nom d'un seul mot n'a aucun candidat, et
- * c'est voulu : remplacer son unique mot ne partage plus rien avec lui.
+ * même rang. Aucune distance d'édition, aucun score de similarité, aucune
+ * ressemblance floue : le remplacement vient d'un mot qu'un fragment DÉCLARE, et
+ * le nom obtenu doit être déclaré à son tour.
+ *
+ * L'énumération est dérivée des fragments, jamais du vocabulaire : un nom
+ * déclaré est une concaténation de fragments, donc la position remplacée tombe
+ * dans l'un d'eux, et ce fragment donne à la fois le mot de remplacement et les
+ * positions inchangées. Chaque couple (fragment, alignement) est comparé UNE
+ * fois, et le coût est linéaire en le matériel du diff — jamais le produit du
+ * vocabulaire par une recomposition par candidat. C'est ce qui rend le relevé
+ * bornable : la revue de sécurité du 22 oct. 2026 a mesuré 1,4 s par cible pour
+ * un nom de 239 mots, du travail synchrone pendant lequel l'échéance du run et
+ * le battement de lease de 10 s ne pouvaient plus courir.
+ *
+ * Quatre plafonds le bornent, et aucun ne devine : la longueur du nom
+ * (`NEIGHBOUR_NAME_WORDS`), la longueur du fragment qui fournit la substitution
+ * (`NEIGHBOUR_FRAGMENT_WORDS`), le nombre de candidats produits
+ * (`NEIGHBOUR_CANDIDATES_MAX`) et le coût total du plan (`NEIGHBOUR_WORK_MAX`).
+ * Atteint, n'importe lequel rend la liste vide : pas de voisin, donc pas de
+ * refus. Un nom d'un seul mot n'a pas de candidat non plus — remplacer son
+ * unique mot ne partage plus rien avec lui — et un nom qui diffère par deux
+ * mots n'est pas un voisin.
  */
 function declaredNeighbours(
-  name: string,
-  declared: DeclaredSourceNames
+  parts: string[],
+  declared: DeclaredSourceNames,
+  budget: NeighbourBudget
 ): string[] {
-  const parts = words(name);
-  if (parts.length < 2) {
+  if (parts.length < 2 || parts.length > NEIGHBOUR_NAME_WORDS) {
     return [];
   }
+  const prefixes = composablePrefixes(parts, declared.fragments);
+  const suffixes = composableSuffixes(parts, declared.fragments);
   const candidates = new Set<string>();
-  for (const [index, current] of parts.entries()) {
-    for (const word of declared.words) {
-      if (word === current) {
+  for (const fragment of declared.fragments) {
+    const piece = words(fragment);
+    if (piece.length < 2 || piece.length > NEIGHBOUR_FRAGMENT_WORDS) {
+      continue;
+    }
+    for (let start = 0; start + piece.length <= parts.length; start += 1) {
+      budget.compared += piece.length;
+      if (budget.compared > NEIGHBOUR_WORK_MAX) {
+        return [];
+      }
+      const candidate = oneWordCandidate(piece, start, {
+        parts,
+        prefixes,
+        suffixes,
+      });
+      if (candidate === undefined) {
         continue;
       }
-      const candidate = parts
-        .map((part, position) => (position === index ? word : part))
-        .join(" ");
-      if (sourceDeclaresName(candidate, declared)) {
-        candidates.add(candidate);
+      candidates.add(candidate);
+      if (candidates.size > NEIGHBOUR_CANDIDATES_MAX) {
+        return [];
       }
     }
   }
   return [...candidates].sort();
+}
+
+/**
+ * Le nom obtenu en remplaçant UN mot du nom visé par le mot du fragment à cet
+ * alignement, quand le reste du fragment s'y superpose exactement et que les
+ * deux moitiés autour sont déclarées. `undefined` dès que l'écart n'est pas
+ * exactement d'un mot.
+ */
+function oneWordCandidate(
+  piece: string[],
+  start: number,
+  alignment: { parts: string[]; prefixes: boolean[]; suffixes: boolean[] }
+): string | undefined {
+  let differing = -1;
+  for (const [at, word] of piece.entries()) {
+    if (word === alignment.parts[start + at]) {
+      continue;
+    }
+    if (differing >= 0) {
+      return;
+    }
+    differing = at;
+  }
+  if (differing < 0) {
+    return;
+  }
+  if (
+    !(alignment.prefixes[start] && alignment.suffixes[start + piece.length])
+  ) {
+    return;
+  }
+  return alignment.parts
+    .map((word, at) => (at === start + differing ? piece[differing] : word))
+    .join(" ");
 }
 
 /** Les noms candidats d'une cible, écrits comme la cible l'est : rôle + nom. */
@@ -1015,7 +1158,8 @@ function scenarioTargets(
 function undeclaredTargets(
   scenario: Scenario,
   declared: DeclaredSourceNames,
-  pageNames: Map<string, Set<string>>
+  pageNames: Map<string, Set<string>>,
+  budget: NeighbourBudget
 ): { label: string; locator: Locator; neighbours: string[] }[] {
   const undeclared: {
     label: string;
@@ -1027,7 +1171,14 @@ function undeclaredTargets(
       continue;
     }
     const name = normalizeText(target.locator.name);
-    if (name === "" || sourceDeclaresName(name, declared)) {
+    const parts = words(name);
+    if (parts.length < 2 || parts.length > NEIGHBOUR_NAME_WORDS) {
+      // Un nom d'un seul mot n'a aucun voisin, et un nom de plus de 40 mots
+      // n'est pas un nom d'interface : dans les deux cas rien n'est mesuré,
+      // donc rien n'est refusé — et le découpage quadratique n'est pas payé.
+      continue;
+    }
+    if (sourceDeclaresName(name, declared)) {
       continue;
     }
     // La page de découverte nomme la cible : l'observation directe prime sur le
@@ -1036,7 +1187,7 @@ function undeclaredTargets(
     if (pageNames.get(ariaRole(target.locator.value))?.has(name)) {
       continue;
     }
-    const neighbours = declaredNeighbours(name, declared);
+    const neighbours = declaredNeighbours(parts, declared, budget);
     if (neighbours.length > 0) {
       undeclared.push({ ...target, neighbours });
     }
@@ -1088,9 +1239,12 @@ export function undeclaredTargetRefusals(
   const pageNames = evidence?.aria
     ? ariaRoleNames(evidence.aria)
     : new Map<string, Set<string>>();
+  // Un seul budget pour tout le plan : c'est lui qui borne le travail synchrone
+  // du gate quand le modèle multiplie les cibles longues.
+  const budget: NeighbourBudget = { compared: 0 };
   const refusals: { error: QaError; scenario: Scenario }[] = [];
   for (const scenario of plan.scenarios) {
-    const targets = undeclaredTargets(scenario, declared, pageNames);
+    const targets = undeclaredTargets(scenario, declared, pageNames, budget);
     if (targets.length === 0) {
       continue;
     }

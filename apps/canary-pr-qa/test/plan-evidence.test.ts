@@ -21,7 +21,12 @@ import {
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
 import { runQa } from "../src/runner.js";
-import { type Locator, type Plan, PlanSchema } from "../src/schema.js";
+import {
+  type Locator,
+  type Plan,
+  PlanSchema,
+  type SourceLineMaterial,
+} from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
 
 const close: (() => Promise<void>)[] = [];
@@ -2514,5 +2519,118 @@ describe("refus statique d'une cible que le matériel source ne déclare pas", (
         material
       )
     ).toEqual([]);
+  });
+});
+
+/**
+ * Deux libellés déclarés qui composent le nom voisin : le relevé de voisins a de
+ * quoi travailler, et chaque plafond se prouve à sa frontière — un cran en deçà
+ * le refus tombe, un cran au-delà il se tait.
+ */
+const NEIGHBOUR_MATERIAL: SourceLineMaterial[] = [
+  {
+    path: "src/form.ts",
+    lines: [
+      { line: 1, text: 'aria-label="alpha beta"' },
+      { line: 2, text: 'aria-label="gamma delta"' },
+    ],
+  },
+];
+
+/** Matériel d'un fragment unique de `count` mots, cité pour être déclaré. */
+function fragmentMaterial(count: number, prefix = "w"): SourceLineMaterial[] {
+  return [
+    {
+      path: "src/form.ts",
+      lines: [
+        {
+          line: 1,
+          text: `aria-label="${Array.from({ length: count }, (_unused, index) => `${prefix}${index}`).join(" ")}"`,
+        },
+      ],
+    },
+  ];
+}
+
+function refusalsFor(name: string, material: SourceLineMaterial[]) {
+  return undeclaredTargetRefusals(
+    PlanSchema.parse(inventedCashTargetPlan(name)),
+    material
+  );
+}
+
+describe("bornes du relevé de voisins d'une cible non déclarée", () => {
+  it("s'arrête à la longueur de nom traitée, et le refuse juste en deçà", () => {
+    // Le nom est le même bloc répété : à 40 mots le relevé trouve le voisin
+    // déclaré, à 42 il ne mesure plus rien. Les schémas autorisent 2 000
+    // caractères, donc un nom de cette taille vient du modèle.
+    const tail = "alpha X gamma delta";
+    const refused = `${Array.from({ length: 18 }, () => "alpha beta").join(" ")} ${tail}`;
+    const beyond = `${Array.from({ length: 19 }, () => "alpha beta").join(" ")} ${tail}`;
+    expect(refused.split(" ")).toHaveLength(40);
+    expect(beyond.split(" ")).toHaveLength(42);
+    const [refusal] = refusalsFor(refused, NEIGHBOUR_MATERIAL);
+    expect(refusal?.error.message).toContain(
+      `role=textbox name=${JSON.stringify(refused.replace(" X ", " beta "))}`
+    );
+    expect(refusalsFor(beyond, NEIGHBOUR_MATERIAL)).toEqual([]);
+  });
+  it("s'arrête à la longueur du fragment qui fournit la substitution", () => {
+    // Le mot substitué vient d'un fragment déclaré, et un fragment de 13 mots
+    // n'est plus un libellé : au-delà, aucun candidat n'est formé.
+    const name12 = (count: number) =>
+      Array.from({ length: count }, (_unused, index) =>
+        index === 1 ? "X" : `w${index}`
+      ).join(" ");
+    const [refusal] = refusalsFor(name12(12), fragmentMaterial(12));
+    expect(refusal?.error.message).toContain('role=textbox name="w0 w1');
+    expect(refusalsFor(name12(13), fragmentMaterial(13))).toEqual([]);
+  });
+  it("s'arrête au nombre de candidats, et le refuse juste en deçà", () => {
+    // Chaque fragment « alpha wN » forme un candidat « alpha wN gamma delta ».
+    // Soixante-quatre se lisent, davantage ne se lisent plus : le refus se tait
+    // au lieu de publier une liste non bornée.
+    const name = "alpha X gamma delta";
+    const withCount = (count: number): SourceLineMaterial[] => [
+      {
+        path: "src/form.ts",
+        lines: [
+          { line: 1, text: 'aria-label="gamma delta"' },
+          ...Array.from({ length: count }, (_unused, index) => ({
+            line: index + 2,
+            text: `aria-label="alpha w${index}"`,
+          })),
+        ],
+      },
+    ];
+    const [refusal] = refusalsFor(name, withCount(64));
+    // Le plan porte la cible deux fois (l'étape et l'assertion), donc chaque
+    // refus énumère ses propres candidats : le dernier de la borne est nommé.
+    expect(refusal?.error.message).toContain(
+      'role=textbox name="alpha w63 gamma delta"'
+    );
+    expect(refusal?.error.message).not.toContain("alpha w64");
+    expect(refusalsFor(name, withCount(65))).toEqual([]);
+  });
+  it("s'arrête au coût total du plan, et le refuse tant qu'il reste du budget", () => {
+    // Le budget est partagé par le plan : les fragments inertes qui précèdent le
+    // seul fragment qui produit un voisin l'épuisent, et le relevé se tait. Avec
+    // dix fois moins de travail, le même nom est refusé.
+    const name = `${Array.from({ length: 18 }, () => "alpha beta").join(" ")} alpha X gamma delta`;
+    const withFillers = (count: number): SourceLineMaterial[] => [
+      {
+        path: "src/form.ts",
+        lines: [
+          ...Array.from({ length: count }, (_unused, index) => ({
+            line: index + 1,
+            text: `aria-label="${Array.from({ length: 12 }, (_w, at) => `f${index}x${at}`).join(" ")}"`,
+          })),
+          { line: count + 1, text: 'aria-label="alpha beta"' },
+          { line: count + 2, text: 'aria-label="gamma delta"' },
+        ],
+      },
+    ];
+    expect(refusalsFor(name, withFillers(10))).toHaveLength(1);
+    expect(refusalsFor(name, withFillers(2000))).toEqual([]);
   });
 });
