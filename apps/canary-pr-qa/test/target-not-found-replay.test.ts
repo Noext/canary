@@ -1088,26 +1088,33 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
   - status [ref=e430]`;
 
   it("énumère les cibles réelles observées, contrôles d'abord, sans en choisir une", () => {
-    const note = observedTargetsNote(ariaRoleNameNodes(OBSERVED));
+    const note = observedTargetsNote(ariaRoleNameNodes(OBSERVED), MATERIAL);
     expect(note).toContain("cibles observées dans le DOM à cet instant");
-    // Les champs de comptage passent avant les boutons de navigation : c'est
-    // l'ordre mécanique par rôle, pas une similarité de libellé.
-    const shown = String(note).split(" : ")[1] ?? "";
-    expect(shown.indexOf('textbox "Quantité · Pièce de 2 €"')).toBeLessThan(
-      shown.indexOf('button "Pilotage"')
-    );
-    // Le nom vide et la prose ne sont pas énumérés : un run ne publie pas le
-    // contenu de la page.
+    // Les champs de comptage sont nommés : le préfixe « Quantité · » que le
+    // plan avait perdu se lit ici.
+    expect(String(note)).toContain('textbox "Quantité · Pièce de 2 €"');
+    expect(String(note)).toContain('textbox "Quantité · Billet de 100 €"');
+    // Le nom vide, la prose et les libellés que le matériel ne déclare pas ne
+    // sont pas énumérés : un run ne publie pas le contenu de la page.
     expect(note).not.toContain("Espace de travail");
     expect(note).not.toContain('status ""');
+    expect(note).not.toContain("Pharmacie active");
   });
 
   it("plafonne l'énumération à huit cibles et dit ce qui reste", () => {
     const nodes = Array.from({ length: 11 }, (_unused, index) => ({
-      name: `Champ ${index + 1}`,
+      name: `Champ ${index + 1} obligatoire`,
       role: "textbox",
     }));
-    const note = observedTargetsNote(nodes);
+    const note = observedTargetsNote(nodes, [
+      {
+        path: "src/form.ts",
+        lines: Array.from({ length: 11 }, (_unused, index) => ({
+          line: index + 1,
+          text: `aria-label="Champ ${index + 1} obligatoire"`,
+        })),
+      },
+    ]);
     expect(String(note).match(/textbox /g)).toHaveLength(8);
     expect(note).toContain("et 3 autres");
   });
@@ -1115,13 +1122,47 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
   it("place le rôle visé en tête quand la cible est role+nom", () => {
     const note = observedTargetsNote(
       [
-        { name: "Save", role: "button" },
-        { name: "Name", role: "textbox" },
+        { name: "Save now", role: "button" },
+        { name: "Name field", role: "textbox" },
+      ],
+      [
+        {
+          path: "src/form.ts",
+          lines: [
+            { line: 1, text: 'aria-label="Save now"' },
+            { line: 2, text: 'aria-label="Name field"' },
+          ],
+        },
       ],
       "textbox"
     );
-    expect(String(note).indexOf('textbox "Name"')).toBeLessThan(
-      String(note).indexOf('button "Save"')
+    expect(String(note).indexOf('textbox "Name field"')).toBeLessThan(
+      String(note).indexOf('button "Save now"')
     );
+  });
+
+  it("ne publie aucun nom que le matériel source ne déclare pas", () => {
+    // Le message d'un scénario part dans le commentaire de PR : un nom observé
+    // qui vient d'un fichier hors diff (un compte, un patient) n'y entre pas.
+    const note = observedTargetsNote(
+      [
+        { name: "Quantité · Billet de 20 €", role: "textbox" },
+        { name: "Dossier de Mme Dupont", role: "heading" },
+        { name: "Pharmacie active", role: "combobox" },
+      ],
+      MATERIAL
+    );
+    expect(String(note)).toContain('textbox "Quantité · Billet de 20 €"');
+    expect(note).not.toContain("Dupont");
+    expect(note).not.toContain("Pharmacie active");
+  });
+
+  it("garde le message générique sans matériel déclaré", () => {
+    expect(
+      observedTargetsNote(
+        [{ name: "Quantité · Billet de 20 €", role: "textbox" }],
+        []
+      )
+    ).toBeUndefined();
   });
 });

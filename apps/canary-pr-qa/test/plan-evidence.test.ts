@@ -2470,4 +2470,49 @@ describe("refus statique d'une cible que le matériel source ne déclare pas", (
       )
     ).toEqual([]);
   });
+  it("ne refuse pas une cible que la page de découverte nomme elle-même", () => {
+    // Le diff n'est pas l'application : un libellé qui vit dans un fichier hors
+    // hunk n'y est pas déclaré. L'observation directe prime — « Pharmacie
+    // active » est dans l'instantané de découverte, donc réelle, quels que
+    // soient les noms déclarés à un mot.
+    const plan = PlanSchema.parse(inventedCashTargetPlan("Pharmacie active"));
+    const materialWithNeighbour = [
+      {
+        path: "src/form.ts",
+        lines: [
+          { line: 1, text: 'aria-label="Pharmacie inactive"' },
+          { line: 2, text: 'aria-label="Pharmacie de garde"' },
+        ],
+      },
+    ];
+    expect(undeclaredTargetRefusals(plan, materialWithNeighbour)).toHaveLength(
+      1
+    );
+    expect(
+      undeclaredTargetRefusals(plan, materialWithNeighbour, {
+        url: "https://preview.test/",
+        aria: '- main [ref=e1]:\n  - textbox "Pharmacie active" [ref=e2]',
+      })
+    ).toEqual([]);
+  });
+  it("garde la ponctuation d'un littéral déclaré", () => {
+    // « Save & close » est une déclaration, pas du code : le filtre de
+    // ponctuation ne s'applique qu'aux fragments noyés dans du code (gabarit,
+    // JSX), jamais à ce qu'un guillemet délimite.
+    const material = [
+      {
+        path: "src/form.ts",
+        lines: [
+          { line: 1, text: 'aria-label="Save & close"' },
+          { line: 2, text: 'aria-label="Save and close"' },
+        ],
+      },
+    ];
+    expect(
+      undeclaredTargetRefusals(
+        PlanSchema.parse(inventedCashTargetPlan("Save & close")),
+        material
+      )
+    ).toEqual([]);
+  });
 });

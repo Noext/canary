@@ -18,7 +18,13 @@ import {
   typographicTargetNote,
 } from "./plan-evidence.js";
 import type { ProgressEvent } from "./progress.js";
-import type { Assertion, Locator, Scenario, ScenarioResult } from "./schema.js";
+import type {
+  Assertion,
+  Locator,
+  Scenario,
+  ScenarioResult,
+  SourceLineMaterial,
+} from "./schema.js";
 import { compareVisual } from "./visual.js";
 
 /** Locator qui porte un nom accessible : le seul concerné par la graphie d'un signe. */
@@ -62,7 +68,8 @@ async function explainMissingTarget(
   scenario: Scenario,
   preview: string,
   canary: Canary,
-  config: Config
+  config: Config,
+  material: SourceLineMaterial[]
 ): Promise<{ diagnostic: Diagnostic; note?: string }> {
   const diagnostic = diagnose(failure, config);
   if (diagnostic.code !== "TARGET_NOT_FOUND") {
@@ -85,6 +92,7 @@ async function explainMissingTarget(
       ? undefined
       : observedTargetsNote(
           nodes,
+          material,
           locator?.by === "role" ? locator.value : undefined
         );
     const explanation = note ?? observed;
@@ -390,7 +398,8 @@ async function driveScenario(
   config: Config,
   canary: Canary,
   record: (event: ProgressEvent) => Promise<void>,
-  repo: string
+  repo: string,
+  material: SourceLineMaterial[]
 ) {
   await canary.act(
     sessionId,
@@ -457,7 +466,8 @@ async function driveScenario(
         result.scenario,
         preview,
         canary,
-        config
+        config,
+        material
       );
       result.steps.push({
         index,
@@ -512,7 +522,8 @@ export async function executeScenario(
   canary: Canary,
   record: (event: ProgressEvent) => Promise<void> = async () =>
     Promise.resolve(),
-  repo = ""
+  repo = "",
+  material: SourceLineMaterial[] = []
 ): Promise<ScenarioResult> {
   const result: ScenarioResult = {
     scenario,
@@ -538,7 +549,8 @@ export async function executeScenario(
       config,
       canary,
       record,
-      repo
+      repo,
+      material
     );
   } catch (error) {
     result.diagnostic = diagnose(error, config);

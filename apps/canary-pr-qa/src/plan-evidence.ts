@@ -354,6 +354,14 @@ const FORM_CONTROL_ROLES = new Set([
  * `by:label "Pièce de 2 €"` alors que les champs de comptage s'appelaient
  * « Quantité · Pièce de 2 € » : le préfixe perdu ne se lisait nulle part.
  *
+ * Le message d'un scénario part dans le commentaire de PR, donc dans un dépôt,
+ * et le résumé de support promet de ne pas porter le DOM : un nom accessible
+ * observé n'est publié que s'il est DÉJÀ dans le matériel source déclaré —
+ * littéral, morceau de gabarit ou composition des deux. Un nom que la page
+ * affiche et que le diff ne déclare pas (un compte, un patient, un libellé d'un
+ * fichier hors hunk) reste dans l'artefact et hors du message : le filtre par
+ * rôle ne prouve rien de la sensibilité d'un nom, le matériel si.
+ *
  * L'énumération ne choisit rien, ne corrige rien et ne convertit aucun
  * TARGET_NOT_FOUND en succès : le scénario reste bloqué, il devient lisible.
  * L'ordre est mécanique, sans ressemblance ni score : le rôle visé d'abord, les
@@ -364,9 +372,16 @@ const FORM_CONTROL_ROLES = new Set([
  */
 export function observedTargetsNote(
   nodes: AriaNameNode[],
+  material: SourceLineMaterial[],
   role?: string,
   limit = OBSERVED_TARGETS_SHOWN
 ): string | undefined {
+  const declared = declaredSourceNames(material);
+  if (declared.fragments.size === 0) {
+    // Sans matériel déclaré, aucun nom n'est publiable : mieux vaut le message
+    // générique qu'un libellé de page dans un commentaire public.
+    return;
+  }
   const wanted = role === undefined ? undefined : ariaRole(role);
   const seen = new Set<string>();
   const observed: { rank: number; target: string }[] = [];
@@ -376,7 +391,8 @@ export function observedTargetsNote(
     if (
       normalized === "" ||
       seen.has(target) ||
-      !TARGETABLE_ROLES.has(nodeRole)
+      !TARGETABLE_ROLES.has(nodeRole) ||
+      !sourceDeclaresName(normalized, declared)
     ) {
       continue;
     }
@@ -392,7 +408,7 @@ export function observedTargetsNote(
     .map((item) => item.target);
   const shown = ordered.slice(0, limit);
   const rest = ordered.length - shown.length;
-  return `cibles observées dans le DOM à cet instant, rôle et nom accessible : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`;
+  return `cibles observées dans le DOM à cet instant, rôle et nom accessible, toutes déclarées par la source : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`;
 }
 
 /** Mots d'un nom normalisé : la comparaison des libellés se fait mot à mot. */
@@ -823,27 +839,38 @@ function declaredTextFragments(material: SourceLineMaterial[]): Set<string> {
 }
 
 /**
- * Fragments de texte d'UNE ligne : littéraux et morceaux de gabarit, chacun
- * normalisé et privé de ce qui n'est pas du texte. Une ligne de JSX minifié en
- * porte plusieurs ; l'appelant les accumule.
+ * Fragments de texte d'UNE ligne, en deux familles que le filtre sépare :
+ *
+ * - ce qu'un guillemet DÉLIMITE est du texte par construction, et le garder tel
+ *   quel est le seul moyen de ne pas jeter un libellé réel : `aria-label="Save &
+ *   close"` porte une esperluette, `"Total (compté)"` une parenthèse, et le
+ *   filtre de ponctuation les aurait écartés — donc un nom déclaré serait
+ *   devenu un nom inventé, refusé à tort ;
+ * - ce qu'un gabarit ou du JSX laisse entre ses bornes est du texte NOYÉ dans du
+ *   code : c'est là que le découpage produit des fragments qui ne sont pas des
+ *   noms (`} active`), et c'est là que le filtre s'applique.
  */
 function textFragmentsOfLine(text: string): string[] {
-  const raw: string[] = [];
+  const quoted: string[] = [];
   for (const [, value] of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
-    raw.push(value ?? "");
+    quoted.push(value ?? "");
   }
   for (const [, value] of text.matchAll(/'((?:[^'\\]|\\.)*)'/g)) {
-    raw.push(value ?? "");
+    quoted.push(value ?? "");
   }
+  const embedded: string[] = [];
   for (const [, value] of text.matchAll(/`([^`]*)`/g)) {
-    raw.push(...(value ?? "").split(/\$\{[^}]*\}/));
+    embedded.push(...(value ?? "").split(/\$\{[^}]*\}/));
   }
   for (const [, value] of text.matchAll(/>([^<>{}]+)</g)) {
-    raw.push(value ?? "");
+    embedded.push(value ?? "");
   }
-  return raw
-    .map(normalizeText)
-    .filter((fragment) => fragment !== "" && !CODE_PUNCTUATION.test(fragment));
+  return [
+    ...quoted.map(normalizeText),
+    ...embedded
+      .map(normalizeText)
+      .filter((fragment) => !CODE_PUNCTUATION.test(fragment)),
+  ].filter((fragment) => fragment !== "");
 }
 
 /**
@@ -987,7 +1014,8 @@ function scenarioTargets(
  */
 function undeclaredTargets(
   scenario: Scenario,
-  declared: DeclaredSourceNames
+  declared: DeclaredSourceNames,
+  pageNames: Map<string, Set<string>>
 ): { label: string; locator: Locator; neighbours: string[] }[] {
   const undeclared: {
     label: string;
@@ -1000,6 +1028,12 @@ function undeclaredTargets(
     }
     const name = normalizeText(target.locator.name);
     if (name === "" || sourceDeclaresName(name, declared)) {
+      continue;
+    }
+    // La page de découverte nomme la cible : l'observation directe prime sur le
+    // silence du matériel. Un libellé que le diff ne porte pas parce qu'il vit
+    // dans un fichier hors hunk reste visible, donc vrai.
+    if (pageNames.get(ariaRole(target.locator.value))?.has(name)) {
       continue;
     }
     const neighbours = declaredNeighbours(name, declared);
@@ -1032,19 +1066,31 @@ function undeclaredTargets(
  * Plusieurs voisins ne suppriment donc pas le refus ; ils interdisent seulement
  * d'en désigner un. Un nom absent sans aucun voisin n'est jamais refusé : le
  * matériel ne dit alors rien, et l'exécution reste le seul juge.
+ *
+ * Le matériel du diff n'est pas l'application entière : un libellé qui vit dans
+ * un fichier hors hunk n'y est pas déclaré. L'observation directe tranche donc
+ * avant le refus — une cible que l'instantané de découverte porte sous son
+ * couple rôle+nom est réelle, quels que soient les voisins déclarés — et le
+ * refus ne tombe que sur ce que ni le matériel ni la page ne nomment. Quand
+ * l'instantané ne dit rien de la cible (vue ouverte par un clic), c'est le
+ * matériel qui décide, et c'est ce silence-là que la limite mesurée documente.
  */
 export function undeclaredTargetRefusals(
   plan: Plan,
-  material: SourceLineMaterial[]
+  material: SourceLineMaterial[],
+  evidence?: DiscoveryEvidence
 ): { error: QaError; scenario: Scenario }[] {
   const declared = declaredSourceNames(material);
   if (declared.fragments.size === 0) {
     // Aucun fragment déclaré : le matériel ne dit rien, donc aucun refus.
     return [];
   }
+  const pageNames = evidence?.aria
+    ? ariaRoleNames(evidence.aria)
+    : new Map<string, Set<string>>();
   const refusals: { error: QaError; scenario: Scenario }[] = [];
   for (const scenario of plan.scenarios) {
-    const targets = undeclaredTargets(scenario, declared);
+    const targets = undeclaredTargets(scenario, declared, pageNames);
     if (targets.length === 0) {
       continue;
     }
