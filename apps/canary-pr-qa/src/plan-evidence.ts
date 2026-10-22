@@ -921,6 +921,11 @@ function textFragmentsOfLine(text: string): string[] {
 interface DeclaredSourceNames {
   /** Fragments de deux mots et plus, seuls capables de composer un nom. */
   fragments: Set<string>;
+  /**
+   * Le découpage des fragments qui peuvent fournir une substitution, calculé une
+   * fois par plan. `null` dit que le budget s'est épuisé pendant ce découpage.
+   */
+  neighbourPieces?: string[][] | null;
 }
 
 function declaredSourceNames(
@@ -1175,11 +1180,11 @@ function declaredNeighbours(
   const prefixes = composablePrefixes(parts, declared.fragments);
   const suffixes = composableSuffixes(parts, declared.fragments);
   const candidates = new Set<string>();
-  for (const fragment of declared.fragments) {
-    const piece = words(fragment);
-    if (piece.length < 2 || piece.length > NEIGHBOUR_FRAGMENT_WORDS) {
-      continue;
-    }
+  const pieces = neighbourPieces(declared, budget);
+  if (pieces === null) {
+    return [];
+  }
+  for (const piece of pieces) {
     for (let start = 0; start + piece.length <= parts.length; start += 1) {
       budget.spent += piece.length;
       if (budget.spent > TARGET_WORK_MAX) {
@@ -1200,6 +1205,47 @@ function declaredNeighbours(
     }
   }
   return [...candidates].sort();
+}
+
+/**
+ * Le découpage des fragments qui peuvent fournir une substitution : une fois par
+ * plan, et FACTURÉ, y compris pour les fragments écartés.
+ *
+ * La revue de sécurité du 22 oct. 2026 a mesuré ce trou : un fragment de plus de
+ * `NEIGHBOUR_FRAGMENT_WORDS` mots était découpé puis écarté AVANT que
+ * `budget.spent` ne change, donc chaque cible le redécoupait. 50 000 littéraux de
+ * 13 mots (1,35 Mo) et 192 cibles ont coûté 11,17 s de CPU synchrone alors que le
+ * budget n'enregistrait que 6 144 sur 200 000 ; pendant ces 11 s, l'échéance du
+ * run et le battement de lease de 10 s ne pouvaient plus courir. Facturer
+ * l'inspection et ne découper chaque fragment qu'une fois rend le coût linéaire
+ * en le matériel du diff, et l'arrêt anticipé quand le budget tombe.
+ *
+ * Budget épuisé : `null`, donc pas de voisin, donc pas de refus. On ne devine pas
+ * sur un travail qu'on n'a pas eu le droit de finir.
+ */
+function neighbourPieces(
+  declared: DeclaredSourceNames,
+  budget: TargetWorkBudget
+): string[][] | null {
+  if (declared.neighbourPieces !== undefined) {
+    return declared.neighbourPieces;
+  }
+  const pieces: string[][] = [];
+  for (const fragment of declared.fragments) {
+    const piece = words(fragment);
+    // Le découpage se paie même quand le fragment ne peut pas servir : c'est le
+    // coût qui manquait au budget.
+    budget.spent += piece.length + 1;
+    if (budget.spent > TARGET_WORK_MAX) {
+      declared.neighbourPieces = null;
+      return null;
+    }
+    if (piece.length >= 2 && piece.length <= NEIGHBOUR_FRAGMENT_WORDS) {
+      pieces.push(piece);
+    }
+  }
+  declared.neighbourPieces = pieces;
+  return pieces;
 }
 
 /**

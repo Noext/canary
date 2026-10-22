@@ -2712,6 +2712,32 @@ describe("bornes du relevé de voisins d'une cible non déclarée", () => {
     expect(refusalsFor(name, withFillers(10))).toHaveLength(1);
     expect(refusalsFor(name, withFillers(2000))).toEqual([]);
   });
+  it("facture au budget les fragments écartés parce que trop longs", () => {
+    // Un fragment de plus de 12 mots ne fournit jamais de voisin, mais il était
+    // découpé puis écarté AVANT d'être facturé : chaque cible le redécoupait. La
+    // revue de sécurité du 22 oct. 2026 a mesuré 11,17 s de CPU synchrone pour
+    // 50 000 littéraux de 13 mots et 192 cibles alors que le budget n'enregistrait
+    // que 6 144 sur 200 000 — et pendant ce temps l'échéance du run et le
+    // battement de lease de 10 s ne pouvaient pas courir.
+    const inert = (count: number): SourceLineMaterial[] => [
+      {
+        path: "src/form.ts",
+        lines: [
+          ...Array.from({ length: count }, (_unused, index) => ({
+            line: index + 1,
+            text: `aria-label="${Array.from({ length: 13 }, (_w, at) => `g${index}x${at}`).join(" ")}"`,
+          })),
+          { line: count + 1, text: 'aria-label="alpha beta"' },
+          { line: count + 2, text: 'aria-label="gamma delta"' },
+        ],
+      },
+    ];
+    // Dix fragments inertes ne coûtent presque rien : la cible voisine est refusée.
+    expect(refusalsFor("alpha X gamma delta", inert(10))).toHaveLength(1);
+    // Seize mille fragments de 13 mots dépassent le budget du plan : le relevé
+    // se tait au lieu de payer un découpage qu'il n'a pas facturé.
+    expect(refusalsFor("alpha X gamma delta", inert(16_000))).toEqual([]);
+  });
   it("facture le repli typographique au même budget que le relevé", () => {
     // Quatre signes repliables font plus de 250 graphies, chacune un découpage
     // quadratique : un nom de 40 mots épuise le budget du plan à lui seul, et
