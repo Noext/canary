@@ -1089,16 +1089,24 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
 
   it("énumère les cibles réelles observées, contrôles d'abord, sans en choisir une", () => {
     const note = observedTargetsNote(ariaRoleNameNodes(OBSERVED), MATERIAL);
-    expect(note).toContain("cibles observées dans le DOM à cet instant");
+    expect(note?.detail).toContain(
+      "cibles observées dans le DOM à cet instant"
+    );
     // Les champs de comptage sont nommés : le préfixe « Quantité · » que le
     // plan avait perdu se lit ici.
-    expect(String(note)).toContain('textbox "Quantité · Pièce de 2 €"');
-    expect(String(note)).toContain('textbox "Quantité · Billet de 100 €"');
+    expect(note?.detail).toContain('textbox "Quantité · Pièce de 2 €"');
+    expect(note?.detail).toContain('textbox "Quantité · Billet de 100 €"');
     // Le nom vide, la prose et les libellés que le matériel ne déclare pas ne
-    // sont pas énumérés : un run ne publie pas le contenu de la page.
-    expect(note).not.toContain("Espace de travail");
-    expect(note).not.toContain('status ""');
-    expect(note).not.toContain("Pharmacie active");
+    // sont pas énumérés : un run ne relève pas le contenu de la page.
+    expect(note?.detail).not.toContain("Espace de travail");
+    expect(note?.detail).not.toContain('status ""');
+    expect(note?.detail).not.toContain("Pharmacie active");
+    // Ce qui se PUBLIE est un compte : le message part dans le commentaire de
+    // PR, et le nom d'une cible vivante de la page n'y entre pas, pas même
+    // quand le matériel le déclare.
+    expect(note?.published).toBe(
+      "3 cibles observées dans le DOM à cet instant, voir le détail du run"
+    );
   });
 
   it("plafonne l'énumération à huit cibles et dit ce qui reste", () => {
@@ -1115,8 +1123,13 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
         })),
       },
     ]);
-    expect(String(note).match(/textbox /g)).toHaveLength(8);
-    expect(note).toContain("et 3 autres");
+    expect(String(note?.detail).match(/textbox /g)).toHaveLength(8);
+    expect(note?.detail).toContain("et 3 autres");
+    // Le compte publié porte les onze, pas les huit montrées : le détail reste
+    // dans l'artefact, et le compte dit ce qu'il y a à y lire.
+    expect(note?.published).toBe(
+      "11 cibles observées dans le DOM à cet instant, voir le détail du run"
+    );
   });
 
   it("place le rôle visé en tête quand la cible est role+nom", () => {
@@ -1136,14 +1149,17 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
       ],
       "textbox"
     );
-    expect(String(note).indexOf('textbox "Name field"')).toBeLessThan(
-      String(note).indexOf('button "Save now"')
+    const detail = String(note?.detail);
+    expect(detail.indexOf('textbox "Name field"')).toBeLessThan(
+      detail.indexOf('button "Save now"')
     );
   });
 
-  it("ne publie aucun nom que le matériel source ne déclare pas", () => {
+  it("ne publie aucun nom, même un nom que le matériel source déclare", () => {
     // Le message d'un scénario part dans le commentaire de PR : un nom observé
-    // qui vient d'un fichier hors diff (un compte, un patient) n'y entre pas.
+    // n'y entre pas. Celui d'un fichier hors diff (un compte, un patient) n'est
+    // pas non plus relevé, mais même un libellé déclaré est un libellé VIVANT
+    // de la page, et un lecteur du dépôt n'a pas les identifiants de la preview.
     const note = observedTargetsNote(
       [
         { name: "Quantité · Billet de 20 €", role: "textbox" },
@@ -1152,9 +1168,12 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
       ],
       MATERIAL
     );
-    expect(String(note)).toContain('textbox "Quantité · Billet de 20 €"');
-    expect(note).not.toContain("Dupont");
-    expect(note).not.toContain("Pharmacie active");
+    expect(note?.detail).toContain('textbox "Quantité · Billet de 20 €"');
+    expect(note?.detail).not.toContain("Dupont");
+    expect(note?.detail).not.toContain("Pharmacie active");
+    expect(note?.published).not.toContain("Quantité");
+    expect(note?.published).not.toContain("Dupont");
+    expect(note?.published).not.toContain("Pharmacie active");
   });
 
   it("garde le message générique sans matériel déclaré", () => {

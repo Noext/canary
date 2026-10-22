@@ -60,6 +60,11 @@ function roleNameTarget(
  * générique. Sans cette énumération, une cible inventée et une cible mal
  * dérivée produisaient le même message, et la différence restait dans le
  * snapshot que personne ne lisait.
+ *
+ * Les noms observés ne se publient pas : `note` est la phrase qui part dans le
+ * message (donc dans le commentaire de PR et le résumé de support) et ne porte
+ * qu'un COMPTE, `observedTargets` porte les noms et ne va que dans l'artefact du
+ * run, sous `StepResult.observedTargets` (revue de sécurité du 22 oct. 2026).
  */
 async function explainMissingTarget(
   failure: unknown,
@@ -70,7 +75,11 @@ async function explainMissingTarget(
   canary: Canary,
   config: Config,
   material: SourceLineMaterial[]
-): Promise<{ diagnostic: Diagnostic; note?: string }> {
+): Promise<{
+  diagnostic: Diagnostic;
+  note?: string;
+  observedTargets?: string;
+}> {
   const diagnostic = diagnose(failure, config);
   if (diagnostic.code !== "TARGET_NOT_FOUND") {
     return { diagnostic };
@@ -95,7 +104,7 @@ async function explainMissingTarget(
           material,
           locator?.by === "role" ? locator.value : undefined
         );
-    const explanation = note ?? observed;
+    const explanation = note ?? observed?.published;
     return explanation
       ? {
           diagnostic: {
@@ -103,6 +112,7 @@ async function explainMissingTarget(
             message: `${diagnostic.message} — ${explanation}`,
           },
           note: explanation,
+          observedTargets: observed?.detail,
         }
       : { diagnostic };
   } catch {
@@ -476,6 +486,9 @@ async function driveScenario(
         ok: false,
         reason: explained.diagnostic.message,
         observation: explained.diagnostic.message,
+        // Les noms observés vivent ici, dans l'artefact du run, et nulle part
+        // dans ce qui se publie : `reportMarkdown` ne lit pas ce champ.
+        observedTargets: explained.observedTargets,
       });
       await record({
         phase: "execution",

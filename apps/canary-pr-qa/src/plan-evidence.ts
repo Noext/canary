@@ -345,6 +345,24 @@ const FORM_CONTROL_ROLES = new Set([
 ]);
 
 /**
+ * Ce qu'un TARGET_NOT_FOUND peut dire d'une page : ce qui se publie, et ce qui
+ * ne sort pas de l'artefact du run.
+ */
+export interface ObservedTargetsNote {
+  /**
+   * Les couples rôle+nom observés. Ils vivent dans `StepResult.observedTargets`,
+   * c'est-à-dire dans `result.json` et le rapport HTML du run, derrière
+   * l'autorisation des artefacts — jamais dans `reportMarkdown`.
+   */
+  detail: string;
+  /**
+   * La phrase PUBLIQUE : un compte, jamais un nom. Elle part dans le message du
+   * scénario, donc dans le commentaire de PR et dans le résumé de support.
+   */
+  published: string;
+}
+
+/**
  * Les cibles réellement présentes dans le DOM à l'instant de l'échec : rôle et
  * nom accessible, présentés comme OBSERVÉS, jamais comme la correction à
  * appliquer. C'est la vérité mesurable dont dispose un run quand une cible ne
@@ -354,13 +372,15 @@ const FORM_CONTROL_ROLES = new Set([
  * `by:label "Pièce de 2 €"` alors que les champs de comptage s'appelaient
  * « Quantité · Pièce de 2 € » : le préfixe perdu ne se lisait nulle part.
  *
- * Le message d'un scénario part dans le commentaire de PR, donc dans un dépôt,
- * et le résumé de support promet de ne pas porter le DOM : un nom accessible
- * observé n'est publié que s'il est DÉJÀ dans le matériel source déclaré —
- * littéral, morceau de gabarit ou composition des deux. Un nom que la page
- * affiche et que le diff ne déclare pas (un compte, un patient, un libellé d'un
- * fichier hors hunk) reste dans l'artefact et hors du message : le filtre par
- * rôle ne prouve rien de la sensibilité d'un nom, le matériel si.
+ * Un nom accessible observé ne se publie JAMAIS, quel qu'il soit : le message
+ * d'un scénario part dans le commentaire de PR, donc dans un dépôt, et le résumé
+ * de support promet de ne pas porter le DOM (revue de sécurité du 22 oct. 2026).
+ * Même un nom que le matériel source déclare est un libellé VIVANT de la page —
+ * un compte, un enregistrement, une région d'état peuvent porter le texte d'un
+ * littéral du diff — et un lecteur du dépôt n'a pas les identifiants de la
+ * preview. Ce qui se publie est donc un COMPTE (« 3 cibles observées, voir le
+ * détail du run ») ; les noms restent dans l'artefact autorisé, sous
+ * `StepResult.observedTargets`.
  *
  * L'énumération ne choisit rien, ne corrige rien et ne convertit aucun
  * TARGET_NOT_FOUND en succès : le scénario reste bloqué, il devient lisible.
@@ -375,11 +395,11 @@ export function observedTargetsNote(
   material: SourceLineMaterial[],
   role?: string,
   limit = OBSERVED_TARGETS_SHOWN
-): string | undefined {
+): ObservedTargetsNote | undefined {
   const declared = declaredSourceNames(material);
   if (declared.fragments.size === 0) {
-    // Sans matériel déclaré, aucun nom n'est publiable : mieux vaut le message
-    // générique qu'un libellé de page dans un commentaire public.
+    // Sans matériel déclaré, aucun nom n'est relevé : mieux vaut le message
+    // générique qu'une énumération de la page.
     return;
   }
   const wanted = role === undefined ? undefined : ariaRole(role);
@@ -408,7 +428,10 @@ export function observedTargetsNote(
     .map((item) => item.target);
   const shown = ordered.slice(0, limit);
   const rest = ordered.length - shown.length;
-  return `cibles observées dans le DOM à cet instant, rôle et nom accessible, toutes déclarées par la source : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`;
+  return {
+    published: `${ordered.length} cible${ordered.length > 1 ? "s" : ""} observée${ordered.length > 1 ? "s" : ""} dans le DOM à cet instant, voir le détail du run`,
+    detail: `cibles observées dans le DOM à cet instant, rôle et nom accessible, toutes déclarées par la source : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`,
+  };
 }
 
 /** Mots d'un nom normalisé : la comparaison des libellés se fait mot à mot. */
