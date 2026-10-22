@@ -31,7 +31,6 @@ import {
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
   stateTargetReadRefusals,
-  undeclaredTargetRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "./plan-evidence.js";
@@ -955,11 +954,6 @@ function planRefusalParts(
       ...writeEvidenceRefusals(candidate, policy).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
-      ...undeclaredTargetRefusals(
-        candidate,
-        sourceLineMaterial(context),
-        evidence
-      ).map((item) => `${item.error.message}. ${item.error.hint}`),
       ...unstableSelectorRefusals(candidate).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
@@ -1366,9 +1360,10 @@ async function executePlan(
     );
     await progress.record({ phase: "planning", diagnostic });
   }
-  // Le matériel du diff sert deux fois : au refus statique d'une cible que rien
-  // ne déclare, et au filtre des noms observés qu'un message d'exécution a le
-  // droit de publier. Une seule lecture, donc un seul contenu.
+  // Le matériel du diff sert UNE fois : au filtre des noms observés qu'un
+  // message d'exécution a le droit de publier. Il ne refuse plus rien — un nom
+  // absent du diff n'est pas un nom inventé, la PR 20 de
+  // `pharmania/arpilabe-pilotage` l'a mesuré (voir `plan-evidence.ts`).
   const material = sourceLineMaterial(context);
   result.coverage = validateCoverage(result.plan, context, policy, config);
   // Refus rendus au planificateur pendant la planification, rejoués ici : un
@@ -1382,10 +1377,6 @@ async function executePlan(
       ...preconditionRefusals(result.plan, catalog, context.ref.repo),
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
-      ...undeclaredTargetRefusals(result.plan, material, {
-        url: initialPage.url,
-        aria: evidence,
-      }),
       ...attributeValueRefusals(result.plan),
       ...stateTargetReadRefusals(result.plan, {
         url: initialPage.url,

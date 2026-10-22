@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
+import { QaError } from "../src/diagnostics.js";
+import { executeScenario } from "../src/executor.js";
 import {
   ariaRoleNameNodes,
   observedTargetsNote,
-  undeclaredTargetRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
 import { runQa } from "../src/runner.js";
@@ -13,6 +14,7 @@ import {
   type SourceLineMaterial,
 } from "../src/schema.js";
 import { fixture, PR_URL } from "./fixture.js";
+import { LOT_AL_SCENARIOS } from "./lot-al-plan.js";
 
 /**
  * Les deux scénarios RÉELS du run b7da97f1 (22 oct. 2026, PR 17 de
@@ -937,10 +939,31 @@ const INVENTED = 'role=textbox name="Quantité · Pièce de 20 €"';
 
 /**
  * Le message d'exécution du run b7da97f1, recopié de l'artefact : c'est ce que
- * l'opérateur lisait, et ce que le refus statique remplace.
+ * l'opérateur lisait, et ce que le refus statique remplaçait autrefois.
  */
 const MEASURED_FAILURE =
   "Canary action failed: Timeout 10000ms exceeded.\nCall log:\n  - waiting for getByRole('textbox', { name: 'Quantité · Pièce de 20 €', exact: true })";
+
+/**
+ * Les champs de comptage de l'instantané RÉEL du run b7da97f1, à l'instant du
+ * remplissage (« Quantité · Billet de 20 € » y figure, « Pièce de 20 € »
+ * n'existe pas) : les lignes sont recopiées de l'artefact, avec leurs refs.
+ */
+const OBSERVED_CASH_FIELDS = `- main [ref=e2]:
+  - button "Caisse et Coffre" [ref=e31]
+  - textbox "Quantité · Billet de 500 €" [active] [ref=e380]: "2"
+  - textbox "Quantité · Billet de 200 €" [ref=e384]
+  - textbox "Quantité · Billet de 100 €" [ref=e388]
+  - textbox "Quantité · Billet de 50 €" [ref=e392]
+  - textbox "Quantité · Billet de 20 €" [ref=e396]
+  - textbox "Quantité · Billet de 10 €" [ref=e400]
+  - textbox "Quantité · Billet de 5 €" [ref=e404]
+  - textbox "Quantité · Pièce de 2 €" [ref=e408]
+  - textbox "Quantité · Pièce de 1 €" [ref=e412]
+  - textbox "Quantité · Pièce de 50 c" [ref=e416]
+  - textbox "Quantité · Pièce de 20 c" [ref=e420]
+  - textbox "Montant d’espèces attendu" [ref=e440]: 1 240,00
+  - paragraph: Espace de travail`;
 
 describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", () => {
   it("montre le trou du contrôle d'évidence : la cible inventée reste non concluante", () => {
@@ -974,38 +997,20 @@ describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", (
     expect(MEASURED_FAILURE).not.toContain("cibles observées");
   });
 
-  it("refuse les deux scénarios avant exécution et nomme les noms déclarés", () => {
-    // APRÈS : le contrôle statique ne dépend pas de la page. Il lit le matériel
-    // du diff, y cherche le nom visé, ne l'y trouve pas, et nomme les noms que
-    // le matériel déclare à un mot — sans en choisir un.
-    const refusals = undeclaredTargetRefusals(MEASURED_PLAN, MATERIAL);
-    expect(refusals.map((item) => item.scenario.id)).toEqual([
-      "balanced-cash-closes-and-reopens",
-      "cash-count-survives-view-switch",
-    ]);
-    for (const refusal of refusals) {
-      expect(refusal.error.code).toBe("PLAN_TARGET_NOT_IN_SOURCE");
-      const message = String(refusal.error.message);
-      expect(message).toContain(INVENTED);
-      expect(message).toContain(
-        'role=textbox name="Quantité · Billet de 20 €", role=textbox name="Quantité · Pièce de 1 €", role=textbox name="Quantité · Pièce de 2 €", role=textbox name="Quantité · Pièce de 20 c"'
-      );
-      // Aucun autre scénario du plan mesuré n'est refusé : les cibles réelles
-      // de la vue (Clôturer la session, Montant d'espèces attendu…) passent.
-      expect(message).not.toContain("Clôturer la session");
-    }
-  });
-
-  it("bloque le scénario avant la première étape navigateur, jamais en succès", async () => {
-    // Le run rejoué ne change qu'UNE chose : la provenance des fichiers, parce
-    // que le fixture ne sert qu'un patch. Les cibles et leur ordre sont ceux du
-    // run — ouvrir la vue par un clic, puis remplir la pièce de 20 € inventée.
+  it("laisse le plan s'exécuter, et bloque la cible inventée à l'exécution", async () => {
+    // Le refus statique n'existe plus : une cible que le diff ne déclare pas
+    // n'est pas une cible inventée (la PR 20 l'a mesuré, voir le rejeu du run
+    // 20c3c29a). L'invention du run b7da97f1 reste attrapée — par l'exécution,
+    // qui la refusait déjà toute seule dans ce run — et son diagnostic nomme
+    // les cibles réellement observées dans le DOM, ce qu'aucun message ne
+    // faisait avant le lot AL.
     const scenario = structuredClone(MEASURED_PLAN.scenarios[0]!);
     const invented = scenario.steps.findIndex((step) => step.id === "fill-20");
     expect(invented).toBeGreaterThan(0);
     scenario.steps = scenario.steps.slice(0, invented + 1);
-    // Une seule assertion, celle qui relit l'étape du remplissage : le contrat
-    // exige au moins une assertion, et le refus la précède de toute façon.
+    // Une seule assertion, celle du remplissage : le contrat exige une étape
+    // ordonnée par assertion, et l'échec du remplissage l'interrompt de toute
+    // façon.
     scenario.assertions = scenario.assertions.filter(
       (assertion) => assertion.id === "s1-total-1240"
     );
@@ -1014,39 +1019,159 @@ describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", (
       description: "Vérifier le total compté",
       action: { type: "assert", assertionId: "s1-total-1240" },
     });
-    scenario.sourceFiles = ["src/form.ts"];
-    scenario.requirements = [
-      {
-        sourceFile: "src/form.ts",
-        quote: 'label: "Billet de 20 €"',
-        behavior: "La source énumère les dénominations comptées",
-      },
-    ];
+    const f = await fixture();
+    close.push(f.close);
+    const actions: string[] = [];
+    // Le run nomme ses appels par le rang de l'étape et son action : le
+    // remplissage du run y est `${rang de fill-20 + 1}-fill`.
+    const inventedCall = `${invented + 1}-fill`;
+    vi.spyOn(Canary.prototype, "start").mockResolvedValue("invented-target");
+    vi.spyOn(Canary.prototype, "act").mockImplementation(
+      async (_session, label) => {
+        actions.push(label);
+        if (label === inventedCall) {
+          throw new QaError(
+            "TARGET_NOT_FOUND",
+            MEASURED_FAILURE,
+            "Check the target."
+          );
+        }
+        return {
+          url: "https://fixture/",
+          snapshot: OBSERVED_CASH_FIELDS,
+          evidence: OBSERVED_CASH_FIELDS,
+          actual: true,
+        };
+      }
+    );
+    vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+    const blocked = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      f.config,
+      new Canary(f.config),
+      undefined,
+      "",
+      MATERIAL
+    );
+    // Aucun refus statique ne devance l'exécution : l'étape de remplissage a
+    // bien coûté un appel navigateur, et c'est celui qui échoue.
+    expect(actions).toContain(inventedCall);
+    expect(blocked.outcome).toBe("blocked");
+    expect(blocked.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+    // Ce qui se publie est constant : le message dit qu'il y a des cibles
+    // observées, jamais lesquelles.
+    expect(String(blocked.diagnostic?.message)).toContain(
+      "cibles observées dans le DOM à cet instant : voir le détail du run"
+    );
+    // Le détail, lui, vit dans l'artefact et nomme les champs réels — dont le
+    // « Billet de 20 € » que la cible inventée cherchait.
+    const failed = blocked.steps.find((step) => step.stepId === "fill-20");
+    expect(failed?.observedTargets).toContain(
+      'textbox "Quantité · Billet de 20 €"'
+    );
+    expect(failed?.observedTargets).not.toContain("Pièce de 20 €");
+  });
+});
+
+/**
+ * Rejeu du run 20c3c29a, celui qui a décidé du retrait du refus statique.
+ *
+ * La version statique refusait une cible role+nom absente des fragments du diff
+ * dès qu'un nom déclaré en différait d'un mot. Sur ce run elle a bloqué 9 des 10
+ * scénarios en `PLAN_TARGET_NOT_IN_SOURCE` pour quatre libellés que
+ * l'application rend réellement — `Quantité · Billet de 20 €`, `… de 100 €`,
+ * `… de 50 €`, `… de 5 €` —, tous venus de `packages/domain/src/cash.ts`, un
+ * fichier que le diff de la PR 20 ne touche pas. Le seul voisin que le message a
+ * nommé est `Billet de 500 €` : c'est le matériel que ce rejeu sert, celui que
+ * le refus de production a révélé.
+ *
+ * L'autre PR ne sauve pas la règle : le vrai positif du corpus (le run
+ * b7da97f1, même matériel, même vue derrière un clic) n'a jamais été refusé en
+ * production ; il a échoué en `TARGET_NOT_FOUND` et le relevé des cibles
+ * observées l'explique. Et les deux façons de resserrer la règle mesurées sur
+ * ces deux PR ne gardent pas ce positif : exiger que la cible voisine soit
+ * observée rend le contrôle muet des deux côtés (les champs de comptage sont
+ * hors de l'instantané de découverte, et dans les 9 313 instantanés du corpus
+ * qui montrent un champ de comptage, « Billet de 20 € » et « Billet de 500 € »
+ * apparaissent ensemble), exiger que le mot remplacé ne soit déclaré nulle part
+ * le rend muet de même (chaque mot de l'invention est déclaré ailleurs dans le
+ * matériel : « Pièce » par « Pièce de 1 € », « € » par « Billet de 20 € », « 20 »
+ * par « Pièce de 20 c »). Les deux se réduisent donc au retrait, avec du code en
+ * plus : c'est le retrait qui est gardé.
+ */
+describe("rejeu du run 20c3c29a : cibles réelles que le diff ne déclare pas", () => {
+  it("ne refuse plus les quatre libellés rendus par l'application, et les exécute", async () => {
+    // Le run rejoué ne change que la provenance des fichiers : le fixture ne
+    // sert qu'un patch, et les exigences doivent citer une ligne du diff. Les
+    // cibles, elles, sont celles du run, mot pour mot.
+    const scenarios = structuredClone(LOT_AL_SCENARIOS).map((scenario) => {
+      const fills = scenario.steps.filter(
+        (step) =>
+          step.action.type === "fill" &&
+          step.action.locator.by === "role" &&
+          /^Quantité · /.test(step.action.locator.name ?? "")
+      );
+      expect(fills.length).toBeGreaterThan(0);
+      const lastFill = fills.at(-1)!;
+      const last = scenario.steps.indexOf(lastFill);
+      // Les étapes qui portent les cibles, dans l'ordre du run, jusqu'au dernier
+      // remplissage refusé, puis l'assertion que ce remplissage sert : le
+      // contrat exige une étape ordonnée par assertion, et les assertions
+      // intermédiaires du run qui ne sont plus servies par aucune étape
+      // laissée sont écartées avec leurs étapes `assert`.
+      const steps = scenario.steps
+        .slice(0, last + 1)
+        .filter((step) => step.action.type !== "assert");
+      const visible = scenario.assertions.find(
+        (assertion) => assertion.afterStep === lastFill.id
+      );
+      expect(visible).toBeDefined();
+      steps.push({
+        id: "assert-after-count",
+        description: "Vérifier l'état après le comptage",
+        action: { type: "assert", assertionId: visible!.id },
+      });
+      return {
+        ...scenario,
+        sourceFiles: ["src/form.ts"],
+        requirements: [
+          {
+            sourceFile: "src/form.ts",
+            quote: 'label: "Billet de 500 €"',
+            behavior: "La source énumère les dénominations comptées",
+          },
+        ],
+        steps,
+        assertions: [visible!],
+      };
+    });
     const f = await fixture({
-      // Le patch porte son en-tête de hunk : sans lui, `postChangeHunks` ne
-      // lit aucune ligne et le matériel serait vide (le gate resterait muet).
-      formPatch: `@@ -1,1 +1,2 @@\n+  { cents: 2_000, label: "Billet de 20 €", kind: "billet" },\n+aria-label={\`Quantité · \${d.label}\`}`,
+      // Le matériel que le refus de production a révélé : un seul nom déclaré,
+      // « Billet de 500 € ». La liste des dénominations vit hors du diff.
+      formPatch:
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: la ligne du patch est le gabarit de la source, non évalué ici.
+        '@@ -1,1 +1,2 @@\n+  { cents: 50_000, label: "Billet de 500 €", kind: "billet" },\n+aria-label={`Quantité · ${d.label}`}',
       plans: [
         {
-          summary: "Rejeu de la cible inventée du run b7da97f1",
-          scenarios: [scenario],
+          summary: "Rejeu des cibles réelles du run 20c3c29a",
+          scenarios: scenarios as Plan["scenarios"],
           skipped: [],
         },
       ],
     });
     close.push(f.close);
     const actions: string[] = [];
-    vi.spyOn(Canary.prototype, "start").mockResolvedValue("target-in-source");
+    vi.spyOn(Canary.prototype, "start").mockResolvedValue("lot-al");
     vi.spyOn(Canary.prototype, "act").mockImplementation(
       async (_session, label) => {
         actions.push(label);
         return {
           url: "https://fixture/",
-          snapshot:
-            '- main [ref=e1]:\n  - button "Caisse et Coffre" [ref=e2]\n  - textbox "Quantité · Billet de 20 €" [ref=e3]',
-          evidence:
-            '- main [ref=e1]:\n  - button "Caisse et Coffre" [ref=e2]\n  - textbox "Quantité · Billet de 20 €" [ref=e3]',
-          actual: "Welcome",
+          snapshot: OBSERVED_CASH_FIELDS,
+          evidence: OBSERVED_CASH_FIELDS,
+          actual: true,
         };
       }
     );
@@ -1055,14 +1180,25 @@ describe("rejeu du run b7da97f1 : cible inventée de la vue Caisse et Coffre", (
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    const blocked = result.scenarios[0];
-    expect(blocked?.outcome).toBe("blocked");
-    expect(blocked?.diagnostic?.code).toBe("PLAN_TARGET_NOT_IN_SOURCE");
-    expect(String(blocked?.diagnostic?.message)).toContain(INVENTED);
-    // Le refus tombe sur le matériel : aucune étape du scénario n'a coûté un
-    // appel navigateur, et le scénario n'est jamais converti en succès.
-    expect(actions.some((label) => label.startsWith("2-fill"))).toBe(false);
-    expect(blocked?.steps).toEqual([]);
+    // Aucun scénario n'est arrêté avant sa première étape navigateur : les deux
+    // plans atteignent la vue Caisse, ce que le refus statique leur interdisait.
+    expect(result.outcome).not.toBe("blocked");
+    for (const scenario of result.scenarios) {
+      expect(scenario.steps.length).toBeGreaterThan(0);
+      // Les champs de comptage visés par le run ont bien été remplis : leurs
+      // cibles existent, c'est l'application qui décide, pas le diff.
+      expect(
+        scenario.steps.filter((step) => step.action.type === "fill" && step.ok)
+          .length
+      ).toBeGreaterThan(0);
+    }
+    // Les libellés refusés en production sont ceux des étapes jouées.
+    const played = JSON.stringify(
+      result.scenarios.map((scenario) => scenario.steps)
+    );
+    expect(played).toContain("Quantité · Billet de 20 €");
+    expect(played).toContain("Quantité · Billet de 100 €");
+    expect(actions.length).toBeGreaterThan(0);
   });
 });
 

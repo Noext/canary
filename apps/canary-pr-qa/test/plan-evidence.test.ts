@@ -14,9 +14,9 @@ import {
   ariaRoleNameNodes,
   ariaRoleNames,
   missingExpectationRefusals,
+  observedTargetsNote,
   planEvidenceDiagnostic,
   typographicTargetNote,
-  undeclaredTargetRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
@@ -2400,111 +2400,52 @@ const MEASURED_MATERIAL = [
   },
 ];
 
-/** Le scénario mesuré du run b7da97f1, réduit à l'étape qui a inventé sa cible. */
-function inventedCashTargetPlan(name: string): Plan {
-  const plan = readOnlyPlan({ by: "role", value: "textbox", name });
-  plan.scenarios[0]!.steps.splice(1, 0, {
-    id: "fill-20",
-    description: "Compter les pièces de 20 €",
-    action: {
-      type: "fill",
-      locator: { by: "role", value: "textbox", name },
-      value: "2",
-    },
-  });
-  return plan;
-}
-
-describe("refus statique d'une cible que le matériel source ne déclare pas", () => {
-  it("refuse la cible inventée du run b7da97f1 et nomme les noms déclarés à un mot", () => {
-    const plan = PlanSchema.parse(
-      inventedCashTargetPlan("Quantité · Pièce de 20 €")
+/**
+ * Le filtre de publication d'un diagnostic d'exécution : les noms que la page
+ * expose ne sortent que s'ils sont composés de fragments que le diff déclare.
+ * C'est le seul usage qui reste du matériel source — il ne refuse plus rien.
+ *
+ * Le refus statique qui vivait ici (cible absente du diff et un nom déclaré à un
+ * mot d'elle) a été retiré sur mesure : sur la PR 20 de
+ * `pharmania/arpilabe-pilotage`, il a bloqué 9 scénarios sur 10 pour quatre
+ * libellés que l'application rend réellement, et le seul vrai positif du corpus
+ * échoue de toute façon à l'exécution, avec le relevé des cibles observées. Le
+ * rejeu des deux PR et le détail des variantes écartées sont dans
+ * `target-not-found-replay.test.ts`.
+ */
+describe("noms qu'un diagnostic d'exécution a le droit de publier", () => {
+  const cashFields = (labels: string[]) =>
+    ariaRoleNameNodes(
+      ["- main [ref=e2]:"]
+        .concat(
+          labels.map(
+            (label, index) => `  - textbox "${label}" [ref=e${index + 3}]`
+          )
+        )
+        .join("\n")
     );
-    const [refusal, ...rest] = undeclaredTargetRefusals(
-      plan,
+
+  it("énumère les champs réels de la vue Caisse, et pas la pièce de 20 €", () => {
+    // Les libellés réels des deux PR : ceux du run 20c3c29a (PR 20) et celui
+    // que le run b7da97f1 a inventé. Le matériel du diff de la PR 17 énumère
+    // les dénominations ; il ne compose jamais une pièce de 20 €.
+    const note = observedTargetsNote(
+      cashFields([
+        "Quantité · Billet de 20 €",
+        "Quantité · Billet de 100 €",
+        "Quantité · Pièce de 20 c",
+        "Quantité · Pièce de 20 €",
+      ]),
       MEASURED_MATERIAL
     );
-    expect(rest).toEqual([]);
-    expect(refusal?.error.code).toBe("PLAN_TARGET_NOT_IN_SOURCE");
-    const message = String(refusal?.error.message);
-    expect(message).toContain(
-      'fill-20 → role=textbox name="Quantité · Pièce de 20 €"'
-    );
-    // Les quatre noms que le matériel déclare à un mot de l'invention : tous
-    // nommés, aucun présenté comme la correction.
-    expect(message).toContain('role=textbox name="Quantité · Billet de 20 €"');
-    expect(message).toContain('role=textbox name="Quantité · Pièce de 1 €"');
-    expect(message).toContain('role=textbox name="Quantité · Pièce de 2 €"');
-    expect(message).toContain('role=textbox name="Quantité · Pièce de 20 c"');
-    expect(String(refusal?.error.hint)).toContain(
-      "none of them is accepted in the target's place"
-    );
+    expect(note?.detail).toContain('textbox "Quantité · Billet de 20 €"');
+    expect(note?.detail).toContain('textbox "Quantité · Billet de 100 €"');
+    expect(note?.detail).toContain('textbox "Quantité · Pièce de 20 c"');
+    expect(note?.detail).toContain("3 cibles observées");
+    // Un nom que le matériel ne compose pas ne se publie pas, même observé.
+    expect(note?.detail).not.toContain("Pièce de 20 €");
   });
-  it("accepte un nom que le matériel compose avec un libellé qu'il déclare", () => {
-    for (const name of [
-      "Quantité · Billet de 100 €",
-      "Quantité · Pièce de 20 c",
-      "Quantité · Pièce de 1 €",
-      "Montant d’espèces attendu",
-    ]) {
-      const plan = PlanSchema.parse(inventedCashTargetPlan(name));
-      expect(undeclaredTargetRefusals(plan, MEASURED_MATERIAL)).toEqual([]);
-    }
-  });
-  it("ne refuse pas un nom absent du diff quand aucun nom déclaré n'en approche", () => {
-    // « Pharmacie active » est un combobox réel de la page, hors du diff : le
-    // matériel ne le déclare pas, et aucun nom déclaré n'en diffère qu'à un mot.
-    // Un refus ici bloquerait un plan correct, et la mesure du corpus l'a montré
-    // (une première version refusait ce combobox sur un fragment de code qui
-    // n'était pas un nom).
-    const plan = PlanSchema.parse(inventedCashTargetPlan("Pharmacie active"));
-    expect(undeclaredTargetRefusals(plan, MEASURED_MATERIAL)).toEqual([]);
-  });
-  it("ne refuse pas un nom d'un seul mot ni une cible non role+nom", () => {
-    expect(
-      undeclaredTargetRefusals(
-        PlanSchema.parse(inventedCashTargetPlan("P&L")),
-        MEASURED_MATERIAL
-      )
-    ).toEqual([]);
-    const labelPlan = readOnlyPlan({ by: "label", value: "Pièce de 2 €" });
-    expect(
-      undeclaredTargetRefusals(PlanSchema.parse(labelPlan), MEASURED_MATERIAL)
-    ).toEqual([]);
-  });
-  it("ne dit rien sans matériel déclaré", () => {
-    expect(
-      undeclaredTargetRefusals(
-        PlanSchema.parse(inventedCashTargetPlan("Quantité · Pièce de 20 €")),
-        []
-      )
-    ).toEqual([]);
-  });
-  it("ne refuse pas une cible que la page de découverte nomme elle-même", () => {
-    // Le diff n'est pas l'application : un libellé qui vit dans un fichier hors
-    // hunk n'y est pas déclaré. L'observation directe prime — « Pharmacie
-    // active » est dans l'instantané de découverte, donc réelle, quels que
-    // soient les noms déclarés à un mot.
-    const plan = PlanSchema.parse(inventedCashTargetPlan("Pharmacie active"));
-    const materialWithNeighbour = [
-      {
-        path: "src/form.ts",
-        lines: [
-          { line: 1, text: 'aria-label="Pharmacie inactive"' },
-          { line: 2, text: 'aria-label="Pharmacie de garde"' },
-        ],
-      },
-    ];
-    expect(undeclaredTargetRefusals(plan, materialWithNeighbour)).toHaveLength(
-      1
-    );
-    expect(
-      undeclaredTargetRefusals(plan, materialWithNeighbour, {
-        url: "https://preview.test/",
-        aria: '- main [ref=e1]:\n  - textbox "Pharmacie active" [ref=e2]',
-      })
-    ).toEqual([]);
-  });
+
   it("garde la ponctuation d'un littéral déclaré", () => {
     // « Save & close » est une déclaration, pas du code : le filtre de
     // ponctuation ne s'applique qu'aux fragments noyés dans du code (gabarit,
@@ -2512,297 +2453,44 @@ describe("refus statique d'une cible que le matériel source ne déclare pas", (
     const material = [
       {
         path: "src/form.ts",
-        lines: [
-          { line: 1, text: 'aria-label="Save & close"' },
-          { line: 2, text: 'aria-label="Save and close"' },
-        ],
+        lines: [{ line: 1, text: 'aria-label="Save & close"' }],
       },
     ];
-    expect(
-      undeclaredTargetRefusals(
-        PlanSchema.parse(inventedCashTargetPlan("Save & close")),
-        material
-      )
-    ).toEqual([]);
-  });
-  it("accepte une graphie que le repli d'exécution sait résoudre", () => {
-    // La source écrit l'apostrophe typographique, le plan l'apostrophe droite :
-    // `canary.ts` essaie les deux graphies, donc la cible s'exécutait. La
-    // refuser bloquerait un scénario qui marchait.
-    const material = [
-      {
-        path: "src/form.ts",
-        lines: [
-          { line: 1, text: 'aria-label="Justification de l’écart"' },
-          { line: 2, text: 'aria-label="Justification de la clôture"' },
-        ],
-      },
-    ];
-    expect(
-      undeclaredTargetRefusals(
-        PlanSchema.parse(inventedCashTargetPlan("Justification de l'écart")),
-        material
-      )
-    ).toEqual([]);
-  });
-  it("laisse une assertion d'absence viser un nom que la source ne déclare plus", () => {
-    // Prouver qu'un bouton a disparu : le nom n'a rien à déclarer, c'est son
-    // absence qui est le contrat, et le hint du refus conseille lui-même cette
-    // forme pour établir une disparition.
-    const material = [
-      {
-        path: "src/form.ts",
-        lines: [{ line: 1, text: 'aria-label="Remove account"' }],
-      },
-    ];
-    const target = {
-      by: "role" as const,
-      value: "button",
-      name: "Delete account",
-    };
-    for (const assertion of [
-      { kind: "hidden" as const },
-      { kind: "count" as const, expected: 0 },
-    ]) {
-      const plan = readOnlyPlan(target);
-      Object.assign(plan.scenarios[0]!.assertions[0]!, assertion);
-      expect(
-        undeclaredTargetRefusals(PlanSchema.parse(plan), material)
-      ).toEqual([]);
-    }
-    // Mais une assertion de présence garde le refus : c'est la même cible, et
-    // elle y demande bien un nom que la source ne déclare pas.
-    const present = readOnlyPlan(target);
-    expect(
-      undeclaredTargetRefusals(PlanSchema.parse(present), material)
-    ).toHaveLength(1);
-  });
-});
-
-/**
- * Deux libellés déclarés qui composent le nom voisin : le relevé de voisins a de
- * quoi travailler, et chaque plafond se prouve à sa frontière — un cran en deçà
- * le refus tombe, un cran au-delà il se tait.
- */
-const NEIGHBOUR_MATERIAL: SourceLineMaterial[] = [
-  {
-    path: "src/form.ts",
-    lines: [
-      { line: 1, text: 'aria-label="alpha beta"' },
-      { line: 2, text: 'aria-label="gamma delta"' },
-    ],
-  },
-];
-
-/** Matériel d'un fragment unique de `count` mots, cité pour être déclaré. */
-function fragmentMaterial(count: number, prefix = "w"): SourceLineMaterial[] {
-  return [
-    {
-      path: "src/form.ts",
-      lines: [
-        {
-          line: 1,
-          text: `aria-label="${Array.from({ length: count }, (_unused, index) => `${prefix}${index}`).join(" ")}"`,
-        },
-      ],
-    },
-  ];
-}
-
-function refusalsFor(name: string, material: SourceLineMaterial[]) {
-  return undeclaredTargetRefusals(
-    PlanSchema.parse(inventedCashTargetPlan(name)),
-    material
-  );
-}
-
-/**
- * Un scénario par nom visé, dans l'ordre donné : la mesure partage son budget
- * entre les scénarios, donc l'ordre du plan est l'ordre des dépenses.
- */
-function scenarioPerName(names: string[]): Plan {
-  const scenario = inventedCashTargetPlan(names[0] as string).scenarios[0];
-  return {
-    summary: "Bornes de la mesure d'un plan",
-    scenarios: names.map((name, index) => {
-      const clone = structuredClone(scenario) as Plan["scenarios"][number];
-      clone.id = `cible-${index}`;
-      for (const step of clone.steps) {
-        if ("locator" in step.action && step.action.locator?.by === "role") {
-          step.action.locator.name = name;
-        }
-      }
-      for (const assertion of clone.assertions) {
-        if (assertion.target?.by === "role") {
-          assertion.target.name = name;
-        }
-      }
-      return clone;
-    }),
-    skipped: [],
-  };
-}
-
-describe("bornes du relevé de voisins d'une cible non déclarée", () => {
-  it("s'arrête à la longueur de nom traitée, et le refuse juste en deçà", () => {
-    // Le nom est le même bloc répété : à 40 mots le relevé trouve le voisin
-    // déclaré, à 42 il ne mesure plus rien. Les schémas autorisent 2 000
-    // caractères, donc un nom de cette taille vient du modèle.
-    const tail = "alpha X gamma delta";
-    const refused = `${Array.from({ length: 18 }, () => "alpha beta").join(" ")} ${tail}`;
-    const beyond = `${Array.from({ length: 19 }, () => "alpha beta").join(" ")} ${tail}`;
-    expect(refused.split(" ")).toHaveLength(40);
-    expect(beyond.split(" ")).toHaveLength(42);
-    const [refusal] = refusalsFor(refused, NEIGHBOUR_MATERIAL);
-    expect(refusal?.error.message).toContain(
-      `role=textbox name=${JSON.stringify(refused.replace(" X ", " beta "))}`
+    const note = observedTargetsNote(
+      ariaRoleNameNodes('- main [ref=e1]:\n  - button "Save & close" [ref=e2]'),
+      material
     );
-    expect(refusalsFor(beyond, NEIGHBOUR_MATERIAL)).toEqual([]);
+    expect(note?.detail).toContain('button "Save & close"');
   });
-  it("s'arrête à la longueur du fragment qui fournit la substitution", () => {
-    // Le mot substitué vient d'un fragment déclaré, et un fragment de 13 mots
-    // n'est plus un libellé : au-delà, aucun candidat n'est formé.
-    const name12 = (count: number) =>
-      Array.from({ length: count }, (_unused, index) =>
-        index === 1 ? "X" : `w${index}`
-      ).join(" ");
-    const [refusal] = refusalsFor(name12(12), fragmentMaterial(12));
-    expect(refusal?.error.message).toContain('role=textbox name="w0 w1');
-    expect(refusalsFor(name12(13), fragmentMaterial(13))).toEqual([]);
-  });
-  it("s'arrête au nombre de candidats, et le refuse juste en deçà", () => {
-    // Chaque fragment « alpha wN » forme un candidat « alpha wN gamma delta ».
-    // Soixante-quatre se lisent, davantage ne se lisent plus : le refus se tait
-    // au lieu de publier une liste non bornée.
-    const name = "alpha X gamma delta";
-    const withCount = (count: number): SourceLineMaterial[] => [
+
+  it("borne la longueur du nom mesuré", () => {
+    // Les schémas autorisent des noms de 2 000 caractères et l'instantané monte
+    // à 200 000 : le découpage est quadratique en la longueur du nom, donc un
+    // nom de plus de 40 mots n'est pas mesuré du tout.
+    const words = (count: number) =>
+      Array.from({ length: count }, (_unused, index) => `w${index}`).join(" ");
+    const material: SourceLineMaterial[] = [
       {
         path: "src/form.ts",
-        lines: [
-          { line: 1, text: 'aria-label="gamma delta"' },
-          ...Array.from({ length: count }, (_unused, index) => ({
-            line: index + 2,
-            text: `aria-label="alpha w${index}"`,
-          })),
-        ],
+        lines: [{ line: 1, text: `aria-label="${words(42)}"` }],
       },
     ];
-    const [refusal] = refusalsFor(name, withCount(64));
-    // Le plan porte la cible deux fois (l'étape et l'assertion), donc chaque
-    // refus énumère ses propres candidats : le dernier de la borne est nommé.
-    expect(refusal?.error.message).toContain(
-      'role=textbox name="alpha w63 gamma delta"'
-    );
-    expect(refusal?.error.message).not.toContain("alpha w64");
-    expect(refusalsFor(name, withCount(65))).toEqual([]);
-  });
-  it("s'arrête au coût total du plan, et le refuse tant qu'il reste du budget", () => {
-    // Le budget est partagé par le plan : les fragments inertes qui précèdent le
-    // seul fragment qui produit un voisin l'épuisent, et le relevé se tait. Avec
-    // dix fois moins de travail, le même nom est refusé.
-    const name = `${Array.from({ length: 18 }, () => "alpha beta").join(" ")} alpha X gamma delta`;
-    const withFillers = (count: number): SourceLineMaterial[] => [
-      {
-        path: "src/form.ts",
-        lines: [
-          ...Array.from({ length: count }, (_unused, index) => ({
-            line: index + 1,
-            text: `aria-label="${Array.from({ length: 12 }, (_w, at) => `f${index}x${at}`).join(" ")}"`,
-          })),
-          { line: count + 1, text: 'aria-label="alpha beta"' },
-          { line: count + 2, text: 'aria-label="gamma delta"' },
-        ],
-      },
-    ];
-    expect(refusalsFor(name, withFillers(10))).toHaveLength(1);
-    expect(refusalsFor(name, withFillers(2000))).toEqual([]);
-  });
-  it("n'exige pas qu'un clic ifPresent soit déclaré par la source", () => {
-    // Un clic optionnel ne s'exécute pas quand sa cible est absente : son nom
-    // n'a donc pas à vivre dans le diff. `Close account` est déclaré et
-    // `Reopen account` en diffère d'un mot, donc sans l'exemption le gate
-    // refusait ce clic pourtant optionnel (revue de code du 22 oct. 2026).
-    const plan = inventedCashTargetPlan("Quantité · Pièce de 2 €");
-    plan.scenarios[0]!.steps.unshift({
-      id: "establish",
-      description: "Rouvrir le compte s'il est fermé",
-      action: {
-        type: "click",
-        ifPresent: true,
-        locator: { by: "role", value: "button", name: "Reopen account" },
-      },
-    });
-    // Le contrat exécutable de `ifPresent` exige qu'une assertion vérifie l'état
-    // qu'il établit : elle porte un sélecteur CSS, donc elle n'entre pas dans la
-    // mesure des cibles role+nom.
-    plan.scenarios[0]!.assertions.push({
-      id: "establish-state",
-      description: "l'état établi par le clic optionnel est vérifié",
-      kind: "visible",
-      target: { by: "css", value: "[data-open]" },
-      afterStep: "establish",
-      verification: "state",
-    });
-    plan.scenarios[0]!.steps.splice(1, 0, {
-      id: "assert-establish",
-      description: "l'état établi est vérifié",
-      action: { type: "assert", assertionId: "establish-state" },
-    });
     expect(
-      undeclaredTargetRefusals(PlanSchema.parse(plan), [
-        {
-          path: "src/account.ts",
-          lines: [{ line: 1, text: 'button "Close account"' }],
-        },
-      ])
-    ).toEqual([]);
-  });
-  it("facture au budget les fragments écartés parce que trop longs", () => {
-    // Un fragment de plus de 12 mots ne fournit jamais de voisin, mais il était
-    // découpé puis écarté AVANT d'être facturé : chaque cible le redécoupait. La
-    // revue de sécurité du 22 oct. 2026 a mesuré 11,17 s de CPU synchrone pour
-    // 50 000 littéraux de 13 mots et 192 cibles alors que le budget n'enregistrait
-    // que 6 144 sur 200 000 — et pendant ce temps l'échéance du run et le
-    // battement de lease de 10 s ne pouvaient pas courir.
-    const inert = (count: number): SourceLineMaterial[] => [
-      {
-        path: "src/form.ts",
-        lines: [
-          ...Array.from({ length: count }, (_unused, index) => ({
-            line: index + 1,
-            text: `aria-label="${Array.from({ length: 13 }, (_w, at) => `g${index}x${at}`).join(" ")}"`,
-          })),
-          { line: count + 1, text: 'aria-label="alpha beta"' },
-          { line: count + 2, text: 'aria-label="gamma delta"' },
-        ],
-      },
-    ];
-    // Dix fragments inertes ne coûtent presque rien : la cible voisine est refusée.
-    expect(refusalsFor("alpha X gamma delta", inert(10))).toHaveLength(1);
-    // Seize mille fragments de 13 mots dépassent le budget du plan : le relevé
-    // se tait au lieu de payer un découpage qu'il n'a pas facturé.
-    expect(refusalsFor("alpha X gamma delta", inert(16_000))).toEqual([]);
-  });
-  it("facture le repli typographique au même budget que le relevé", () => {
-    // Quatre signes repliables font plus de 250 graphies, chacune un découpage
-    // quadratique : un nom de 40 mots épuise le budget du plan à lui seul, et
-    // le gate se tait — il ne refuse pas une cible sur un travail qu'il n'a pas
-    // payé (revue de sécurité du 22 oct. 2026 : 9,0 s pour 10 cibles de 40 mots).
-    const greedy = [
-      ...Array.from({ length: 4 }, () => "l'écart"),
-      ...Array.from({ length: 36 }, (_unused, index) => `z${index}`),
-    ].join(" ");
-    expect(greedy.split(" ")).toHaveLength(40);
-    // La cible voisine est refusée quand rien n'a mangé le budget…
-    expect(refusalsFor("alpha X gamma delta", NEIGHBOUR_MATERIAL)).toHaveLength(
-      1
-    );
-    // …et ne l'est plus après un nom dont les graphies coûtent plus que lui.
+      observedTargetsNote(
+        [{ name: words(40), role: "textbox" }],
+        [
+          {
+            path: "src/form.ts",
+            lines: [{ line: 1, text: `aria-label="${words(40)}"` }],
+          },
+        ]
+      )?.detail
+    ).toContain("1 cible observée");
+    // Un nom de 42 mots n'est pas mesuré : le relevé se tait, et le message
+    // publié reste la phrase constante.
     expect(
-      undeclaredTargetRefusals(
-        PlanSchema.parse(scenarioPerName([greedy, "alpha X gamma delta"])),
-        NEIGHBOUR_MATERIAL
-      )
-    ).toEqual([]);
+      observedTargetsNote([{ name: words(42), role: "textbox" }], material)
+        ?.detail
+    ).toBeUndefined();
   });
 });
