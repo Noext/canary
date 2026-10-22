@@ -162,14 +162,18 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
   );
 });
 
-it("rejects static matching output as transition evidence in actual Chromium", async () => {
+it("blames the plan for a transition on an invariant, and the application for a missed one", async () => {
   const f = await fixture({ unchangedState: true });
   closers.push(f.close);
   const result = await runQa(
     { prUrl: PR_URL, previewUrl: f.baseUrl },
     f.config
   );
-  expect(result.outcome, result.scenarios[0]?.error).toBe("failed");
+  // La page n'a pas bougé ET le libellé attendu est déjà celui qui s'affiche :
+  // le plan a exigé un changement sur un invariant, donc le verdict nomme le
+  // plan (`blocked`) au lieu d'accuser l'application (`failed`).
+  expect(result.outcome, result.scenarios[0]?.error).toBe("blocked");
+  expect(result.scenarios[0]?.diagnostic?.code).toBe("TRANSITION_ON_INVARIANT");
   expect(result.scenarios[0]?.assertions[0]).toMatchObject({
     baseline: "Welcome Ada",
     actual: "Welcome Ada",
@@ -194,7 +198,10 @@ it("rejects static matching output as transition evidence in actual Chromium", a
     f.config,
     new Canary(f.config)
   );
+  // Ici l'attendu n'est pas atteint : l'application n'a pas fait ce que
+  // l'étape promettait, et le verdict reste un échec.
   expect(alternate.outcome, alternate.error).toBe("failed");
+  expect(alternate.diagnostic?.code).toBe("TRANSITION_NOT_OBSERVED");
   expect(alternate.assertions[0]).toMatchObject({
     baseline: "Welcome Ada",
     actual: "Welcome Ada",
