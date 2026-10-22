@@ -919,6 +919,18 @@ function declaredSourceNames(
 }
 
 /**
+ * Un nom plus long n'est pas un nom d'interface : rien n'est mesuré, ni dans le
+ * relevé de la page ni dans la recherche de voisins. Les schémas autorisent des
+ * noms de 2 000 caractères et l'instantané d'accessibilité monte à 200 000 : le
+ * découpage est quadratique en la longueur du nom, donc un nom de plusieurs
+ * centaines de mots venu du modèle ou de la page ferait tourner le worker sans
+ * que l'échéance du run ni le battement de lease de 10 s ne puissent courir
+ * (revues de sécurité du 22 oct. 2026 : 1,4 s par cible à 239 mots, 12,1 s sur
+ * un nom répété de 4 000 caractères).
+ */
+const NAME_WORDS_MAX = 40;
+
+/**
  * Le nom est-il déclaré par le matériel ? Une seule forme, jamais une
  * ressemblance : il est la concaténation de fragments que le diff déclare —
  * c'est exactement ce que fait un gabarit (`` `Quantité · ${d.label}` `` avec un
@@ -927,12 +939,20 @@ function declaredSourceNames(
  * n'énumère nulle part, ne l'est pas. Un nom qu'aucun fragment ne porte — même
  * présent dans la prose du diff — n'est pas déclaré pour autant : c'est une
  * ligne de code qui passe, pas un nom que l'interface expose.
+ *
+ * La borne de longueur est ICI, dans le matcher, et pas chez ses appelants :
+ * aucun d'eux ne peut l'oublier, et le découpage quadratique n'est jamais payé
+ * sur un nom qui n'en est pas un.
  */
 function sourceDeclaresName(
   name: string,
   declared: DeclaredSourceNames
 ): boolean {
-  return composesFromFragments(words(name), declared.fragments);
+  const parts = words(name);
+  if (parts.length > NAME_WORDS_MAX) {
+    return false;
+  }
+  return composesFromFragments(parts, declared.fragments);
 }
 
 /**
@@ -1033,12 +1053,6 @@ function composableSuffixes(
 }
 
 /**
- * Un nom plus long n'est plus comparé à un voisin : au-delà, rien n'est mesuré
- * et le refus se tait. Les schémas autorisent des noms de 2 000 caractères, donc
- * un nom de plusieurs centaines de mots est du modèle, pas de l'interface.
- */
-const NEIGHBOUR_NAME_WORDS = 40;
-/**
  * Un fragment plus long n'entre pas dans la comparaison : un nom se compose de
  * libellés, et le mot substitué vient de l'un d'eux.
  */
@@ -1079,9 +1093,10 @@ interface NeighbourBudget {
  * le battement de lease de 10 s ne pouvaient plus courir.
  *
  * Quatre plafonds le bornent, et aucun ne devine : la longueur du nom
- * (`NEIGHBOUR_NAME_WORDS`), la longueur du fragment qui fournit la substitution
- * (`NEIGHBOUR_FRAGMENT_WORDS`), le nombre de candidats produits
- * (`NEIGHBOUR_CANDIDATES_MAX`) et le coût total du plan (`NEIGHBOUR_WORK_MAX`).
+ * (`NAME_WORDS_MAX`, appliquée par `sourceDeclaresName`), la longueur du
+ * fragment qui fournit la substitution (`NEIGHBOUR_FRAGMENT_WORDS`), le nombre
+ * de candidats produits (`NEIGHBOUR_CANDIDATES_MAX`) et le coût total du plan
+ * (`NEIGHBOUR_WORK_MAX`).
  * Atteint, n'importe lequel rend la liste vide : pas de voisin, donc pas de
  * refus. Un nom d'un seul mot n'a pas de candidat non plus — remplacer son
  * unique mot ne partage plus rien avec lui — et un nom qui diffère par deux
@@ -1092,7 +1107,7 @@ function declaredNeighbours(
   declared: DeclaredSourceNames,
   budget: NeighbourBudget
 ): string[] {
-  if (parts.length < 2 || parts.length > NEIGHBOUR_NAME_WORDS) {
+  if (parts.length < 2 || parts.length > NAME_WORDS_MAX) {
     return [];
   }
   const prefixes = composablePrefixes(parts, declared.fragments);
@@ -1236,7 +1251,7 @@ function undeclaredTargets(
     }
     const name = normalizeText(target.locator.name);
     const parts = words(name);
-    if (parts.length < 2 || parts.length > NEIGHBOUR_NAME_WORDS) {
+    if (parts.length < 2 || parts.length > NAME_WORDS_MAX) {
       // Un nom d'un seul mot n'a aucun voisin, et un nom de plus de 40 mots
       // n'est pas un nom d'interface : dans les deux cas rien n'est mesuré,
       // donc rien n'est refusé — et le découpage quadratique n'est pas payé.

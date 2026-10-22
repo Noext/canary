@@ -1184,4 +1184,31 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
       )
     ).toBeUndefined();
   });
+
+  it("ne mesure pas un nom plus long qu'un nom d'interface", () => {
+    // L'instantané d'accessibilité est vivant et plafonné à 200 000 caractères :
+    // un nom répété qui se recompose dans les fragments déclarés faisait tourner
+    // le découpage quadratique 12,1 s sur 4 000 caractères (revue de sécurité du
+    // 22 oct. 2026). Au-delà de 40 mots, rien n'est mesuré — et le nom qui, lui,
+    // est un nom reste relevé.
+    const overlong = Array.from({ length: 360 }, () => "alpha beta").join(" ");
+    expect(overlong.length).toBeGreaterThan(3900);
+    const note = observedTargetsNote(
+      [
+        { name: overlong, role: "textbox" },
+        { name: "alpha beta", role: "button" },
+      ],
+      [
+        {
+          path: "src/form.ts",
+          lines: [{ line: 1, text: 'aria-label="alpha beta"' }],
+        },
+      ]
+    );
+    expect(note?.detail).toContain('button "alpha beta"');
+    expect(note?.detail).not.toContain("alpha beta alpha beta");
+    expect(note?.published).toBe(
+      "1 cible observée dans le DOM à cet instant, voir le détail du run"
+    );
+  });
 });
