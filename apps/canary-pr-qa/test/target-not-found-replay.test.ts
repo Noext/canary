@@ -1090,7 +1090,7 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
   it("énumère les cibles réelles observées, contrôles d'abord, sans en choisir une", () => {
     const note = observedTargetsNote(ariaRoleNameNodes(OBSERVED), MATERIAL);
     expect(note?.detail).toContain(
-      "cibles observées dans le DOM à cet instant"
+      "3 cibles observées dans le DOM à cet instant"
     );
     // Les champs de comptage sont nommés : le préfixe « Quantité · » que le
     // plan avait perdu se lit ici.
@@ -1101,11 +1101,10 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
     expect(note?.detail).not.toContain("Espace de travail");
     expect(note?.detail).not.toContain('status ""');
     expect(note?.detail).not.toContain("Pharmacie active");
-    // Ce qui se PUBLIE est un compte : le message part dans le commentaire de
-    // PR, et le nom d'une cible vivante de la page n'y entre pas, pas même
-    // quand le matériel le déclare.
+    // Ce qui se PUBLIE est une phrase CONSTANTE : le message part dans le
+    // commentaire de PR, et rien de la page n'y entre — ni un nom, ni un compte.
     expect(note?.published).toBe(
-      "3 cibles observées dans le DOM à cet instant, voir le détail du run"
+      "cibles observées dans le DOM à cet instant : voir le détail du run"
     );
   });
 
@@ -1125,11 +1124,49 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
     ]);
     expect(String(note?.detail).match(/textbox /g)).toHaveLength(8);
     expect(note?.detail).toContain("et 3 autres");
-    // Le compte publié porte les onze, pas les huit montrées : le détail reste
-    // dans l'artefact, et le compte dit ce qu'il y a à y lire.
-    expect(note?.published).toBe(
-      "11 cibles observées dans le DOM à cet instant, voir le détail du run"
+    // Le détail porte les onze, l'artefact les garde tous : la phrase publiée,
+    // elle, ne les compte pas.
+    expect(note?.detail).toContain("11 cibles observées");
+    expect(note?.published).not.toMatch(/\d/);
+  });
+
+  it("publie la même phrase quel que soit le nombre de cibles observées", () => {
+    // Le filtre est indexé sur des littéraux du diff, donc contrôlés par l'auteur
+    // de la PR : un compte publié, ou même la seule présence de la phrase, lui
+    // dirait si le libellé qu'il a deviné existe dans le DOM authentifié. Le
+    // texte public ne dépend donc NI du nombre, NI de l'existence d'une
+    // observation.
+    const material = [
+      {
+        path: "src/form.ts",
+        lines: Array.from({ length: 8 }, (_unused, index) => ({
+          line: index + 1,
+          text: `aria-label="Champ ${index + 1} obligatoire"`,
+        })),
+      },
+    ];
+    const node = (index: number) => ({
+      name: `Champ ${index} obligatoire`,
+      role: "textbox",
+    });
+    const one = observedTargetsNote([node(1)], material);
+    const eight = observedTargetsNote(
+      Array.from({ length: 8 }, (_unused, index) => node(index + 1)),
+      material
     );
+    const none = observedTargetsNote(
+      [{ name: "Rien de déclaré", role: "textbox" }],
+      material
+    );
+    expect(one?.published).toBe(eight?.published);
+    expect(none?.published).toBe(eight?.published);
+    expect(one?.published).toBe(
+      "cibles observées dans le DOM à cet instant : voir le détail du run"
+    );
+    // L'artefact, lui, garde le compte et les noms.
+    expect(one?.detail).toContain("1 cible observée");
+    expect(eight?.detail).toContain("8 cibles observées");
+    expect(none?.detail).toBeUndefined();
   });
 
   it("place le rôle visé en tête quand la cible est role+nom", () => {
@@ -1207,8 +1244,7 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
     );
     expect(note?.detail).toContain('button "alpha beta"');
     expect(note?.detail).not.toContain("alpha beta alpha beta");
-    expect(note?.published).toBe(
-      "1 cible observée dans le DOM à cet instant, voir le détail du run"
-    );
+    expect(note?.detail).toContain("1 cible observée");
+    expect(note?.published).not.toMatch(/\d/);
   });
 });

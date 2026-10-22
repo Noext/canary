@@ -350,17 +350,29 @@ const FORM_CONTROL_ROLES = new Set([
  */
 export interface ObservedTargetsNote {
   /**
-   * Les couples rôle+nom observés. Ils vivent dans `StepResult.observedTargets`,
-   * c'est-à-dire dans `result.json` et le rapport HTML du run, derrière
-   * l'autorisation des artefacts — jamais dans `reportMarkdown`.
+   * Le compte et les couples rôle+nom observés. Ils vivent dans
+   * `StepResult.observedTargets`, c'est-à-dire dans `result.json` et le rapport
+   * HTML du run, derrière l'autorisation des artefacts — jamais dans
+   * `reportMarkdown`. Absent quand la page n'expose rien de déclaré.
    */
-  detail: string;
+  detail?: string;
   /**
-   * La phrase PUBLIQUE : un compte, jamais un nom. Elle part dans le message du
-   * scénario, donc dans le commentaire de PR et dans le résumé de support.
+   * La phrase PUBLIQUE. Elle est CONSTANTE dès que le relevé a couru : ni nom,
+   * ni compte, ni cardinalité. Elle part dans le message du scénario, donc dans
+   * le commentaire de PR et dans le résumé de support.
    */
   published: string;
 }
+
+/**
+ * La phrase publiée : constante, donc sans information sur la page. Un relevé qui
+ * laisserait lire un compte, ou même sa seule présence, répondrait à la question
+ * « ce libellé deviné existe-t-il dans le DOM authentifié ? » — le filtre est
+ * indexé sur des littéraux du diff, donc contrôlés par l'auteur de la PR (revue
+ * de sécurité du 22 oct. 2026).
+ */
+const OBSERVED_TARGETS_PUBLISHED =
+  "cibles observées dans le DOM à cet instant : voir le détail du run";
 
 /**
  * Les cibles réellement présentes dans le DOM à l'instant de l'échec : rôle et
@@ -374,12 +386,11 @@ export interface ObservedTargetsNote {
  *
  * Un nom accessible observé ne se publie JAMAIS, quel qu'il soit : le message
  * d'un scénario part dans le commentaire de PR, donc dans un dépôt, et le résumé
- * de support promet de ne pas porter le DOM (revue de sécurité du 22 oct. 2026).
- * Même un nom que le matériel source déclare est un libellé VIVANT de la page —
- * un compte, un enregistrement, une région d'état peuvent porter le texte d'un
- * littéral du diff — et un lecteur du dépôt n'a pas les identifiants de la
- * preview. Ce qui se publie est donc un COMPTE (« 3 cibles observées, voir le
- * détail du run ») ; les noms restent dans l'artefact autorisé, sous
+ * de support promet de ne pas porter le DOM. Même un nom que le matériel source
+ * déclare est un libellé VIVANT de la page — un compte, un enregistrement, une
+ * région d'état peuvent porter le texte d'un littéral du diff — et un lecteur du
+ * dépôt n'a pas les identifiants de la preview. Ce qui se publie est une phrase
+ * CONSTANTE ; le compte et les noms restent dans l'artefact autorisé, sous
  * `StepResult.observedTargets`.
  *
  * L'énumération ne choisit rien, ne corrige rien et ne convertit aucun
@@ -398,8 +409,8 @@ export function observedTargetsNote(
 ): ObservedTargetsNote | undefined {
   const declared = declaredSourceNames(material);
   if (declared.fragments.size === 0) {
-    // Sans matériel déclaré, aucun nom n'est relevé : mieux vaut le message
-    // générique qu'une énumération de la page.
+    // Sans matériel déclaré, le relevé ne court pas : mieux vaut le message
+    // générique qu'une phrase qui ne décrit rien.
     return;
   }
   const wanted = role === undefined ? undefined : ariaRole(role);
@@ -419,9 +430,6 @@ export function observedTargetsNote(
     seen.add(target);
     observed.push({ rank: observationRank(nodeRole, wanted), target });
   }
-  if (observed.length === 0) {
-    return;
-  }
   const ordered = observed
     .map((item, index) => ({ ...item, index }))
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
@@ -429,8 +437,11 @@ export function observedTargetsNote(
   const shown = ordered.slice(0, limit);
   const rest = ordered.length - shown.length;
   return {
-    published: `${ordered.length} cible${ordered.length > 1 ? "s" : ""} observée${ordered.length > 1 ? "s" : ""} dans le DOM à cet instant, voir le détail du run`,
-    detail: `cibles observées dans le DOM à cet instant, rôle et nom accessible, toutes déclarées par la source : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`,
+    published: OBSERVED_TARGETS_PUBLISHED,
+    detail:
+      ordered.length === 0
+        ? undefined
+        : `${ordered.length} cible${ordered.length > 1 ? "s" : ""} observée${ordered.length > 1 ? "s" : ""} dans le DOM à cet instant, rôle et nom accessible, toutes déclarées par la source : ${shown.join(" ; ")}${rest > 0 ? ` ; et ${rest} autres` : ""}`,
   };
 }
 

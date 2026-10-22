@@ -61,10 +61,13 @@ function roleNameTarget(
  * dérivée produisaient le même message, et la différence restait dans le
  * snapshot que personne ne lisait.
  *
- * Les noms observés ne se publient pas : `note` est la phrase qui part dans le
- * message (donc dans le commentaire de PR et le résumé de support) et ne porte
- * qu'un COMPTE, `observedTargets` porte les noms et ne va que dans l'artefact du
- * run, sous `StepResult.observedTargets` (revue de sécurité du 22 oct. 2026).
+ * Rien de ce que la page expose ne se publie : `note` est la phrase qui part
+ * dans le message (donc dans le commentaire de PR et le résumé de support) et
+ * elle est CONSTANTE — ni nom, ni compte, ni cardinalité, sinon le commentaire
+ * répondrait à « ce libellé deviné existe-t-il ? » pour un auteur de PR qui
+ * contrôle le diff. `observedTargets` porte le compte et les noms, et ne va que
+ * dans l'artefact du run, sous `StepResult.observedTargets` (revue de sécurité
+ * du 22 oct. 2026).
  */
 async function explainMissingTarget(
   failure: unknown,

@@ -382,16 +382,20 @@ async function runMissingLabelTarget() {
  * Le commentaire de PR est public sur un dépôt et le résumé de support promet de
  * ne pas porter le DOM : un nom accessible observé n'y entre pas, MÊME quand le
  * matériel source le déclare. Il reste dans l'artefact du run, derrière
- * l'autorisation des artefacts, et le message publié ne garde qu'un compte.
+ * l'autorisation des artefacts, et le message publié est CONSTANT : ni nom, ni
+ * compte, ni cardinalité. Un compte suffirait à répondre à « ce libellé deviné
+ * existe-t-il dans le DOM authentifié ? » pour un auteur de PR qui contrôle le
+ * diff, et des runs publiés répétés formeraient un oracle d'appartenance.
  */
 it("keeps observed DOM names out of the published comment", async () => {
   const { result, f } = await runMissingLabelTarget();
   const scenario = result.scenarios[0];
   expect(scenario?.outcome).toBe("blocked");
   expect(scenario?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
-  // Le message public garde le code, la cause et le compte — pas les noms.
+  // Le message public garde le code et la cause — ni les noms, ni le compte.
   expect(scenario?.error).toContain("cibles observées dans le DOM");
   expect(scenario?.error).toContain("voir le détail du run");
+  expect(String(scenario?.error)).not.toMatch(/\d+\s+cible/);
   // L'artefact du run, lui, porte les noms : l'énumération est déplacée, jamais
   // supprimée.
   const stored = JSON.parse(
@@ -412,7 +416,12 @@ it("keeps observed DOM names out of the published comment", async () => {
     request.path.endsWith("/comments")
   )?.payload.body;
   expect(typeof published).toBe("string");
-  expect(published).toContain("2 cibles observées");
+  expect(published).toContain(
+    "cibles observées dans le DOM à cet instant : voir le détail du run"
+  );
+  // Le compte reste dans l'artefact (vérifié ci-dessus via `observedTargets`),
+  // jamais dans la surface publique.
+  expect(published).not.toMatch(/\d+\s+cible/);
   const summary = JSON.stringify(
     await supportSummary(result.id, f.config),
     null,
