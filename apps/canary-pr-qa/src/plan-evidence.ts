@@ -1309,6 +1309,18 @@ function provesAbsence(assertion: Scenario["assertions"][number]): boolean {
 }
 
 /**
+ * Un clic `ifPresent` est optionnel par contrat : il ne s'exécute pas quand sa
+ * cible est absente, et le gate exécutable exige déjà qu'une assertion vérifie
+ * l'état qu'il établit. Exiger en plus que son nom soit déclaré par la source
+ * refuserait un plan dont le cas nominal est l'absence du bouton — un contrôle
+ * « Rouvrir le compte » n'existe pas dans le diff quand le compte est ouvert
+ * (revue de code du 22 oct. 2026).
+ */
+function optionalClick(step: Scenario["steps"][number]): boolean {
+  return step.action.type === "click" && step.action.ifPresent === true;
+}
+
+/**
  * Cible role+nom du scénario, avec le libellé qui la désigne dans le refus :
  * l'étape qui la porte, ou l'étape et l'assertion quand c'est une assertion. Une
  * assertion d'absence n'est pas une cible à déclarer : c'est son absence qui est
@@ -1319,7 +1331,7 @@ function scenarioTargets(
 ): { label: string; locator: Locator }[] {
   return [
     ...scenario.steps.flatMap((step) =>
-      "locator" in step.action && step.action.locator
+      "locator" in step.action && step.action.locator && !optionalClick(step)
         ? [{ label: step.id, locator: step.action.locator }]
         : []
     ),

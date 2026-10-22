@@ -2712,6 +2712,46 @@ describe("bornes du relevé de voisins d'une cible non déclarée", () => {
     expect(refusalsFor(name, withFillers(10))).toHaveLength(1);
     expect(refusalsFor(name, withFillers(2000))).toEqual([]);
   });
+  it("n'exige pas qu'un clic ifPresent soit déclaré par la source", () => {
+    // Un clic optionnel ne s'exécute pas quand sa cible est absente : son nom
+    // n'a donc pas à vivre dans le diff. `Close account` est déclaré et
+    // `Reopen account` en diffère d'un mot, donc sans l'exemption le gate
+    // refusait ce clic pourtant optionnel (revue de code du 22 oct. 2026).
+    const plan = inventedCashTargetPlan("Quantité · Pièce de 2 €");
+    plan.scenarios[0]!.steps.unshift({
+      id: "establish",
+      description: "Rouvrir le compte s'il est fermé",
+      action: {
+        type: "click",
+        ifPresent: true,
+        locator: { by: "role", value: "button", name: "Reopen account" },
+      },
+    });
+    // Le contrat exécutable de `ifPresent` exige qu'une assertion vérifie l'état
+    // qu'il établit : elle porte un sélecteur CSS, donc elle n'entre pas dans la
+    // mesure des cibles role+nom.
+    plan.scenarios[0]!.assertions.push({
+      id: "establish-state",
+      description: "l'état établi par le clic optionnel est vérifié",
+      kind: "visible",
+      target: { by: "css", value: "[data-open]" },
+      afterStep: "establish",
+      verification: "state",
+    });
+    plan.scenarios[0]!.steps.splice(1, 0, {
+      id: "assert-establish",
+      description: "l'état établi est vérifié",
+      action: { type: "assert", assertionId: "establish-state" },
+    });
+    expect(
+      undeclaredTargetRefusals(PlanSchema.parse(plan), [
+        {
+          path: "src/account.ts",
+          lines: [{ line: 1, text: 'button "Close account"' }],
+        },
+      ])
+    ).toEqual([]);
+  });
   it("facture au budget les fragments écartés parce que trop longs", () => {
     // Un fragment de plus de 12 mots ne fournit jamais de voisin, mais il était
     // découpé puis écarté AVANT d'être facturé : chaque cible le redécoupait. La
