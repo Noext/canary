@@ -31,6 +31,7 @@ import {
   type PlanEvidenceReport,
   planEvidenceDiagnostic,
   stateTargetReadRefusals,
+  undeclaredTargetRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "./plan-evidence.js";
@@ -954,6 +955,9 @@ function planRefusalParts(
       ...writeEvidenceRefusals(candidate, policy).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
+      ...undeclaredTargetRefusals(candidate, sourceLineMaterial(context)).map(
+        (item) => `${item.error.message}. ${item.error.hint}`
+      ),
       ...unstableSelectorRefusals(candidate).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
@@ -1372,6 +1376,7 @@ async function executePlan(
       ...preconditionRefusals(result.plan, catalog, context.ref.repo),
       ...writeEvidenceRefusals(result.plan, policy),
       ...unstableSelectorRefusals(result.plan),
+      ...undeclaredTargetRefusals(result.plan, sourceLineMaterial(context)),
       ...attributeValueRefusals(result.plan),
       ...stateTargetReadRefusals(result.plan, {
         url: initialPage.url,

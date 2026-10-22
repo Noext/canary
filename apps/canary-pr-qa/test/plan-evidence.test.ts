@@ -16,6 +16,7 @@ import {
   missingExpectationRefusals,
   planEvidenceDiagnostic,
   typographicTargetNote,
+  undeclaredTargetRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
@@ -2346,5 +2347,127 @@ describe("résolution d'une référence de ligne (run 9add286d, forme sans recop
     // Rien n'a été inventé pour autant : le plan refusé est bloqué.
     expect(result.outcome).toBe("blocked");
     expect(result.diagnostic?.code).toBe("MODEL_JSON_INVALID");
+  });
+});
+
+/**
+ * Le matériel réel du diff de la PR 17 (`pharmania/arpilabe-pilotage`) au SHA
+ * 814b671, celui des 200 runs mesurés : les dénominations telles que la source
+ * les déclare (`packages/domain/src/cash.ts`) et le libellé composé par le
+ * gabarit (`apps/web/app/page.tsx`). Rien n'est inventé ici — ces lignes sont
+ * copiées du patch —, et c'est ce matériel qui rend l'invention lisible : la
+ * source énumère « Billet de 20 € » et « Pièce de 20 c », jamais « Pièce de
+ * 20 € ».
+ */
+const MEASURED_MATERIAL = [
+  {
+    path: "packages/domain/src/cash.ts",
+    lines: [
+      '  { cents: 50_000, label: "Billet de 500 €", kind: "billet" },',
+      '  { cents: 20_000, label: "Billet de 200 €", kind: "billet" },',
+      '  { cents: 10_000, label: "Billet de 100 €", kind: "billet" },',
+      '  { cents: 5_000, label: "Billet de 50 €", kind: "billet" },',
+      '  { cents: 2_000, label: "Billet de 20 €", kind: "billet" },',
+      '  { cents: 1_000, label: "Billet de 10 €", kind: "billet" },',
+      '  { cents: 500, label: "Billet de 5 €", kind: "billet" },',
+      '  { cents: 200, label: "Pièce de 2 €", kind: "piece" },',
+      '  { cents: 100, label: "Pièce de 1 €", kind: "piece" },',
+      '  { cents: 50, label: "Pièce de 50 c", kind: "piece" },',
+      '  { cents: 20, label: "Pièce de 20 c", kind: "piece" },',
+      '  { cents: 10, label: "Pièce de 10 c", kind: "piece" },',
+      '  { cents: 5, label: "Pièce de 5 c", kind: "piece" },',
+      '  { cents: 2, label: "Pièce de 2 c", kind: "piece" },',
+      '  { cents: 1, label: "Pièce de 1 c", kind: "piece" },',
+    ].map((text, index) => ({ line: index + 1, text })),
+  },
+  {
+    path: "apps/web/app/page.tsx",
+    lines: [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: la ligne citée garde son `${` : c'est le gabarit de la source, non évalué ici.
+      "aria-label={`Quantité · ${d.label}`}",
+      '"Montant d’espèces attendu"',
+    ].map((text, index) => ({ line: index + 1, text })),
+  },
+];
+
+/** Le scénario mesuré du run b7da97f1, réduit à l'étape qui a inventé sa cible. */
+function inventedCashTargetPlan(name: string): Plan {
+  const plan = readOnlyPlan({ by: "role", value: "textbox", name });
+  plan.scenarios[0]!.steps.splice(1, 0, {
+    id: "fill-20",
+    description: "Compter les pièces de 20 €",
+    action: {
+      type: "fill",
+      locator: { by: "role", value: "textbox", name },
+      value: "2",
+    },
+  });
+  return plan;
+}
+
+describe("refus statique d'une cible que le matériel source ne déclare pas", () => {
+  it("refuse la cible inventée du run b7da97f1 et nomme les noms déclarés à un mot", () => {
+    const plan = PlanSchema.parse(
+      inventedCashTargetPlan("Quantité · Pièce de 20 €")
+    );
+    const [refusal, ...rest] = undeclaredTargetRefusals(
+      plan,
+      MEASURED_MATERIAL
+    );
+    expect(rest).toEqual([]);
+    expect(refusal?.error.code).toBe("PLAN_TARGET_NOT_IN_SOURCE");
+    const message = String(refusal?.error.message);
+    expect(message).toContain(
+      'fill-20 → role=textbox name="Quantité · Pièce de 20 €"'
+    );
+    // Les quatre noms que le matériel déclare à un mot de l'invention : tous
+    // nommés, aucun présenté comme la correction.
+    expect(message).toContain('role=textbox name="Quantité · Billet de 20 €"');
+    expect(message).toContain('role=textbox name="Quantité · Pièce de 1 €"');
+    expect(message).toContain('role=textbox name="Quantité · Pièce de 2 €"');
+    expect(message).toContain('role=textbox name="Quantité · Pièce de 20 c"');
+    expect(String(refusal?.error.hint)).toContain(
+      "none of them is accepted in the target's place"
+    );
+  });
+  it("accepte un nom que le matériel compose avec un libellé qu'il déclare", () => {
+    for (const name of [
+      "Quantité · Billet de 100 €",
+      "Quantité · Pièce de 20 c",
+      "Quantité · Pièce de 1 €",
+      "Montant d’espèces attendu",
+    ]) {
+      const plan = PlanSchema.parse(inventedCashTargetPlan(name));
+      expect(undeclaredTargetRefusals(plan, MEASURED_MATERIAL)).toEqual([]);
+    }
+  });
+  it("ne refuse pas un nom absent du diff quand aucun nom déclaré n'en approche", () => {
+    // « Pharmacie active » est un combobox réel de la page, hors du diff : le
+    // matériel ne le déclare pas, et aucun nom déclaré n'en diffère qu'à un mot.
+    // Un refus ici bloquerait un plan correct, et la mesure du corpus l'a montré
+    // (une première version refusait ce combobox sur un fragment de code qui
+    // n'était pas un nom).
+    const plan = PlanSchema.parse(inventedCashTargetPlan("Pharmacie active"));
+    expect(undeclaredTargetRefusals(plan, MEASURED_MATERIAL)).toEqual([]);
+  });
+  it("ne refuse pas un nom d'un seul mot ni une cible non role+nom", () => {
+    expect(
+      undeclaredTargetRefusals(
+        PlanSchema.parse(inventedCashTargetPlan("P&L")),
+        MEASURED_MATERIAL
+      )
+    ).toEqual([]);
+    const labelPlan = readOnlyPlan({ by: "label", value: "Pièce de 2 €" });
+    expect(
+      undeclaredTargetRefusals(PlanSchema.parse(labelPlan), MEASURED_MATERIAL)
+    ).toEqual([]);
+  });
+  it("ne dit rien sans matériel déclaré", () => {
+    expect(
+      undeclaredTargetRefusals(
+        PlanSchema.parse(inventedCashTargetPlan("Quantité · Pièce de 20 €")),
+        []
+      )
+    ).toEqual([]);
   });
 });
