@@ -2340,18 +2340,23 @@ describe("résolution d'une référence de ligne (run 9add286d, forme sans recop
     // Le refus est celui du schéma d'entrée, rendu au planificateur avec la
     // ligne demandée et le numéro que le matériel porte réellement. Le plan
     // n'est jamais corrigé en silence : la même réponse invalide est refusée
-    // jusqu'à la fin de la tentative.
+    // jusqu'à la fin de la tentative. Le message dit que le JSON se lit et que
+    // c'est le plan qui est fautif, puis nomme la règle et le scénario.
     const correction = (
       f.modelRequests[1]?.messages as { content: string }[] | undefined
     )?.at(-1)?.content;
-    expect(correction).toContain("Invalid JSON or schema:");
+    expect(correction).toContain(
+      "The JSON is readable but the plan violates the contract:"
+    );
     expect(correction).toContain(
       "requirements.0.line: Line 400 of src/form.ts is outside the material"
     );
     expect(correction).toContain("368 before it");
-    // Rien n'a été inventé pour autant : le plan refusé est bloqué.
+    // Rien n'a été inventé pour autant : le plan refusé est bloqué, et le code
+    // dit un plan hors contrat, pas un transport en panne.
     expect(result.outcome).toBe("blocked");
-    expect(result.diagnostic?.code).toBe("MODEL_JSON_INVALID");
+    expect(result.diagnostic?.code).toBe("PLAN_SCHEMA_INVALID");
+    expect(result.diagnostic?.hint).toContain("368 before it");
   });
 });
 

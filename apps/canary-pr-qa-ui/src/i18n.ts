@@ -48,7 +48,7 @@ export const errorMessages: Record<string, string | undefined> = {
   MODEL_CATALOG_EMPTY:
     "Le fournisseur n’a renvoyé aucun modèle utilisable. Vérifiez son endpoint et sa clé.",
   MODEL_JSON_INVALID:
-    "Le modèle a renvoyé une réponse que Canary n’a pas pu interpréter.",
+    "Le modèle a renvoyé une réponse qui n’est pas du JSON lisible : Canary n’a pas pu l’interpréter.",
   MODEL_NOT_ALLOWED:
     "Ce modèle n’est pas autorisé sur ce serveur. Choisissez-en un dans la liste.",
   MODEL_OUTPUT_INCOMPLETE:
@@ -66,6 +66,8 @@ export const errorMessages: Record<string, string | undefined> = {
     "Un fichier modifié par la pull request n’est couvert par aucun scénario et n’est pas listé comme ignoré.",
   PLAN_SCENARIO_ID_RESERVED:
     "Le plan réutilise l’identifiant réservé à la découverte : ce scénario ne peut pas être exécuté.",
+  PLAN_SCHEMA_INVALID:
+    "Le plan du modèle est du JSON lisible, mais il viole le contrat de plan : le test n’a jamais été exécuté, et aucune assertion n’a été relâchée pour obtenir un succès.",
   PLAN_SELECTOR_UNSTABLE:
     "Le scénario cible un élément avec un sélecteur CSS dérivé d’une classe, d’une couleur lue dans la source ou d’une position (`aside > div`, `header h1`, `div:nth-of-type(2)`) : cette cible ne nomme aucun élément, elle en désigne un endroit, et plusieurs éléments peuvent s’y trouver. Un conteneur stable en tête ne la rend pas unique : `#panel > div` reste refusé.",
   PLAN_SKIP_OUTSIDE_DIFF:
@@ -726,6 +728,8 @@ export const runAdvice: Record<string, string> = {
     "Relancez le test pour obtenir un plan qui couvre tous les fichiers modifiés de la PR ; un chemin critique ne peut être ignoré que par un skip approuvé dans `.canary/qa.json`.",
   PLAN_SCENARIO_ID_RESERVED:
     "Relancez le test : l’identifiant `_discovery` est réservé au relevé de découverte et ne peut pas nommer un scénario.",
+  PLAN_SCHEMA_INVALID:
+    "Lisez la règle, le scénario et l’étape que nomme le diagnostic, corrigez le plan, puis relancez : une assertion ne s’affaiblit jamais pour obtenir un succès.",
   PLAN_SELECTOR_UNSTABLE:
     "Ciblez ce que montre l’instantané de découverte — un rôle avec son nom accessible, un id, ou un attribut stable défini par la source, écrits sur l’élément visé et non sur un de ses ancêtres — jamais une position (`>`, espace, `+`, `~`, `:nth-of-type`), puis relancez.",
   PLAN_STATE_TARGET_READ_AS_TEXT:

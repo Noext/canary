@@ -1018,7 +1018,17 @@ function validateContractAssertion(
   }
   const { assertionId } = step.action;
   const assertion = scenario.assertions.find((item) => item.id === assertionId);
-  const issue = (message: string) => ctx.addIssue({ code: "custom", message });
+  /**
+   * Le refus nomme le scénario ET l'étape : ces deux règles se lisent sur une
+   * étape précise, et un message sans eux laisse le planificateur chercher
+   * laquelle de ses vingt étapes cite une assertion qui n'existe pas. Le plan
+   * refusé repart au modèle avec ce texte, donc il doit suffire à réparer.
+   */
+  const issue = (message: string) =>
+    ctx.addIssue({
+      code: "custom",
+      message: `Scenario ${scenario.id} step ${step?.id}: ${message}`,
+    });
   if (!assertion) {
     issue("Unknown contract assertion");
     return;
@@ -1076,14 +1086,23 @@ function validateScenarioContract(
   ctx: z.RefinementCtx
 ) {
   const issue = (message: string) => ctx.addIssue({ code: "custom", message });
+  /**
+   * Une règle qui se lit sur le scénario entier nomme ce scénario : le refus
+   * repart au planificateur, et « Duplicate assertion ids » sans le scénario
+   * l'oblige à deviner lequel de ses vingt candidats est en cause.
+   */
+  const inScenario = (message: string) =>
+    issue(`Scenario ${scenario.id}: ${message}`);
   const stepIds = scenario.steps.map((step) => step.id);
   if (new Set(stepIds).size !== stepIds.length) {
-    issue("Duplicate contract step ids");
+    inScenario("Duplicate contract step ids");
   }
   const evaluated: string[] = [];
   for (const [index, step] of scenario.steps.entries()) {
     if (["finish", "blocked"].includes(step.action.type)) {
-      issue("Finish/blocked cannot be a contract step");
+      issue(
+        `Scenario ${scenario.id} step ${step.id}: Finish/blocked cannot be a contract step`
+      );
     }
     const fault = establishingClickFault(scenario, index);
     if (fault) {
@@ -1095,14 +1114,14 @@ function validateScenarioContract(
     }
   }
   if (new Set(evaluated).size !== evaluated.length) {
-    issue("Repeated contract assertion");
+    inScenario("Repeated contract assertion");
   }
   if (evaluated.length !== scenario.assertions.length) {
-    issue("Every assertion requires one ordered contract step");
+    inScenario("Every assertion requires one ordered contract step");
   }
   const ids = scenario.assertions.map((item) => item.id);
   if (new Set(ids).size !== ids.length) {
-    issue("Duplicate assertion ids");
+    inScenario("Duplicate assertion ids");
   }
 }
 export type Plan = z.infer<typeof PlanSchema>;
