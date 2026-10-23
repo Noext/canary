@@ -12,6 +12,7 @@ import { type Config, validateConfiguration } from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import {
+  declaredPreconditionNames,
   fixtureCatalog,
   NO_DECLARED_PRECONDITIONS,
   preconditionPlanRefusal,
@@ -820,6 +821,14 @@ export function planPayload(
   const payload = {
     changedFiles: context.files.map((file) => file.filename),
     fixtures: catalog,
+    /**
+     * Vrai quand le catalogue ne déclare RIEN pour ce dépôt : aucune
+     * précondition ne peut alors être satisfaite, donc chaque scénario qui en
+     * déclare une est bloqué avant la première étape (run 720c0ba0 : huit
+     * scénarios sur huit, sur `role:Administrateur démo 1` et `fixture:DEMO17`).
+     * Le planificateur reçoit ce fait au lieu de le déduire d'un catalogue vide.
+     */
+    preconditionsAvailable: declaredPreconditionNames(catalog).length > 0,
     initialPage,
     maxScenarios: config.QA_MAX_SCENARIOS,
     pr: context,
