@@ -1222,16 +1222,40 @@ export function quotePickCorrection(
     );
     return;
   };
-  // `after` ne porte pas le défaut de citation : il tient les refus dérivés —
-  // couverture, preuve d'écriture — que le plan sera de toute façon revalidé
-  // après la réponse. L'écarter ici privait de l'indice les runs dont la
-  // citation fautive entraînait justement un refus de couverture, c'est-à-dire
-  // ceux où le planificateur devait le plus être aidé.
   if (parts.reserved.length > 0) {
     return skip("reserved");
   }
   if (parts.before.length > 0) {
     return skip("before");
+  }
+  /**
+   * `after` ne porte pas le défaut de citation, mais il n'est pas réparable par
+   * un indice non plus. La seule partie qu'une citation répare est celle qui
+   * DÉRIVE d'elle — la couverture du fichier déclaré, que la paire résolue fait
+   * tomber. On rejoue donc les refus avec TOUTES les paires offertes résolues :
+   * si `after` se vide, tout ce qu'il portait venait des citations et l'indice
+   * suffit ; s'il reste quelque chose — un sélecteur instable, une attente
+   * d'attribut invalide, une preuve d'écriture manquante —, le plan a un autre
+   * défaut qu'un choix de ligne ne corrige pas, et la réécriture complète garde
+   * sa place (revue du 23 oct. 2026).
+   */
+  const allOffered = new Set(
+    offers.map((offer) =>
+      witnessPairKey(offer.scenarioId, offer.requirement.sourceFile)
+    )
+  );
+  const resolvedParts = planRefusalParts(
+    candidate,
+    policy,
+    context,
+    config,
+    catalog,
+    scans,
+    undefined,
+    allOffered
+  );
+  if (resolvedParts.after.length > 0) {
+    return skip("after", { afterResolved: resolvedParts.after.length });
   }
   if (
     parts.fatal.length === 0 ||

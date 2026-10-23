@@ -509,3 +509,26 @@ it("teaches where to read a text the view shows, instead of the state it pins", 
     /A data attribute the source defines as a stable hook stays a fine target/i
   );
 });
+
+it("teaches the effect of a blocking rule, not the mechanism it imagines", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Lot AP : deux scénarios du run 8ebadbfe ont asserté que le bouton de
+  // clôture portait `disabled` quand la justification manquait. L'application
+  // ne le désactive jamais (`canAttemptClose` ignore la justification) et
+  // refuse le clic — même règle documentée, mécanisme différent. La consigne
+  // dit donc d'asserter l'EFFET, et nomme le contre-exemple mesuré.
+  expect(prompt).toMatch(
+    /A BLOCKING rule the PR states .* asserted by its EFFECT/i
+  );
+  expect(prompt).toContain("canAttemptClose");
+  expect(prompt).toMatch(/never expect a disabled attribute/i);
+});
+
+it("sends a boundary case on the rejected side of the limit", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Lot AP : le run f05cd773 a rempli exactement 280 caractères et attendu le
+  // refus, alors que 280 est la borne acceptée. Le plan, pas l'application.
+  expect(prompt).toMatch(/A BOUNDARY case sits on the REJECTED side/i);
+  expect(prompt).toContain("L+1 are refused");
+  expect(prompt).toContain("exactly 280 characters");
+});
