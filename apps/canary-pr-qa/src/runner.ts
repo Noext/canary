@@ -1189,30 +1189,61 @@ export function quotePickCorrection(
     undefined,
     weakWitnessPairs(faults, context)
   );
-  if (
-    parts.reserved.length > 0 ||
-    parts.before.length > 0 ||
-    parts.after.length > 0
-  ) {
-    return;
-  }
-  if (
-    parts.fatal.length === 0 ||
-    parts.fatal.some((item) => item.code !== "REQUIREMENT_UNGROUNDED")
-  ) {
-    return;
-  }
   const offers: QuoteOffer[] = faults.map((fault) => ({
     candidates: quoteResolutionCandidates(fault.requirement, context, scans),
     rank: fault.rank,
     requirement: fault.requirement,
     scenarioId: fault.scenarioId,
   }));
+  /**
+   * Pourquoi la correction par indice s'écarte : mesuré, pas supposé. Les runs
+   * 8d80b3d4 et a2bf907f ont payé leur appel de correction et sont revenus avec
+   * la même citation, alors que les refus nommaient la ligne ; sans ce relevé,
+   * la seule façon de savoir laquelle des gardes a écarté l'indice était de
+   * relire le code en espérant tomber juste.
+   */
+  const skip = (
+    reason: string,
+    extra: Record<string, unknown> = {}
+  ): undefined => {
+    logger.info(
+      {
+        after: parts.after.length,
+        before: parts.before.length,
+        candidates: offers.map((offer) => offer.candidates.length),
+        fatal: parts.fatal.map((item) => item.code),
+        offers: offers.length,
+        reason,
+        reserved: parts.reserved.length,
+        runId,
+        ...extra,
+      },
+      "Quote pick correction skipped"
+    );
+    return;
+  };
+  // `after` ne porte pas le défaut de citation : il tient les refus dérivés —
+  // couverture, preuve d'écriture — que le plan sera de toute façon revalidé
+  // après la réponse. L'écarter ici privait de l'indice les runs dont la
+  // citation fautive entraînait justement un refus de couverture, c'est-à-dire
+  // ceux où le planificateur devait le plus être aidé.
+  if (parts.reserved.length > 0) {
+    return skip("reserved");
+  }
+  if (parts.before.length > 0) {
+    return skip("before");
+  }
+  if (
+    parts.fatal.length === 0 ||
+    parts.fatal.some((item) => item.code !== "REQUIREMENT_UNGROUNDED")
+  ) {
+    return skip("fatal");
+  }
   if (
     offers.length === 0 ||
     offers.some((offer) => offer.candidates.length === 0)
   ) {
-    return;
+    return skip("candidates");
   }
   const message = quotePickMessage(offers);
   if (message === "") {

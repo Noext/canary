@@ -1,3 +1,4 @@
+import { type Canary, compileProbe } from "./canary.js";
 import { type Diagnostic, QaError } from "./diagnostics.js";
 import type { explainMissingTarget } from "./missing-target.js";
 import type { ProgressEvent } from "./progress.js";
@@ -158,4 +159,32 @@ function finish(result: ScenarioResult) {
     );
   }
   result.outcome = "passed";
+}
+
+/**
+ * Le relevé d'avant-étape : une assertion `transition` ou `persisted` compare à
+ * la valeur mesurée AVANT l'interaction, une seule fois par assertion.
+ */
+export async function captureBaselines(
+  sessionId: string,
+  scenario: Scenario,
+  stepId: string | undefined,
+  baselines: Map<string, unknown>,
+  preview: string,
+  canary: Canary
+) {
+  for (const assertion of scenario.assertions) {
+    if (
+      assertion.afterStep === stepId &&
+      ["transition", "persisted"].includes(assertion.verification) &&
+      !baselines.has(assertion.id)
+    ) {
+      const observation = await canary.act(
+        sessionId,
+        `baseline-${assertion.id}`,
+        compileProbe(assertion, preview)
+      );
+      baselines.set(assertion.id, observation.actual);
+    }
+  }
 }

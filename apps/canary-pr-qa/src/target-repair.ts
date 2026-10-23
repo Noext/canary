@@ -85,28 +85,15 @@ async function chooseObservedTarget(
 }
 
 /**
- * Réécrit la cible d'une étape sur un élément observé. Rend le locator appliqué
- * pour que le résultat du run le consigne, ou `undefined` quand l'étape n'a pas
- * de cible à réécrire.
+ * La cible à jouer pour une reprise, construite sans toucher à l'action du plan.
+ * Le plan est partagé — `result.plan.scenarios`, `result.scenario`, l'entrée
+ * d'artefact de la tentative échouée — et `ScenarioResult.contract.hash` a été
+ * calculée sur lui AVANT l'exécution : réécrire son locator en place laissait un
+ * plan enregistré qui ne correspondait plus à son propre hash, et une tentative
+ * échouée qui affichait la cible de la reprise (revue du 23 oct. 2026).
  */
-function applyTarget(
-  action: Action,
-  chosen: ObservedTarget
-): Locator | undefined {
-  // Toutes les actions qui visent un élément portent leur cible dans
-  // `locator` (voir `ActionSchema`) : `fill`, `press`, `select`, `check`,
-  // `click`, `download`, `popup`, et `assert` en option. Une action sans
-  // `locator` — `goto`, `observe`, `finish`, `blocked` — n'a rien à réécrire.
-  if (!("locator" in action) || action.locator === undefined) {
-    return;
-  }
-  const locator: Locator = {
-    by: "role",
-    value: chosen.role,
-    name: chosen.name,
-  };
-  (action as { locator?: Locator }).locator = locator;
-  return locator;
+function repairedLocator(chosen: ObservedTarget): Locator {
+  return { by: "role", name: chosen.name, value: chosen.role };
 }
 
 /** La forme publiée dans l'artefact du run, jamais dans le rapport. */
@@ -127,7 +114,9 @@ export async function repairStepTarget(args: {
   scenario: string;
   step: Scenario["steps"][number];
   targets: ObservedTarget[] | undefined;
-}): Promise<ObservedTarget | undefined> {
+}): Promise<
+  { step: Scenario["steps"][number]; target: ObservedTarget } | undefined
+> {
   const { model, step, preview, targets } = args;
   if (
     model === undefined ||
@@ -141,6 +130,16 @@ export async function repairStepTarget(args: {
   const scope = runScope.getStore();
   if (scope && (scope.targetRepairs ?? 0) >= MAX_TARGET_REPAIRS_PER_RUN) {
     return;
+  }
+  /**
+   * La reprise est comptée AVANT la requête : une réponse `null`, une réponse
+   * refusée par le schéma ou une panne du modèle consomme une capacité d'appel
+   * et des jetons réels. Ne la compter qu'en cas de succès laissait un run
+   * dépasser le plafond de quatre reprises — et de fait le budget partagé de
+   * `MAX_MODEL_CALLS_PER_RUN` (revue du 23 oct. 2026).
+   */
+  if (scope) {
+    scope.targetRepairs = (scope.targetRepairs ?? 0) + 1;
   }
   let chosen: ObservedTarget | undefined;
   try {
@@ -156,11 +155,18 @@ export async function repairStepTarget(args: {
      */
     return;
   }
-  if (!(chosen && applyTarget(step.action, chosen))) {
+  if (!chosen) {
     return;
   }
-  if (scope) {
-    scope.targetRepairs = (scope.targetRepairs ?? 0) + 1;
-  }
-  return chosen;
+  // La tentative rejouée porte sa propre copie de l'action : le plan partagé,
+  // son hash de contrat et l'entrée de la tentative échouée gardent la cible
+  // que le planificateur avait écrite (revue du 23 oct. 2026).
+  const action = {
+    ...step.action,
+    locator: repairedLocator(chosen),
+  } as Scenario["steps"][number]["action"];
+  return {
+    step: { ...step, action } as Scenario["steps"][number],
+    target: chosen,
+  };
 }
