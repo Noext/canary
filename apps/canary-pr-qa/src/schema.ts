@@ -1184,6 +1184,15 @@ export interface StepResult {
   ok: boolean;
   reason: string;
   /**
+   * Cible substituée avant une seconde tentative, quand la page exposait un
+   * libellé voisin de celui que le plan avait écrit (run 287e0f0c :
+   * « Pièce de 20 € » planifiée là où la page expose « Billet de 20 € »).
+   * L'artefact dit ce qui a été joué ; le message publié n'en porte rien, et le
+   * scénario ne passe que si la cible observée produit vraiment le
+   * comportement attendu.
+   */
+  repairedTarget?: string;
+  /**
    * Clic `ifPresent` dont la cible était absente : l'étape n'a rien fait parce
    * que l'état qu'elle établit était déjà là. Ce n'est ni une réussite
    * silencieuse ni un échec, et le rapport le dit.
