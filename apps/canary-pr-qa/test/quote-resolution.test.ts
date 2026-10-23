@@ -524,3 +524,45 @@ describe("rejeu du corpus mesuré : le gate n'écrit aucun remplacement", () => 
     );
   });
 });
+
+describe("la correction par indice ne remplace pas la réécriture complète", () => {
+  it("s'écarte quand un refus de `after` ne vient pas des citations offertes", () => {
+    const context = contextFor(CASH);
+    // Une citation faible, réparable par indice…
+    const weak = planWith("ecart-a-justifier");
+    expect(
+      quoteResolutionCandidates(
+        { quote: "ecart-a-justifier", sourceFile: CASH },
+        context,
+        amputationScans()
+      ).length
+    ).toBeGreaterThan(0);
+    // …mais un second scénario porte un sélecteur positionnel, que
+    // `applyQuotePicks` ne touche pas : la réécriture complète doit rester.
+    const base = weak.scenarios[0]!;
+    const polluted = PlanSchema.parse({
+      ...weak,
+      scenarios: [
+        ...weak.scenarios,
+        {
+          ...structuredClone(base),
+          id: "other-scenario",
+          steps: [
+            ...base.steps,
+            {
+              id: "click-positional",
+              description: "cliquer une carte par position",
+              action: {
+                type: "click",
+                locator: { by: "css", value: "aside > div" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      quotePickCorrection(polluted, policy, context, config, "review-p2")
+    ).toBeUndefined();
+  });
+});
