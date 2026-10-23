@@ -1,3 +1,4 @@
+import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
 import type { Model } from "./model.js";
 import { runScope } from "./run-scope.js";
@@ -11,6 +12,8 @@ import type { Action, Locator, Scenario } from "./schema.js";
  * devinettes.
  */
 const MAX_TARGET_REPAIRS_PER_RUN = 4;
+
+const logger = createLogger({ name: "canary-pr-qa" });
 
 /** Une cible telle que la page l'expose à l'instant de l'échec. */
 export interface ObservedTarget {
@@ -118,18 +121,39 @@ export async function repairStepTarget(args: {
   { step: Scenario["steps"][number]; target: ObservedTarget } | undefined
 > {
   const { model, step, preview, targets } = args;
+  /**
+   * Pourquoi une reprise s'écarte : mesuré, pas supposé. Le run ff87a97b a bloqué
+   * quatre scénarios sur la même cible inventée sans qu'aucune reprise ne parte,
+   * et l'artefact ne dit pas laquelle des gardes l'a empêchée.
+   */
+  const skip = (reason: string): undefined => {
+    logger.info(
+      {
+        action: step.action.type,
+        reason,
+        scenario: args.scenario,
+        targets: targets?.length ?? 0,
+      },
+      "Target repair skipped"
+    );
+    return;
+  };
+  if (model === undefined) {
+    return skip("no-model");
+  }
   if (
-    model === undefined ||
     step.action.type === "assert" ||
     step.action.type === "observe" ||
-    step.action.type === "goto" ||
-    (targets?.length ?? 0) === 0
+    step.action.type === "goto"
   ) {
-    return;
+    return skip("not-repairable-action");
+  }
+  if ((targets?.length ?? 0) === 0) {
+    return skip("no-observed-targets");
   }
   const scope = runScope.getStore();
   if (scope && (scope.targetRepairs ?? 0) >= MAX_TARGET_REPAIRS_PER_RUN) {
-    return;
+    return skip("run-cap");
   }
   /**
    * La reprise est comptée AVANT la requête : une réponse `null`, une réponse
@@ -148,6 +172,10 @@ export async function repairStepTarget(args: {
       scenario: args.scenario,
     });
   } catch {
+    logger.info(
+      { scenario: args.scenario },
+      "Target repair failed, keeping the failure"
+    );
     /**
      * Une reprise qui échoue ne remplace jamais l'échec d'origine : sans
      * fournisseur configuré, ou sans réponse, le scénario garde son
@@ -156,7 +184,7 @@ export async function repairStepTarget(args: {
     return;
   }
   if (!chosen) {
-    return;
+    return skip("model-declined");
   }
   // La tentative rejouée porte sa propre copie de l'action : le plan partagé,
   // son hash de contrat et l'entrée de la tentative échouée gardent la cible
