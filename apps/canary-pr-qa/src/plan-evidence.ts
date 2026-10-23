@@ -19,6 +19,7 @@ import {
   type Scenario,
   type SourceLineMaterial,
 } from "./schema.js";
+import type { ObservedTarget } from "./target-repair.js";
 
 /**
  * Contrôle d'évidence du plan : juste après la planification, l'instantané
@@ -378,6 +379,12 @@ export interface ObservedTargetsNote {
    * le commentaire de PR et dans le résumé de support.
    */
   published: string;
+  /**
+   * Les cibles observées, dans l'ordre mécanique du relevé (rôle visé d'abord,
+   * puis contrôles de formulaire, puis ordre du DOM). Elles servent à la reprise
+   * d'exécution, qui ne peut choisir que parmi elles, et à personne d'autre.
+   */
+  targets?: ObservedTarget[];
 }
 
 /**
@@ -432,6 +439,7 @@ export function observedTargetsNote(
   const wanted = role === undefined ? undefined : ariaRole(role);
   const seen = new Set<string>();
   const observed: { rank: number; target: string }[] = [];
+  const entries: (ObservedTarget & { rank: number })[] = [];
   for (const { role: nodeRole, name } of nodes) {
     const normalized = normalizeText(name);
     const target = `${nodeRole} ${JSON.stringify(normalized)}`;
@@ -444,16 +452,26 @@ export function observedTargetsNote(
       continue;
     }
     seen.add(target);
-    observed.push({ rank: observationRank(nodeRole, wanted), target });
+    const rank = observationRank(nodeRole, wanted);
+    observed.push({ rank, target });
+    entries.push({ rank, role: nodeRole, name: normalized });
   }
   const ordered = observed
     .map((item, index) => ({ ...item, index }))
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
     .map((item) => item.target);
+  const ranked = entries
+    .map((item, index) => ({ ...item, index }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(({ role: entryRole, name: entryName }) => ({
+      role: entryRole,
+      name: entryName,
+    }));
   const shown = ordered.slice(0, limit);
   const rest = ordered.length - shown.length;
   return {
     published: OBSERVED_TARGETS_PUBLISHED,
+    targets: ranked.length === 0 ? undefined : ranked.slice(0, limit),
     detail:
       ordered.length === 0
         ? undefined

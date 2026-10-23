@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
 import { QaError } from "../src/diagnostics.js";
 import { executeScenario } from "../src/executor.js";
+import type { Model } from "../src/model.js";
 import {
   ariaRoleNameNodes,
   observedTargetsNote,
@@ -1386,5 +1387,158 @@ describe("énumération des cibles observées quand une cible ne résout pas", (
     expect(note?.detail).not.toContain("alpha beta alpha beta");
     expect(note?.detail).toContain("1 cible observée");
     expect(note?.published).not.toMatch(/\d/);
+  });
+});
+
+/**
+ * Reprise au runtime : quand une cible n'existe pas, la page vient de donner la
+ * liste exacte de ce qu'elle expose. Le run la transmet au modèle, qui désigne
+ * un élément de cette liste par son INDEX, puis l'étape est rejouée une seule
+ * fois sur cette cible.
+ *
+ * Ce que la reprise ne fait pas, et que ces tests tiennent : elle ne réécrit
+ * jamais une assertion (une promesse non tenue reste un échec), elle ne peut
+ * choisir qu'un élément observé, et elle ne devine rien quand le modèle ne
+ * désigne rien.
+ */
+describe("reprise au runtime d'une cible absente", () => {
+  /** Le scénario mesuré, tronqué au remplissage de la cible inventée. */
+  function measuredScenario() {
+    const scenario = structuredClone(MEASURED_PLAN.scenarios[0]!);
+    const invented = scenario.steps.findIndex((step) => step.id === "fill-20");
+    expect(invented).toBeGreaterThan(0);
+    scenario.steps = scenario.steps.slice(0, invented + 1);
+    scenario.assertions = scenario.assertions.filter(
+      (assertion) => assertion.id === "s1-total-1240"
+    );
+    return { scenario, invented };
+  }
+
+  it("rejoue l'étape sur la cible observée et consigne la reprise", async () => {
+    const { scenario, invented } = measuredScenario();
+    const f = await fixture();
+    const close = [f.close];
+    const labels: string[] = [];
+    const fillCall = `${invented + 1}-fill`;
+    let failures = 0;
+    vi.spyOn(Canary.prototype, "start").mockResolvedValue("repair-target");
+    vi.spyOn(Canary.prototype, "act").mockImplementation(
+      async (_session, label) => {
+        labels.push(label);
+        if (label === fillCall && failures === 0) {
+          failures += 1;
+          throw new QaError(
+            "TARGET_NOT_FOUND",
+            MEASURED_FAILURE,
+            "Check the target."
+          );
+        }
+        return {
+          url: "https://fixture/",
+          snapshot: OBSERVED_CASH_FIELDS,
+          evidence: OBSERVED_CASH_FIELDS,
+          actual: true,
+        };
+      }
+    );
+    vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+    const asked: unknown[] = [];
+    const model = {
+      json: async (_system: string, payload: never) => {
+        asked.push(payload);
+        const observed = (payload as { observedTargets: { name: string }[] })
+          .observedTargets;
+        const index = observed.findIndex((target) =>
+          target.name.includes("Billet de 20 €")
+        );
+        expect(index).toBeGreaterThanOrEqual(0);
+        return { index };
+      },
+    } as unknown as Model;
+    const result = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      f.config,
+      new Canary(f.config),
+      undefined,
+      "",
+      MATERIAL,
+      model
+    );
+    await Promise.all(close.map((done) => done()));
+    // L'étape a coûté deux appels navigateur : l'échec, puis la reprise.
+    expect(labels.filter((label) => label === fillCall)).toHaveLength(2);
+    expect(asked).toHaveLength(1);
+    const played = result.steps.find(
+      (step) => step.stepId === "fill-20" && step.ok
+    );
+    expect(played?.repairedTarget).toBe(
+      'role=textbox name="Quantité · Billet de 20 €"'
+    );
+    expect(result.diagnostic?.code).not.toBe("TARGET_NOT_FOUND");
+  });
+
+  it("ne réécrit jamais une assertion : une cible absente reste un échec", async () => {
+    const { scenario, invented } = measuredScenario();
+    // Le remplacement devient une assertion sur la cible absente : le remplissage
+    // disparaît, l'assertion reste seule à viser « Pièce de 20 € ».
+    const assertionStep = {
+      id: "assert-cible",
+      description: "Lire la pièce de 20 €",
+      action: { type: "assert" as const, assertionId: "s1-total-1240" },
+    };
+    scenario.steps = [...scenario.steps.slice(0, invented), assertionStep];
+    scenario.assertions = scenario.assertions.map((assertion) => ({
+      ...assertion,
+      target: {
+        by: "role" as const,
+        value: "textbox",
+        name: "Quantité · Pièce de 20 €",
+      },
+    }));
+    const f = await fixture();
+    const close = [f.close];
+    vi.spyOn(Canary.prototype, "start").mockResolvedValue("assert-target");
+    vi.spyOn(Canary.prototype, "act").mockImplementation(
+      async (_session, label) => {
+        if (label.endsWith("-assert")) {
+          throw new QaError(
+            "TARGET_NOT_FOUND",
+            MEASURED_FAILURE,
+            "Check the target."
+          );
+        }
+        return {
+          url: "https://fixture/",
+          snapshot: OBSERVED_CASH_FIELDS,
+          evidence: OBSERVED_CASH_FIELDS,
+          actual: true,
+        };
+      }
+    );
+    vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+    let asked = 0;
+    const model = {
+      json: async () => {
+        asked += 1;
+        return { index: 0 };
+      },
+    } as unknown as Model;
+    const result = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      f.config,
+      new Canary(f.config),
+      undefined,
+      "",
+      MATERIAL,
+      model
+    );
+    await Promise.all(close.map((done) => done()));
+    expect(asked).toBe(0);
+    expect(result.outcome).toBe("failed");
+    expect(result.diagnostic?.code).toBe("TARGET_NOT_FOUND");
   });
 });

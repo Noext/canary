@@ -1414,7 +1414,8 @@ async function executePlan(
         canary,
         (event) => progress.record(event),
         context.ref.repo,
-        material
+        material,
+        model
       )
     );
     await saveReport(root, result, config);
@@ -1449,7 +1450,8 @@ async function executePlan(
           canary,
           (event) => progress.record(event),
           context.ref.repo,
-          material
+          material,
+          model
         )
       );
     }

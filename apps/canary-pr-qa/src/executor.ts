@@ -7,155 +7,23 @@ import {
   compileAction,
   compileProbe,
   type Observation,
-  PLAN_EVIDENCE_SNAPSHOT_CHARS,
 } from "./canary.js";
 import type { Config } from "./config.js";
-import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
+import { diagnose, QaError } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
-import {
-  ariaRoleNameNodes,
-  observedTargetsNote,
-  typographicTargetNote,
-} from "./plan-evidence.js";
+import { explainMissingTarget } from "./missing-target.js";
+import type { Model } from "./model.js";
 import type { ProgressEvent } from "./progress.js";
 import type {
   Assertion,
-  Locator,
   Scenario,
   ScenarioResult,
   SourceLineMaterial,
 } from "./schema.js";
+import { finish, recordStepPlayed, reportStepFailure } from "./step-outcome.js";
+import { describeTarget, repairStepTarget } from "./target-repair.js";
 import { compareVisual } from "./visual.js";
 
-/** Locator qui porte un nom accessible : le seul concerné par la graphie d'un signe. */
-type NamedTarget = Extract<Locator, { by: "role" }>;
-
-/**
- * Cible role+nom d'une étape ou de l'assertion qu'elle exécute. Les autres types
- * de locator ne portent pas de nom accessible.
- */
-function roleNameTarget(
-  scenario: Scenario,
-  step: Scenario["steps"][number]
-): NamedTarget | undefined {
-  const { action } = step;
-  const assertion =
-    action.type === "assert"
-      ? scenario.assertions.find((item) => item.id === action.assertionId)
-      : undefined;
-  const target =
-    ("locator" in action ? action.locator : undefined) ?? assertion?.target;
-  return target?.by === "role" ? target : undefined;
-}
-
-/**
- * Une cible restée introuvable est expliquée avec ce que la page expose : une
- * graphie jumelle quand il n'y en a qu'une (Playwright compare le nom accessible
- * caractère par caractère, `exact: true`, et le plan recopie souvent la
- * ponctuation de la source — U+0027 — là où l'application expose l'apostrophe
- * typographique — U+2019), et à défaut les cibles réellement observées dans le
- * DOM à cet instant, rôle et nom accessible, huit au plus. Le relevé n'a lieu
- * qu'après l'échec, n'énonce aucun refus, ne choisit aucune cible et ne bloque
- * aucun run qui réussissait : une page qui ne répond plus garde le message
- * générique. Sans cette énumération, une cible inventée et une cible mal
- * dérivée produisaient le même message, et la différence restait dans le
- * snapshot que personne ne lisait.
- *
- * Rien de ce que la page expose ne se publie : `note` est la phrase qui part
- * dans le message (donc dans le commentaire de PR et le résumé de support) et
- * elle est CONSTANTE — ni nom, ni compte, ni cardinalité, sinon le commentaire
- * répondrait à « ce libellé deviné existe-t-il ? » pour un auteur de PR qui
- * contrôle le diff. `observedTargets` porte le compte et les noms, et ne va que
- * dans l'artefact du run, sous `StepResult.observedTargets` (revue de sécurité
- * du 22 oct. 2026).
- */
-async function explainMissingTarget(
-  failure: unknown,
-  sessionId: string,
-  step: Scenario["steps"][number],
-  scenario: Scenario,
-  preview: string,
-  canary: Canary,
-  config: Config,
-  material: SourceLineMaterial[]
-): Promise<{
-  diagnostic: Diagnostic;
-  note?: string;
-  observedTargets?: string;
-}> {
-  const diagnostic = diagnose(failure, config);
-  if (diagnostic.code !== "TARGET_NOT_FOUND") {
-    return { diagnostic };
-  }
-  const locator = roleNameTarget(scenario, step);
-  try {
-    const current = await canary.act(
-      sessionId,
-      "target-name-check",
-      compileAction({ type: "observe" }, preview, undefined, {
-        evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
-      })
-    );
-    const nodes = ariaRoleNameNodes(current.evidence ?? current.snapshot);
-    const note = locator
-      ? typographicTargetNote(locator.name, locator.value, nodes)
-      : undefined;
-    const observed = note
-      ? undefined
-      : observedTargetsNote(
-          nodes,
-          material,
-          locator?.by === "role" ? locator.value : undefined
-        );
-    const explanation = note ?? observed?.published;
-    return explanation
-      ? {
-          diagnostic: {
-            ...diagnostic,
-            message: `${diagnostic.message} — ${explanation}`,
-          },
-          note: explanation,
-          observedTargets: observed?.detail,
-        }
-      : { diagnostic };
-  } catch {
-    // Le relevé est un confort : une page qui ne répond plus garde le message
-    // générique, et l'échec d'origine reste celui qui est rapporté.
-    return { diagnostic };
-  }
-}
-
-/**
- * Le contrat joué doit être EXACTEMENT le contrat planifié : mêmes identifiants,
- * même ordre. Comparer les longueurs laissait passer une étape jouée deux fois
- * compensant une étape sautée, et surtout ne disait pas laquelle manquait : le
- * hint nomme les étapes absentes du relevé.
- */
-function finish(result: ScenarioResult) {
-  const planned = result.scenario.steps.map((step) => step.id);
-  const played = result.contract?.completedSteps ?? [];
-  if (
-    played.length !== planned.length ||
-    played.some((id, index) => id !== planned[index])
-  ) {
-    const missing = planned.filter((id) => !played.includes(id));
-    throw new QaError(
-      "CONTRACT_INCOMPLETE",
-      "AI attempted to finish before all planned assertions and required steps completed",
-      `Execute the original ordered contract; do not omit actions or weaken assertions.${missing.length > 0 ? ` Missing steps: ${missing.join(", ")}.` : ""}`
-    );
-  }
-  if (
-    !result.scenario.assertions.every((a) =>
-      result.assertions.some((item) => item.id === a.id && item.passed)
-    )
-  ) {
-    throw new Error(
-      "AI attempted to finish before all planned assertions passed"
-    );
-  }
-  result.outcome = "passed";
-}
 async function performStep(
   sessionId: string,
   step: Scenario["steps"][number],
@@ -432,35 +300,81 @@ async function captureBaselines(
     }
   }
 }
-/**
- * Une cible qui n'apparaît jamais est une promesse non tenue, pas une panne :
- * un `assert` affirme qu'un élément existe, donc son échec est une assertion
- * fausse et le scénario échoue. Un clic dont la même cible ne résout jamais
- * reste une panne d'exécution (`false`) : l'action n'a pas atteint son but.
- */
-function failAssertionOnMissingTarget(
-  result: ScenarioResult,
-  step: Scenario["steps"][number],
-  diagnostic: Diagnostic,
-  baselines: Map<string, unknown>
-): boolean {
-  if (step.action.type !== "assert" || diagnostic.code !== "TARGET_NOT_FOUND") {
-    return false;
+async function playStepWithRepair(args: {
+  baselines: Map<string, unknown>;
+  canary: Canary;
+  config: Config;
+  index: number;
+  material: SourceLineMaterial[];
+  model?: Model;
+  preview: string;
+  repo: string;
+  result: ScenarioResult;
+  sessionId: string;
+  step: Scenario["steps"][number];
+}): Promise<{
+  failure?: Awaited<ReturnType<typeof explainMissingTarget>>;
+  repairedTo?: string;
+}> {
+  const { sessionId, step, index, result, preview, canary, baselines, config } =
+    args;
+  const { repo, material, model } = args;
+  let repairedTo: string | undefined;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await performStep(
+        sessionId,
+        step,
+        index,
+        result,
+        preview,
+        canary,
+        baselines,
+        config,
+        repo
+      );
+      return { repairedTo };
+    } catch (error) {
+      const failure = await explainMissingTarget(
+        error,
+        sessionId,
+        step,
+        result.scenario,
+        preview,
+        canary,
+        config,
+        material
+      );
+      const chosen =
+        attempt === 1
+          ? await repairStepTarget({
+              model,
+              preview,
+              scenario: result.scenario.title,
+              step,
+              targets: failure.targets,
+            })
+          : undefined;
+      if (!chosen) {
+        return { failure };
+      }
+      repairedTo = describeTarget(chosen);
+      // La cible d'origine reste lisible : le résultat dit ce qui a été visé,
+      // puis ce qui a été joué, et la reprise ne se confond pas avec un plan
+      // qui aurait eu raison.
+      result.steps.push({
+        action: step.action,
+        index,
+        ok: false,
+        reason: `cible absente, reprise tentée sur ${repairedTo}`,
+        observation: `cible absente, reprise tentée sur ${repairedTo}`,
+        observedTargets: failure.observedTargets,
+        stepId: step.id,
+      });
+    }
   }
-  const { assertionId } = step.action;
-  if (!result.assertions.some((item) => item.id === assertionId)) {
-    result.assertions.push({
-      id: assertionId,
-      passed: false,
-      actual: undefined,
-      baseline: baselines.get(assertionId),
-    });
-  }
-  result.outcome = "failed";
-  result.diagnostic = diagnostic;
-  result.error = `Assertion ${assertionId} failed: the target never appeared — ${diagnostic.message}`;
-  return true;
 }
+
 async function driveScenario(
   sessionId: string,
   result: ScenarioResult,
@@ -469,7 +383,8 @@ async function driveScenario(
   canary: Canary,
   record: (event: ProgressEvent) => Promise<void>,
   repo: string,
-  material: SourceLineMaterial[]
+  material: SourceLineMaterial[],
+  model?: Model
 ) {
   await canary.act(
     sessionId,
@@ -497,98 +412,29 @@ async function driveScenario(
       step: index,
       action: step.action.type,
     });
-    try {
-      await performStep(
-        sessionId,
-        step,
-        index,
-        result,
-        preview,
-        canary,
-        baselines,
-        config,
-        repo
-      );
-      // Toute étape planifiée entre au contrat, `observe` compris. L'ancien
-      // exécuteur excluait `observe` parce qu'il s'agissait alors d'un coup
-      // d'œil libre du modèle, qui ne faisait pas avancer le contrat ; depuis
-      // que l'hôte joue le plan figé, c'est une étape planifiée comme une
-      // autre, et l'exclure faisait refuser par `finish()` un contrat pourtant
-      // joué en entier (run 91fb1e35 : 6 scénarios sur 6, zéro étape en échec,
-      // zéro assertion fausse).
-      result.contract?.completedSteps.push(step.id);
-      const played = result.steps.at(-1);
-      let stepOutcome = "ok";
-      if (result.outcome === "failed") {
-        stepOutcome = "failed";
-      }
-      if (played?.skipped === true) {
-        stepOutcome = "skipped";
-      }
-      await record({
-        phase: "execution",
-        scenarioId: result.scenario.id,
-        step: index,
-        action: step.action.type,
-        outcome: stepOutcome,
-        durationMs: Date.now() - started,
-      });
-    } catch (error) {
-      const explained = await explainMissingTarget(
-        error,
-        sessionId,
-        step,
-        result.scenario,
-        preview,
-        canary,
-        config,
-        material
-      );
-      result.steps.push({
-        index,
-        stepId: step.id,
-        action: step.action,
-        ok: false,
-        reason: explained.diagnostic.message,
-        observation: explained.diagnostic.message,
-        // Les noms observés vivent ici, dans l'artefact du run, et nulle part
-        // dans ce qui se publie : `reportMarkdown` ne lit pas ce champ.
-        observedTargets: explained.observedTargets,
-      });
-      await record({
-        phase: "execution",
-        scenarioId: result.scenario.id,
-        step: index,
-        action: step.action.type,
-        outcome: "error",
-        diagnostic: explained.diagnostic,
-      });
-      // Le verdict et l'erreur nommée sont déjà posés : renvoyer ici évite que
-      // le catch de `executeScenario` les remplace par le message brut.
-      if (
-        failAssertionOnMissingTarget(
-          result,
-          step,
-          explained.diagnostic,
-          baselines
-        )
-      ) {
-        return;
-      }
-      if (explained.note) {
-        // L'erreur publiée doit porter l'explication : `diagnose` reprend un
-        // `QaError` tel quel, alors que l'erreur brute serait rendue sans elle.
-        throw new QaError(
-          explained.diagnostic.code,
-          explained.diagnostic.message,
-          explained.diagnostic.hint
-        );
-      }
-      throw error;
+    const { failure, repairedTo } = await playStepWithRepair({
+      baselines,
+      canary,
+      config,
+      index,
+      material,
+      model,
+      preview,
+      repo,
+      result,
+      sessionId,
+      step,
+    });
+    if (failure === undefined) {
+      await recordStepPlayed(result, step, index, repairedTo, record, started);
+    } else {
+      await reportStepFailure(failure, step, index, result, baselines, record);
     }
     // Un verdict déjà posé arrête le scénario : `finish()` exigerait toutes les
-    // assertions vertes et remplacerait le diagnostic par son propre message,
-    // qu'il s'agisse d'un échec ou d'un reclassement en `blocked`.
+    // assertions vertes et remplacerait le diagnostic par son message. Le
+    // contrôle vaut aussi pour une étape JOUÉE dont l'assertion a échoué — sans
+    // lui, le `finish` suivant écrase le verdict par « finish before all planned
+    // assertions passed ».
     if (result.outcome === "failed" || result.diagnostic) {
       return;
     }
@@ -604,7 +450,13 @@ export async function executeScenario(
   record: (event: ProgressEvent) => Promise<void> = async () =>
     Promise.resolve(),
   repo = "",
-  material: SourceLineMaterial[] = []
+  material: SourceLineMaterial[] = [],
+  /**
+   * Fourni par le runner. Absent en test unitaire : la reprise de cible est
+   * alors purement désactivée, et l'échec reste l'échec — aucun test ne peut
+   * passer grâce à une reprise qu'il n'a pas demandée.
+   */
+  model?: Model
 ): Promise<ScenarioResult> {
   const result: ScenarioResult = {
     scenario,
@@ -631,7 +483,8 @@ export async function executeScenario(
       canary,
       record,
       repo,
-      material
+      material,
+      model
     );
   } catch (error) {
     result.diagnostic = diagnose(error, config);

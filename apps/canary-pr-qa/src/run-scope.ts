@@ -40,6 +40,12 @@ export interface RunScope {
    */
   retries?: number;
   signal: AbortSignal;
+  /**
+   * Reprises de cible consommées par ce run (`target-repair.ts`). Comptées à
+   * part : elles ne sont pas des reprises de transport, et le plafond est un
+   * plafond de dépense, pas de qualité.
+   */
+  targetRepairs?: number;
   tokens: number;
   verifyOwnership?: () => Promise<void>;
 }
