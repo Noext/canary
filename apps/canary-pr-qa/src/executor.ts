@@ -20,7 +20,12 @@ import type {
   ScenarioResult,
   SourceLineMaterial,
 } from "./schema.js";
-import { finish, recordStepPlayed, reportStepFailure } from "./step-outcome.js";
+import {
+  captureBaselines,
+  finish,
+  recordStepPlayed,
+  reportStepFailure,
+} from "./step-outcome.js";
 import { describeTarget, repairStepTarget } from "./target-repair.js";
 import { compareVisual } from "./visual.js";
 
@@ -277,29 +282,6 @@ function recordUnprovenAssertion(
   }
   result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
 }
-async function captureBaselines(
-  sessionId: string,
-  scenario: Scenario,
-  stepId: string | undefined,
-  baselines: Map<string, unknown>,
-  preview: string,
-  canary: Canary
-) {
-  for (const assertion of scenario.assertions) {
-    if (
-      assertion.afterStep === stepId &&
-      ["transition", "persisted"].includes(assertion.verification) &&
-      !baselines.has(assertion.id)
-    ) {
-      const observation = await canary.act(
-        sessionId,
-        `baseline-${assertion.id}`,
-        compileProbe(assertion, preview)
-      );
-      baselines.set(assertion.id, observation.actual);
-    }
-  }
-}
 async function playStepWithRepair(args: {
   baselines: Map<string, unknown>;
   canary: Canary;
@@ -320,11 +302,15 @@ async function playStepWithRepair(args: {
     args;
   const { repo, material, model } = args;
   let repairedTo: string | undefined;
+  // La tentative rejouée porte sa propre copie de l'action : le plan partagé,
+  // son hash de contrat et l'entrée de la tentative échouée gardent la cible
+  // que le planificateur avait écrite.
+  let attemptStep = step;
   for (let attempt = 1; ; attempt += 1) {
     try {
       await performStep(
         sessionId,
-        step,
+        attemptStep,
         index,
         result,
         preview,
@@ -358,7 +344,8 @@ async function playStepWithRepair(args: {
       if (!chosen) {
         return { failure };
       }
-      repairedTo = describeTarget(chosen);
+      repairedTo = describeTarget(chosen.target);
+      attemptStep = chosen.step;
       // La cible d'origine reste lisible : le résultat dit ce qui a été visé,
       // puis ce qui a été joué, et la reprise ne se confond pas avec un plan
       // qui aurait eu raison.

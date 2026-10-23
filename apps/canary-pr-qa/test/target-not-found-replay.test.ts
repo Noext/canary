@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
 import { QaError } from "../src/diagnostics.js";
@@ -8,12 +9,14 @@ import {
   observedTargetsNote,
   validatePlanEvidence,
 } from "../src/plan-evidence.js";
+import { type RunScope, runScope } from "../src/run-scope.js";
 import { runQa } from "../src/runner.js";
 import {
   type Plan,
   PlanSchema,
   type SourceLineMaterial,
 } from "../src/schema.js";
+import { repairStepTarget } from "../src/target-repair.js";
 import { fixture, PR_URL } from "./fixture.js";
 import { LOT_AL_SCENARIOS } from "./lot-al-plan.js";
 
@@ -1540,5 +1543,117 @@ describe("reprise au runtime d'une cible absente", () => {
     expect(asked).toBe(0);
     expect(result.outcome).toBe("failed");
     expect(result.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+  });
+});
+
+describe("la reprise ne touche pas au plan exécuté", () => {
+  it("garde la cible du planificateur, son hash de contrat et la tentative échouée", async () => {
+    const scenario = structuredClone(MEASURED_PLAN.scenarios[0]!);
+    const invented = scenario.steps.findIndex((step) => step.id === "fill-20");
+    scenario.steps = scenario.steps.slice(0, invented + 1);
+    scenario.assertions = scenario.assertions.filter(
+      (assertion) => assertion.id === "s1-total-1240"
+    );
+    const original = structuredClone(scenario.steps[invented]!.action);
+    const f = await fixture();
+    const close = [f.close];
+    let failures = 0;
+    const fillCall = `${invented + 1}-fill`;
+    vi.spyOn(Canary.prototype, "start").mockResolvedValue("no-mutation");
+    vi.spyOn(Canary.prototype, "act").mockImplementation(
+      async (_session, label) => {
+        if (label === fillCall && failures === 0) {
+          failures += 1;
+          throw new QaError(
+            "TARGET_NOT_FOUND",
+            MEASURED_FAILURE,
+            "Check the target."
+          );
+        }
+        return {
+          url: "https://fixture/",
+          snapshot: OBSERVED_CASH_FIELDS,
+          evidence: OBSERVED_CASH_FIELDS,
+          actual: true,
+        };
+      }
+    );
+    vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+    const model = {
+      json: async (_system: string, payload: never) => {
+        const observed = (payload as { observedTargets: { name: string }[] })
+          .observedTargets;
+        return {
+          index: observed.findIndex((target) =>
+            target.name.includes("Billet de 20 €")
+          ),
+        };
+      },
+    } as unknown as Model;
+    const result = await executeScenario(
+      scenario,
+      f.baseUrl,
+      f.dataDir,
+      f.config,
+      new Canary(f.config),
+      undefined,
+      "",
+      MATERIAL,
+      model
+    );
+    await Promise.all(close.map((done) => done()));
+    // Le plan exécuté garde la cible du planificateur…
+    expect(scenario.steps[invented]?.action).toEqual(original);
+    // …la tentative échouée aussi, et seule l'entrée jouée nomme la reprise.
+    const failed = result.steps.find(
+      (step) => step.stepId === "fill-20" && !step.ok
+    );
+    expect(failed?.action).toEqual(original);
+    const played = result.steps.find(
+      (step) => step.stepId === "fill-20" && step.ok
+    );
+    expect(played?.repairedTarget).toBe(
+      'role=textbox name="Quantité · Billet de 20 €"'
+    );
+    // Le hash de contrat décrit le plan tel qu'il a été planifié.
+    expect(result.contract?.hash).toBe(
+      createHash("sha256").update(JSON.stringify(scenario)).digest("hex")
+    );
+  });
+
+  it("compte une reprise même quand le modèle ne désigne rien", async () => {
+    const scope: RunScope = {
+      calls: 0,
+      costUsd: 0,
+      id: "repair-count",
+      maxCostUsd: 0,
+      maxTokens: 0,
+      reservedCostUsd: 0,
+      reservedTokens: 0,
+      signal: new AbortController().signal,
+      tokens: 0,
+    };
+    const model = { json: async () => ({ index: null }) } as unknown as Model;
+    const step = {
+      id: "fill-20",
+      description: "compter",
+      action: {
+        type: "fill" as const,
+        locator: { by: "role" as const, value: "textbox", name: "Pièce" },
+        value: "2",
+      },
+    };
+    const chosen = await runScope.run(scope, () =>
+      repairStepTarget({
+        model,
+        preview: "https://fixture/",
+        scenario: "s",
+        step,
+        targets: [{ name: "Billet de 20 €", role: "textbox" }],
+      })
+    );
+    expect(chosen).toBeUndefined();
+    // La requête a eu lieu : la capacité est consommée, plafond compris.
+    expect(scope.targetRepairs).toBe(1);
   });
 });
