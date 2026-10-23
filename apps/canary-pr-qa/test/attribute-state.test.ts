@@ -1485,11 +1485,13 @@ describe("état de la caisse hérité d'un run antérieur", () => {
     }
   });
 
-  it("accepte verification state sur une caisse déjà ouverte, là où transition échouerait", async () => {
+  it("accepte verification state sur une caisse déjà ouverte, là où transition bloque le plan", async () => {
     // L'étape d'établissement ne déplace la valeur que si l'état était
-    // l'autre. Vérifiée en `transition`, elle échoue donc en
-    // TRANSITION_NOT_OBSERVED quand la caisse est déjà ouverte ; vérifiée en
-    // `state`, elle passe dans les deux configurations.
+    // l'autre. Vérifiée en `transition`, elle n'a aucun changement à montrer
+    // quand la caisse est déjà ouverte : vérifiée en `state`, elle passe dans
+    // les deux configurations ; vérifiée en `transition`, elle est reclassée en
+    // `blocked` — la valeur attendue est déjà celle qui est affichée, donc c'est
+    // le plan qui exigeait un changement sur un invariant.
     const open = await setup();
     cashPage("ouvert");
     scriptPlan(PlanSchema.parse(establishesOpenPlan()));
@@ -1509,9 +1511,10 @@ describe("état de la caisse hérité d'un run antérieur", () => {
       { prUrl: PR_URL, previewUrl: strict.baseUrl },
       strict.config
     );
-    expect(strictRun.outcome).toBe("failed");
+    expect(strictRun.outcome).toBe("blocked");
+    expect(strictRun.scenarios[0]?.outcome).toBe("blocked");
     expect(strictRun.scenarios[0]?.diagnostic?.code).toBe(
-      "TRANSITION_NOT_OBSERVED"
+      "TRANSITION_ON_INVARIANT"
     );
   });
 });
@@ -1768,10 +1771,12 @@ describe("établissement d'état tolérant : click(ifPresent)", () => {
     );
   });
 
-  it("n'attribue aucune transition à une étape sautée : les deux valeurs sont identiques", async () => {
+  it("n'attribue aucune transition à une étape sautée : le plan est bloqué, pas l'application", async () => {
     // Une étape qui n'a pas eu lieu ne prouve aucun déplacement : sa baseline
-    // vaut la valeur observée, et `transition` échoue en TRANSITION_NOT_OBSERVED
-    // plutôt que de passer pour une preuve.
+    // vaut la valeur observée, et l'attendu déjà en place est celui qu'elle
+    // affiche. Le scénario n'est donc pas vert — la transition n'est pas
+    // démontrée — mais le blâme va au plan, qui a exigé un changement
+    // impossible sur une invariance.
     const plan = statefulPlan();
     plan.scenarios[0]!.assertions[0]!.verification = "transition";
     const f = await setup({ plans: [PlanSchema.parse(plan)] });
@@ -1780,9 +1785,10 @@ describe("établissement d'état tolérant : click(ifPresent)", () => {
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
     );
-    expect(result.outcome).toBe("failed");
+    expect(result.outcome).toBe("blocked");
+    expect(result.scenarios[0]?.outcome).toBe("blocked");
     expect(result.scenarios[0]?.diagnostic?.code).toBe(
-      "TRANSITION_NOT_OBSERVED"
+      "TRANSITION_ON_INVARIANT"
     );
     expect(
       result.scenarios[0]?.steps.find((s) => s.stepId === "reopen")?.skipped

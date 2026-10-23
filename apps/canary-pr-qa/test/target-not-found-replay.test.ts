@@ -1182,9 +1182,13 @@ describe("rejeu du run 20c3c29a : cibles réelles que le diff ne déclare pas", 
     );
     // Aucun scénario n'est arrêté avant sa première étape navigateur : les deux
     // plans atteignent la vue Caisse, ce que le refus statique leur interdisait.
-    expect(result.outcome).not.toBe("blocked");
+    // Un refus de plan se lit à son code (PLAN_*) et à un scénario sans aucune
+    // étape ; le verdict d'exécution, lui, dépend de la page simulée, qui ne
+    // bouge pas d'une lecture à l'autre et rend donc les transitions du plan
+    // indémontrables.
     for (const scenario of result.scenarios) {
       expect(scenario.steps.length).toBeGreaterThan(0);
+      expect(scenario.diagnostic?.code ?? "").not.toMatch(/^PLAN_/);
       // Les champs de comptage visés par le run ont bien été remplis : leurs
       // cibles existent, c'est l'application qui décide, pas le diff.
       expect(

@@ -71,10 +71,13 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((close) => close()));
 });
 
-async function runBanner(
-  verification: "transition" | "persisted",
-  values: { actual: string; baseline: string; persisted?: string }
-) {
+interface Probes {
+  actual: unknown;
+  baseline: unknown;
+  persisted?: unknown;
+}
+
+async function runScenario(scenario: Scenario, probes: Probes) {
   const dataDir = await mkdtemp(join(tmpdir(), "canary-transition-"));
   cleanups.push(() => rm(dataDir, { force: true, recursive: true }));
   const preview = "http://127.0.0.1:9/preview";
@@ -85,26 +88,26 @@ async function runBanner(
     QA_API_TOKEN: "fixture-api-token-123456789012345",
     QA_DATA_DIR: dataDir,
   });
-  const observation = (actual: string): Observation => ({
+  const observation = (actual: unknown): Observation => ({
     actual,
-    snapshot: `repère : ${actual}`,
+    snapshot: `repère : ${String(actual)}`,
     url: preview,
   });
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("transition-evidence");
   vi.spyOn(Canary.prototype, "act").mockImplementation(
     async (_session, label) => {
       if (label.startsWith("baseline-")) {
-        return observation(values.baseline);
+        return observation(probes.baseline);
       }
       if (label.startsWith("persistence-")) {
-        return observation(values.persisted ?? values.actual);
+        return observation(probes.persisted ?? probes.actual);
       }
-      return observation(values.actual);
+      return observation(probes.actual);
     }
   );
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
   return executeScenario(
-    bannerScenario(verification),
+    scenario,
     preview,
     dataDir,
     config,
@@ -112,25 +115,55 @@ async function runBanner(
   );
 }
 
-it("explains an unchanged transition instead of recopying the assertion description", async () => {
+async function runBanner(
+  verification: "transition" | "persisted",
+  values: { actual: string; baseline: string; persisted?: string }
+) {
+  return runScenario(bannerScenario(verification), values);
+}
+
+it("reclassifies an unchanged transition that already shows the expected value", async () => {
   const result = await runBanner("transition", {
     actual: BANNER,
     baseline: BANNER,
   });
-  expect(result.outcome).toBe("failed");
+  // La valeur est celle que l'assertion attendait déjà : le plan a exigé un
+  // changement sur un invariant, donc l'application n'a rien à se reprocher. Le
+  // verdict reste non vert, et le relevé fautif reste enregistré.
+  expect(result.outcome).toBe("blocked");
   expect(result.assertions[0]).toMatchObject({
     actual: BANNER,
     baseline: BANNER,
     passed: false,
   });
-  expect(result.diagnostic?.code).toBe("TRANSITION_NOT_OBSERVED");
+  expect(result.diagnostic?.code).toBe("TRANSITION_ON_INVARIANT");
   expect(result.error).toBe(result.diagnostic?.message);
   expect(result.error).toMatch(/banner-text-after/);
   expect(result.error).toMatch(/go-pnl/);
   expect(result.error).toMatch(/identical to the baseline/);
+  expect(result.error).toMatch(/the plan requires a change on a value/);
   expect(result.error).not.toContain(DESCRIPTION);
   expect(result.diagnostic?.hint).toMatch(/"state"/);
   expect(result.diagnostic?.hint).toMatch(/afterStep/);
+});
+
+it("keeps a failed change failed when the unchanged value misses the expectation", async () => {
+  // Valeur qui devait changer et n'a pas bougé : l'attendu n'est pas atteint, et
+  // ce n'est plus le plan qui est en cause. Le reclassement ne doit jamais
+  // couvrir ce cas.
+  const result = await runBanner("transition", {
+    actual: "Aperçu de PR",
+    baseline: "Aperçu de PR",
+  });
+  expect(result.outcome).toBe("failed");
+  expect(result.assertions[0]).toMatchObject({
+    actual: "Aperçu de PR",
+    baseline: "Aperçu de PR",
+    passed: false,
+  });
+  expect(result.diagnostic?.code).toBe("TRANSITION_NOT_OBSERVED");
+  expect(result.error).toMatch(/no change observed/);
+  expect(result.error).not.toContain(DESCRIPTION);
 });
 
 it("passes a transition whose value changed to the expected one", async () => {
@@ -171,6 +204,9 @@ it("explains an unchanged persisted value the same way after the reload", async 
     baseline: BANNER,
     persisted: BANNER,
   });
+  // `persisted` garde la règle précédente : le reclassement mesuré porte sur
+  // `transition`, et une persistence qui ne diffère pas du relevé d'avant ne
+  // prouve pas la survie qu'elle promet.
   expect(result.outcome).toBe("failed");
   expect(result.assertions[0]).toMatchObject({
     actual: BANNER,
@@ -180,6 +216,184 @@ it("explains an unchanged persisted value the same way after the reload", async 
   });
   expect(result.diagnostic?.code).toBe("TRANSITION_NOT_OBSERVED");
   expect(result.error).not.toContain(DESCRIPTION);
+});
+
+/**
+ * Les deux assertions mesurées du lot AM (PR pharmania/arpilabe-pilotage#20, SHA
+ * 5a48a466, déploiement 337be29) sont copiées de l'artefact du run sans
+ * retouche : même identifiant, même cible, même `expected`, même `afterStep`.
+ * Les étapes sont réduites à celles qui précèdent l'assertion — la suite du
+ * scénario ne change pas son évaluation — et les valeurs de référence sont celles
+ * que le run a relevées : `baseline === actual`, et cette valeur est déjà celle
+ * que l'assertion attend.
+ */
+function measuredStatusScenario(): Scenario {
+  return ScenarioSchema.parse({
+    id: "cash-manque-justifie-cloture",
+    title: "Manque de 40 € justifié par motif + commentaire puis clôturé",
+    rationale:
+      "2×500 € + 2×100 € = 120000 centimes contre 124000 attendus : l'écart est bloquant et la justification manque",
+    kind: "happy_path",
+    sourceFiles: ["apps/web/app/page.tsx"],
+    preconditions: [],
+    requirements: [
+      {
+        sourceFile: "apps/web/app/page.tsx",
+        quote:
+          'data-cash-justification-problem={view.justificationProblem??"aucun"}',
+        behavior:
+          "Le problème de justification courant est exposé dans data-cash-justification-problem.",
+      },
+    ],
+    steps: [
+      {
+        id: "s3-open",
+        description: "Ouvrir l'application",
+        action: { type: "goto", path: "/" },
+      },
+      {
+        id: "s3-cash",
+        description: "Aller sur Caisse et Coffre",
+        action: {
+          type: "click",
+          locator: { by: "role", value: "button", name: "Caisse et Coffre" },
+        },
+      },
+      {
+        id: "s3-fill-100",
+        description: "Saisir 2 billets de 100 €",
+        action: {
+          type: "fill",
+          locator: {
+            by: "css",
+            value: 'input[aria-label="Quantité · Billet de 100 €"]',
+          },
+          value: "2",
+        },
+      },
+      {
+        id: "s3-check-status",
+        description: "Vérifier l'état d'écart à justifier",
+        action: { type: "assert", assertionId: "s3-status" },
+      },
+    ],
+    assertions: [
+      {
+        id: "s3-status",
+        description:
+          "Le libellé reste « Écart à justifier » tant que la justification manque",
+        target: { by: "css", value: 'span[aria-live="polite"]' },
+        afterStep: "s3-fill-100",
+        verification: "transition",
+        kind: "text",
+        expected: "Écart à justifier",
+      },
+    ],
+  });
+}
+
+function measuredStateScenario(): Scenario {
+  return ScenarioSchema.parse({
+    id: "caisse-manque-40-euros",
+    title:
+      "Manque de 40 € : écart −4 000, écart à justifier et clôture refusée",
+    rationale:
+      "Le domaine bloque un écart négatif non justifié et la composition d'écran expose la variance",
+    kind: "edge_case",
+    sourceFiles: ["apps/web/app/page.tsx"],
+    preconditions: [],
+    requirements: [
+      {
+        sourceFile: "apps/web/app/page.tsx",
+        quote:
+          'data-cash-variance-cents={view.varianceCents===null?"indisponible":String(view.varianceCents)}',
+        behavior:
+          "L'écart signé est exposé en centimes, ou « indisponible » quand il ne peut pas être calculé.",
+      },
+    ],
+    steps: [
+      {
+        id: "open",
+        description: "ouvrir l'application",
+        action: { type: "goto", path: "/" },
+      },
+      {
+        id: "go-caisse",
+        description: "ouvrir la vue Caisse et Coffre",
+        action: {
+          type: "click",
+          locator: { by: "role", value: "button", name: "Caisse et Coffre" },
+        },
+      },
+      {
+        id: "fill-100",
+        description: "compter 2 billets de 100 € (total 1 200,00 €)",
+        action: {
+          type: "fill",
+          locator: { by: "label", value: "Quantité · Billet de 100 €" },
+          value: "2",
+        },
+      },
+      {
+        id: "verify-state",
+        description: "l'état est écart à justifier",
+        action: { type: "assert", assertionId: "s3-state" },
+      },
+    ],
+    assertions: [
+      {
+        id: "s3-state",
+        description:
+          "data-cash-state porte ecart-a-justifier pour un manque non justifié",
+        target: {
+          by: "css",
+          value: '[data-cash-state="ecart-a-justifier"]',
+        },
+        afterStep: "fill-100",
+        verification: "transition",
+        kind: "count",
+        expected: 1,
+      },
+    ],
+  });
+}
+
+it("names the plan, not the application, for assertion s3-status of run 59edcd21", async () => {
+  const result = await runScenario(measuredStatusScenario(), {
+    actual: "Écart à justifier",
+    baseline: "Écart à justifier",
+  });
+  expect(result.outcome).toBe("blocked");
+  expect(result.diagnostic?.code).toBe("TRANSITION_ON_INVARIANT");
+  expect(result.error).toBe(result.diagnostic?.message);
+  expect(result.error).toMatch(/s3-status/);
+  expect(result.error).toMatch(/s3-fill-100/);
+  expect(result.assertions[0]).toMatchObject({
+    actual: "Écart à justifier",
+    baseline: "Écart à justifier",
+    passed: false,
+  });
+  // La valeur attendue reste dans l'artefact d'assertion, jamais dans le
+  // commentaire publié.
+  expect(result.error).not.toContain("Écart à justifier");
+});
+
+it("names the plan, not the application, for assertion s3-state of run 9599ccc1", async () => {
+  const result = await runScenario(measuredStateScenario(), {
+    actual: 1,
+    baseline: 1,
+  });
+  expect(result.outcome).toBe("blocked");
+  expect(result.diagnostic?.code).toBe("TRANSITION_ON_INVARIANT");
+  expect(result.error).toBe(result.diagnostic?.message);
+  expect(result.error).toMatch(/s3-state/);
+  expect(result.error).toMatch(/fill-100/);
+  expect(result.assertions[0]).toMatchObject({
+    actual: 1,
+    baseline: 1,
+    passed: false,
+  });
+  expect(result.diagnostic?.hint).toMatch(/"state"/);
 });
 
 it("states the three verification semantics to the planner", () => {
@@ -229,6 +443,18 @@ it("teaches the two readable forms and when a transition is provable", () => {
   );
   expect(prompt).toMatch(
     /verification "transition" is only for a step that genuinely moves the value/i
+  );
+  // Lot AM : deux assertions mesurées ont exigé une transition sur une valeur qui
+  // reste. La consigne nomme les deux cas et la question qui tranche avant de
+  // choisir `transition`.
+  expect(prompt).toMatch(
+    /assertion s3-status of scenario cash-manque-justifie-cloture/
+  );
+  expect(prompt).toMatch(
+    /assertion s3-state of scenario caisse-manque-40-euros/
+  );
+  expect(prompt).toMatch(
+    /when the value you expect is the one already read before the step, or the one the description says stays, the verification is state with afterStep set to the interaction/i
   );
   expect(prompt).toMatch(
     /\[role="status"\] is a region whose visible text IS its content, so kind "text" on it is fine/i

@@ -320,10 +320,12 @@ async function evaluateAssertion(
         )
       : observation.actual;
   const verification = assertion.verification ?? "state";
-  const passed =
-    (assertion.kind === "visual"
+  const matched =
+    assertion.kind === "visual"
       ? (actual as { passed: boolean }).passed
-      : assertionMatches(assertion, actual)) &&
+      : assertionMatches(assertion, actual);
+  const passed =
+    matched &&
     (!["transition", "persisted"].includes(verification) ||
       (baselines.has(assertion.id) &&
         !isDeepStrictEqual(baseline, observation.actual))) &&
@@ -345,24 +347,67 @@ async function evaluateAssertion(
     persisted,
   });
   if (!passed) {
-    result.outcome = "failed";
-    if (unchanged) {
-      // Naming the missing transition, not recopying the assertion description:
-      // "the element still shows X" reads as a regression while actual and
-      // baseline agree, and sends the operator after an innocent element.
-      result.diagnostic = diagnose(
-        new QaError(
-          "TRANSITION_NOT_OBSERVED",
-          `Assertion ${assertion.id}: no change observed — the value after step ${assertion.afterStep ?? "the interaction"} is identical to the baseline probed before it, so the required ${verification} is not demonstrated`,
-          `Require a change only from a value that must change. For an invariance after an interaction, use verification "state" with afterStep set to the interaction step (the element is still there after clicking X).`
-        ),
-        config
-      );
-      result.error = result.diagnostic.message;
-    } else {
-      result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
-    }
+    recordUnprovenAssertion(
+      result,
+      assertion,
+      verification,
+      matched,
+      unchanged,
+      config
+    );
   }
+}
+/**
+ * Ce qu'un relevé non conforme veut dire. Une valeur inchangée qui satisfait
+ * déjà l'attendu rejette la faute sur le plan : elle montre exactement ce que
+ * l'assertion demande, donc c'est la vérification choisie qui est fausse, pas la
+ * fonctionnalité. Mesuré sur le lot AM (runs 59edcd21 et 9599ccc1), où le plan
+ * exigeait une `transition` sur un libellé et sur un attribut d'état qui
+ * RESTENT à leur valeur tant que la justification manque. Le verdict reste non
+ * vert — `blocked`, statut de commit en erreur — donc rien ne passe en silence ;
+ * seul le blâme change de camp. Un changement vers une autre valeur reste
+ * `failed`, comme une valeur inchangée qui n'atteint pas l'attendu, et
+ * `persisted` garde la règle précédente.
+ */
+function recordUnprovenAssertion(
+  result: ScenarioResult,
+  assertion: Assertion,
+  verification: string,
+  matched: boolean,
+  unchanged: boolean,
+  config: Config
+) {
+  const step = assertion.afterStep ?? "the interaction";
+  if (unchanged && verification === "transition" && matched) {
+    result.outcome = "blocked";
+    result.diagnostic = diagnose(
+      new QaError(
+        "TRANSITION_ON_INVARIANT",
+        `Assertion ${assertion.id}: the plan requires a change on a value that does not change — the value after step ${step} is identical to the baseline probed before it, and that unchanged value already satisfies the expected one, so the application shows what the assertion asks for and the verification is what is wrong`,
+        `Verify this value with "state" and afterStep set to the interaction: an invariant cannot demonstrate a transition. Move the "transition" to the output the step really moves, or drop the interaction if nothing is meant to change.`
+      ),
+      config
+    );
+    result.error = result.diagnostic.message;
+    return;
+  }
+  result.outcome = "failed";
+  if (unchanged) {
+    // Naming the missing transition, not recopying the assertion description:
+    // "the element still shows X" reads as a regression while actual and
+    // baseline agree, and sends the operator after an innocent element.
+    result.diagnostic = diagnose(
+      new QaError(
+        "TRANSITION_NOT_OBSERVED",
+        `Assertion ${assertion.id}: no change observed — the value after step ${step} is identical to the baseline probed before it, so the required ${verification} is not demonstrated`,
+        `Require a change only from a value that must change. For an invariance after an interaction, use verification "state" with afterStep set to the interaction step (the element is still there after clicking X).`
+      ),
+      config
+    );
+    result.error = result.diagnostic.message;
+    return;
+  }
+  result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
 }
 async function captureBaselines(
   sessionId: string,
@@ -541,7 +586,10 @@ async function driveScenario(
       }
       throw error;
     }
-    if (result.outcome === "failed") {
+    // Un verdict déjà posé arrête le scénario : `finish()` exigerait toutes les
+    // assertions vertes et remplacerait le diagnostic par son propre message,
+    // qu'il s'agisse d'un échec ou d'un reclassement en `blocked`.
+    if (result.outcome === "failed" || result.diagnostic) {
       return;
     }
   }
