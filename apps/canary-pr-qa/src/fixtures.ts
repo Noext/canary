@@ -112,7 +112,7 @@ const NAME_SHOWN_CHARS = 120;
 const CONDITIONS_SHOWN_CHARS = 140;
 /** Plafond d'une entrée du refus agrégé : identifiant (60 au plus) et conditions. */
 const OFFENDER_SHOWN_CHARS = 200;
-function declaredPreconditionNames(catalog: TrustedCatalog): string[] {
+export function declaredPreconditionNames(catalog: TrustedCatalog): string[] {
   return [
     ...Object.keys(catalog.fixtures).map((name) => `fixture:${name}`),
     ...catalog.roles.map((name) => `role:${name}`),

@@ -532,3 +532,13 @@ it("sends a boundary case on the rejected side of the limit", () => {
   expect(prompt).toContain("L+1 are refused");
   expect(prompt).toContain("exactly 280 characters");
 });
+
+it("dit au planificateur qu'aucune précondition ne peut être vérifiée", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Lot AQ : le run 720c0ba0 a perdu ses huit scénarios sur des préconditions
+  // inventées alors que le catalogue ne déclare rien pour ce dépôt.
+  expect(prompt).toContain("preconditionsAvailable");
+  expect(prompt).toMatch(/declares NOTHING for this repository/i);
+  expect(prompt).toContain("PRECONDITION_UNVERIFIED");
+  expect(prompt).toContain("role:Administrateur démo 1");
+});
