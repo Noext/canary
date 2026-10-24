@@ -542,3 +542,15 @@ it("dit au planificateur qu'aucune précondition ne peut être vérifiée", () =
   expect(prompt).toContain("PRECONDITION_UNVERIFIED");
   expect(prompt).toContain("role:Administrateur démo 1");
 });
+
+it("établit les problèmes antérieurs avant d'asserter le suivant", () => {
+  const prompt = PLANNER_PROMPT.replace(/\s+/g, " ");
+  // Lot AS : deux runs ont attendu `commentaire-trop-long` après un simple
+  // remplissage, alors que `cashJustificationProblem` teste le motif d'abord —
+  // sans motif valide la vue reste sur `motif-manquant`.
+  expect(prompt).toMatch(/documented PRIORITY ORDER/i);
+  expect(prompt).toContain("cashJustificationProblem");
+  expect(prompt).toMatch(
+    /Establish every earlier condition with its own step/i
+  );
+});
