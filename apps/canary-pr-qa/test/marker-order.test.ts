@@ -531,4 +531,56 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
       )
     ).toEqual([]);
   });
+
+  it("ne refuse pas une garde de retour dont la condition doit être fausse", () => {
+    // `if (draft.kind !== "autre") return "kind-missing";` : pour atteindre la
+    // valeur suivante la condition doit être FAUSSE, donc sélectionner « autre »
+    // est exactement ce qu'il faut. Le refus ne vise que les gardes d'appelant.
+    const polarity: SourceLineMaterial[] = CHAIN_MATERIAL.map((source) =>
+      source.path === "src/view-state.ts"
+        ? {
+            ...source,
+            lines: source.lines.map((line) =>
+              line.line === 8
+                ? {
+                    ...line,
+                    text: '  if (draft.kind !== "autre") { return "kind-missing"; }',
+                  }
+                : line
+            ),
+          }
+        : source
+    );
+    const plan = planWith(STEP_WITH_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH(polarity), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
+  });
+
+  it("ne refuse pas un conflit corrigé avant l'assertion", () => {
+    // La saisie « 0 » est remplacée par « 1240 » avant l'assertion : seule la
+    // dernière écriture décide de ce que la vue affiche.
+    const plan = planWith(
+      [
+        {
+          action: { path: "/", type: "goto" },
+          description: "open",
+          id: "open",
+        },
+        EXPECTED_STEP("0") as never,
+        EXPECTED_STEP("1240") as never,
+        ...(STEP_WITHOUT_EXPECTED as unknown[]).slice(1),
+      ] as never,
+      [ASSERTION_STAGE_TOO_LONG]
+    );
+    expect(
+      unwitnessedPlanRefusals(
+        plan,
+        CONTEXT_WITH(CHAIN_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+  });
 });

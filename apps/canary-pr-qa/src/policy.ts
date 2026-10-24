@@ -3145,18 +3145,22 @@ function unmetControl(
         step.action.type === control.action &&
         namesControl(step.action, control.label)
     );
-    const unmet = steps[0];
-    if (!unmet) {
+    if (steps.length === 0) {
       return { ...control, field };
     }
-    // Une étape qui écrit une valeur que la condition rejette explicitement ne
-    // satisfait rien : `!== 0` confronté à une saisie littérale « 0 ».
+    // Seule une condition d'APPELANT doit tenir : la garde d'un `return` antérieur
+    // doit au contraire être FAUSSE pour atteindre une valeur plus loin, donc une
+    // saisie qui y contredit n'est pas un conflit, c'est le chemin normal.
+    // Et seule la DERNIÈRE écriture compte : une valeur corrigée avant
+    // l'assertion n'a plus d'effet sur ce que la vue affiche.
+    if (!guard.caller) {
+      continue;
+    }
     const condition = [guard.condition, ...(guard.evidence ?? [])].join(" ");
-    const conflict = steps.find((step) =>
-      contradicts(condition, actionValue(step.action))
-    );
-    if (conflict) {
-      return { ...control, field, valueConflict: actionValue(conflict.action) };
+    const last = steps.at(-1);
+    const written = actionValue(last?.action ?? {});
+    if (contradicts(condition, written)) {
+      return { ...control, field, valueConflict: written };
     }
   }
   return;
