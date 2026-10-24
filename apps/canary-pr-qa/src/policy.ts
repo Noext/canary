@@ -53,6 +53,15 @@ export async function trustedPolicy(
 }
 const DOCUMENTATION_DIRECTORY = /(^|\/)(docs|openspec)\//;
 const MARKDOWN_FILE = /\.mdx?$/i;
+/**
+ * Un fichier de test ne porte aucun comportement visible : son comportement EST
+ * celui du code qu'il éprouve, déjà couvert par le scénario qui exerce ce code.
+ * L'exiger comme chemin critique demandait un scénario navigateur pour
+ * `apps/web/lib/cash-session.test.ts` (run 338f18d8), c'est-à-dire une preuve en
+ * double et un run bloqué pour un fichier qui n'affiche rien. Le skip reste
+ * visible : il est listé, compté et publié.
+ */
+const TEST_FILE = /(^|\/)(__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
 const LICENSE_FILE = /(^|\/)LICEN[CS]E(\.[^/]*)?$/i;
 /**
  * Documentation is never gated by `criticalPaths`: markdown prose, `docs/` and
@@ -125,7 +134,7 @@ function approvedSkipCovers(pattern: string, file: string): boolean {
  */
 function isCriticalPath(policy: Policy, file: string): boolean {
   return (
-    !isDocumentationPath(file) &&
+    !(isDocumentationPath(file) || TEST_FILE.test(file)) &&
     policy.criticalPaths.some((prefix) => file.startsWith(prefix))
   );
 }

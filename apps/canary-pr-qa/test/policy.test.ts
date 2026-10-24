@@ -10,6 +10,7 @@ import {
   amputatedQuote,
   amputatedQuoteRemedy,
   amputationScans,
+  criticalSkipRefused,
   isDocumentationPath,
   numberedSourceLines,
   PolicySchema,
@@ -4857,4 +4858,40 @@ it("bounds a fragment's end in the planner prompt without forbidding it", () => 
   expect(prompt).toMatch(
     /stopping three characters earlier was an exact witness/i
   );
+});
+
+/**
+ * Un fichier de test n'est pas un chemin critique : son comportement est celui
+ * du code qu'il éprouve, déjà couvert par le scénario qui exerce ce code. Le run
+ * 338f18d8 a bloqué sur `apps/web/lib/cash-session.test.ts`, un fichier qui
+ * n'affiche rien.
+ */
+it.each([
+  "apps/web/lib/cash-session.test.ts",
+  "apps/web/lib/cash-session.test.tsx",
+  "packages/domain/src/__tests__/cash.spec.ts",
+  "apps/web/lib/__mocks__/fetch.js",
+  "packages/domain/src/cash.spec.mts",
+])("n'exige pas d'approbation pour sauter %s", (file) => {
+  const policy = PolicySchema.parse({
+    approvedSkips: [],
+    criticalPaths: ["apps/", "packages/"],
+    version: 1,
+  });
+  expect(criticalSkipRefused(policy, file)).toBe(false);
+});
+
+it("garde l'exigence d'approbation pour le code testé", () => {
+  const policy = PolicySchema.parse({
+    approvedSkips: [],
+    criticalPaths: ["apps/", "packages/"],
+    version: 1,
+  });
+  expect(criticalSkipRefused(policy, "apps/web/lib/cash-session.ts")).toBe(
+    true
+  );
+  // Un fichier dont le nom ressemble à un test sans en être un reste gated.
+  expect(
+    criticalSkipRefused(policy, "apps/web/lib/cash-session.testing.ts")
+  ).toBe(true);
 });
