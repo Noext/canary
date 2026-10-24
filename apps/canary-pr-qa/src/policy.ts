@@ -2628,8 +2628,17 @@ export function validateProvider(policy: Policy, config: Config) {
  * rapporte.
  */
 export interface MarkerGuard {
+  /**
+   * Renseigné quand la garde ne vient pas de la fonction qui rend la valeur,
+   * mais d'un CONDITIONNEL qui l'appelle : `justificationRequired ? f(...) : null`.
+   * La valeur n'existe alors que si cette condition tient, et elle est écrite
+   * à un endroit du diff que le raisonnement doit nommer.
+   */
+  caller?: { fallback: string; source: string };
   /** Le texte de la condition, tel que le diff l'écrit. */
   condition: string;
+  /** Les textes traversés pour résoudre les champs : la preuve d'une contradiction. */
+  evidence?: string[];
   /** Les champs de l'état que cette garde consulte (`justification.reason`). */
   fields: string[];
   /** La valeur rendue quand cette garde échoue. */
@@ -2644,12 +2653,54 @@ export interface MissingInteraction {
   /** Le contrôle à jouer avant l'assertion, nom accessible lu dans le diff. */
   control: string;
   expected: string;
+  /** Le champ de la condition que ce contrôle commande. */
+  field?: string;
   guard: MarkerGuard;
+  /** La valeur que le plan écrit et qui contredit la condition, si elle est démontrable. */
+  valueConflict?: string;
 }
 
 const MARKER_TARGET = /^\[(data-[a-z0-9-]+)="([^"]+)"\]$/i;
 const LITERAL_RETURN = /return\s+"([^"]+)"\s*;/;
 const FIELD = /\b([a-z][a-zA-Z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)*)\b/g;
+
+/**
+ * Les fichiers qu'une piste peut traverser : celui qui porte l'expression, et
+ * ceux qu'il importe. Un homonyme d'un fichier sans rapport reste hors de portée
+ * — c'est ce qui a fait lire la mauvaise chaîne de gardes — mais une dépendance
+ * réelle est suivie, parce qu'une condition écrite dans un module importé décide
+ * bien de la valeur affichée.
+ */
+function reachableSources(
+  material: SourceLineMaterial[],
+  entryPath: string
+): SourceLineMaterial[] {
+  const entry = material.find((source) => source.path === entryPath);
+  if (!entry) {
+    return material;
+  }
+  const imported = new Set<string>();
+  for (const line of entry.lines) {
+    for (const match of line.text.matchAll(/from\s+["']([^"']+)["']/g)) {
+      const specifier = (match[1] ?? "").replace(/^\.{1,2}\//, "");
+      if (specifier) {
+        imported.add(specifier);
+      }
+    }
+  }
+  const files = material.filter(
+    (source) =>
+      source.path === entryPath ||
+      [...imported].some(
+        (specifier) =>
+          source.path.endsWith(specifier) ||
+          source.path.endsWith(`${specifier}.ts`) ||
+          source.path.endsWith(`${specifier}.tsx`) ||
+          source.path.endsWith(`${specifier}/index.ts`)
+      )
+  );
+  return files.length > 0 ? files : [entry];
+}
 
 /** Les valeurs d'un marqueur que l'assertion vise, quand la cible en nomme une. */
 function markerOf(assertion: {
@@ -2702,11 +2753,109 @@ function markerExpression(
  * (`cond ? "x" : cond2 ? "y" : "z"`). Toute autre forme rend une liste vide :
  * l'analyse préfère ne rien dire plutôt que d'inventer un ordre.
  */
+
+/**
+ * La conditionnelle qui décide si la fonction est appelée du tout :
+ * `const problem = required ? compute(draft) : null` fait de `required` une garde
+ * de premier rang, écrite ailleurs que dans la fonction qui rend la valeur.
+ *
+ * Sans elle, une assertion sur `compute` passait alors que rien n'établissait
+ * `required` — le run 3c51455f remplissait motif et commentaire sans jamais créer
+ * l'écart qui rend la justification obligatoire, et le marqueur restait au repli.
+ */
+function callerGuardOf(
+  lines: { line: number; text: string }[],
+  name: string
+): { condition: string; fallback: string; line: number } | undefined {
+  const definition = lines.find((line) =>
+    new RegExp(`(?:const|let)\\s+${name}\\s*=`).test(line.text)
+  );
+  if (!definition) {
+    return;
+  }
+  const value = definition.text.slice(definition.text.indexOf("=") + 1);
+  const question = value.indexOf("?");
+  const colon = value.lastIndexOf(":");
+  if (question === -1 || colon <= question) {
+    return;
+  }
+  const condition = value.slice(0, question).trim();
+  const fallback = value
+    .slice(colon + 1)
+    .replace(/[;,)\s]+$/, "")
+    .trim();
+  return condition ? { condition, fallback, line: definition.line } : undefined;
+}
+
+/**
+ * Les champs qu'une condition consulte vraiment : un identifiant nu cache sa
+ * définition (`varianceCents` → `expectedCents` → `parseAmountFr(session.expected)`),
+ * donc on suit la piste quelques sauts et on ne garde que les champs pointés, les
+ * seuls qu'un contrôle du diff peut commander. Une piste qui s'arrête laisse la
+ * liste telle quelle : la règle se taira plutôt que d'inventer.
+ */
+function resolveFields(
+  lines: { line: number; text: string }[],
+  condition: string,
+  depth = 4
+): { evidence: string[]; fields: string[] } {
+  const evidence: string[] = [];
+  const fields = new Set(fieldsOf(condition));
+  let frontier = [condition];
+  for (let hop = 0; hop < depth; hop += 1) {
+    const definitions = bareDefinitions(lines, frontier);
+    if (definitions.length === 0) {
+      break;
+    }
+    frontier = [];
+    for (const definition of definitions) {
+      const text = definition.slice(definition.indexOf("=") + 1);
+      evidence.push(text);
+      for (const field of fieldsOf(text)) {
+        fields.add(field);
+      }
+      frontier.push(text);
+    }
+  }
+  return { evidence, fields: [...fields].slice(0, 12) };
+}
+
+/** Les définitions des identifiants nus d'un texte, une par identifiant. */
+function bareDefinitions(
+  lines: { line: number; text: string }[],
+  texts: string[]
+): string[] {
+  const bare = new Set<string>();
+  for (const text of texts) {
+    for (const match of text.matchAll(FIELD)) {
+      const name = match[1] ?? "";
+      if (
+        !(name.includes(".") || NOT_A_FIELD.has(name)) &&
+        /^[A-Za-z_$][\w$]*$/.test(name)
+      ) {
+        bare.add(name);
+      }
+    }
+  }
+  const found: string[] = [];
+  for (const name of bare) {
+    const definition = lines.find((line) =>
+      new RegExp(`(?:const|let)\\s+${name}\\s*=`).test(line.text)
+    );
+    if (definition) {
+      found.push(definition.text);
+    }
+  }
+  return found;
+}
+
 function markerGuards(
   material: SourceLineMaterial[],
-  expression: string
+  expression: string,
+  entryPath: string
 ): MarkerGuard[] {
-  const lines = everyLine(material);
+  const lines = everyLine(reachableSources(material, entryPath));
+  const callers: MarkerGuard[] = [];
   /**
    * La valeur d'un marqueur descend d'un identifiant : `view.problem ?? "none"`
    * nomme `problem`, dont la définition peut elle-même appeler une fonction.
@@ -2728,39 +2877,63 @@ function markerGuards(
       ).test(line.text)
     );
     if (!definition) {
-      return [];
+      return callers;
     }
-    const body = functionBody(lines, definition.line);
+    // La conditionnelle qui décide de l'appel est une garde de premier rang :
+    // elle est écrite avant la fonction, donc elle passe avant elle.
+    const caller = callerGuardOf(lines, name);
+    if (caller) {
+      const resolved = resolveFields(lines, caller.condition);
+      callers.push({
+        caller: {
+          fallback: caller.fallback,
+          source: `${definition.path ?? entryPath}:${caller.line}`,
+        },
+        condition: caller.condition,
+        evidence: resolved.evidence,
+        fields: resolved.fields,
+        value: "",
+      });
+    }
+    const body = functionBody(lines, definition.line, definition.path);
     const literalReturns = body.filter((line) =>
       LITERAL_RETURN.test(line.text)
     );
     if (literalReturns.length > 0) {
-      return literalReturns.slice(0, 8).map((line) => {
-        const condition = conditionOf(line.text);
-        return {
-          condition,
-          fields: fieldsOf(condition),
-          value: LITERAL_RETURN.exec(line.text)?.[1] ?? "",
-        };
-      });
+      return [
+        ...callers,
+        ...literalReturns.slice(0, 8).map((line) => {
+          const condition = conditionOf(line.text);
+          return {
+            condition,
+            fields: fieldsOf(condition),
+            value: LITERAL_RETURN.exec(line.text)?.[1] ?? "",
+          };
+        }),
+      ];
     }
     const next = /[A-Za-z_$][\w$]*\s*\(/
       .exec(definition.text.replace(new RegExp(`^.*?${name}`), ""))?.[0]
       ?.replace(/\s*\($/, "");
     if (!next || next === name) {
-      return [];
+      return callers;
     }
     name = next;
   }
-  return [];
+  return callers;
 }
 
 /** Les lignes du corps qui suit une définition, jusqu'à la déclaration suivante. */
 function functionBody(
-  lines: { line: number; text: string }[],
-  from: number
-): { line: number; text: string }[] {
-  const index = lines.findIndex((line) => line.line === from);
+  lines: { line: number; path?: string; text: string }[],
+  from: number,
+  path?: string
+): { line: number; path?: string; text: string }[] {
+  // L'identité d'un corps est (fichier, ligne) : deux fichiers ont chacun leur
+  // ligne 4, et confondre les deux faisait lire un corps qui n'existe pas.
+  const index = lines.findIndex(
+    (line) => line.line === from && (path === undefined || line.path === path)
+  );
   const body: { line: number; text: string }[] = [];
   for (const line of lines.slice(index, index + 40)) {
     if (
@@ -2883,10 +3056,7 @@ function missingForAssertion(
   }
   const found = markerExpression(material, marker.attribute);
   const guards = found
-    ? markerGuards(
-        material.filter((source) => source.path === found.path),
-        found.expression
-      )
+    ? markerGuards(material, found.expression, found.path)
     : [];
   const target = guards.findIndex((guard) => guard.value === marker.value);
   if (target <= 0) {
@@ -2903,7 +3073,11 @@ function missingForAssertion(
           attribute: marker.attribute,
           control: unmet.label,
           expected: marker.value,
+          field: unmet.field,
           guard,
+          ...(unmet.valueConflict === undefined
+            ? {}
+            : { valueConflict: unmet.valueConflict }),
         },
       ];
     }
@@ -2950,7 +3124,14 @@ function unmetControl(
   guard: MarkerGuard,
   played: Plan["scenarios"][number]["steps"],
   material: SourceLineMaterial[]
-): { action: "fill" | "select" | "check"; label: string } | undefined {
+):
+  | {
+      action: "fill" | "select" | "check";
+      field: string;
+      label: string;
+      valueConflict?: string;
+    }
+  | undefined {
   for (const field of guard.fields) {
     const control = controlFor(material, field);
     // Un champ que le code initialise à une valeur littérale non vide est déjà
@@ -2959,16 +3140,51 @@ function unmetControl(
     if (!control || hasInitialValue(material, field)) {
       continue;
     }
-    const established = played.some(
+    const steps = played.filter(
       (step) =>
         step.action.type === control.action &&
         namesControl(step.action, control.label)
     );
-    if (!established) {
-      return control;
+    if (steps.length === 0) {
+      return { ...control, field };
+    }
+    // Seule une condition d'APPELANT doit tenir : la garde d'un `return` antérieur
+    // doit au contraire être FAUSSE pour atteindre une valeur plus loin, donc une
+    // saisie qui y contredit n'est pas un conflit, c'est le chemin normal.
+    // Et seule la DERNIÈRE écriture compte : une valeur corrigée avant
+    // l'assertion n'a plus d'effet sur ce que la vue affiche.
+    if (!guard.caller) {
+      continue;
+    }
+    const condition = [guard.condition, ...(guard.evidence ?? [])].join(" ");
+    const last = steps.at(-1);
+    const written = actionValue(last?.action ?? {});
+    if (contradicts(condition, written)) {
+      return { ...control, field, valueConflict: written };
     }
   }
   return;
+}
+
+/** La valeur littérale qu'une action écrit, quand elle en écrit une. */
+function actionValue(action: object): string {
+  const value = (action as { value?: unknown }).value;
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * Une contradiction DÉMONTRABLE seulement : la condition compare à un littéral et
+ * l'étape écrit ce littéral. Tout le reste est incertain et ne produit rien — une
+ * analyse qui devine fabrique des faux refus.
+ */
+function contradicts(condition: string, value: string): boolean {
+  if (value === "") {
+    return false;
+  }
+  return (
+    (condition.includes("!== 0") || condition.includes("!= 0")) &&
+    value.trim() === "0"
+  );
 }
 
 function namesControl(
@@ -3001,6 +3217,12 @@ function missingInteractionRefusal(
   const first = missing[0];
   if (!first) {
     return;
+  }
+  if (first.valueConflict !== undefined) {
+    return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the step that operates "${first.control}" writes "${first.valueConflict}", which the condition ${first.guard.condition} rejects. Write a value that satisfies it, then assert the marker.`;
+  }
+  if (first.guard.caller) {
+    return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the view returns NO value for it until a condition written at ${first.guard.caller.source} holds: ${first.guard.condition}. Nothing in the scenario commands "${first.control}", which sets ${first.field ?? "a field of that condition"}; without it the marker stays at its fallback "${first.guard.caller.fallback}". Add a step that ${first.action}s "${first.control}" BEFORE the assertion step.`;
   }
   return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the view only returns that value after its earlier condition holds: ${first.guard.condition}. Add a step that ${first.action}s "${first.control}" BEFORE the assertion step, then assert the marker. Assertions on a computed marker are only reachable through the order the diff computes.`;
 }
