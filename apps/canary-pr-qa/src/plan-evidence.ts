@@ -1865,6 +1865,21 @@ export function planEvidenceDiagnostic(
  * échecs sur dix, tous de cette forme). Le diff seul ne permet pas cette
  * jointure ; le fichier entier, si.
  *
+ * Un fichier est donc livré ENTIER ou pas du tout : couper le dernier au milieu
+ * du budget présentait un fichier tronqué comme disponible, et le planificateur
+ * n'avait aucun moyen de le savoir. Ce qui ne tient pas dans le budget est
+ * omis, et le tri par poids réel place d'abord ce que la PR change vraiment.
+ */
+/**
+ * Les fichiers modifiés, en entier, pour la planification.
+ *
+ * Le planificateur ne voyait que les hunks du diff. Une valeur affichée est
+ * pourtant calculée ailleurs dans le même fichier : sur `#20`, le marqueur
+ * `data-*` et les `aria-label` de ses contrôles vivent à deux endroits de
+ * `page.tsx`, et l'assertion a été écrite sans la jointure (lot AU : cinq
+ * échecs sur dix, tous de cette forme). Le diff seul ne permet pas cette
+ * jointure ; le fichier entier, si.
+ *
  * Le contenu est borné, jamais deviné : un fichier absent (supprimé par la PR),
  * binaire, ou au-delà du budget est omis, et ce qui est coupé est coupé à la
  * fin. Un fichier tronqué reste utilisable, un fichier inventé ne le serait pas.
@@ -1878,15 +1893,20 @@ const BINARY = "\u0000";
 
 /** Le plus modifié d'abord : c'est là que vit ce que la PR change vraiment. */
 export async function changedFileTexts(
-  files: { changes?: number; filename: string }[],
+  files: {
+    additions?: number;
+    changes?: number;
+    deletions?: number;
+    filename: string;
+  }[],
   read: (path: string) => Promise<string | undefined>,
   budget: number
 ): Promise<PlanFileText[]> {
   const texts: PlanFileText[] = [];
   let spent = 0;
-  // `fileSchema` ne déclare pas `changes` : le tri lit les deux seuls champs
-  // que le contexte porte réellement, sinon toutes les comparaisons valent zéro
-  // et l'ordre reste celui de l'API.
+  // Le tri lit le poids que l'API rend (`changes`, sinon additions + deletions) :
+  // sans ces compteurs, toutes les comparaisons valent zéro et l'ordre reste
+  // celui de l'API, quel que soit le fichier le plus modifié.
   const weight = (file: {
     additions?: number;
     changes?: number;
@@ -1895,17 +1915,16 @@ export async function changedFileTexts(
   for (const file of [...files].sort(
     (left, right) => weight(right) - weight(left)
   )) {
-    const room = budget - spent;
-    if (room <= 0) {
-      break;
-    }
     const content = await read(file.filename).catch(() => undefined);
-    if (content === undefined || content.includes(BINARY)) {
+    if (
+      content === undefined ||
+      content.includes(BINARY) ||
+      content.length > budget - spent
+    ) {
       continue;
     }
-    const text = content.length > room ? content.slice(0, room) : content;
-    texts.push({ content: text, path: file.filename });
-    spent += text.length;
+    texts.push({ content, path: file.filename });
+    spent += content.length;
   }
   return texts;
 }

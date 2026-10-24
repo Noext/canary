@@ -35,6 +35,12 @@ const prSchema = z.object({
 const fileSchema = z.object({
   filename: z.string(),
   status: z.string(),
+  // Les trois compteurs que l'API rend et que le tri de `changedFileTexts` lit :
+  // sans eux, toutes les comparaisons valaient zéro et l'ordre restait celui de
+  // l'API, quel que soit le fichier le plus modifié.
+  additions: z.number().int().optional(),
+  deletions: z.number().int().optional(),
+  changes: z.number().int().optional(),
   patch: z.string().optional(),
   previous_filename: z.string().optional(),
 });
