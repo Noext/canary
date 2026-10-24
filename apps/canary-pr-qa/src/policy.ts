@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
+
 import type { GitHub, PrContext } from "./github.js";
 import {
   normalizeQuoteText,
@@ -2383,8 +2384,12 @@ export function unwitnessedPlanRefusals(
   policy: Policy,
   resolved: ReadonlySet<string> = new Set()
 ): string[] {
+  // L'ordre des marqueurs passe avant l'absence de témoin : une assertion sur
+  // une valeur que la vue n'atteint pas est un défaut de forme, et les autres
+  // refus n'ont pas d'intérêt tant qu'il tient.
+  const order = markerOrderFinding(plan, sourceLineMaterial(context)).refusals;
   const changed = new Set(context.files.map((file) => file.filename));
-  return unwitnessedSources(plan, context)
+  const unwitnessed = unwitnessedSources(plan, context)
     .filter(
       ({ file, scenarioId }) => !resolved.has(witnessPairKey(scenarioId, file))
     )
@@ -2398,6 +2403,7 @@ export function unwitnessedPlanRefusals(
       );
       return `${error.message}. ${error.hint}`;
     });
+  return [...order, ...((unwitnessed as string[]) ?? [])];
 }
 
 /**
@@ -2532,6 +2538,22 @@ export function validateCoverage(
   if (source) {
     throw source;
   }
+  // L'ordre des marqueurs est un contrôle final : un plan qui n'établit pas les
+  // gardes antérieures d'une valeur n'atteint jamais cette valeur, et le run
+  // rapporterait un défaut de plan comme un défaut produit.
+  for (const scenario of plan.scenarios) {
+    const { fatal, refusals } = markerOrderFinding(
+      { scenarios: [scenario] },
+      sourceLineMaterial(context)
+    );
+    if (fatal) {
+      throw new QaError(
+        "MARKER_ORDER_UNREACHABLE",
+        refusals[0] ?? "Marker order is unreachable",
+        "Establish every earlier condition of the marker with its own step, in the order the diff computes them, before asserting the value."
+      );
+    }
+  }
   for (const scenario of plan.scenarios) {
     const budget = contractBudgetRefusal(scenario, config);
     if (budget) {
@@ -2584,4 +2606,371 @@ export function validateProvider(policy: Policy, config: Config) {
   ) {
     throw new Error("Provider denied by trusted repository data policy");
   }
+}
+
+/**
+ * L'ORDRE des états d'un marqueur, lu dans le diff de l'application.
+ *
+ * Un marqueur d'état — `[data-x="valeur"]` — ne prend pas ses valeurs au hasard :
+ * la vue le calcule par une chaîne de gardes, et la première qui échoue décide.
+ * Une assertion qui attend la TROISIÈME valeur sans avoir satisfait les deux
+ * premières ne décrit donc pas un comportement : elle décrit un état que
+ * l'application n'atteint pas. Mesuré sur le lot AU : cinq runs sur dix, tous
+ * avec la même forme — le plan remplit un commentaire et attend la valeur
+ * « commentaire-trop-long » alors que la garde du motif, plus haute, renvoie
+ * encore « motif-manquant ».
+ *
+ * Rien ici ne connaît une application : le nom du marqueur, les valeurs, l'ordre
+ * des gardes et les contrôles qui les commandent sont tous lus dans le matériel
+ * du diff. L'analyse est CONSERVATRICE — dès qu'une pièce manque, elle ne dit
+ * rien. Un refus qui ne peut pas nommer la garde et le contrôle à jouer serait
+ * une devinette, et une devinette qui bloque un plan coûte plus qu'elle ne
+ * rapporte.
+ */
+export interface MarkerGuard {
+  /** Le texte de la condition, tel que le diff l'écrit. */
+  condition: string;
+  /** Les champs de l'état que cette garde consulte (`justification.reason`). */
+  fields: string[];
+  /** La valeur rendue quand cette garde échoue. */
+  value: string;
+}
+
+export interface MissingInteraction {
+  /** L'action que ce contrôle demande : `select`, `fill` ou `check`. */
+  action: "fill" | "select" | "check";
+  assertionId: string;
+  attribute: string;
+  /** Le contrôle à jouer avant l'assertion, nom accessible lu dans le diff. */
+  control: string;
+  expected: string;
+  guard: MarkerGuard;
+}
+
+const MARKER_TARGET = /^\[(data-[a-z0-9-]+)="([^"]+)"\]$/i;
+const LITERAL_RETURN = /return\s+"([^"]+)"\s*;/;
+const FIELD = /\b([a-z][a-zA-Z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)*)\b/g;
+
+/** Les valeurs d'un marqueur que l'assertion vise, quand la cible en nomme une. */
+function markerOf(assertion: {
+  target?: { by: string; value: string };
+}): { attribute: string; value: string } | undefined {
+  const css =
+    assertion.target?.by === "css" ? assertion.target.value : undefined;
+  const match = css ? MARKER_TARGET.exec(css.trim()) : null;
+  return match
+    ? { attribute: match[1] ?? "", value: match[2] ?? "" }
+    : undefined;
+}
+
+/** Toutes les lignes du matériel, fichier par fichier, dans l'ordre du diff. */
+function everyLine(material: SourceLineMaterial[]) {
+  return material.flatMap((file) =>
+    file.lines.map((entry) => ({ path: file.path, ...entry }))
+  );
+}
+
+/**
+ * L'expression que la vue écrit dans ce marqueur : `data-cash-state={view.status}`
+ * rend `view.status`. Absent du matériel, la règle se tait.
+ */
+function markerExpression(
+  material: SourceLineMaterial[],
+  attribute: string
+): string | undefined {
+  for (const line of everyLine(material)) {
+    const index = line.text.indexOf(`${attribute}={`);
+    if (index === -1) {
+      continue;
+    }
+    const rest = line.text.slice(index + attribute.length + 2);
+    const match = /^(.+?)\}/.exec(rest);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return;
+}
+
+/**
+ * Les gardes qui décident des valeurs de ce marqueur, dans l'ordre du code.
+ *
+ * Deux formes sont lues, et seulement celles-là : la fonction qui rend les
+ * littéraux (`if (...) return "x";`) et le ternaire enchaîné
+ * (`cond ? "x" : cond2 ? "y" : "z"`). Toute autre forme rend une liste vide :
+ * l'analyse préfère ne rien dire plutôt que d'inventer un ordre.
+ */
+function markerGuards(
+  material: SourceLineMaterial[],
+  expression: string
+): MarkerGuard[] {
+  const lines = everyLine(material);
+  /**
+   * La valeur d'un marqueur descend d'un identifiant : `view.problem ?? "none"`
+   * nomme `problem`, dont la définition peut elle-même appeler une fonction.
+   * On suit donc la piste, trois sauts au plus, et on lit la chaîne de gardes
+   * de la première fonction qui rend des littéraux. Un identifiant dont la
+   * définition n'est pas dans le matériel arrête la piste : la règle se tait.
+   */
+  const tail = /[A-Za-z_$][\w$]*/.exec(
+    (expression.split(".").at(-1) ?? expression).trim()
+  )?.[0];
+  if (!tail) {
+    return [];
+  }
+  let name = tail;
+  for (let hop = 0; hop < 3; hop += 1) {
+    const definition = lines.find((line) =>
+      new RegExp(
+        `(?:const|let|function)\\s+${name}\\b|<\\w+[^>]*\\s${name}=|${name}\\s*=\\s*\\(`
+      ).test(line.text)
+    );
+    if (!definition) {
+      return [];
+    }
+    const body = functionBody(lines, definition.line);
+    const literalReturns = body.filter((line) =>
+      LITERAL_RETURN.test(line.text)
+    );
+    if (literalReturns.length > 0) {
+      return literalReturns.slice(0, 8).map((line) => {
+        const condition = conditionOf(line.text);
+        return {
+          condition,
+          fields: fieldsOf(condition),
+          value: LITERAL_RETURN.exec(line.text)?.[1] ?? "",
+        };
+      });
+    }
+    const next = /[A-Za-z_$][\w$]*\s*\(/
+      .exec(definition.text.replace(new RegExp(`^.*?${name}`), ""))?.[0]
+      ?.replace(/\s*\($/, "");
+    if (!next || next === name) {
+      return [];
+    }
+    name = next;
+  }
+  return [];
+}
+
+/** Les lignes du corps qui suit une définition, jusqu'à la déclaration suivante. */
+function functionBody(
+  lines: { line: number; text: string }[],
+  from: number
+): { line: number; text: string }[] {
+  const index = lines.findIndex((line) => line.line === from);
+  const body: { line: number; text: string }[] = [];
+  for (const line of lines.slice(index, index + 40)) {
+    if (
+      body.length > 0 &&
+      /^\s*(?:function\s|const\s+\w+\s*=\s*\()/.test(line.text)
+    ) {
+      break;
+    }
+    body.push(line);
+  }
+  return body;
+}
+
+function conditionOf(line: string): string {
+  const trimmed = line.trim();
+  const withoutReturn = trimmed.split("return")[0] ?? trimmed;
+  return withoutReturn
+    .replace(/^if\s*\(/, "")
+    .replace(/\)\s*\{?$/, "")
+    .replace(/^}/, "")
+    .trim();
+}
+
+const NOT_A_FIELD = new Set([
+  "and",
+  "else",
+  "false",
+  "if",
+  "length",
+  "null",
+  "or",
+  "return",
+  "some",
+  "string",
+  "then",
+  "true",
+  "undefined",
+]);
+
+function fieldsOf(condition: string): string[] {
+  const fields = new Set<string>();
+  for (const match of condition.matchAll(FIELD)) {
+    const name = match[1] ?? "";
+    const root = name.split(".")[0] ?? "";
+    if (name.includes(".") && !NOT_A_FIELD.has(root)) {
+      fields.add(name);
+    }
+  }
+  return [...fields];
+}
+
+/**
+ * Le contrôle qui commande ce champ et son libellé accessible : le diff écrit
+ * `aria-label="…"` sur l'élément dont la valeur ou le changement touche le
+ * champ. C'est la seule association dont nous disposons, et elle vient de la
+ * source, jamais d'une convention de nommage.
+ */
+function controlFor(
+  material: SourceLineMaterial[],
+  field: string
+): { action: "fill" | "select" | "check"; label: string } | undefined {
+  for (const line of everyLine(material)) {
+    if (!(line.text.includes(field) && /aria-label=/.test(line.text))) {
+      continue;
+    }
+    const label = /aria-label="([^"]+)"/.exec(line.text)?.[1];
+    if (!label) {
+      continue;
+    }
+    if (/<select\b/.test(line.text)) {
+      return { action: "select", label };
+    }
+    if (/type="checkbox"/.test(line.text)) {
+      return { action: "check", label };
+    }
+    return { action: "fill", label };
+  }
+  return;
+}
+
+/**
+ * Les interactions manquantes d'un scénario : pour chaque assertion qui vise une
+ * valeur d'un marqueur, toutes les gardes qui la précèdent doivent avoir été
+ * satisfaites par une étape jouée AVANT l'assertion. La garde est satisfaite si
+ * le scénario a joué le contrôle qui porte l'un de ses champs.
+ */
+function missingEstablishingInteractions(
+  plan: Pick<Plan, "scenarios">,
+  material: SourceLineMaterial[]
+): MissingInteraction[] {
+  return plan.scenarios.flatMap((scenario) =>
+    missingForScenario(scenario, material)
+  );
+}
+
+function missingForScenario(
+  scenario: Plan["scenarios"][number],
+  material: SourceLineMaterial[]
+): MissingInteraction[] {
+  const stepIndex = new Map(
+    scenario.steps.map((step, index) => [step.id, index] as const)
+  );
+  return scenario.assertions.flatMap((assertion) =>
+    missingForAssertion(assertion, scenario, stepIndex, material)
+  );
+}
+
+function missingForAssertion(
+  assertion: Plan["scenarios"][number]["assertions"][number],
+  scenario: Plan["scenarios"][number],
+  stepIndex: Map<string, number>,
+  material: SourceLineMaterial[]
+): MissingInteraction[] {
+  const marker = markerOf(assertion);
+  const assertAt = stepIndex.get(assertion.afterStep ?? "");
+  if (!marker || assertAt === undefined) {
+    return [];
+  }
+  const expression = markerExpression(material, marker.attribute);
+  const guards = expression ? markerGuards(material, expression) : [];
+  const target = guards.findIndex((guard) => guard.value === marker.value);
+  if (target <= 0) {
+    return [];
+  }
+  const played = scenario.steps.slice(0, assertAt + 1);
+  for (const guard of guards.slice(0, target)) {
+    const unmet = unmetControl(guard, played, material);
+    if (unmet) {
+      return [
+        {
+          action: unmet.action,
+          assertionId: assertion.id,
+          attribute: marker.attribute,
+          control: unmet.label,
+          expected: marker.value,
+          guard,
+        },
+      ];
+    }
+  }
+  return [];
+}
+
+/** Le premier contrôle d'une garde que le scénario n'a pas joué avant l'assertion. */
+function unmetControl(
+  guard: MarkerGuard,
+  played: Plan["scenarios"][number]["steps"],
+  material: SourceLineMaterial[]
+): { action: "fill" | "select" | "check"; label: string } | undefined {
+  for (const field of guard.fields) {
+    const control = controlFor(material, field);
+    if (!control) {
+      continue;
+    }
+    const established = played.some(
+      (step) =>
+        step.action.type === control.action &&
+        namesControl(step.action, control.label)
+    );
+    if (!established) {
+      return control;
+    }
+  }
+  return;
+}
+
+function namesControl(
+  action: { locator?: { by: string; value: string; name?: string } },
+  label: string
+): boolean {
+  const locator = action.locator;
+  if (!locator) {
+    return false;
+  }
+  const name = locator.by === "role" ? (locator.name ?? "") : locator.value;
+  return name === label;
+}
+
+/** Le refus rendu au planificateur, borné et sans jargon d'application. */
+function missingInteractionRefusal(
+  missing: MissingInteraction[],
+  scenarioId: string
+): string | undefined {
+  const first = missing[0];
+  if (!first) {
+    return;
+  }
+  return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the view only returns that value after its earlier condition holds: ${first.guard.condition}. Add a step that ${first.action}s "${first.control}" BEFORE the assertion step, then assert the marker. Assertions on a computed marker are only reachable through the order the diff computes.`;
+}
+
+/**
+ * Le point d'entrée unique : les refus à rendre au planificateur (un par
+ * scénario fautif) et, quand le plan est arrêté après acceptation, le premier
+ * refus fatal. Une seule fonction exportée garde le module lisible depuis la
+ * politique sans ajouter deux symboles à sa surface publique.
+ */
+function markerOrderFinding(
+  plan: Pick<Plan, "scenarios">,
+  material: SourceLineMaterial[]
+): { fatal?: MissingInteraction; refusals: string[] } {
+  const refusals: string[] = [];
+  let fatal: MissingInteraction | undefined;
+  for (const scenario of plan.scenarios) {
+    const missing = missingEstablishingInteractions(
+      { scenarios: [scenario] },
+      material
+    );
+    const message = missingInteractionRefusal(missing, scenario.id);
+    if (message) {
+      refusals.push(message);
+      fatal ??= missing[0];
+    }
+  }
+  return { fatal, refusals };
 }

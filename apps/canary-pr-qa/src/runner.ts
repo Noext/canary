@@ -21,6 +21,7 @@ import {
   trustedCatalog,
 } from "./fixtures.js";
 import { GitHub, type PrContext, truncatedContextWarning } from "./github.js";
+
 import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
@@ -1301,6 +1302,7 @@ export function quotePickCorrection(
  * nommé passe avant les refus de forme : un fichier hors diff ne doit jamais
  * masquer le refus que le planificateur est en train d'apprendre à corriger.
  */
+
 function settlePlan(
   plan: Plan,
   context: PrContext,
