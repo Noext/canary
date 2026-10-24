@@ -13,13 +13,15 @@ import { runScope } from "./run-scope.js";
 import type { Plan, Scenario } from "./schema.js";
 
 const schema = z.record(
+  z.string(),
   z
     .object({
-      roles: z.record(z.string()).default({}),
-      visuals: z.record(z.string()).default({}),
+      roles: z.record(z.string(), z.string()).default({}),
+      visuals: z.record(z.string(), z.string()).default({}),
       visualTolerance: z.number().min(0).max(0.1).default(0.001),
       fixtures: z
         .record(
+          z.string(),
           z.object({
             seedUrl: z.string().url(),
             cleanupUrl: z.string().url(),

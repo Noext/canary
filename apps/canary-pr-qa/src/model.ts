@@ -314,7 +314,7 @@ function unusableOutputMessage(
  */
 export interface ConstrainedCorrection<T> {
   /** Schéma de la réponse attendue ; une réponse qui ne le respecte pas ne résout rien. */
-  answer: z.ZodType<unknown, z.ZodTypeDef, unknown>;
+  answer: z.ZodType<unknown, unknown>;
   /** Ce que le modèle lit : la question contrainte, jamais le plan refusé. */
   message: string;
   /** Valeur résolue, ou `undefined` quand la réponse ne permet pas de la construire. */
@@ -345,7 +345,7 @@ export class Model {
   async json<T>(
     system: string,
     payload: unknown,
-    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    schema: z.ZodType<T, unknown>,
     maxTokens = this.config.QA_PLAN_MAX_TOKENS,
     repair?: (
       value: T
@@ -619,7 +619,7 @@ export class Model {
    */
   private readContent<T>(
     content: string,
-    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    schema: z.ZodType<T, unknown>,
     constrained: ConstrainedCorrection<T> | undefined
   ): { value: T } | { discarded: true } | { invalid: InvalidContent } {
     let parsed: unknown;

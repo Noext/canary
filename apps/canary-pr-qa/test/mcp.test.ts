@@ -477,7 +477,7 @@ it("lists runs with status, outcome and cost, and returns one run's whole result
     run: { id, outcome: "passed", status: "completed" },
   });
   const absent = await tool(url, key, "get_run", {
-    id: "87654321-1234-1234-1234-123456789012",
+    id: "87654321-1234-4234-9234-123456789012",
   });
   expect(absent.isError).toBe(true);
 }, 30_000);
@@ -667,7 +667,7 @@ it("lists a run's Canary sessions and keeps raw evidence behind the data policy"
   expect(absent.isError).toBe(true);
   expect(String(absent.body.message)).toContain("welcome");
   const missing = await tool(url, key, "list_run_sessions", {
-    runId: "87654321-1234-1234-1234-123456789012",
+    runId: "87654321-1234-4234-9234-123456789012",
   });
   expect(missing.isError).toBe(true);
 }, 30_000);

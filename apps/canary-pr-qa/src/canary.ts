@@ -565,12 +565,20 @@ export function assertionMatches(
     return actual === false;
   }
   if (assertion.kind === "text") {
+    /**
+     * zod v4 ne rétrécit plus `expected` sur `kind` : le texte est donc lu avec
+     * sa forme, pas avec une assertion de type. Un `expected` désigné par une
+     * ligne a déjà été résolu en texte avant d'arriver ici ; s'il ne l'est pas,
+     * la comparaison n'a pas de sens et rend `false`.
+     */
+    const expected = assertion.expected;
     return (
       typeof actual === "string" &&
+      typeof expected === "string" &&
       actual
         .replace(/\s+/g, " ")
         .trim()
-        .includes(assertion.expected.replace(/\s+/g, " ").trim())
+        .includes(expected.replace(/\s+/g, " ").trim())
     );
   }
   return actual === assertion.expected;

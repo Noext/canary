@@ -144,7 +144,9 @@ export const SessionStartRequestSchema = RequestBaseSchema.extend({
   name: z.string().min(1).max(200).optional(),
   headless: z.boolean().optional(),
   ignoreHTTPSErrors: z.boolean().optional(),
-  capture: CaptureOptionsSchema.default({}),
+  // zod v4 : `default` exige la SORTIE complète du schéma, `prefault` rejoue la
+  // valeur dans le schéma et laisse donc les `default` internes s'appliquer.
+  capture: CaptureOptionsSchema.prefault({}),
 });
 
 export const SessionEndRequestSchema = RequestBaseSchema.extend({
