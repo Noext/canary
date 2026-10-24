@@ -160,6 +160,123 @@ const ASSERTION_TOO_LONG = {
   verification: "state",
 } as never;
 
+/** Une application fictive à deux fichiers : la vue et l'état qu'elle importe. */
+const CHAIN_MATERIAL: SourceLineMaterial[] = [
+  {
+    lines: [
+      { line: 1, text: 'import { describeStage } from "./view-state";' },
+      { line: 2, text: "export function View({ session }) {" },
+      { line: 3, text: "  const view = describeStage(session);" },
+      {
+        line: 4,
+        text: '<p data-stage-problem={view.problem ?? "none"}>stage</p>',
+      },
+      {
+        line: 5,
+        text: '<input value={session.expected} aria-label="Expected amount" />',
+      },
+      {
+        line: 6,
+        text: '<select value={draft.kind} aria-label="Kind of the note">',
+      },
+      {
+        line: 7,
+        text: '<textarea value={draft.note} aria-label="Note about the case">',
+      },
+      { line: 8, text: "}" },
+    ],
+    path: "src/view.tsx",
+  },
+  {
+    lines: [
+      { line: 1, text: "export function describeStage(session) {" },
+      { line: 2, text: "  const total = Number(session.expected);" },
+      { line: 3, text: "  const required = total !== 0;" },
+      {
+        line: 4,
+        text: "  const problem = required ? problemOf(session.draft) : null;",
+      },
+      { line: 5, text: "  return { problem };" },
+      { line: 6, text: "}" },
+      { line: 7, text: "function problemOf(draft) {" },
+      {
+        line: 8,
+        text: '  if (draft.kind.trim().length === 0) { return "kind-missing"; }',
+      },
+      {
+        line: 9,
+        text: '  if (draft.note.trim().length === 0) { return "note-missing"; }',
+      },
+      {
+        line: 10,
+        text: '  return "note-too-long";',
+      },
+      { line: 11, text: "}" },
+    ],
+    path: "src/view-state.ts",
+  },
+];
+
+const EXPECTED_STEP = (value: string) => ({
+  action: {
+    by: "css",
+    type: "fill",
+    locator: { by: "css", value: 'input[aria-label="Expected amount"]' },
+    value,
+  },
+  description: "type the expected amount",
+  id: "fill-expected",
+});
+
+const ASSERTION_STAGE_TOO_LONG = {
+  afterStep: "fill-note",
+  description: "the stage marker reports the long note",
+  expected: "note-too-long",
+  id: "stage-too-long",
+  kind: "text",
+  target: { by: "css", value: '[data-stage-problem="note-too-long"]' },
+  verification: "state",
+} as never;
+
+const STEP_WITHOUT_EXPECTED = [
+  { action: { path: "/", type: "goto" }, description: "open", id: "open" },
+  {
+    action: {
+      locator: { by: "role", name: "Kind of the note", role: "combobox" },
+      type: "select",
+      value: "autre",
+    },
+    description: "choose the kind",
+    id: "select-kind",
+  } as never,
+  {
+    action: {
+      locator: { by: "role", name: "Note about the case", role: "textbox" },
+      type: "fill",
+      value: "x".repeat(281),
+    },
+    description: "type a long note",
+    id: "fill-note",
+  } as never,
+  {
+    action: { assertionId: "stage-too-long", type: "assert" },
+    description: "assert the marker",
+    id: "assert-stage",
+  },
+] as never;
+
+const STEP_WITH_EXPECTED = [
+  { action: { path: "/", type: "goto" }, description: "open", id: "open" },
+  EXPECTED_STEP("1240") as never,
+  ...(STEP_WITHOUT_EXPECTED as unknown[]).slice(1),
+] as never;
+
+const STEP_EXPECTED_ZERO = [
+  { action: { path: "/", type: "goto" }, description: "open", id: "open" },
+  EXPECTED_STEP("0") as never,
+  ...(STEP_WITHOUT_EXPECTED as unknown[]).slice(1),
+] as never;
+
 describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", () => {
   it("ne dit rien d'une assertion qui ne vise pas un marqueur", () => {
     const plan = planWith(
@@ -354,6 +471,62 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     const plan = planWith(STEP_WITHOUT_SELECT, [ASSERTION_TOO_LONG]);
     expect(
       unwitnessedPlanRefusals(plan, CONTEXT_WITH([decoy, view]), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
+  });
+
+  it("refuse l'assertion dont la condition de l'appelant n'est pas établie", () => {
+    // La valeur n'existe que si `required` tient, et `required` se décide à
+    // travers trois définitions jusque dans un champ que l'écran commande :
+    // `session.expected`. Le scénario ne le remplit pas, donc le marqueur reste
+    // au repli `none` et l'assertion ne peut pas être vraie (run 3c51455f).
+    const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    const refusals = unwitnessedPlanRefusals(
+      plan,
+      CONTEXT_WITH(CHAIN_MATERIAL),
+      POLICY
+    ).filter((line) => line.includes("data-stage-problem"));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain("Expected amount");
+    expect(refusals[0]).toContain("src/view-state.ts:");
+    expect(refusals[0]).toContain("null");
+  });
+
+  it("accepte la même assertion quand le champ de la condition est rempli", () => {
+    // La contre-direction : rien ne manque, donc rien n'est refusé.
+    const plan = planWith(STEP_WITH_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    expect(
+      unwitnessedPlanRefusals(
+        plan,
+        CONTEXT_WITH(CHAIN_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+  });
+
+  it("refuse une valeur que la condition rejette explicitement", () => {
+    // La saisie est écrite mais vaut « 0 », que la condition `total !== 0`
+    // rejette : l'étape existe, elle n'établit rien.
+    const plan = planWith(STEP_EXPECTED_ZERO, [ASSERTION_STAGE_TOO_LONG]);
+    const refusals = unwitnessedPlanRefusals(
+      plan,
+      CONTEXT_WITH(CHAIN_MATERIAL),
+      POLICY
+    ).filter((line) => line.includes("data-stage-problem"));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain('writes "0"');
+  });
+
+  it("ne dit rien quand la dépendance n'est pas résoluble", () => {
+    // Sans la définition de `required`, la piste s'arrête : la règle se tait
+    // plutôt que d'inventer une condition.
+    const unresolved: SourceLineMaterial[] = CHAIN_MATERIAL.filter(
+      (source) => source.path !== "src/view-state.ts"
+    );
+    const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH(unresolved), POLICY).filter(
         (line) => line.includes("data-stage-problem")
       )
     ).toEqual([]);
