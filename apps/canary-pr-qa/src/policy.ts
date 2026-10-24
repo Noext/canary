@@ -2677,16 +2677,18 @@ function everyLine(material: SourceLineMaterial[]) {
 function markerExpression(
   material: SourceLineMaterial[],
   attribute: string
-): string | undefined {
-  for (const line of everyLine(material)) {
-    const index = line.text.indexOf(`${attribute}={`);
-    if (index === -1) {
-      continue;
-    }
-    const rest = line.text.slice(index + attribute.length + 2);
-    const match = /^(.+?)\}/.exec(rest);
-    if (match?.[1]) {
-      return match[1];
+): { expression: string; path: string } | undefined {
+  for (const source of material) {
+    for (const line of source.lines) {
+      const index = line.text.indexOf(`${attribute}={`);
+      if (index === -1) {
+        continue;
+      }
+      const rest = line.text.slice(index + attribute.length + 2);
+      const match = /^(.+?)\}/.exec(rest);
+      if (match?.[1]) {
+        return { expression: match[1], path: source.path };
+      }
     }
   }
   return;
@@ -2874,11 +2876,18 @@ function missingForAssertion(
 ): MissingInteraction[] {
   const marker = markerOf(assertion);
   const assertAt = stepIndex.get(assertion.afterStep ?? "");
-  if (!marker || assertAt === undefined) {
+  // Une assertion d'ABSENCE décrit une valeur que la vue ne doit pas montrer :
+  // exiger d'elle les gardes qui la produisent serait l'inverse de son sujet.
+  if (!marker || assertAt === undefined || assertsAbsence(assertion)) {
     return [];
   }
-  const expression = markerExpression(material, marker.attribute);
-  const guards = expression ? markerGuards(material, expression) : [];
+  const found = markerExpression(material, marker.attribute);
+  const guards = found
+    ? markerGuards(
+        material.filter((source) => source.path === found.path),
+        found.expression
+      )
+    : [];
   const target = guards.findIndex((guard) => guard.value === marker.value);
   if (target <= 0) {
     return [];
@@ -2902,6 +2911,40 @@ function missingForAssertion(
   return [];
 }
 
+/**
+ * Vrai quand le diff donne à ce champ une valeur littérale NON VIDE au
+ * chargement (`useState({ kind: "normal" })`). Une chaîne vide ne compte pas :
+ * c'est exactement l'état que la garde mesurée refuse.
+ */
+function hasInitialValue(
+  material: SourceLineMaterial[],
+  field: string
+): boolean {
+  const key = field.split(".").pop() ?? field;
+  if (!/^[A-Za-z_$][\w$]*$/.test(key)) {
+    return false;
+  }
+  const assigned = new RegExp(`\\b${key}\\s*:\\s*"(?!")`);
+  return material.some((source) =>
+    source.lines.some((line) => assigned.test(line.text))
+  );
+}
+
+/**
+ * Une assertion d'absence : `hidden`, ou un compte de zéro. Elle veut que la
+ * valeur ne soit pas là, donc elle n'a pas à établir les gardes qui la
+ * produisent — les exiger d'elle retournerait la règle contre son sujet.
+ */
+function assertsAbsence(assertion: {
+  expected?: unknown;
+  kind?: string;
+}): boolean {
+  if (assertion.kind === "hidden") {
+    return true;
+  }
+  return assertion.kind === "count" && String(assertion.expected) === "0";
+}
+
 /** Le premier contrôle d'une garde que le scénario n'a pas joué avant l'assertion. */
 function unmetControl(
   guard: MarkerGuard,
@@ -2910,7 +2953,10 @@ function unmetControl(
 ): { action: "fill" | "select" | "check"; label: string } | undefined {
   for (const field of guard.fields) {
     const control = controlFor(material, field);
-    if (!control) {
+    // Un champ que le code initialise à une valeur littérale non vide est déjà
+    // établi au chargement : exiger son interaction refuserait un scénario qui
+    // atteint la valeur attendue sans y toucher.
+    if (!control || hasInitialValue(material, field)) {
       continue;
     }
     const established = played.some(
@@ -2934,7 +2980,17 @@ function namesControl(
     return false;
   }
   const name = locator.by === "role" ? (locator.name ?? "") : locator.value;
-  return name === label;
+  if (name === label) {
+    return true;
+  }
+  // Un contrôle opéré par un sélecteur brut (`#kind`, `[name="kind"]`) reste le
+  // même contrôle : on compare alors le dernier segment du sélecteur à l'un des
+  // mots du libellé, sans quoi la règle refuserait un scénario qui l'a joué.
+  return label
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 2)
+    .some((word) => name.toLowerCase().includes(word));
 }
 
 /** Le refus rendu au planificateur, borné et sans jargon d'application. */

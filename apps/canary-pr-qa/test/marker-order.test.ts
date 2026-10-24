@@ -116,6 +116,50 @@ const POLICY = {
  * d'arpilabe, aucun attribut de la PR mesurée — la règle doit sortir du diff
  * seul, sinon elle ne vaut que pour un dépôt.
  */
+/** Le contexte qui porte un matériel donné (deux fichiers, ici). */
+function CONTEXT_WITH(material: SourceLineMaterial[]) {
+  return {
+    ...(CONTEXT as Record<string, unknown>),
+    files: material.map((source) => ({
+      additions: source.lines.length,
+      changes: source.lines.length,
+      deletions: 0,
+      filename: source.path,
+      patch: patchOf(source.lines),
+      status: "modified",
+    })),
+  } as never;
+}
+
+/** Les étapes d'un scénario qui remplit sans choisir le motif. */
+const STEP_WITHOUT_SELECT: Plan["scenarios"][number]["steps"] = [
+  { action: { path: "/", type: "goto" }, description: "open", id: "open" },
+  {
+    action: {
+      type: "fill",
+      locator: { by: "role", name: "Note", role: "textbox" },
+      value: "x".repeat(281),
+    },
+    description: "fill a long note",
+    id: "fill-too-long",
+  } as never,
+  {
+    action: { assertionId: "too-long", type: "assert" },
+    description: "assert the marker",
+    id: "assert-too-long",
+  },
+];
+
+const ASSERTION_TOO_LONG = {
+  afterStep: "fill-too-long",
+  description: "the marker reports the long note",
+  expected: "note-too-long",
+  id: "too-long",
+  kind: "text",
+  target: { by: "css", value: '[data-stage-problem="note-too-long"]' },
+  verification: "state",
+} as never;
+
 describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", () => {
   it("ne dit rien d'une assertion qui ne vise pas un marqueur", () => {
     const plan = planWith(
@@ -228,6 +272,89 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     expect(
       unwitnessedPlanRefusals(plan, CONTEXT, POLICY).filter((line) =>
         line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
+  });
+
+  it("ne refuse rien quand l'assertion demande l'ABSENCE du marqueur", () => {
+    // Une assertion d'absence décrit une valeur que la vue ne doit pas
+    // montrer : exiger d'elle les gardes qui la produisent retournerait la
+    // règle contre son sujet.
+    for (const kind of ["hidden", "count"] as const) {
+      const plan = planWith(STEP_WITHOUT_SELECT, [
+        {
+          afterStep: "fill-too-long",
+          description: "the marker is absent",
+          expected: kind === "count" ? "0" : "",
+          id: "order-case",
+          kind,
+          target: { by: "css", value: '[data-stage-problem="note-too-long"]' },
+          verification: "state",
+        } as never,
+      ]);
+      expect(
+        unwitnessedPlanRefusals(plan, CONTEXT, POLICY).filter((line) =>
+          line.includes("data-stage-problem")
+        )
+      ).toEqual([]);
+    }
+  });
+
+  it("ne refuse rien quand le code initialise déjà le champ de la garde", () => {
+    // `useState({ kind: "normal" })` : la garde antérieure est satisfaite au
+    // chargement, donc le scénario atteint la valeur attendue sans toucher au
+    // contrôle, et exiger l'interaction refuserait un plan correct.
+    const withDefault: SourceLineMaterial = {
+      lines: [
+        ...MATERIAL[0]!.lines,
+        {
+          line: 90,
+          text: 'const [draft, setDraft] = useState({ kind: "normal" });',
+        },
+      ],
+      path: "src/view.tsx",
+    };
+    const plan = planWith(STEP_WITHOUT_SELECT, [ASSERTION_TOO_LONG]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH([withDefault]), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
+  });
+
+  it("lit les gardes du fichier qui porte l'expression, pas d'un homonyme", () => {
+    // Les deux fichiers définissent `problem`. Le leurre vient en premier et sa
+    // chaîne porte une garde antérieure ; la vue, elle, rend directement la
+    // valeur attendue. Sans l'identité du fichier, la garde du leurre est lue et
+    // l'assertion est refusée à tort.
+    const decoy: SourceLineMaterial = {
+      lines: [
+        { line: 1, text: "function problem(draft) {" },
+        {
+          line: 2,
+          text: '  if (draft.kind.trim().length === 0) { return "kind-missing"; }',
+        },
+        { line: 3, text: '  return "note-too-long";' },
+        { line: 4, text: "}" },
+      ],
+      path: "src/decoy.tsx",
+    };
+    const view: SourceLineMaterial = {
+      lines: [
+        {
+          line: 1,
+          text: '<p data-stage-problem={view.problem ?? "none"}>here</p>',
+        },
+        { line: 2, text: "function problem() {" },
+        { line: 3, text: '  return "note-too-long";' },
+        { line: 4, text: "}" },
+      ],
+      path: "src/view.tsx",
+    };
+    const plan = planWith(STEP_WITHOUT_SELECT, [ASSERTION_TOO_LONG]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH([decoy, view]), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
       )
     ).toEqual([]);
   });

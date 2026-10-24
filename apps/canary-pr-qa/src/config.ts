@@ -179,6 +179,17 @@ const envSchema = z.object({
    * sous son plafond —, et un plafond absolu d'appels par run borne la dépense.
    */
   QA_MODEL_RETRIES: z.coerce.number().int().min(0).max(5).default(3),
+  /**
+   * Ce que les fichiers modifiés, EN ENTIER, peuvent peser dans le message du
+   * planificateur. Le diff ne dit pas comment une valeur affichée est calculée
+   * plus loin dans le même fichier ; ce budget achète cette jointure.
+   */
+  QA_PLAN_FILE_CHARS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000)
+    .default(120_000),
   QA_CONTEXT_CHARS: z.coerce
     .number()
     .int()

@@ -4353,7 +4353,14 @@ function plannerPayloadBound(
   files: PrContext["files"],
   contextChars: number = config.QA_CONTEXT_CHARS
 ): number {
-  return contextChars + JSON.stringify(files).length + MATERIAL_RESERVE_CHARS;
+  // L'enveloppe porte aussi les fichiers modifiés en entier : leur budget est
+  // une part de la borne, pas une marge en plus (voir `plannerPayloadLimit`).
+  return (
+    contextChars +
+    config.QA_PLAN_FILE_CHARS +
+    JSON.stringify(files).length +
+    MATERIAL_RESERVE_CHARS
+  );
 }
 
 /**
@@ -4462,7 +4469,9 @@ it("keeps the planner message inside the context budget with its numbered materi
         ...saturated,
         context: [
           {
-            content: "z".repeat(config.QA_CONTEXT_CHARS + 40_000),
+            content: "z".repeat(
+              config.QA_CONTEXT_CHARS + config.QA_PLAN_FILE_CHARS + 40_000
+            ),
             path: "src/big.ts",
             ref: context.sha,
           },
