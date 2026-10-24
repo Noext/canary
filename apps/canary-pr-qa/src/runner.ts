@@ -21,16 +21,17 @@ import {
   trustedCatalog,
 } from "./fixtures.js";
 import { GitHub, type PrContext, truncatedContextWarning } from "./github.js";
-
 import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
   attributeValueRefusals,
+  changedFileTexts,
   type DiscoveryEvidence,
   ifPresentRefusals,
   missingExpectationRefusals,
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
+  type PlanFileText,
   planEvidenceDiagnostic,
   stateTargetReadRefusals,
   unstableSelectorRefusals,
@@ -789,6 +790,7 @@ const SOURCE_LINES_RESERVE_CHARS = 30_000;
 function plannerPayloadLimit(context: PrContext, config: Config): number {
   return (
     config.QA_CONTEXT_CHARS +
+    config.QA_PLAN_FILE_CHARS +
     JSON.stringify(context.files).length +
     SOURCE_LINES_RESERVE_CHARS
   );
@@ -817,10 +819,12 @@ export function planPayload(
   preview: Preview,
   initialPage: Observation,
   catalog: TrustedCatalog,
-  config: Config
+  config: Config,
+  files: PlanFileText[] = []
 ) {
   const payload = {
     changedFiles: context.files.map((file) => file.filename),
+    fileTexts: files,
     fixtures: catalog,
     /**
      * Vrai quand le catalogue ne déclare RIEN pour ce dépôt : aucune
@@ -1347,7 +1351,18 @@ async function executePlan(
   const catalog = await fixtureCatalog(config, context.ref.repo).then(
     trustedCatalog
   );
-  const payload = planPayload(context, preview, initialPage, catalog, config);
+  const payload = planPayload(
+    context,
+    preview,
+    initialPage,
+    catalog,
+    config,
+    await changedFileTexts(
+      context.files,
+      (path) => github.optionalFile(context.ref.repo, path, context.sha),
+      config.QA_PLAN_FILE_CHARS
+    )
+  );
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
   await progress.record({ phase: "planning" });

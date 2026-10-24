@@ -1854,3 +1854,58 @@ export function planEvidenceDiagnostic(
     hint: `Le plan visait un élément que la page de découverte ne contient pas ; aucune étape navigateur n'a été dépensée. Corrige la cible dans le plan${copyable ? " en recopiant la cible exposée" : ""}, ou déclare la vue explicitement non testable. L'instantané d'accessibilité est limité à 12 niveaux de profondeur, ne couvre pas les types css/label/testId, et ne lit un texte ou un placeholder que lorsqu'il le porte.${unresolved}`,
   };
 }
+
+/**
+ * Les fichiers modifiés, en entier, pour la planification.
+ *
+ * Le planificateur ne voyait que les hunks du diff. Une valeur affichée est
+ * pourtant calculée ailleurs dans le même fichier : sur `#20`, le marqueur
+ * `data-*` et les `aria-label` de ses contrôles vivent à deux endroits de
+ * `page.tsx`, et l'assertion a été écrite sans la jointure (lot AU : cinq
+ * échecs sur dix, tous de cette forme). Le diff seul ne permet pas cette
+ * jointure ; le fichier entier, si.
+ *
+ * Le contenu est borné, jamais deviné : un fichier absent (supprimé par la PR),
+ * binaire, ou au-delà du budget est omis, et ce qui est coupé est coupé à la
+ * fin. Un fichier tronqué reste utilisable, un fichier inventé ne le serait pas.
+ */
+export interface PlanFileText {
+  content: string;
+  path: string;
+}
+
+const BINARY = "\u0000";
+
+/** Le plus modifié d'abord : c'est là que vit ce que la PR change vraiment. */
+export async function changedFileTexts(
+  files: { changes?: number; filename: string }[],
+  read: (path: string) => Promise<string | undefined>,
+  budget: number
+): Promise<PlanFileText[]> {
+  const texts: PlanFileText[] = [];
+  let spent = 0;
+  // `fileSchema` ne déclare pas `changes` : le tri lit les deux seuls champs
+  // que le contexte porte réellement, sinon toutes les comparaisons valent zéro
+  // et l'ordre reste celui de l'API.
+  const weight = (file: {
+    additions?: number;
+    changes?: number;
+    deletions?: number;
+  }) => file.changes ?? (file.additions ?? 0) + (file.deletions ?? 0);
+  for (const file of [...files].sort(
+    (left, right) => weight(right) - weight(left)
+  )) {
+    const room = budget - spent;
+    if (room <= 0) {
+      break;
+    }
+    const content = await read(file.filename).catch(() => undefined);
+    if (content === undefined || content.includes(BINARY)) {
+      continue;
+    }
+    const text = content.length > room ? content.slice(0, room) : content;
+    texts.push({ content: text, path: file.filename });
+    spent += text.length;
+  }
+  return texts;
+}

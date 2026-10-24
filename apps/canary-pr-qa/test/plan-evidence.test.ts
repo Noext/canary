@@ -994,6 +994,9 @@ describe("scénario refusé avant exécution", () => {
     const f = await setup();
     const labels = stubCanary(ARIA);
     scriptPlan(PlanSchema.parse(observedPlan()));
+    // Les fichiers modifiés arrivent maintenant en entier (voir
+    // `changedFileTexts`), donc la vue partielle ne se produit plus pour eux :
+    // ce test garde son sujet — l'indice sur une vue coupée — en rendant le
     const result = await runQa(
       { prUrl: PR_URL, previewUrl: f.baseUrl },
       f.config
@@ -2244,6 +2247,13 @@ describe("résolution d'une citation refusée (run 9add286d)", () => {
       headContent: `${body}\n// au-delà du plafond de lecture`,
       plans: [planWith(REFUSED_QUOTE), pickAnswer(1)],
     });
+    // Les fichiers modifiés arrivent maintenant en entier (voir
+    // `changedFileTexts`). Ce test garde son sujet — l'indice sur une vue
+    // coupée — en rendant ce fichier entier indisponible, comme un budget
+    // épuisé : `QA_PLAN_FILE_CHARS` à zéro, la vue partielle réapparaît et le
+    // run ne paie plus les ~30 000 tokens du fichier entier dans un budget de
+    // test fait pour mesurer autre chose.
+    f.config.QA_PLAN_FILE_CHARS = 0;
     stubCanary(ARIA);
     const result = await runQa(
       { prUrl: PR_URL, previewUrl: f.baseUrl },
