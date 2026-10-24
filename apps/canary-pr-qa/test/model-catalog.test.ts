@@ -136,5 +136,9 @@ it("returns useful schema errors to the bounded repair request without silently 
     bodies.every((body) => body.model === "opencode-go/deepseek-v4.1-flash")
   ).toBe(true);
   const messages = bodies[1]?.messages as { content: string }[];
-  expect(messages.at(-1)?.content).toContain("ok: Expected boolean");
+  // zod 4 nomme le type attendu et le type reçu dans le même message ; la règle
+  // testée ne change pas : la correction nomme la violation et son champ.
+  expect(messages.at(-1)?.content).toContain(
+    "ok: Invalid input: expected boolean"
+  );
 });

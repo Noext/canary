@@ -162,7 +162,7 @@ export const githubRemovalSchema = githubStatusSchema.extend({
 
 export const githubManifestSchema = z.object({
   action: z.string(),
-  manifest: z.record(z.unknown()),
+  manifest: z.record(z.string(), z.unknown()),
 });
 
 export const githubInstallSchema = z.object({ url: z.string() });

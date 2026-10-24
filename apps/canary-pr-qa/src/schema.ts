@@ -965,7 +965,14 @@ function planSchema<T extends z.ZodTypeAny, A extends z.ZodTypeAny>(
         ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
       }
       for (const scenario of plan.scenarios) {
-        validateScenarioContract(scenario, ctx);
+        // Le générique ne transporte que le schéma d'exigence choisi par
+        // l'appelant : les règles lues ici sont celles de la forme COMMUNE, et
+        // zod v4 rend `output<T>` opaque à cette frontière. Le transtypage est
+        // donc borné à cet appel, il ne touche aucune valeur.
+        validateScenarioContract(
+          scenario as unknown as z.infer<typeof ScenarioSchema>,
+          ctx
+        );
       }
     });
 }
