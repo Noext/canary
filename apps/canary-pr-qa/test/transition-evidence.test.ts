@@ -135,6 +135,9 @@ it("reclassifies an unchanged transition that already shows the expected value",
     actual: BANNER,
     baseline: BANNER,
     passed: false,
+    // L'état attendu était déjà là avant l'étape : l'assertion ne prouve pas que
+    // l'étape l'a produit, et le run le publie au lieu de le laisser deviner.
+    preMatched: true,
   });
   expect(result.diagnostic?.code).toBe("TRANSITION_ON_INVARIANT");
   expect(result.error).toBe(result.diagnostic?.message);
@@ -145,6 +148,17 @@ it("reclassifies an unchanged transition that already shows the expected value",
   expect(result.error).not.toContain(DESCRIPTION);
   expect(result.diagnostic?.hint).toMatch(/"state"/);
   expect(result.diagnostic?.hint).toMatch(/afterStep/);
+});
+
+it("ne signale aucune pré-satisfaction quand la valeur change vraiment", async () => {
+  const result = await runBanner("transition", {
+    actual: BANNER,
+    baseline: "Aperçu de PR",
+  });
+  // La valeur d'arrivée n'était pas celle de départ : l'assertion prouve bien
+  // quelque chose sur l'étape.
+  expect(result.assertions[0]).not.toHaveProperty("preMatched");
+  expect(result.assertions[0]?.passed).toBe(true);
 });
 
 it("keeps a failed change failed when the unchanged value misses the expectation", async () => {

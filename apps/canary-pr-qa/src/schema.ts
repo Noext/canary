@@ -1215,6 +1215,13 @@ export interface ScenarioResult {
     passed: boolean;
     actual: unknown;
     baseline?: unknown;
+    /**
+     * Vrai quand la valeur observée APRÈS l'étape satisfaisait déjà l'attendu
+     * AVANT elle. L'assertion ne prouve alors pas que l'étape a produit l'état :
+     * il peut venir d'un scénario précédent ou d'un état persisté. Publié, jamais
+     * requalifié — un verdict ne devient ni vert ni rouge à cause de ce champ.
+     */
+    preMatched?: boolean;
     persisted?: unknown;
   }[];
   contract?: { completedSteps: string[]; totalSteps: number; hash: string };
