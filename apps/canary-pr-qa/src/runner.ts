@@ -114,6 +114,9 @@ async function discover(
         undefined,
         {
           evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
+          // La découverte doit voir l'écran rendu, pas la coquille : la même
+          // page est ensuite jouée par les scénarios.
+          hydrate: true,
         }
       )
     );

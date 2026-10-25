@@ -438,6 +438,37 @@ function expectCallsWithTargetedCorrection(
   expect(sent(2)).toContain("last correction round");
 }
 
+describe("découverte : voir la page rendue, et le dire", () => {
+  const URL_PREVIEW = "https://preview.example.test/";
+
+  it("attend le travail de la page quand la découverte le demande", () => {
+    const script = compileAction(
+      { type: "goto", path: "/" },
+      URL_PREVIEW,
+      undefined,
+      { hydrate: true }
+    );
+    expect(script).toContain('waitUntil: "load"');
+    expect(script).toContain('waitForLoadState("networkidle"');
+    expect(script).toContain("hydrated: true");
+  });
+
+  it("garde la navigation simple pour une étape de scénario", () => {
+    const script = compileAction({ type: "goto", path: "/" }, URL_PREVIEW);
+    expect(script).toContain('waitUntil: "domcontentloaded"');
+    expect(script).not.toContain("networkidle");
+    expect(script).toContain("hydrated: false");
+  });
+
+  it("publie la taille réelle de l'instantané et sa troncature", () => {
+    // Sans ces deux nombres, un run ne peut pas distinguer « le contrôle n'existe
+    // pas » de « le contrôle est au-delà des 14 000 caractères envoyés ».
+    const script = compileAction({ type: "goto", path: "/" }, URL_PREVIEW);
+    expect(script).toContain("snapshotChars: ariaSnapshot.length");
+    expect(script).toContain("snapshotTruncated: ariaSnapshot.length > ");
+  });
+});
+
 describe("validation and deterministic assertions", () => {
   it("supports an unnamed status role with its frozen assertion target", () => {
     const target = { by: "role" as const, value: "status", name: "" };
