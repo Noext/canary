@@ -277,6 +277,83 @@ const STEP_EXPECTED_ZERO = [
   ...(STEP_WITHOUT_EXPECTED as unknown[]).slice(1),
 ] as never;
 
+/** L'assertion sur la valeur de repli du marqueur : le commentaire est acceptable. */
+const ASSERTION_STAGE_ACCEPTABLE = {
+  afterStep: "fill-note",
+  description: "the stage marker reports no problem",
+  expected: "none",
+  id: "stage-ok",
+  kind: "text",
+  target: { by: "css", value: '[data-stage-problem="none"]' },
+  verification: "state",
+} as never;
+
+/** Les étapes qui remplissent le commentaire ; la longueur est dans la chaîne. */
+function NOTE_STEPS(value: string) {
+  return [
+    {
+      action: {
+        locator: { by: "role", name: "Note about the case", role: "textbox" },
+        type: "fill",
+        value,
+      },
+      description: "type the note",
+      id: "fill-note",
+    } as never,
+    {
+      action: { assertionId: "stage-ok", type: "assert" },
+      description: "assert the marker",
+      id: "assert-stage",
+    } as never,
+  ];
+}
+
+/** Le scénario complet : montant établi, motif choisi, commentaire saisi. */
+function STEP_EXPECTED_AND_NOTE(note: string) {
+  return [
+    {
+      action: { path: "/", type: "goto" },
+      description: "open",
+      id: "open",
+    } as never,
+    EXPECTED_STEP("1240") as never,
+    {
+      action: {
+        locator: { by: "role", name: "Kind of the note", role: "combobox" },
+        type: "select",
+        value: "autre",
+      },
+      description: "choose the kind",
+      id: "select-kind",
+    } as never,
+    ...NOTE_STEPS(note),
+  ];
+}
+
+/**
+ * Le même écran fictif, avec une condition de LONGUEUR dans la chaîne :
+ * `if (draft.note.trim().length > MAX_NOTE) return "note-too-long";` et sa
+ * constante résolue. Aucun nom du dépôt mesuré n'y figure.
+ */
+const LENGTH_MATERIAL: SourceLineMaterial[] = CHAIN_MATERIAL.map((source) =>
+  source.path === "src/view-state.ts"
+    ? {
+        ...source,
+        lines: source.lines.map((line) => {
+          if (line.line === 10) {
+            return {
+              ...line,
+              text: '  if (draft.note.trim().length > MAX_NOTE) { return "note-too-long"; }',
+            };
+          }
+          return line.line === 11
+            ? { ...line, text: "const MAX_NOTE = 280;" }
+            : line;
+        }),
+      }
+    : source
+);
+
 describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", () => {
   it("ne dit rien d'une assertion qui ne vise pas un marqueur", () => {
     const plan = planWith(
@@ -606,6 +683,113 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
       unwitnessedPlanRefusals(
         plan,
         CONTEXT_WITH(CHAIN_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+  });
+
+  it("refuse une saisie trop longue là où une valeur acceptable est attendue", () => {
+    // Le cas mesuré (b933cf08) : le plan écrit 284 caractères en visant 280, et
+    // attend la valeur de repli. La contradiction est démontrable avant Chromium.
+    const plan = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(284)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    const refusals = unwitnessedPlanRefusals(
+      plan,
+      CONTEXT_WITH(LENGTH_MATERIAL),
+      POLICY
+    ).filter((line) => line.includes("data-stage-problem"));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain("holds 284 characters");
+    expect(refusals[0]).toContain("limit that decides this value is 280");
+  });
+
+  it("accepte exactement la borne, et une saisie au-delà quand le dépassement est attendu", () => {
+    // 280 tient dans la limite, 281 la dépasse : les deux plans sont corrects,
+    // chacun visant le côté de la borne qu'il annonce.
+    const bounded = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(280)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(
+        bounded,
+        CONTEXT_WITH(LENGTH_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+    const over = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(281)), [
+      ASSERTION_STAGE_TOO_LONG,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(
+        over,
+        CONTEXT_WITH(LENGTH_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+  });
+
+  it("ne lit que la dernière saisie du champ", () => {
+    // 284 puis 280 : c'est la seconde qui décide, donc aucune contradiction.
+    const plan = planWith(
+      [
+        ...STEP_EXPECTED_AND_NOTE("x".repeat(284)),
+        ...NOTE_STEPS("x".repeat(280)),
+      ] as never,
+      [ASSERTION_STAGE_ACCEPTABLE]
+    );
+    expect(
+      unwitnessedPlanRefusals(
+        plan,
+        CONTEXT_WITH(LENGTH_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+  });
+
+  it("mesure en unités UTF-16, comme String.length", () => {
+    // Un caractère hors BMP pèse 2 unités : 140 symboles font 280, 141 en font
+    // 282 et dépassent la limite — une mesure en points de code se tromperait.
+    const exact = planWith(STEP_EXPECTED_AND_NOTE("𝄞".repeat(140)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(
+        exact,
+        CONTEXT_WITH(LENGTH_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+    const tooLong = planWith(STEP_EXPECTED_AND_NOTE("𝄞".repeat(141)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(
+        tooLong,
+        CONTEXT_WITH(LENGTH_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toHaveLength(1);
+  });
+
+  it("ne refuse rien quand la limite ou le champ ne sont pas établis", () => {
+    // La constante n'est pas résoluble : la règle ne peut rien prouver, donc
+    // elle ne refuse pas une saisie dont la longueur est inconnue du code.
+    const LENGTH_UNRESOLVED = LENGTH_MATERIAL.map((source) => ({
+      ...source,
+      lines: source.lines.map((line) =>
+        line.text === "const MAX_NOTE = 280;"
+          ? { ...line, text: "const MAX_NOTE = UNKNOWN_LIMIT;" }
+          : line
+      ),
+    }));
+    const plan = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(284)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(
+        plan,
+        CONTEXT_WITH(LENGTH_UNRESOLVED),
         POLICY
       ).filter((line) => line.includes("data-stage-problem"))
     ).toEqual([]);
