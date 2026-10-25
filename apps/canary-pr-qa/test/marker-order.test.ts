@@ -553,21 +553,19 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     ).toEqual([]);
   });
 
-  it("refuse l'assertion dont la condition de l'appelant n'est pas établie", () => {
-    // La valeur n'existe que si `required` tient, et `required` se décide à
-    // travers trois définitions jusque dans un champ que l'écran commande :
-    // `session.expected`. Le scénario ne le remplit pas, donc le marqueur reste
-    // au repli `none` et l'assertion ne peut pas être vraie (run 3c51455f).
+  it("ne refuse pas sur une condition d'appelant, faute d'observation", () => {
+    // `justificationRequired ? f(...) : null` dépend d'un état persisté (montant
+    // attendu hérité, session déjà ouverte) que la porte ne peut pas observer :
+    // refuser sans observation produisait des refus faux sur des plans réels.
+    // La garde est enregistrée pour la phase de découverte, pas opposée au plan.
     const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
-    const refusals = unwitnessedPlanRefusals(
-      plan,
-      CONTEXT_WITH(CHAIN_MATERIAL),
-      POLICY
-    ).filter((line) => line.includes("data-stage-problem"));
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0]).toContain("Expected amount");
-    expect(refusals[0]).toContain("src/view-state.ts:");
-    expect(refusals[0]).toContain("null");
+    expect(
+      unwitnessedPlanRefusals(
+        plan,
+        CONTEXT_WITH(CHAIN_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
   });
 
   it("accepte la même assertion quand le champ de la condition est rempli", () => {

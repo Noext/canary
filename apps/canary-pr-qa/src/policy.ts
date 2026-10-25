@@ -2699,9 +2699,17 @@ function reachableSources(
   const imported = new Set<string>();
   for (const line of entry.lines) {
     for (const match of line.text.matchAll(/from\s+["']([^"']+)["']/g)) {
-      const specifier = (match[1] ?? "").replace(/^\.{1,2}\//, "");
-      if (specifier) {
-        imported.add(specifier);
+      // Relatif (`../lib/x`) ou alias de configuration (`@/lib/x`) : on garde le
+      // suffixe de chemin, qui identifie le fichier sans coder l'alias du projet.
+      const raw = match[1] ?? "";
+      for (const specifier of [
+        raw,
+        raw.replace(/^\.{1,2}\//, ""),
+        raw.replace(/^(@[^/]*|~)\//, ""),
+      ]) {
+        if (specifier) {
+          imported.add(specifier);
+        }
       }
     }
   }
@@ -2784,13 +2792,17 @@ function callerGuardOf(
   lines: { line: number; text: string }[],
   name: string
 ): { condition: string; fallback: string; line: number } | undefined {
-  const definition = lines.find((line) =>
+  const index = lines.findIndex((line) =>
     new RegExp(`(?:const|let)\\s+${name}\\s*=`).test(line.text)
   );
-  if (!definition) {
+  const definition = lines[index];
+  if (!definition || index < 0) {
     return;
   }
-  const value = definition.text.slice(definition.text.indexOf("=") + 1);
+  // Le formateur étale souvent le ternaire : `const x = cond` puis `? f(...)`
+  // puis `: null;`. Lire la seule première ligne rendait la condition invisible.
+  const statement = statementOf(lines, index);
+  const value = statement.slice(statement.indexOf("=") + 1);
   const question = value.indexOf("?");
   const colon = value.lastIndexOf(":");
   if (question === -1 || colon <= question) {
@@ -2812,6 +2824,18 @@ function callerGuardOf(
   return condition ? { condition, fallback, line: definition.line } : undefined;
 }
 
+/** Le texte d'une déclaration, recollé jusqu'à son point-virgule. */
+function statementOf(lines: { text: string }[], index: number): string {
+  const parts: string[] = [];
+  for (const line of lines.slice(index, index + 8)) {
+    parts.push(line.text.trim());
+    if (line.text.includes(";")) {
+      break;
+    }
+  }
+  return parts.join(" ");
+}
+
 /**
  * Les champs qu'une condition consulte vraiment : un identifiant nu cache sa
  * définition (`varianceCents` → `expectedCents` → `parseAmountFr(session.expected)`),
@@ -2822,18 +2846,22 @@ function callerGuardOf(
 function resolveFields(
   lines: { line: number; text: string }[],
   condition: string,
-  depth = 4
+  depth = 8
 ): { evidence: string[]; fields: string[] } {
   const evidence: string[] = [];
   const fields = new Set(fieldsOf(condition));
+  const seen = new Set<string>();
   let frontier = [condition];
   for (let hop = 0; hop < depth; hop += 1) {
-    const definitions = bareDefinitions(lines, frontier);
+    const definitions = bareDefinitions(lines, frontier).filter(
+      (definition) => !seen.has(definition)
+    );
     if (definitions.length === 0) {
       break;
     }
     frontier = [];
     for (const definition of definitions) {
+      seen.add(definition);
       const text = definition.slice(definition.indexOf("=") + 1);
       evidence.push(text);
       for (const field of fieldsOf(text)) {
@@ -2854,21 +2882,27 @@ function bareDefinitions(
   for (const text of texts) {
     for (const match of text.matchAll(FIELD)) {
       const name = match[1] ?? "";
-      if (
-        !(name.includes(".") || NOT_A_FIELD.has(name)) &&
-        /^[A-Za-z_$][\w$]*$/.test(name)
-      ) {
-        bare.add(name);
+      if (NOT_A_FIELD.has(name.split(".")[0] ?? "")) {
+        continue;
+      }
+      // Un identifiant nu cache sa définition ; la RACINE d'un champ pointé aussi
+      // (`parsedExpected.ok` vient de `const parsedExpected = parseAmountFr(...)`),
+      // et c'est elle qui mène au champ réellement commandé par l'écran.
+      const candidate = name.includes(".") ? (name.split(".")[0] ?? "") : name;
+      if (/^[A-Za-z_$][\w$]*$/.test(candidate)) {
+        bare.add(candidate);
       }
     }
   }
   const found: string[] = [];
   for (const name of bare) {
-    const definition = lines.find((line) =>
+    const index = lines.findIndex((line) =>
       new RegExp(`(?:const|let)\\s+${name}\\s*=`).test(line.text)
     );
-    if (definition) {
-      found.push(definition.text);
+    if (index >= 0) {
+      // Une déclaration étalée (`const varianceCents =` puis la condition à la
+      // ligne suivante) ne livrait rien : la piste s'arrêtait avant le champ.
+      found.push(statementOf(lines, index));
     }
   }
   return found;
@@ -2931,14 +2965,20 @@ function markerGuards(
           const condition = conditionOf(line.text);
           return {
             condition,
-            fields: fieldsOf(condition),
+            // Un champ local (`comment.length`) cache le champ réel de l'état
+            // (`justification.comment`) : on résout la racine, sinon aucun
+            // contrôle du diff ne peut être reconnu.
+            fields: resolveFields(lines, condition).fields,
             value: LITERAL_RETURN.exec(line.text)?.[1] ?? "",
           };
         }),
       ];
     }
+    // La déclaration peut être étalée : l'appel à suivre est dans le texte
+    // recollé, sinon une condition ternaire multi-lignes coupe la piste.
+    const statement = statementOf(lines, lines.indexOf(definition));
     const next = /[A-Za-z_$][\w$]*\s*\(/
-      .exec(definition.text.replace(new RegExp(`^.*?${name}`), ""))?.[0]
+      .exec(statement.replace(new RegExp(`^.*?${name}`), ""))?.[0]
       ?.replace(/\s*\($/, "");
     if (!next || next === name) {
       return callers;
@@ -3111,6 +3151,14 @@ function missingForAssertion(
     return [conflict];
   }
   for (const guard of guards.slice(0, Math.max(target, 0))) {
+    // Une garde d'APPELANT dépend souvent d'un état persisté que la porte ne
+    // peut pas observer (montant attendu hérité, session déjà ouverte). La
+    // refuser sans observation produisait des refus faux sur des plans réels :
+    // elle est enregistrée, mais elle ne refuse pas tant que la découverte n'a
+    // pas livré l'état initial.
+    if (guard.caller) {
+      continue;
+    }
     const unmet = unmetControl(guard, played, material);
     if (unmet) {
       return [
@@ -3197,9 +3245,14 @@ function lengthInteraction(
 }
 
 /**
- * Vrai quand le diff donne à ce champ une valeur littérale NON VIDE au
- * chargement (`useState({ kind: "normal" })`). Une chaîne vide ne compte pas :
- * c'est exactement l'état que la garde mesurée refuse.
+ * Vrai quand le diff donne à ce champ une valeur littérale NON VIDE à
+ * l'initialisation de l'état (`useState({ kind: "normal" })`).
+ *
+ * La règle se limitait à « le champ est assigné quelque part dans le diff », ce
+ * qui prenait pour un état initial une ligne SUPPRIMÉE du patch et une valeur
+ * d'exemple dans un fichier de test : elle en concluait qu'aucune interaction
+ * n'était nécessaire, et laissait passer le plan `3c51455f`. Une valeur vide ne
+ * compte pas non plus : c'est exactement l'état que la garde refuse.
  */
 function hasInitialValue(
   material: SourceLineMaterial[],
@@ -3210,16 +3263,16 @@ function hasInitialValue(
     return false;
   }
   const assigned = new RegExp(`\\b${key}\\s*:\\s*"(?!")`);
-  return material.some((source) =>
-    source.lines.some((line) => assigned.test(line.text))
+  return material.some(
+    (source) =>
+      !TEST_FILE.test(source.path) &&
+      source.lines.some(
+        (line) =>
+          assigned.test(line.text) &&
+          /use(?:State|Reducer)\s*\(/.test(line.text)
+      )
   );
 }
-
-/**
- * Une assertion d'absence : `hidden`, ou un compte de zéro. Elle veut que la
- * valeur ne soit pas là, donc elle n'a pas à établir les gardes qui la
- * produisent — les exiger d'elle retournerait la règle contre son sujet.
- */
 
 /** La valeur littérale qu'une action écrit, quand elle en écrit une. */
 function actionValue(action: object): string {
@@ -3277,9 +3330,11 @@ function lengthConditionOf(
   const definition = name.includes(".")
     ? undefined
     : definitionText(lines, name);
-  const field = definition
-    ? /^\s*([A-Za-z_$][\w$.]*)/.exec(definition)?.[1]
-    : name;
+  // `justification.comment.trim()` : la transformation n'est pas un champ, on
+  // ne garde que le chemin de l'état, sinon aucun contrôle ne correspond.
+  const field = (
+    definition ? /^\s*([A-Za-z_$][\w$.]*)/.exec(definition)?.[1] : name
+  )?.replace(/\.(?:trim|trimEnd|trimStart|toString|normalize)$/, "");
   if (!field?.includes(".")) {
     return;
   }
