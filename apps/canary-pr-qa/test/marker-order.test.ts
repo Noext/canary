@@ -794,4 +794,56 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
       ).filter((line) => line.includes("data-stage-problem"))
     ).toEqual([]);
   });
+
+  it("ne conclut pas sur une longueur qui ne décide pas seule", () => {
+    // `kind === "limited" && note.length > MAX` : un scénario qui choisit un
+    // autre kind n'atteint pas cette garde, donc la longueur ne prouve rien.
+    const compound: SourceLineMaterial[] = LENGTH_MATERIAL.map((source) => ({
+      ...source,
+      lines: source.lines.map((line) =>
+        line.text.includes("draft.note.trim().length > MAX_NOTE")
+          ? {
+              ...line,
+              text: '  if (draft.kind === "limited" && draft.note.trim().length > MAX_NOTE) { return "note-too-long"; }',
+            }
+          : line
+      ),
+    }));
+    const plan = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(284)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH(compound), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
+  });
+
+  it("tient une garde d'appelant comme condition à satisfaire", () => {
+    // `expected.length > 0 ? problemOf(...) : null` : la condition doit TENIR,
+    // donc une saisie de 4 caractères ne la contredit pas.
+    const caller: SourceLineMaterial[] = LENGTH_MATERIAL.map((source) =>
+      source.path === "src/view-state.ts"
+        ? {
+            ...source,
+            lines: source.lines.map((line) =>
+              line.text.startsWith("  const problem =")
+                ? {
+                    ...line,
+                    text: "  const problem = session.expected.trim().length > 0 ? problemOf(session.draft) : null;",
+                  }
+                : line
+            ),
+          }
+        : source
+    );
+    const plan = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(280)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH(caller), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
+  });
 });

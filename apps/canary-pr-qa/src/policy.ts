@@ -2975,11 +2975,16 @@ function functionBody(
 function conditionOf(line: string): string {
   const trimmed = line.trim();
   const withoutReturn = trimmed.split("return")[0] ?? trimmed;
-  return withoutReturn
-    .replace(/^if\s*\(/, "")
-    .replace(/\)\s*\{?$/, "")
-    .replace(/^}/, "")
-    .trim();
+  return (
+    withoutReturn
+      .replace(/^if\s*\(/, "")
+      // `) { …` ferme la condition quelle que soit la suite de la ligne : un `{`
+      // suivi d'un espace laissait la condition sale et la comparaison illisible.
+      .replace(/\)\s*\{.*$/, "")
+      .replace(/\)\s*$/, "")
+      .replace(/^}/, "")
+      .trim()
+  );
 }
 
 const NOT_A_FIELD = new Set([
@@ -3150,7 +3155,15 @@ function lengthRefusal(input: {
     ? input.guards
     : input.guards.slice(0, Math.max(input.target, 0));
   for (const guard of earlier) {
-    const hit = lengthConflictOf(guard, false, input.played, input.material);
+    // Une garde d'appelant doit TENIR (`cond ? f(...) : null`) ; une garde de
+    // `return` antérieure doit être FAUSSE pour atteindre la valeur suivante.
+    const shouldHold = guard.caller !== undefined;
+    const hit = lengthConflictOf(
+      guard,
+      shouldHold,
+      input.played,
+      input.material
+    );
     if (hit) {
       return lengthInteraction(input, hit, guard);
     }
@@ -3246,9 +3259,12 @@ function lengthConditionOf(
   lines: { path?: string; text: string }[],
   condition: string
 ): LengthCondition | undefined {
+  // La comparaison doit être TOUTE la condition : dans
+  // `kind === "limited" && note.length > MAX`, la longueur ne décide pas seule,
+  // et conclure sur elle refuserait un scénario qui prend l'autre branche.
   const match =
-    /((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*)(\s*\.trim\(\))?\.length\s*(>=|<=|>|<)\s*([A-Za-z_$][\w$]*|\d+)/.exec(
-      condition
+    /^\(?\s*((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*)(\s*\.trim\(\))?\.length\s*(>=|<=|>|<)\s*([A-Za-z_$][\w$]*|\d+)\s*\)?$/.exec(
+      condition.trim()
     );
   if (!match) {
     return;
