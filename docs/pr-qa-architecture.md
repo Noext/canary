@@ -154,10 +154,52 @@ séparation `blocked`/`failed`/`skipped`/`stale` et recheck SHA ; réservation d
 
 ## 5 bis. Mesures déjà obtenues
 
+### Comparaison appariée déterministe (la plus solide)
+
+Les sept plans historiques sont rejoués par le même harnais, sans modèle : la
+comparaison est appariée plan par plan et indépendante du temps.
+
+| Plan | Ancienne porte (run d'origine) | Porte actuelle (rejeu) |
+| --- | --- | --- |
+| `3c51455f` | exécuté puis échoué (assertion fausse) | **refusé avant navigateur** : la saisie fait moins que la borne annoncée |
+| `b933cf08` | exécuté puis échoué | **refusé** : 284 caractères écrits là où 280 sont attendus |
+| `f83f0762` | exécuté puis échoué | **refusé** : 281 caractères assertés contre la valeur de repli |
+| `24db19b8` | exécuté (1 échec + 1 blocage) | **refusé** : 290 caractères contre la valeur de repli |
+| `afcc9846` | bloqué après exécution (cible absente) | accepté : rien de statique ne le prouve — honnêtement non refusé |
+| `790fde72` | bloqué (transition sur invariant) | accepté : même raison |
+| `dd1030c1` | bloqué (citation mal attribuée) | **réparé** vers le fichier qui porte la citation |
+
+Quatre plans sur sept passent d'une exécution perdue à un refus instruisible
+avant le navigateur, un est réparé, deux restent non prouvables statiquement et
+ne sont pas refusés à tort.
+
+### Lots de 10 runs (même PR, même modèle, même oracle)
+
 | Lot | Build | Sonde de vues | Runs verts | Scénarios verts | Tokens | Appels |
 | --- | --- | --- | --- | --- | --- | --- |
 | BA | `8143ac9` | non | 7/10 | 87 | 2 810 804 | 16 |
 | BB | `7a6050b` | oui | 7/10 | 92 | 5 378 250 | 32 |
+| CC | `a88c998` | non | 7/10 | 63 | 3 784 344 | 21 |
+| DD | `0ae3b98` | non | 5/10 | 71 | 3 414 409 | 20 |
+
+Ce que les lots disent, sans embellissement : le nombre de runs entièrement verts
+ne progresse pas de façon reproductible (7, 7, 7, 5 sur dix). Ce qui progresse est
+mesurable ailleurs : sur CC, **aucun échec produit** et deux runs refusés avant le
+navigateur coûtent le scénario, pas le run (correctif #99) ; sur DD, les quatre
+blocages sont des scénarios et non des runs. La variance à n = 10 reste du même
+ordre que l'écart entre versions : aucune conclusion de fiabilité ne peut être
+tirée de ces lots.
+
+Coût : +21 % de tokens par rapport à la baseline (3,78 M contre 2,81 M pour deux
+runs refusés en moins), dû aux fichiers modifiés entiers ; la sonde de vues, elle,
+coûte +91 % et n'a rien apporté sur dix runs — elle reste désactivée.
+
+Familles résiduelles, mesurées sur CC + DD : `TRANSITION_ON_INVARIANT` (3
+scénarios), `TRANSITION_NOT_OBSERVED` (1), `TARGET_NOT_FOUND` (1),
+`REQUIREMENT_UNGROUNDED` (2 runs), `MARKER_ORDER_UNREACHABLE` (2 scénarios). Les
+deux premières sont la même faute de plan — demander un changement là où la valeur
+ne bouge pas — et demandent une boucle de re-planification après classification à
+l'exécution, pas une requalification.
 
 La sonde de navigation double le coût (+91 % de tokens, +16 appels) pour cinq
 scénarios verts de plus et **aucun run vert supplémentaire** sur dix. Elle reste
