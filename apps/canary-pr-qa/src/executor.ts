@@ -197,6 +197,10 @@ async function evaluateAssertion(
     assertion.kind === "visual"
       ? (actual as { passed: boolean }).passed
       : assertionMatches(assertion, actual);
+  const preMatched =
+    baselines.has(assertion.id) &&
+    assertion.kind !== "visual" &&
+    assertionMatches(assertion, baseline);
   const passed =
     matched &&
     (!["transition", "persisted"].includes(verification) ||
@@ -218,6 +222,7 @@ async function evaluateAssertion(
     actual,
     baseline,
     persisted,
+    ...(preMatched ? { preMatched } : {}),
   });
   if (!passed) {
     recordUnprovenAssertion(
