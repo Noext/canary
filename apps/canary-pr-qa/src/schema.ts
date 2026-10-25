@@ -1250,6 +1250,12 @@ export interface RunResult {
   preview?: Preview;
   prUrl: string;
   publication?: Publication;
+  /**
+   * Les scénarios réécrits après que l'exécution a mesuré qu'une vérification ne
+   * pouvait rien prouver. Le contrat révisé a repassé tous les refus et a été
+   * réexécuté ; ce champ dit lesquels, il ne requalifie aucun verdict.
+   */
+  replannedScenarioIds?: string[];
   scenarios: ScenarioResult[];
   sha?: string;
   startedAt: string;
