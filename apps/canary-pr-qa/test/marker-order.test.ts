@@ -505,17 +505,44 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     ).toEqual([]);
   });
 
-  it("refuse une valeur que la condition rejette explicitement", () => {
-    // La saisie est écrite mais vaut « 0 », que la condition `total !== 0`
-    // rejette : l'étape existe, elle n'établit rien.
+  it("ne conclut rien d'une saisie qui semble contredire la condition", () => {
+    // `required = total !== 0` avec `total = Number(expected) - Number(counted)` :
+    // une saisie « 0 » du seul montant attendu ne prouve rien. Refuser ici serait
+    // un faux refus (revue), donc la règle se tait et le plan est joué.
     const plan = planWith(STEP_EXPECTED_ZERO, [ASSERTION_STAGE_TOO_LONG]);
-    const refusals = unwitnessedPlanRefusals(
-      plan,
-      CONTEXT_WITH(CHAIN_MATERIAL),
-      POLICY
-    ).filter((line) => line.includes("data-stage-problem"));
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0]).toContain('writes "0"');
+    expect(
+      unwitnessedPlanRefusals(
+        plan,
+        CONTEXT_WITH(CHAIN_MATERIAL),
+        POLICY
+      ).filter((line) => line.includes("data-stage-problem"))
+    ).toEqual([]);
+  });
+
+  it("ne refuse pas un ternaire dont la valeur est sur la branche fausse", () => {
+    // `const problem = session.optional ? null : problemOf(draft)` : la valeur
+    // existe quand la condition est FAUSSE, donc elle n'est pas un prérequis.
+    const inverted: SourceLineMaterial[] = CHAIN_MATERIAL.map((source) =>
+      source.path === "src/view-state.ts"
+        ? {
+            ...source,
+            lines: source.lines.map((line) =>
+              line.line === 4
+                ? {
+                    ...line,
+                    text: "  const problem = session.optional ? null : problemOf(session.draft);",
+                  }
+                : line
+            ),
+          }
+        : source
+    );
+    const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    expect(
+      unwitnessedPlanRefusals(plan, CONTEXT_WITH(inverted), POLICY).filter(
+        (line) => line.includes("data-stage-problem")
+      )
+    ).toEqual([]);
   });
 
   it("ne dit rien quand la dépendance n'est pas résoluble", () => {

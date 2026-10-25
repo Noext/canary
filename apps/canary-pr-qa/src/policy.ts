@@ -421,10 +421,16 @@ export function witnessFiles(quote: string, context: PrContext): string[] {
 
 /**
  * Répare une attribution fautive quand la citation existe, à l'espacement près,
- * dans un autre fichier déclaré par le même scénario : la preuve reste réelle,
- * seule la mention du fichier était fausse. Un plan qui cite un fichier hors
- * scénario n'est pas réparé ici — le planificateur reçoit le refus et corrige
- * lui-même sa liste de sources.
+ * dans un et un seul fichier que la PR change : la preuve reste réelle, seule la
+ * mention du fichier était fausse.
+ *
+ * La réparation ne se limitait aux fichiers déjà déclarés par le scénario, ce qui
+ * la rendait inopérante sur le cas mesuré (`dd1030c1`) : la citation vivait dans
+ * `apps/web/lib/cash-session.ts`, absent de `sourceFiles`, et le plan restait
+ * bloqué après son unique tour de correction. Le fichier qui porte le texte est
+ * donc ajouté à `sourceFiles` — jamais retiré, l'ancien garde son obligation de
+ * couverture — et le doute ne se répare pas : deux fichiers admissibles ou aucun,
+ * et le plan repart au planificateur.
  */
 export function repairRequirementAttribution(
   plan: Plan,
@@ -441,9 +447,14 @@ export function repairRequirementAttribution(
       if (requirementHasWitness(requirement, context)) {
         continue;
       }
-      const candidates = scenario.sourceFiles.filter((sourceFile) =>
-        requirementHasWitness({ quote: requirement.quote, sourceFile }, context)
-      );
+      const candidates = context.files
+        .map((file) => file.filename)
+        .filter((sourceFile) =>
+          requirementHasWitness(
+            { quote: requirement.quote, sourceFile },
+            context
+          )
+        );
       const [target] = candidates;
       if (candidates.length !== 1 || !target) {
         continue;
@@ -455,6 +466,12 @@ export function repairRequirementAttribution(
         to: target,
       });
       requirement.sourceFile = target;
+      // La couverture de l'ancien fichier reste obligatoire : on ajoute, on ne
+      // remplace pas. Le fichier ajouté est celui dont on cite le texte, donc il
+      // est couvert par cette exigence même.
+      if (!scenario.sourceFiles.includes(target)) {
+        scenario.sourceFiles.push(target);
+      }
     }
   }
   return repairs;
@@ -2779,6 +2796,14 @@ function callerGuardOf(
   if (question === -1 || colon <= question) {
     return;
   }
+  // `cond ? null : f(...)` : la valeur existe quand la condition est FAUSSE.
+  // La retenir comme prérequis positif inverserait la règle, donc on se tait.
+  if (
+    !value.slice(question, colon).includes("(") &&
+    value.slice(colon + 1).includes("(")
+  ) {
+    return;
+  }
   const condition = value.slice(0, question).trim();
   const fallback = value
     .slice(colon + 1)
@@ -3148,43 +3173,13 @@ function unmetControl(
     if (steps.length === 0) {
       return { ...control, field };
     }
-    // Seule une condition d'APPELANT doit tenir : la garde d'un `return` antérieur
-    // doit au contraire être FAUSSE pour atteindre une valeur plus loin, donc une
-    // saisie qui y contredit n'est pas un conflit, c'est le chemin normal.
-    // Et seule la DERNIÈRE écriture compte : une valeur corrigée avant
-    // l'assertion n'a plus d'effet sur ce que la vue affiche.
-    if (!guard.caller) {
-      continue;
-    }
-    const condition = [guard.condition, ...(guard.evidence ?? [])].join(" ");
-    const last = steps.at(-1);
-    const written = actionValue(last?.action ?? {});
-    if (contradicts(condition, written)) {
-      return { ...control, field, valueConflict: written };
-    }
+    // La présence de l'interaction suffit. Aucune valeur incompatible n'est
+    // conclue : `required = total !== 0` avec
+    // `total = Number(expected) - Number(counted)` n'autorise rien sur une saisie
+    // « 0 » du seul montant attendu, et une garde de `return` antérieur doit au
+    // contraire être fausse. Le plan est joué, l'exécution juge la valeur.
   }
   return;
-}
-
-/** La valeur littérale qu'une action écrit, quand elle en écrit une. */
-function actionValue(action: object): string {
-  const value = (action as { value?: unknown }).value;
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * Une contradiction DÉMONTRABLE seulement : la condition compare à un littéral et
- * l'étape écrit ce littéral. Tout le reste est incertain et ne produit rien — une
- * analyse qui devine fabrique des faux refus.
- */
-function contradicts(condition: string, value: string): boolean {
-  if (value === "") {
-    return false;
-  }
-  return (
-    (condition.includes("!== 0") || condition.includes("!= 0")) &&
-    value.trim() === "0"
-  );
 }
 
 function namesControl(
