@@ -25,6 +25,7 @@ import {
   type Plan,
   type Preview,
   type Scenario,
+  type ScenarioResult,
   type SourceLineMaterial,
 } from "./schema.js";
 import type { ObservedTarget } from "./target-repair.js";
@@ -2040,4 +2041,96 @@ export function planPayload(
     );
   }
   return payload;
+}
+
+// --- Re-planification après observation ----------------------------------
+
+/**
+ * La re-planification après observation : quand l'exécution mesure qu'une
+ * vérification ne peut pas prouver ce qu'elle demandait, la faute est dans le
+ * plan, et le plan peut être réécrit — une fois, avant que le verdict ne soit
+ * accepté, puis revalidé entièrement.
+ *
+ * Ce module ne décide rien : il nomme les observations qui justifient une
+ * réécriture et prépare ce que le planificateur doit lire. La réécriture
+ * elle-même passe par le même schéma et les mêmes refus qu'un premier plan, et
+ * rien n'est requalifié : une assertion fausse ne devient jamais verte parce
+ * qu'une seconde écriture l'a remplacée — le contrat révisé est réexécuté.
+ */
+
+/** Les codes qui disent « la vérification demandée ne peut rien prouver ici ». */
+export const REPLANNABLE_CODES = new Set([
+  "TRANSITION_NOT_OBSERVED",
+  "TRANSITION_ON_INVARIANT",
+]);
+
+/** Ce que l'exécution a réellement vu pour une assertion fautive. */
+export interface InvariantObservation {
+  assertionId: string;
+  baseline?: unknown;
+  code: string;
+  effective?: unknown;
+  scenarioId: string;
+}
+
+/**
+ * Les observations qui justifient une réécriture : un scénario bloqué ou échoué
+ * dont le diagnostic est une vérification inapplicable. Le détail vient des
+ * relevés déjà enregistrés — aucune seconde exécution n'est nécessaire pour
+ * constater l'invariance.
+ */
+export function invariantObservations(
+  scenarios: ScenarioResult[]
+): InvariantObservation[] {
+  const found: InvariantObservation[] = [];
+  for (const scenario of scenarios) {
+    const code = scenario.diagnostic?.code ?? "";
+    if (!REPLANNABLE_CODES.has(code)) {
+      continue;
+    }
+    const assertionId = /assertion ([^\s:]+)/.exec(
+      scenario.diagnostic?.message ?? ""
+    )?.[1];
+    const measured = scenario.assertions.find(
+      (item) => assertionId === undefined || item.id === assertionId
+    );
+    found.push({
+      assertionId: assertionId ?? measured?.id ?? "",
+      baseline: measured?.baseline,
+      code,
+      effective: measured?.actual,
+      scenarioId: scenario.scenario.id,
+    });
+  }
+  return found;
+}
+
+/**
+ * Ce que le planificateur reçoit : son plan précédent, et ce que l'exécution a
+ * mesuré. Il réécrit la vérification lui-même — aucun code ne transforme une
+ * `transition` en `state` à sa place.
+ */
+export function replanPayload(input: {
+  observations: InvariantObservation[];
+  plan: Plan;
+}): {
+  instruction: string;
+  observations: InvariantObservation[];
+  plan: Plan;
+} {
+  return {
+    instruction:
+      "The plan below was executed. For the scenarios listed in observations, the verification demanded a CHANGE on a value that did not change: the value measured before the step, the value measured after it, and the expected value are given. Rewrite ONLY what is wrong: keep every scenario and every step that proved something, and change the verification or the expected value so that it describes what the application actually does. Use state with afterStep when the value is an invariant and the assertion only needs to show it is there; keep transition only where a step genuinely moves the value. Return the complete corrected plan.",
+    observations: input.observations,
+    plan: input.plan,
+  };
+}
+
+/** Les scénarios à réexécuter, avec leur version réécrite. */
+export function replannedScenarios(
+  plan: Plan,
+  observations: InvariantObservation[]
+): Scenario[] {
+  const ids = new Set(observations.map((item) => item.scenarioId));
+  return plan.scenarios.filter((scenario) => ids.has(scenario.id));
 }

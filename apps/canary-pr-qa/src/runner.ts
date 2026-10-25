@@ -28,12 +28,15 @@ import {
   changedFileTexts,
   type DiscoveryEvidence,
   ifPresentRefusals,
+  invariantObservations,
   missingExpectationRefusals,
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   type PlanFileText,
   planEvidenceDiagnostic,
   planPayload,
+  replannedScenarios,
+  replanPayload,
   stateTargetReadRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
@@ -81,6 +84,7 @@ import {
   type RunResult,
   type Scenario,
   type ScenarioResult,
+  type SourceLineMaterial,
 } from "./schema.js";
 import { traced } from "./telemetry.js";
 
@@ -1266,6 +1270,104 @@ function settlePlan(
   }
   validatePlan(plan, context, config);
 }
+
+/**
+ * Réécrit une fois le plan quand l'exécution a mesuré qu'une vérification ne
+ * pouvait rien prouver, puis réexécute les scénarios concernés.
+ *
+ * Ce n'est pas une requalification : le plan révisé passe le même schéma, les
+ * mêmes refus et la même couverture, et son résultat vient d'une exécution
+ * réelle. Ce qui change est la demande — `transition` là où la valeur ne bouge
+ * pas devenait une preuve impossible — et c'est le planificateur qui la change.
+ */
+async function replanObservedInvariants(input: {
+  canary: Canary;
+  catalog: TrustedCatalog;
+  config: Config;
+  context: PrContext;
+  evidence: string;
+  files: PlanFileText[];
+  initialPage: Observation;
+  material: SourceLineMaterial[];
+  model: Model;
+  policy: Policy;
+  preview: Preview;
+  progress: Progress;
+  result: RunResult;
+  root: string;
+}): Promise<void> {
+  if (!(input.config.QA_REPLAN_ON_INVARIANT && input.result.plan)) {
+    return;
+  }
+  const observations = invariantObservations(input.result.scenarios);
+  if (observations.length === 0) {
+    return;
+  }
+  checkBudget();
+  const revised = await input.model.json(
+    PLANNER_PROMPT,
+    {
+      ...planPayload(
+        input.context,
+        input.preview,
+        input.initialPage,
+        input.catalog,
+        input.config,
+        input.files
+      ),
+      ...replanPayload({ observations, plan: input.result.plan }),
+    },
+    plannerPlanSchema(input.material),
+    input.config.QA_PLAN_MAX_TOKENS,
+    (candidate) => {
+      const refusals = planRefusals(
+        candidate,
+        input.policy,
+        input.context,
+        input.config,
+        input.catalog,
+        amputationScans(),
+        { aria: input.evidence, url: input.initialPage.url }
+      );
+      return refusals.length === 0
+        ? undefined
+        : `Plan rejected: ${refusals.join(" ")} Return the complete corrected plan.`;
+    }
+  );
+  settlePlan(revised, input.context, input.config, input.result.id);
+  input.result.plan = revised;
+  const replanned = replannedScenarios(revised, observations);
+  input.result.replannedScenarioIds = replanned.map((scenario) => scenario.id);
+  for (const scenario of replanned) {
+    logger.info(
+      { runId: input.result.id, scenario: scenario.id },
+      "Re-executing a scenario whose verification was rewritten"
+    );
+    checkBudget();
+    const executed = await executeScenario(
+      scenario,
+      input.preview.url,
+      input.root,
+      input.config,
+      input.canary,
+      (event) => input.progress.record(event),
+      input.context.ref.repo,
+      input.material,
+      input.model
+    );
+    const index = input.result.scenarios.findIndex(
+      (item) => item.scenario.id === scenario.id
+    );
+    if (index >= 0) {
+      input.result.scenarios[index] = executed;
+    } else {
+      input.result.scenarios.push(executed);
+    }
+  }
+  input.result.outcome = aggregate(input.result.scenarios);
+  await saveReport(input.root, input.result, input.config);
+}
+
 async function executePlan(
   result: RunResult,
   context: PrContext,
@@ -1473,6 +1575,26 @@ async function executePlan(
     await saveReport(root, result, config);
   }
   result.outcome = aggregate(result.scenarios);
+  // Une vérification qui ne peut rien prouver est une faute de plan que
+  // l'exécution vient de mesurer : le plan est réécrit une fois, revalidé
+  // entièrement, puis seuls les scénarios concernés sont réexécutés. Aucun
+  // verdict n'est requalifié — le contrat révisé repasse le même gate.
+  await replanObservedInvariants({
+    canary,
+    catalog,
+    config,
+    context,
+    evidence,
+    files: planFiles,
+    initialPage,
+    material,
+    model,
+    policy,
+    preview,
+    progress,
+    result,
+    root,
+  });
   if (config.QA_BASELINE_URL_TEMPLATE) {
     const url = config.QA_BASELINE_URL_TEMPLATE.replaceAll(
       "{sha}",

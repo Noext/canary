@@ -190,6 +190,16 @@ const envSchema = z.object({
    * et un appel de planification supplémentaires ; bénéfice mesurable, donc
    * désactivable pour comparer.
    */
+  /**
+   * Réécrire le plan, une fois, quand l'exécution mesure qu'une vérification ne
+   * peut rien prouver (transition sur une valeur qui ne bouge pas). Le contrat
+   * révisé repasse tous les refus puis est réexécuté : rien n'est requalifié à la
+   * volée. Le drapeau existe pour mesurer ce que coûte la passe supplémentaire.
+   */
+  QA_REPLAN_ON_INVARIANT: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .default(false)
+    .transform((value) => value === true || value === "true"),
   QA_VIEW_PROBE: z
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)
