@@ -7,10 +7,11 @@ import type { BrowserAuth } from "@usecanary/protocol";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
+import type { PrContext } from "./github.js";
 import { fetchText } from "./http.js";
 import { verifyPreviewUrl } from "./preview.js";
 import { checkBudget, runScope } from "./run-scope.js";
-import type { Action, Assertion, Locator } from "./schema.js";
+import type { Action, Assertion, Locator, Plan, Preview } from "./schema.js";
 
 const logger = createLogger({ name: "pr-qa-browser" });
 
@@ -772,6 +773,46 @@ const ariaSnapshot = (await page.snapshotForAI({ depth: 12 })).full;
 console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS}), snapshotChars: ariaSnapshot.length, snapshotTruncated: ariaSnapshot.length > ${MODEL_SNAPSHOT_CHARS}, hydrated: ${options.hydrate ? "true" : "false"}${evidence}, actual, targetName, provenanceUrls }));`;
 }
 
+export async function discoverPreview(
+  context: PrContext,
+  preview: Preview,
+  root: string,
+  canary: Canary
+): Promise<{ evidence: string; initialPage: Observation }> {
+  const sessionId = await canary.start(`PR ${context.ref.number} discovery`);
+  let observation: Observation;
+  try {
+    observation = await canary.act(
+      sessionId,
+      "discover-preview",
+      // L'évidence de validation du plan est relevée en même temps que
+      // l'instantané du modèle, sans second relevé navigateur.
+      compileAction(
+        { type: "goto", path: preview.url },
+        preview.url,
+        undefined,
+        {
+          evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
+          // La découverte doit voir l'écran rendu, pas la coquille : la même
+          // page est ensuite jouée par les scénarios.
+          hydrate: true,
+        }
+      )
+    );
+  } catch (error) {
+    await canary.abort(sessionId);
+    throw error;
+  }
+  try {
+    await canary.end(sessionId, join(root, "_discovery"));
+  } catch (error) {
+    await canary.abort(sessionId);
+    throw error;
+  }
+  const { evidence, ...initialPage } = observation;
+  return { evidence: evidence ?? "", initialPage };
+}
+
 export class Canary {
   private readonly config: Config;
   constructor(config: Config) {
@@ -1064,4 +1105,154 @@ export function browserEnvironment(config: Config): NodeJS.ProcessEnv {
   env.CANARY_NETWORK_ALLOWED_HOSTS = config.PREVIEW_ALLOWED_HOSTS;
   env.CANARY_NETWORK_ALLOW_PRIVATE = config.QA_ALLOW_PRIVATE_PREVIEWS;
   return env;
+}
+
+// --- Sonde de navigation : observer les vues qu'un plan traverse ---------
+
+/**
+ * Une vue réellement observée : l'écran tel qu'il est après une étape de
+ * navigation du plan lui-même.
+ *
+ * Le planificateur ne connaissait que la page d'entrée. Toute assertion portant
+ * sur un écran atteint après un clic était donc écrite de mémoire : `afcc9846`
+ * sur un attribut inexistant, `3c51455f` sur un marqueur dont l'état dépendait
+ * d'un champ jamais rempli. La sonde rejoue **le préfixe de navigation du plan**
+ * — `goto` puis des `click`, rien d'autre — dans une session à part, et rend ce
+ * que l'écran contient vraiment.
+ *
+ * Sécurité par construction : la sonde s'arrête à la première action qui écrit
+ * (`fill`, `select`, `check`, `press`) ou qui observe une assertion. Elle ne
+ * saisit rien, ne valide rien, ne change aucun état métier. Une navigation ne
+ * peut pas modifier de données, donc rejouer un chemin de navigation est sans
+ * effet irréversible.
+ */
+export interface ProbedView {
+  /** L'étape après laquelle cette vue a été relevée. */
+  afterStep: string;
+  /** Taille réelle de l'instantané, avant troncature. */
+  chars: number;
+  snapshot: string;
+  url: string;
+}
+
+const MAX_PROBED_VIEWS = 4;
+const PROBED_VIEW_CHARS = 6000;
+
+/** Les types d'action qui n'écrivent rien. Au-delà, la sonde s'arrête. */
+const NAVIGATION_ONLY = new Set(["click", "goto"]);
+
+/**
+ * Le préfixe de navigation d'un scénario : `goto` et `click` depuis le début,
+ * jusqu'à la première action qui écrit quelque chose. Un préfixe sans clic ne
+ * mène nulle part et n'apprend rien : il est rendu vide.
+ */
+function navigationSteps(scenario: {
+  steps: Plan["scenarios"][number]["steps"];
+}): Plan["scenarios"][number]["steps"] {
+  const steps: Plan["scenarios"][number]["steps"] = [];
+  for (const step of scenario.steps) {
+    if (!NAVIGATION_ONLY.has(step.action.type)) {
+      break;
+    }
+    steps.push(step);
+  }
+  return steps.some((step) => step.action.type === "click") ? steps : [];
+}
+
+/** Ce que la sonde transmet au planificateur : borné, et jamais persisté brut. */
+export function probedViewsPayload(
+  views: ProbedView[]
+): { afterStep: string; snapshot: string; url: string }[] {
+  return views.slice(0, MAX_PROBED_VIEWS).map((view) => ({
+    afterStep: view.afterStep,
+    snapshot: view.snapshot.slice(0, PROBED_VIEW_CHARS),
+    url: view.url,
+  }));
+}
+
+/**
+ * Rejoue le préfixe de navigation dans une session dédiée et rend ce que chaque
+ * clic a réellement affiché. La session est toujours refermée : un échec de
+ * fermeture ne doit pas laisser un navigateur derrière lui.
+ */
+async function probeNavigationViews(input: {
+  canary: Canary;
+  label: string;
+  preview: Preview;
+  root: string;
+  steps: Plan["scenarios"][number]["steps"];
+}): Promise<ProbedView[]> {
+  const steps = input.steps.slice(0, MAX_PROBED_VIEWS);
+  if (steps.length === 0) {
+    return [];
+  }
+  const sessionId = await input.canary.start(input.label);
+  const views: ProbedView[] = [];
+  try {
+    for (const step of steps) {
+      const observation: Observation = await input.canary.act(
+        sessionId,
+        `probe-${step.id}`,
+        compileAction(step.action, input.preview.url)
+      );
+      views.push({
+        afterStep: step.id,
+        chars: observation.snapshotChars ?? observation.snapshot.length,
+        snapshot: observation.snapshot,
+        url: observation.url,
+      });
+    }
+  } catch {
+    // Une vue manquante ne doit pas coûter le run : la sonde est un supplément
+    // d'information, jamais une condition de succès.
+    return views;
+  } finally {
+    try {
+      await input.canary.end(sessionId, join(input.root, "_probe"));
+    } catch {
+      await input.canary.abort(sessionId);
+    }
+  }
+  return views;
+}
+
+/**
+ * Rejoue la navigation du plan, puis fait réécrire le plan en ayant vu l'écran.
+ *
+ * Le planificateur n'a d'abord que la page d'entrée : tout ce qu'un clic révèle
+ * est imaginé (`afcc9846` : cible inexistante après navigation). La sonde rejoue
+ * le préfixe de NAVIGATION — `goto` et des clics, aucune saisie, aucune
+ * soumission, donc aucun effet métier — et la seconde écriture reçoit
+ * l'instantané réel de chaque vue. Une seule passe, bornée, jamais fatale :
+ * sans vue, le plan initial reste et le run continue.
+ */
+export async function probeAndReplan(input: {
+  askPlanner: (views: ProbedView[]) => Promise<Plan | undefined>;
+  canary: Canary;
+  label: string;
+  plan: Plan;
+  preview: Preview;
+  root: string;
+  settle: (plan: Plan) => void;
+}): Promise<Plan | undefined> {
+  const steps = navigationSteps(input.plan.scenarios[0] ?? { steps: [] });
+  if (steps.length === 0) {
+    return;
+  }
+  const views = await probeNavigationViews({
+    canary: input.canary,
+    label: input.label,
+    preview: input.preview,
+    root: input.root,
+    steps,
+  });
+  if (views.length === 0) {
+    return;
+  }
+  const refined = await input.askPlanner(views);
+  if (!refined) {
+    return;
+  }
+  input.settle(refined);
+  return refined;
 }

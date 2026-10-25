@@ -4,15 +4,15 @@ import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
 import {
   Canary,
-  compileAction,
+  discoverPreview,
   type Observation,
-  PLAN_EVIDENCE_SNAPSHOT_CHARS,
+  type ProbedView,
+  probeAndReplan,
 } from "./canary.js";
 import { type Config, validateConfiguration } from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import {
-  declaredPreconditionNames,
   fixtureCatalog,
   NO_DECLARED_PRECONDITIONS,
   preconditionPlanRefusal,
@@ -33,6 +33,7 @@ import {
   type PlanEvidenceReport,
   type PlanFileText,
   planEvidenceDiagnostic,
+  planPayload,
   stateTargetReadRefusals,
   unstableSelectorRefusals,
   validatePlanEvidence,
@@ -44,7 +45,6 @@ import {
   contractBudgetRefusals,
   criticalSkipRefused,
   hasWeakWitness,
-  numberedSourceLines,
   type Policy,
   quoteExcerpt,
   quoteResolutionCandidates,
@@ -80,7 +80,6 @@ import {
   type RunResult,
   type Scenario,
   type ScenarioResult,
-  type SourceLineMaterial,
 } from "./schema.js";
 import { traced } from "./telemetry.js";
 
@@ -94,45 +93,6 @@ export interface RunOptions {
   publish?: boolean;
 }
 
-async function discover(
-  context: PrContext,
-  preview: Preview,
-  root: string,
-  canary: Canary
-): Promise<{ evidence: string; initialPage: Observation }> {
-  const sessionId = await canary.start(`PR ${context.ref.number} discovery`);
-  let observation: Observation;
-  try {
-    observation = await canary.act(
-      sessionId,
-      "discover-preview",
-      // L'évidence de validation du plan est relevée en même temps que
-      // l'instantané du modèle, sans second relevé navigateur.
-      compileAction(
-        { type: "goto", path: preview.url },
-        preview.url,
-        undefined,
-        {
-          evidenceSnapshotChars: PLAN_EVIDENCE_SNAPSHOT_CHARS,
-          // La découverte doit voir l'écran rendu, pas la coquille : la même
-          // page est ensuite jouée par les scénarios.
-          hydrate: true,
-        }
-      )
-    );
-  } catch (error) {
-    await canary.abort(sessionId);
-    throw error;
-  }
-  try {
-    await canary.end(sessionId, join(root, "_discovery"));
-  } catch (error) {
-    await canary.abort(sessionId);
-    throw error;
-  }
-  const { evidence, ...initialPage } = observation;
-  return { evidence: evidence ?? "", initialPage };
-}
 function completeSource(context: PrContext, path: string, ref: string) {
   return context.context.some(
     (item) =>
@@ -765,103 +725,6 @@ function refusalDiagnostic(
   return diagnostic;
 }
 /**
- * La réserve du matériel numéroté dans le message du planificateur. Sa taille est
- * enfin GARANTIE : la borne d'envoi l'additionne au lieu de la déduire d'un
- * reliquat, donc les patches déjà présents dans `pr` ne la dépensent plus avant
- * le premier affichage (voir `planPayload`).
- *
- * C'est le chiffre qui manquait au run 76249900 : borné à `QA_CONTEXT_CHARS +
- * 30_000`, le message pesait 149 162 caractères avec un contexte de dépendances
- * saturé, donc 838 caractères de matériel — un fichier sur dix, sans le fichier
- * cité, et aucune ligne désignable. Le contenu du diff n'est compté par aucune
- * borne (`QA_CONTEXT_CHARS` borne les fichiers de contexte lus par
- * `collectContext`), donc il était déjà là, déjà payé, déjà dépensé.
- */
-const SOURCE_LINES_RESERVE_CHARS = 30_000;
-/**
- * Ce que le message du planificateur a le droit de peser : la borne du contexte
- * de dépendances (`QA_CONTEXT_CHARS`, appliquée par `collectContext`), le diff
- * lui-même — `pr.files` porte ses patches, que cette borne ne compte pas — et la
- * réserve du matériel numéroté.
- *
- * Compter deux fois le même texte, en revanche, n'était pas une marge : c'était
- * un budget faux. La borne supposait le message hors matériel aussi léger que le
- * contexte qu'elle borne, alors qu'il porte en plus les patches ; la réserve
- * annoncée par `QA_CONTEXT_CHARS + 30_000` était donc déjà consommée par ce qui
- * était dans le message depuis le début.
- */
-function plannerPayloadLimit(context: PrContext, config: Config): number {
-  return (
-    config.QA_CONTEXT_CHARS +
-    config.QA_PLAN_FILE_CHARS +
-    JSON.stringify(context.files).length +
-    SOURCE_LINES_RESERVE_CHARS
-  );
-}
-/**
- * Le message du planificateur : le contexte figé de la PR, la page de
- * découverte, le catalogue de fixtures, puis les lignes RÉELLES des fichiers
- * modifiés numérotées dans le nouveau fichier (voir `numberedSourceLines`). Ce
- * matériel est ce que le planificateur DÉSIGNE par son numéro, et non plus ce
- * qu'il recopie : le gate y relit la ligne et écrit son texte dans `quote`
- * (voir `plannerPlanSchema`), ce qui supprime la cause mesurée des copies
- * altérées (`b-altered`) — y compris sur les runs où le refus nommait déjà la
- * bonne ligne, et où le planificateur la retapait quand même.
- *
- * L'affichage est borné par une réserve qui existe : elle est ajoutée à la borne
- * d'envoi (voir `plannerPayloadLimit`) et le matériel en reçoit ce qui reste
- * après le reste du message, jamais plus que la réserve. Un message déjà trop
- * lourd se replie donc sur un matériel plus court au lieu de faire refuser un
- * run qui passait avant, et un PR volumineux garde son run. CETTE TRONCATURE
- * N'EST PLUS UNE BORNE DE RÉSOLUTION : le gate résout une référence `line` dans
- * tout le diff (voir `sourceLineMaterial`), donc une ligne que l'affichage a
- * coupée reste désignable par son numéro.
- */
-export function planPayload(
-  context: PrContext,
-  preview: Preview,
-  initialPage: Observation,
-  catalog: TrustedCatalog,
-  config: Config,
-  files: PlanFileText[] = []
-) {
-  const payload = {
-    changedFiles: context.files.map((file) => file.filename),
-    fileTexts: files,
-    fixtures: catalog,
-    /**
-     * Vrai quand le catalogue ne déclare RIEN pour ce dépôt : aucune
-     * précondition ne peut alors être satisfaite, donc chaque scénario qui en
-     * déclare une est bloqué avant la première étape (run 720c0ba0 : huit
-     * scénarios sur huit, sur `role:Administrateur démo 1` et `fixture:DEMO17`).
-     * Le planificateur reçoit ce fait au lieu de le déduire d'un catalogue vide.
-     */
-    preconditionsAvailable: declaredPreconditionNames(catalog).length > 0,
-    initialPage,
-    maxScenarios: config.QA_MAX_SCENARIOS,
-    pr: context,
-    preview,
-    sourceLines: [] as SourceLineMaterial[],
-  };
-  const limit = plannerPayloadLimit(context, config);
-  payload.sourceLines = numberedSourceLines(
-    context,
-    Math.max(
-      0,
-      Math.min(
-        SOURCE_LINES_RESERVE_CHARS,
-        limit - JSON.stringify(payload).length
-      )
-    )
-  );
-  if (JSON.stringify(payload).length > limit) {
-    throw new Error(
-      "PR context exceeds model budget; refusing partial diff analysis"
-    );
-  }
-  return payload;
-}
-/**
  * Une assertion d'absence ne lit pas un élément : elle en constate l'absence,
  * donc une cible qui ne résout rien y est normale. Les autres sont comptées sur
  * la page de découverte avant toute exécution.
@@ -1310,6 +1173,49 @@ export function quotePickCorrection(
  * masquer le refus que le planificateur est en train d'apprendre à corriger.
  */
 
+/** La seconde écriture : même payload, plus les vues réellement observées. */
+function planWithObservedViews(input: {
+  catalog: TrustedCatalog;
+  config: Config;
+  context: PrContext;
+  evidence: string;
+  files: PlanFileText[];
+  initialPage: Observation;
+  model: Model;
+  policy: Policy;
+  preview: Preview;
+  views: ProbedView[];
+}): Promise<Plan | undefined> {
+  return input.model.json(
+    PLANNER_PROMPT,
+    planPayload(
+      input.context,
+      input.preview,
+      input.initialPage,
+      input.catalog,
+      input.config,
+      input.files,
+      input.views
+    ),
+    plannerPlanSchema(sourceLineMaterial(input.context)),
+    input.config.QA_PLAN_MAX_TOKENS,
+    (candidate) => {
+      const refusals = planRefusals(
+        candidate,
+        input.policy,
+        input.context,
+        input.config,
+        input.catalog,
+        amputationScans(),
+        { aria: input.evidence, url: input.initialPage.url }
+      );
+      return refusals.length === 0
+        ? undefined
+        : `Plan rejected: ${refusals.join(" ")} Return the complete corrected plan.`;
+    }
+  );
+}
+
 function settlePlan(
   plan: Plan,
   context: PrContext,
@@ -1345,7 +1251,7 @@ async function executePlan(
   github: GitHub
 ) {
   await progress.record({ phase: "discovery" });
-  const { evidence, initialPage } = await discover(
+  const { evidence, initialPage } = await discoverPreview(
     context,
     preview,
     root,
@@ -1354,17 +1260,18 @@ async function executePlan(
   const catalog = await fixtureCatalog(config, context.ref.repo).then(
     trustedCatalog
   );
+  const planFiles = await changedFileTexts(
+    context.files,
+    (path) => github.optionalFile(context.ref.repo, path, context.sha),
+    config.QA_PLAN_FILE_CHARS
+  );
   const payload = planPayload(
     context,
     preview,
     initialPage,
     catalog,
     config,
-    await changedFileTexts(
-      context.files,
-      (path) => github.optionalFile(context.ref.repo, path, context.sha),
-      config.QA_PLAN_FILE_CHARS
-    )
+    planFiles
   );
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
@@ -1417,6 +1324,32 @@ async function executePlan(
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
   settlePlan(result.plan, context, config, result.id);
+  const refined = config.QA_VIEW_PROBE
+    ? await probeAndReplan({
+        askPlanner: (views) =>
+          planWithObservedViews({
+            catalog,
+            config,
+            context,
+            evidence,
+            files: planFiles,
+            initialPage,
+            model,
+            policy,
+            preview,
+            views,
+          }),
+        canary,
+        label: `PR ${context.ref.number} probe`,
+        plan: result.plan,
+        preview,
+        root,
+        settle: (plan) => settlePlan(plan, context, config, result.id),
+      })
+    : undefined;
+  if (refined) {
+    result.plan = refined;
+  }
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

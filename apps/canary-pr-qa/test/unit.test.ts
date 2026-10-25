@@ -25,6 +25,7 @@ import {
 import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, type PrContext, parsePrUrl } from "../src/github.js";
 import { mayRetry, PLANNER_PROMPT, transportCode } from "../src/model.js";
+import { planPayload } from "../src/plan-evidence.js";
 import {
   PolicySchema,
   quoteExcerpt,
@@ -39,7 +40,6 @@ import { saveReport } from "../src/report.js";
 import { type RunScope, runScope } from "../src/run-scope.js";
 import {
   FATAL_PRELUDE_CHARS,
-  planPayload,
   relayModelRetries,
   runQa,
 } from "../src/runner.js";

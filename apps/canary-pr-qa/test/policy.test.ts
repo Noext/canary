@@ -5,6 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
 import { PLANNER_PROMPT } from "../src/model.js";
+import { planPayload } from "../src/plan-evidence.js";
 import {
   absentRequirementRemedy,
   amputatedQuote,
@@ -37,7 +38,6 @@ import {
 } from "../src/policy.js";
 import {
   coverageFatalClasses,
-  planPayload,
   planShapeRefusals,
   quotePickCorrection,
 } from "../src/runner.js";
@@ -1375,6 +1375,36 @@ it("says no changed file carries the quote and proposes none outside the diff", 
     `${CASH_MODULE_PATH}, which this PR does not change`
   );
   expect(outsideLine).not.toContain("declare that file");
+});
+
+it("porte les vues observées dans le message du planificateur", () => {
+  // Le modèle ne doit pas imaginer ce qu'un clic révèle : la sonde lui envoie
+  // l'instantané réel de chaque écran traversé, borné.
+  const payload = planPayload(
+    contextWith([
+      { filename: "src/a.ts", patch: "@@ -1,1 +1,2 @@\n+first line" },
+    ]),
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config,
+    [],
+    [
+      {
+        afterStep: "open-drawer",
+        chars: 12_000,
+        snapshot: "snapshot of the drawer",
+        url: "https://preview.test/drawer",
+      },
+    ]
+  );
+  expect(payload.observedViews).toEqual([
+    {
+      afterStep: "open-drawer",
+      snapshot: "snapshot of the drawer",
+      url: "https://preview.test/drawer",
+    },
+  ]);
 });
 
 it("repairs an attribution to a changed file the scenario had not declared", () => {
