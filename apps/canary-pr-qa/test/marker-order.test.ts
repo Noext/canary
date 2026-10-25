@@ -884,4 +884,28 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
     expect(unverifiedPreconditions(plan, plain)).toEqual([]);
   });
+
+  it("fait lire la même représentation au refus et à la publication", () => {
+    // Un seul marqueur, deux contrôles : le refus de longueur et la
+    // précondition non tranchable doivent désigner le MÊME attribut, la MÊME
+    // condition d'appelant et la MÊME provenance — sinon deux règles relisent
+    // le code et peuvent diverger.
+    const plan = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(284)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]);
+    const material = LENGTH_MATERIAL;
+    const refusals = unwitnessedPlanRefusals(
+      plan,
+      CONTEXT_WITH(material),
+      POLICY
+    ).filter((line) => line.includes("data-stage-problem"));
+    expect(refusals.join("\n")).toMatch(/holds 284 characters/);
+    const published = unverifiedPreconditions(plan, material);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      attribute: "data-stage-problem",
+      condition: "required",
+      source: "src/view-state.ts:4",
+    });
+  });
 });

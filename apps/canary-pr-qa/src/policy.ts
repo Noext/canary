@@ -3111,63 +3111,101 @@ function missingForScenario(
   );
 }
 
+/**
+ * L'état d'un marqueur, lu UNE fois : son expression, son repli, les gardes
+ * ordonnées qui décident de sa valeur, les conditions d'appelant qui décident
+ * qu'il en ait une, et la provenance de chaque pièce.
+ *
+ * C'est la représentation que consomment tous les contrôles de plan. Avant elle,
+ * chaque règle relisait le code pour son compte : une garde écrite sur deux
+ * lignes échappait à l'une et pas à l'autre, et deux règles pouvaient conclure
+ * des choses différentes sur le même plan.
+ */
+interface MarkerState {
+  attribute: string;
+  /** Les conditions qui décident que le marqueur ait une valeur du tout. */
+  callers: MarkerGuard[];
+  fallback?: string;
+  /** Les gardes qui décident de la valeur, dans l'ordre du code. */
+  ordered: MarkerGuard[];
+  path: string;
+  value: string;
+}
+
+function markerStateOf(
+  assertion: Plan["scenarios"][number]["assertions"][number],
+  material: SourceLineMaterial[]
+): MarkerState | undefined {
+  // Une assertion d'ABSENCE décrit une valeur que la vue ne doit pas montrer :
+  // exiger d'elle les gardes qui la produisent serait l'inverse de son sujet.
+  if (assertsAbsence(assertion)) {
+    return;
+  }
+  const marker = markerOf(assertion);
+  if (!marker) {
+    return;
+  }
+  const found = markerExpression(material, marker.attribute);
+  if (!found) {
+    return;
+  }
+  const guards = markerGuards(material, found.expression, found.path);
+  return {
+    attribute: marker.attribute,
+    callers: guards.filter((guard) => guard.caller !== undefined),
+    fallback: fallbackLiteral(found.expression),
+    ordered: guards.filter((guard) => guard.caller === undefined),
+    path: found.path,
+    value: marker.value,
+  };
+}
+
 function missingForAssertion(
   assertion: Plan["scenarios"][number]["assertions"][number],
   scenario: Plan["scenarios"][number],
   stepIndex: Map<string, number>,
   material: SourceLineMaterial[]
 ): MissingInteraction[] {
-  const marker = markerOf(assertion);
   const assertAt = stepIndex.get(assertion.afterStep ?? "");
-  // Une assertion d'ABSENCE décrit une valeur que la vue ne doit pas montrer :
-  // exiger d'elle les gardes qui la produisent serait l'inverse de son sujet.
-  if (!marker || assertAt === undefined || assertsAbsence(assertion)) {
+  const state = markerStateOf(assertion, material);
+  if (!state || assertAt === undefined) {
     return [];
   }
-  const found = markerExpression(material, marker.attribute);
-  const guards = found
-    ? markerGuards(material, found.expression, found.path)
-    : [];
-  const fallback = found ? fallbackLiteral(found.expression) : undefined;
-  const target = guards.findIndex((guard) => guard.value === marker.value);
+  const target = state.ordered.findIndex(
+    (guard) => guard.value === state.value
+  );
   // La valeur assertée est le repli du marqueur : plus aucune garde ne doit
   // tenir, et c'est justement ce qu'une longueur peut démentir.
-  const assertsFallback = fallback !== undefined && marker.value === fallback;
+  const assertsFallback =
+    state.fallback !== undefined && state.value === state.fallback;
   if (target <= 0 && !assertsFallback) {
     return [];
   }
   const played = scenario.steps.slice(0, assertAt + 1);
   const conflict = lengthRefusal({
-    assertion,
     assertAt,
-    guards,
-    marker,
+    assertsFallback,
+    assertion,
+    callers: state.callers,
+    marker: state,
     material,
+    ordered: state.ordered,
     played,
     target,
-    assertsFallback,
   });
   if (conflict) {
     return [conflict];
   }
-  for (const guard of guards.slice(0, Math.max(target, 0))) {
-    // Une garde d'APPELANT dépend souvent d'un état persisté que la porte ne
-    // peut pas observer (montant attendu hérité, session déjà ouverte). La
-    // refuser sans observation produisait des refus faux sur des plans réels :
-    // elle est enregistrée, mais elle ne refuse pas tant que la découverte n'a
-    // pas livré l'état initial.
-    if (guard.caller) {
-      continue;
-    }
+  for (const guard of state.ordered.slice(0, Math.max(target, 0))) {
     const unmet = unmetControl(guard, played, material);
     if (unmet) {
       return [
         {
           action: unmet.action,
           assertionId: assertion.id,
-          attribute: marker.attribute,
+          attribute: state.attribute,
           control: unmet.label,
-          expected: marker.value,
+          expected: state.value,
           field: unmet.field,
           guard,
         },
@@ -3193,31 +3231,37 @@ function lengthRefusal(input: {
   assertAt: number;
   assertsFallback: boolean;
   assertion: Plan["scenarios"][number]["assertions"][number];
-  guards: MarkerGuard[];
+  callers: MarkerGuard[];
   marker: { attribute: string; value: string };
   material: SourceLineMaterial[];
+  ordered: MarkerGuard[];
   played: Plan["scenarios"][number]["steps"];
   target: number;
 }): MissingInteraction | undefined {
-  const earlier = input.assertsFallback
-    ? input.guards
-    : input.guards.slice(0, Math.max(input.target, 0));
-  for (const guard of earlier) {
-    // Une garde d'appelant doit TENIR (`cond ? f(...) : null`) ; une garde de
-    // `return` antérieure doit être FAUSSE pour atteindre la valeur suivante.
-    const shouldHold = guard.caller !== undefined;
-    const hit = lengthConflictOf(
-      guard,
-      shouldHold,
-      input.played,
-      input.material
-    );
+  // Une condition d'appelant doit TENIR pour que le marqueur ait une valeur.
+  for (const guard of input.callers) {
+    const hit = lengthConflictOf(guard, true, input.played, input.material);
     if (hit) {
       return lengthInteraction(input, hit, guard);
     }
   }
-  const producing = input.guards[input.target];
-  if (!producing || input.assertsFallback) {
+  // Une garde de `return` antérieure doit être FAUSSE pour atteindre la valeur
+  // assertée ; quand l'assertion vise le repli, aucune ne doit tenir.
+  const earlier = input.assertsFallback
+    ? input.ordered
+    : input.ordered.slice(0, Math.max(input.target, 0));
+  for (const guard of earlier) {
+    const hit = lengthConflictOf(guard, false, input.played, input.material);
+    if (hit) {
+      return lengthInteraction(input, hit, guard);
+    }
+  }
+  if (input.assertsFallback) {
+    return;
+  }
+  // La garde qui produit la valeur assertée doit tenir.
+  const producing = input.ordered[input.target];
+  if (!producing) {
     return;
   }
   const hit = lengthConflictOf(producing, true, input.played, input.material);
@@ -3534,25 +3578,14 @@ export function unverifiedPreconditions(
   const found: UnverifiedPrecondition[] = [];
   for (const scenario of plan.scenarios) {
     for (const assertion of scenario.assertions) {
-      const marker = markerOf(assertion);
-      if (!marker || assertsAbsence(assertion)) {
-        continue;
-      }
-      const expression = markerExpression(material, marker.attribute);
-      if (!expression) {
-        continue;
-      }
-      const caller = markerGuards(
-        material,
-        expression.expression,
-        expression.path
-      ).find((guard) => guard.caller);
-      if (!caller?.caller) {
+      const state = markerStateOf(assertion, material);
+      const caller = state?.callers[0];
+      if (!(state && caller?.caller)) {
         continue;
       }
       found.push({
         assertionId: assertion.id,
-        attribute: marker.attribute,
+        attribute: state.attribute,
         condition: caller.condition,
         scenarioId: scenario.id,
         source: caller.caller.source,
