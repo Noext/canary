@@ -28,6 +28,17 @@ const MARKER = "CANARY_PR_QA_OBSERVATION:";
 const observationSchema = z.object({
   url: z.string(),
   snapshot: z.string(),
+  /**
+   * Taille RÉELLE de l'instantané d'accessibilité avant troncature. Sans elle,
+   * rien dans un run ne dit si le modèle a vu la page ou ses 14 000 premiers
+   * caractères : un contrôle absent du payload pouvait être « valide » pour le
+   * gate (200 000) et invisible pour le planificateur (14 000).
+   */
+  snapshotChars: z.number().int().nonnegative().optional(),
+  /** Vrai quand l'instantané du modèle est un préfixe de l'instantané réel. */
+  snapshotTruncated: z.boolean().optional(),
+  /** Vrai quand la page a été attendue au-delà de son chargement initial. */
+  hydrated: z.boolean().optional(),
   actual: z.unknown().optional(),
   evidence: z.string().optional(),
   provenanceUrls: z.array(z.string().url()).max(5).optional(),
@@ -663,6 +674,14 @@ export interface CompileOptions {
    * relevé alimente l'instantané du modèle, tronqué à MODEL_SNAPSHOT_CHARS.
    */
   evidenceSnapshotChars?: number;
+  /**
+   * Attendre que la page cesse de travailler avant de relever l'instantané.
+   * `domcontentloaded` suffit à une page statique et livre la coquille d'une
+   * SPA : la découverte planifiait alors sur un écran vide. L'attente est bornée
+   * et son échec n'est jamais fatal — un instantané tardif vaut mieux qu'un run
+   * perdu, et `hydrated` dit ce qui s'est réellement passé.
+   */
+  hydrate?: boolean;
 }
 export function compileAction(
   action: Action,
@@ -681,7 +700,10 @@ export function compileAction(
     ) {
       throw new Error("Navigation must remain on the preview origin");
     }
-    command = `await page.goto(${JSON.stringify(target.href)}, { waitUntil: "domcontentloaded", timeout: 15000 });`;
+    command = options.hydrate
+      ? `await page.goto(${JSON.stringify(target.href)}, { waitUntil: "load", timeout: 15000 });
+try { await page.waitForLoadState("networkidle", { timeout: 5000 }); } catch { /* page bavarde : on relève quand même */ }`
+      : `await page.goto(${JSON.stringify(target.href)}, { waitUntil: "domcontentloaded", timeout: 15000 });`;
   } else if (action.type === "download") {
     command = `await ${locatorRun(
       action.locator,
@@ -747,7 +769,7 @@ ${command}
 const url = page.url();
 if (url !== "about:blank" && !url.startsWith(${JSON.stringify(`${preview.origin}/`)})) throw new Error("Page left the allowed preview origin");
 const ariaSnapshot = (await page.snapshotForAI({ depth: 12 })).full;
-console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS})${evidence}, actual, targetName, provenanceUrls }));`;
+console.log(${JSON.stringify(MARKER)} + JSON.stringify({ url, snapshot: ariaSnapshot.slice(0, ${MODEL_SNAPSHOT_CHARS}), snapshotChars: ariaSnapshot.length, snapshotTruncated: ariaSnapshot.length > ${MODEL_SNAPSHOT_CHARS}, hydrated: ${options.hydrate ? "true" : "false"}${evidence}, actual, targetName, provenanceUrls }));`;
 }
 
 export class Canary {
