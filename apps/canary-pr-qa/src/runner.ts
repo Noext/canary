@@ -46,6 +46,7 @@ import {
   criticalSkipRefused,
   hasWeakWitness,
   type Policy,
+  planFindings,
   quoteExcerpt,
   quoteResolutionCandidates,
   type Requirement,
@@ -59,7 +60,6 @@ import {
   undeclaredSources,
   ungroundedPlanRefusals,
   ungroundedRequirements,
-  unverifiedPreconditions,
   unwitnessedPlanRefusals,
   unwitnessedSources,
   validateCoverage,
@@ -1190,10 +1190,7 @@ function publishUnverifiedPreconditions(
   if (!result.plan) {
     return;
   }
-  const unverified = unverifiedPreconditions(
-    result.plan,
-    sourceLineMaterial(context)
-  );
+  const { unverified } = planFindings(result.plan, sourceLineMaterial(context));
   if (unverified.length === 0) {
     return;
   }
@@ -1420,20 +1417,27 @@ async function executePlan(
   // la préversion de base la lisent tous les deux, donc une assertion sans
   // valeur attendue ne dépense aucune étape navigateur, dans l'un comme dans
   // l'autre.
-  const preExecutionRefusals = new Map(
-    [
-      ...preconditionRefusals(result.plan, catalog, context.ref.repo),
-      ...writeEvidenceRefusals(result.plan, policy),
-      ...unstableSelectorRefusals(result.plan),
-      ...attributeValueRefusals(result.plan),
-      ...stateTargetReadRefusals(result.plan, {
-        url: initialPage.url,
-        aria: evidence,
-      }),
-      ...missingExpectationRefusals(result.plan),
-      ...ifPresentRefusals(result.plan),
-    ].map((item) => [item.scenario.id, item.error])
-  );
+  const preExecutionRefusals = new Map([
+    ...(
+      [
+        ...preconditionRefusals(result.plan, catalog, context.ref.repo),
+        ...writeEvidenceRefusals(result.plan, policy),
+        ...unstableSelectorRefusals(result.plan),
+        ...attributeValueRefusals(result.plan),
+        ...stateTargetReadRefusals(result.plan, {
+          url: initialPage.url,
+          aria: evidence,
+        }),
+        ...missingExpectationRefusals(result.plan),
+        ...ifPresentRefusals(result.plan),
+      ] as const
+    ).map((item) => [item.scenario.id, item.error] as const),
+    // L'ordre des marqueurs coûte le scénario, jamais le run : un plan dont une
+    // assertion est impossible garde ses autres scénarios exécutables.
+    ...planFindings(result.plan, sourceLineMaterial(context)).refusals.map(
+      (item) => [item.scenarioId, item.error] as const
+    ),
+  ]);
   await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
     const refusal = refusalDiagnostic(

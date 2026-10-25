@@ -2555,22 +2555,6 @@ export function validateCoverage(
   if (source) {
     throw source;
   }
-  // L'ordre des marqueurs est un contrôle final : un plan qui n'établit pas les
-  // gardes antérieures d'une valeur n'atteint jamais cette valeur, et le run
-  // rapporterait un défaut de plan comme un défaut produit.
-  for (const scenario of plan.scenarios) {
-    const { fatal, refusals } = markerOrderFinding(
-      { scenarios: [scenario] },
-      sourceLineMaterial(context)
-    );
-    if (fatal) {
-      throw new QaError(
-        "MARKER_ORDER_UNREACHABLE",
-        refusals[0] ?? "Marker order is unreachable",
-        "Establish every earlier condition of the marker with its own step, in the order the diff computes them, before asserting the value."
-      );
-    }
-  }
   for (const scenario of plan.scenarios) {
     const budget = contractBudgetRefusal(scenario, config);
     if (budget) {
@@ -3563,7 +3547,7 @@ export interface UnverifiedPrecondition {
  * publie, pour qu'un run ne puisse plus passer pour vérifié alors qu'il repose
  * sur un état supposé.
  */
-export function unverifiedPreconditions(
+function unverifiedPreconditions(
   plan: Pick<Plan, "scenarios">,
   material: SourceLineMaterial[]
 ): UnverifiedPrecondition[] {
@@ -3587,6 +3571,40 @@ export function unverifiedPreconditions(
   return found;
 }
 
+/**
+ * Les scénarios dont l'ordre des marqueurs est impossible, **un refus par
+ * scénario**.
+ *
+ * Le refus était fatal : une seule assertion impossible arrêtait le run entier,
+ * donc perdait les scénarios valides du même plan (mesuré au lot CC : un run à
+ * zéro scénario joué pour une assertion dont la saisie faisait 261 caractères au
+ * lieu de 281). Un défaut de plan qui ne concerne qu'un scénario doit coûter ce
+ * scénario, pas le run.
+ */
+function markerOrderScenarioRefusals(
+  plan: Pick<Plan, "scenarios">,
+  material: SourceLineMaterial[]
+): { error: QaError; scenarioId: string }[] {
+  return plan.scenarios.flatMap((scenario) => {
+    const message = missingInteractionRefusal(
+      missingForScenario(scenario, material),
+      scenario.id
+    );
+    return message
+      ? [
+          {
+            error: new QaError(
+              "MARKER_ORDER_UNREACHABLE",
+              message,
+              "Establish every earlier condition of the marker with its own step, in the order the diff computes them, before asserting the value."
+            ),
+            scenarioId: scenario.id,
+          },
+        ]
+      : [];
+  });
+}
+
 function markerOrderFinding(
   plan: Pick<Plan, "scenarios">,
   material: SourceLineMaterial[]
@@ -3602,4 +3620,24 @@ function markerOrderFinding(
     }
   }
   return { fatal, refusals };
+}
+
+/**
+ * Les constats de la porte sur un plan, en une seule lecture : les scénarios
+ * dont l'assertion est impossible (un refus par scénario, jamais fatal) et les
+ * préconditions qu'aucune preuve ne tranche. Une seule entrée, pour que le plan
+ * soit jugé une fois et que deux contrôles ne puissent pas lire différemment le
+ * même marqueur.
+ */
+export function planFindings(
+  plan: Pick<Plan, "scenarios">,
+  material: SourceLineMaterial[]
+): {
+  refusals: { error: QaError; scenarioId: string }[];
+  unverified: UnverifiedPrecondition[];
+} {
+  return {
+    refusals: markerOrderScenarioRefusals(plan, material),
+    unverified: unverifiedPreconditions(plan, material),
+  };
 }

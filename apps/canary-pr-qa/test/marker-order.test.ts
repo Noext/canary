@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  unverifiedPreconditions,
-  unwitnessedPlanRefusals,
-} from "../src/policy.js";
+import { planFindings, unwitnessedPlanRefusals } from "../src/policy.js";
 import type { Plan, SourceLineMaterial } from "../src/schema.js";
 
 /** Le patch qui porte ces lignes : `postChangeHunks` en tire le matériel. */
@@ -853,7 +850,7 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     // refus si l'état est déjà là), mais elle ne se tait pas non plus : la
     // condition, sa provenance et l'assertion concernée sont publiées.
     const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
-    const unverified = unverifiedPreconditions(plan, CHAIN_MATERIAL);
+    const unverified = planFindings(plan, CHAIN_MATERIAL).unverified;
     expect(unverified).toEqual([
       {
         assertionId: "stage-too-long",
@@ -882,7 +879,7 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
         : source
     );
     const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
-    expect(unverifiedPreconditions(plan, plain)).toEqual([]);
+    expect(planFindings(plan, plain).unverified).toEqual([]);
   });
 
   it("fait lire la même représentation au refus et à la publication", () => {
@@ -900,12 +897,42 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
       POLICY
     ).filter((line) => line.includes("data-stage-problem"));
     expect(refusals.join("\n")).toMatch(/holds 284 characters/);
-    const published = unverifiedPreconditions(plan, material);
+    const published = planFindings(plan, material).unverified;
     expect(published).toHaveLength(1);
     expect(published[0]).toMatchObject({
       attribute: "data-stage-problem",
       condition: "required",
       source: "src/view-state.ts:4",
     });
+  });
+
+  it("coûte le scénario fautif, pas le run entier", () => {
+    // Le refus était fatal : une assertion impossible arrêtait tous les autres
+    // scénarios du plan (lot CC : un run à zéro scénario joué). Il devient un
+    // refus PAR SCÉNARIO : le plan garde ses scénarios exécutables.
+    const faulty = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(284)), [
+      ASSERTION_STAGE_ACCEPTABLE,
+    ]).scenarios[0]!;
+    const healthy = {
+      ...structuredClone(faulty),
+      assertions: [
+        {
+          afterStep: "fill-note",
+          description: "the marker reports the long note",
+          expected: "note-too-long",
+          id: "stage-ok",
+          kind: "text",
+          target: { by: "css", value: '[data-stage-problem="note-too-long"]' },
+          verification: "state",
+        } as never,
+      ],
+      id: "order-case-healthy",
+    };
+    const plan = { scenarios: [faulty, healthy] } as never;
+    const refusals = planFindings(plan, LENGTH_MATERIAL).refusals;
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.scenarioId).toBe("order-case");
+    expect(refusals[0]?.error.code).toBe("MARKER_ORDER_UNREACHABLE");
+    expect(refusals[0]?.error.message).toMatch(/holds \d+ characters/);
   });
 });
