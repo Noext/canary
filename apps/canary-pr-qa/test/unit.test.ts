@@ -51,6 +51,7 @@ import {
   PlanSchema,
   type ScenarioResult,
 } from "../src/schema.js";
+import { repairStepTarget } from "../src/target-repair.js";
 import {
   BASE_SHA,
   fixture,
@@ -437,6 +438,30 @@ function expectCallsWithTargetedCorrection(
   // plus la même chose que le deuxième.
   expect(sent(2)).toContain("last correction round");
 }
+
+describe("exécution autoritaire : la reprise ne touche jamais un contrat", () => {
+  it("n'essaie jamais de réparer une assertion, un observe ou un goto", async () => {
+    // Une assertion est le contrat lui-même : la « réparer » changerait ce que le
+    // test prouve. Seules les actions qui visent un élément peuvent être
+    // rejouées, et seulement vers une cible réellement observée.
+    for (const type of ["assert", "observe", "goto"] as const) {
+      const actions = {
+        assert: { assertionId: "a1", type: "assert" },
+        goto: { path: "/", type: "goto" },
+        observe: { type: "observe" },
+      } as const;
+      const step = { action: actions[type], description: type, id: "s1" };
+      const repaired = await repairStepTarget({
+        model: undefined,
+        preview: "https://preview.test/",
+        scenario: "s",
+        step: step as never,
+        targets: [{ label: "Save", role: "button" } as never],
+      });
+      expect(repaired).toBeUndefined();
+    }
+  });
+});
 
 describe("découverte : voir la page rendue, et le dire", () => {
   const URL_PREVIEW = "https://preview.example.test/";
