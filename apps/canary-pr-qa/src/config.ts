@@ -184,6 +184,16 @@ const envSchema = z.object({
    * planificateur. Le diff ne dit pas comment une valeur affichée est calculée
    * plus loin dans le même fichier ; ce budget achète cette jointure.
    */
+  /**
+   * Rejouer le préfixe de navigation du plan pour observer la vue réellement
+   * testée, puis faire réécrire le plan une fois. Coût : une session navigateur
+   * et un appel de planification supplémentaires ; bénéfice mesurable, donc
+   * désactivable pour comparer.
+   */
+  QA_VIEW_PROBE: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .default(false)
+    .transform((value) => value === true || value === "true"),
   QA_PLAN_FILE_CHARS: z.coerce
     .number()
     .int()

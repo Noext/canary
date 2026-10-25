@@ -2504,3 +2504,60 @@ describe("noms qu'un diagnostic d'exécution a le droit de publier", () => {
     ).toBeUndefined();
   });
 });
+
+describe("sonde de navigation branchée sur le pipeline", () => {
+  /** Le même plan, avec un clic de navigation avant l'assertion. */
+  function clickedPlan(): Plan {
+    const plan = readOnlyPlan({
+      by: "role",
+      name: "Pilotage",
+      value: "heading",
+    });
+    const scenario = plan.scenarios[0]!;
+    scenario.steps = [
+      { action: { path: "/", type: "goto" }, description: "open", id: "load" },
+      {
+        action: {
+          locator: { by: "role", name: "P&L", value: "button" },
+          type: "click",
+        },
+        description: "ouvrir l'écran P&L",
+        id: "open-pl",
+      },
+      {
+        action: { assertionId: "heading", type: "assert" },
+        description: "vérifier le titre",
+        id: "check-heading",
+      },
+    ];
+    scenario.assertions[0]!.afterStep = "open-pl";
+    return plan;
+  }
+
+  it("observe la vue atteinte par un clic, puis refait écrire le plan", async () => {
+    const f = await setup({ plans: [clickedPlan(), clickedPlan()] });
+    const labels = stubCanary(ARIA);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      { ...f.config, QA_VIEW_PROBE: true }
+    );
+    // Une session de sonde rejoue le préfixe de navigation : `goto` puis le
+    // clic, jamais une saisie.
+    expect(labels.some((label) => label.startsWith("probe-"))).toBe(true);
+    expect(labels).toContain("probe-open-pl");
+    // Après la sonde, la demande de planification porte les vues réellement
+    // observées : le premier envoi ne les a pas, les suivants oui.
+    // Le payload voyage comme une chaîne JSON dans le message : on cherche le
+    // nom de l'étape, pas sa ponctuation sérialisée.
+    const mentions = (request: unknown) =>
+      JSON.stringify(request).includes("open-pl");
+    expect(mentions(f.modelRequests[0])).toBe(false);
+    const enriched = f.modelRequests.filter(mentions);
+    expect(enriched.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(enriched[0])).toContain("observedViews");
+    // Le sujet est la sonde et le contenu du second message, pas le verdict du
+    // plan sur l'application factice : celle-ci ne change rien au clic, donc le
+    // verdict dépend d'une sémantique qui n'est pas celle testée ici.
+    expect(result.plan?.scenarios[0]?.steps[1]?.id).toBe("open-pl");
+  });
+});
