@@ -113,6 +113,28 @@ déjà présente) devient la preuve d'attribution, pas la forme de l'assertion.
 des réparations) sont deux artefacts distincts. Un verdict doit être reproductible à partir de
 `asWritten` + règles, et toute réparation est nommée dans le rapport.
 
+### 3.6 Isolation des scénarios
+
+Ce qui est garanti : chaque scénario s'exécute dans sa propre session navigateur,
+avec son storage state préparé (`prepareScenario`), et les fixtures déclarées sont
+semées puis nettoyées par namespace (`seedUrl` / `cleanupUrl`, POST idempotent).
+Les scénarios s'exécutent dans l'ordre du plan, donc l'ordre est reproductible.
+
+Ce qui ne l'est pas : l'application n'offre aucun point de réinitialisation. Un
+montant attendu saisi, une session laissée ouverte ou une ligne créée survivent
+d'un scénario à l'autre et d'un run à l'autre. Aucun mécanisme du harnais ne peut
+l'annuler sans modifier l'application testée.
+
+Ce que le harnais fait de cette limite : toute assertion dont la valeur observée
+avant l'étape satisfaisait déjà l'attendu porte `preMatched: true`. Un lecteur du
+rapport sait alors que l'assertion ne démontre pas que l'étape a produit cet état.
+Le verdict, lui, n'est jamais requalifié pour autant.
+
+Ce qu'il ne fait pas, et qui reste interdit : conclure d'un run vert que l'état
+initial était celui attendu. Un scénario qui dépend d'un état préexistant doit le
+déclarer en précondition (`fixture:` ou `role:`) ; une précondition non déclarée
+n'est ni établie ni vérifiée.
+
 ## 4. Ordre de migration
 
 1. **Harnais de rejeu** (fait) : sept plans réels rejoués sans modèle, verdicts pinés.

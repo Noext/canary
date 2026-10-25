@@ -3090,14 +3090,6 @@ function controlFor(
  * satisfaites par une étape jouée AVANT l'assertion. La garde est satisfaite si
  * le scénario a joué le contrôle qui porte l'un de ses champs.
  */
-function missingEstablishingInteractions(
-  plan: Pick<Plan, "scenarios">,
-  material: SourceLineMaterial[]
-): MissingInteraction[] {
-  return plan.scenarios.flatMap((scenario) =>
-    missingForScenario(scenario, material)
-  );
-}
 
 function missingForScenario(
   scenario: Plan["scenarios"][number],
@@ -3602,10 +3594,7 @@ function markerOrderFinding(
   const refusals: string[] = [];
   let fatal: MissingInteraction | undefined;
   for (const scenario of plan.scenarios) {
-    const missing = missingEstablishingInteractions(
-      { scenarios: [scenario] },
-      material
-    );
+    const missing = missingForScenario(scenario, material);
     const message = missingInteractionRefusal(missing, scenario.id);
     if (message) {
       refusals.push(message);
