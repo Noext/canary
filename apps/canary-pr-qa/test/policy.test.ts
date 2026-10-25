@@ -1377,6 +1377,49 @@ it("says no changed file carries the quote and proposes none outside the diff", 
   expect(outsideLine).not.toContain("declare that file");
 });
 
+it("repairs an attribution to a changed file the scenario had not declared", () => {
+  // Le cas mesuré (dd1030c1) : la citation vit dans src/cash.ts, que le scénario
+  // ne déclarait pas. Le fichier est ajouté aux sources, l'ancien reste — sa
+  // couverture ne se perd pas — et le contrat repasse tous ses contrôles.
+  const attributed = planWithWitnesses([
+    {
+      id: "cash",
+      sourceFiles: ["src/empty.ts"],
+      requirements: [{ sourceFile: "src/empty.ts", quote: REFLOWED_QUOTE }],
+    },
+  ]);
+  expect(repairRequirementAttribution(attributed, reflowedCashContext)).toEqual(
+    [
+      {
+        from: "src/empty.ts",
+        quote: REFLOWED_QUOTE,
+        scenarioId: "cash",
+        to: "src/cash.ts",
+      },
+    ]
+  );
+  expect(attributed.scenarios[0]?.sourceFiles).toEqual([
+    "src/empty.ts",
+    "src/cash.ts",
+  ]);
+});
+
+it("never repairs an attribution no changed file witnesses", () => {
+  // Rien à réparer sans preuve : la citation n'existe nulle part, le plan reste
+  // tel quel et suit la boucle de correction ordinaire.
+  const absent = planWithWitnesses([
+    {
+      id: "cash",
+      sourceFiles: ["src/empty.ts"],
+      requirements: [
+        { sourceFile: "src/empty.ts", quote: "const absent = 1;" },
+      ],
+    },
+  ]);
+  expect(repairRequirementAttribution(absent, reflowedCashContext)).toEqual([]);
+  expect(absent.scenarios[0]?.requirements[0]?.sourceFile).toBe("src/empty.ts");
+});
+
 it("repairs an attribution only when another declared file witnesses the quote", () => {
   const misattributed: PrContext = {
     ...reflowedCashContext,
