@@ -2673,8 +2673,8 @@ export interface MissingInteraction {
   /** Le champ de la condition que ce contrôle commande. */
   field?: string;
   guard: MarkerGuard;
-  /** La valeur que le plan écrit et qui contredit la condition, si elle est démontrable. */
-  valueConflict?: string;
+  /** La contradiction de LONGUEUR, quand elle est démontrable. */
+  lengthConflict?: { limit: number; measured: number };
 }
 
 const MARKER_TARGET = /^\[(data-[a-z0-9-]+)="([^"]+)"\]$/i;
@@ -2975,11 +2975,16 @@ function functionBody(
 function conditionOf(line: string): string {
   const trimmed = line.trim();
   const withoutReturn = trimmed.split("return")[0] ?? trimmed;
-  return withoutReturn
-    .replace(/^if\s*\(/, "")
-    .replace(/\)\s*\{?$/, "")
-    .replace(/^}/, "")
-    .trim();
+  return (
+    withoutReturn
+      .replace(/^if\s*\(/, "")
+      // `) { …` ferme la condition quelle que soit la suite de la ligne : un `{`
+      // suivi d'un espace laissait la condition sale et la comparaison illisible.
+      .replace(/\)\s*\{.*$/, "")
+      .replace(/\)\s*$/, "")
+      .replace(/^}/, "")
+      .trim()
+  );
 }
 
 const NOT_A_FIELD = new Set([
@@ -3083,12 +3088,29 @@ function missingForAssertion(
   const guards = found
     ? markerGuards(material, found.expression, found.path)
     : [];
+  const fallback = found ? fallbackLiteral(found.expression) : undefined;
   const target = guards.findIndex((guard) => guard.value === marker.value);
-  if (target <= 0) {
+  // La valeur assertée est le repli du marqueur : plus aucune garde ne doit
+  // tenir, et c'est justement ce qu'une longueur peut démentir.
+  const assertsFallback = fallback !== undefined && marker.value === fallback;
+  if (target <= 0 && !assertsFallback) {
     return [];
   }
   const played = scenario.steps.slice(0, assertAt + 1);
-  for (const guard of guards.slice(0, target)) {
+  const conflict = lengthRefusal({
+    assertion,
+    assertAt,
+    guards,
+    marker,
+    material,
+    played,
+    target,
+    assertsFallback,
+  });
+  if (conflict) {
+    return [conflict];
+  }
+  for (const guard of guards.slice(0, Math.max(target, 0))) {
     const unmet = unmetControl(guard, played, material);
     if (unmet) {
       return [
@@ -3100,14 +3122,78 @@ function missingForAssertion(
           expected: marker.value,
           field: unmet.field,
           guard,
-          ...(unmet.valueConflict === undefined
-            ? {}
-            : { valueConflict: unmet.valueConflict }),
         },
       ];
     }
   }
   return [];
+}
+
+/** Le repli d'un marqueur : `view.problem ?? "aucun"` rend `aucun`. */
+function fallbackLiteral(expression: string): string | undefined {
+  return /\?\?\s*"([^"]+)"/.exec(expression)?.[1];
+}
+
+/**
+ * La contradiction de longueur, quand elle est démontrable : la dernière saisie
+ * du champ commandé contredit la comparaison que la garde exige. Les gardes
+ * antérieures doivent être fausses, celle qui produit la valeur assertée doit
+ * tenir ; tout le reste — pas de contrôle, pas de saisie, constante non résolue —
+ * rend `undefined` et la règle se tait.
+ */
+function lengthRefusal(input: {
+  assertAt: number;
+  assertsFallback: boolean;
+  assertion: Plan["scenarios"][number]["assertions"][number];
+  guards: MarkerGuard[];
+  marker: { attribute: string; value: string };
+  material: SourceLineMaterial[];
+  played: Plan["scenarios"][number]["steps"];
+  target: number;
+}): MissingInteraction | undefined {
+  const earlier = input.assertsFallback
+    ? input.guards
+    : input.guards.slice(0, Math.max(input.target, 0));
+  for (const guard of earlier) {
+    // Une garde d'appelant doit TENIR (`cond ? f(...) : null`) ; une garde de
+    // `return` antérieure doit être FAUSSE pour atteindre la valeur suivante.
+    const shouldHold = guard.caller !== undefined;
+    const hit = lengthConflictOf(
+      guard,
+      shouldHold,
+      input.played,
+      input.material
+    );
+    if (hit) {
+      return lengthInteraction(input, hit, guard);
+    }
+  }
+  const producing = input.guards[input.target];
+  if (!producing || input.assertsFallback) {
+    return;
+  }
+  const hit = lengthConflictOf(producing, true, input.played, input.material);
+  return hit ? lengthInteraction(input, hit, producing) : undefined;
+}
+
+function lengthInteraction(
+  input: {
+    assertion: Plan["scenarios"][number]["assertions"][number];
+    marker: { attribute: string; value: string };
+  },
+  hit: { field: string; limit: number; measured: number },
+  guard: MarkerGuard
+): MissingInteraction {
+  return {
+    action: "fill",
+    assertionId: input.assertion.id,
+    attribute: input.marker.attribute,
+    control: hit.field,
+    expected: input.marker.value,
+    field: hit.field,
+    guard,
+    lengthConflict: { limit: hit.limit, measured: hit.measured },
+  };
 }
 
 /**
@@ -3134,6 +3220,145 @@ function hasInitialValue(
  * valeur ne soit pas là, donc elle n'a pas à établir les gardes qui la
  * produisent — les exiger d'elle retournerait la règle contre son sujet.
  */
+
+/** La valeur littérale qu'une action écrit, quand elle en écrit une. */
+function actionValue(action: object): string {
+  const value = (action as { value?: unknown }).value;
+  return typeof value === "string" ? value : "";
+}
+
+/** La comparaison de longueur d'une condition, une fois la constante résolue. */
+interface LengthCondition {
+  field: string;
+  limit: number;
+  operator: ">" | ">=" | "<" | "<=";
+  trimmed: boolean;
+}
+
+/** Le texte de la définition d'un identifiant, après son `=` s'il y en a un. */
+function definitionText(
+  lines: { path?: string; text: string }[],
+  name: string
+): string | undefined {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) {
+    return;
+  }
+  const line = lines.find((entry) =>
+    new RegExp(`(?:const|let)\\s+${name}\\s*=`).test(entry.text)
+  );
+  return line?.text.slice(line.text.indexOf("=") + 1);
+}
+
+/**
+ * La condition de longueur d'une garde, telle que le code la calcule :
+ * `comment.length > CASH_JUSTIFICATION_MAX_LENGTH`, avec `comment` défini plus
+ * haut comme `justification.comment.trim()`. Le champ réel, la transformation et
+ * la constante viennent tous du code ; si l'un manque, la règle se tait.
+ */
+function lengthConditionOf(
+  lines: { path?: string; text: string }[],
+  condition: string
+): LengthCondition | undefined {
+  // La comparaison doit être TOUTE la condition : dans
+  // `kind === "limited" && note.length > MAX`, la longueur ne décide pas seule,
+  // et conclure sur elle refuserait un scénario qui prend l'autre branche.
+  const match =
+    /^\(?\s*((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*)(\s*\.trim\(\))?\.length\s*(>=|<=|>|<)\s*([A-Za-z_$][\w$]*|\d+)\s*\)?$/.exec(
+      condition.trim()
+    );
+  if (!match) {
+    return;
+  }
+  const [, name = "", inlineTrim = "", operator = "", right = ""] = match;
+  // Deux formes : le champ est lu directement (`draft.note.trim().length`), ou
+  // par un identifiant qui cache sa définition (`comment.length` avec
+  // `const comment = justification.comment.trim()`). La seconde porte la
+  // transformation, la première la porte dans la condition elle-même.
+  const definition = name.includes(".")
+    ? undefined
+    : definitionText(lines, name);
+  const field = definition
+    ? /^\s*([A-Za-z_$][\w$.]*)/.exec(definition)?.[1]
+    : name;
+  if (!field?.includes(".")) {
+    return;
+  }
+  const limit = /^\d+$/.test(right)
+    ? Number(right)
+    : Number(
+        (/^\s*(\d+)\s*;/.exec(definitionText(lines, right) ?? "") ?? [])[1] ??
+          Number.NaN
+      );
+  if (!Number.isFinite(limit)) {
+    return;
+  }
+  return {
+    field,
+    limit,
+    operator: operator as LengthCondition["operator"],
+    trimmed: inlineTrim !== "" || /\.trim\(\)/.test(definition ?? ""),
+  };
+}
+
+/** Vrai quand la comparaison est satisfaite par cette longueur. */
+function lengthHolds(
+  measured: number,
+  operator: LengthCondition["operator"],
+  limit: number
+): boolean {
+  if (operator === ">") {
+    return measured > limit;
+  }
+  if (operator === ">=") {
+    return measured >= limit;
+  }
+  if (operator === "<") {
+    return measured < limit;
+  }
+  return measured <= limit;
+}
+
+/**
+ * La contradiction de longueur d'une garde, quand elle est démontrable : la
+ * dernière saisie du champ commandé contredit la comparaison que la garde exige.
+ * Aucun contrôle, aucune saisie, aucune constante résolue : la règle se tait.
+ */
+function lengthConflictOf(
+  guard: MarkerGuard,
+  shouldHold: boolean,
+  played: Plan["scenarios"][number]["steps"],
+  material: SourceLineMaterial[]
+):
+  | { field: string; limit: number; measured: number; written: string }
+  | undefined {
+  const lines = everyLine(material);
+  const length = lengthConditionOf(lines, guard.condition);
+  if (!length) {
+    return;
+  }
+  const control = controlFor(material, length.field);
+  if (!control) {
+    return;
+  }
+  const steps = played.filter(
+    (step) =>
+      step.action.type === control.action &&
+      namesControl(step.action, control.label)
+  );
+  const last = steps.at(-1);
+  const written = actionValue(last?.action ?? {});
+  if (written === "") {
+    return;
+  }
+  // Même sémantique que le code testé : `.trim()` s'il est appliqué là-bas, et
+  // `String.length` (unités UTF-16) pour la mesure.
+  const measured = (length.trimmed ? written.trim() : written).length;
+  if (lengthHolds(measured, length.operator, length.limit) === shouldHold) {
+    return;
+  }
+  return { field: length.field, limit: length.limit, measured, written };
+}
+
 function assertsAbsence(assertion: {
   expected?: unknown;
   kind?: string;
@@ -3213,8 +3438,8 @@ function missingInteractionRefusal(
   if (!first) {
     return;
   }
-  if (first.valueConflict !== undefined) {
-    return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the step that operates "${first.control}" writes "${first.valueConflict}", which the condition ${first.guard.condition} rejects. Write a value that satisfies it, then assert the marker.`;
+  if (first.lengthConflict) {
+    return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the last write in "${first.control}" holds ${first.lengthConflict.measured} characters and the limit that decides this value is ${first.lengthConflict.limit}. Rewrite the step with a value whose length satisfies ${first.guard.condition}, then assert the marker.`;
   }
   if (first.guard.caller) {
     return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the view returns NO value for it until a condition written at ${first.guard.caller.source} holds: ${first.guard.condition}. Nothing in the scenario commands "${first.control}", which sets ${first.field ?? "a field of that condition"}; without it the marker stays at its fallback "${first.guard.caller.fallback}". Add a step that ${first.action}s "${first.control}" BEFORE the assertion step.`;
