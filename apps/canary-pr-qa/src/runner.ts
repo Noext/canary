@@ -59,6 +59,7 @@ import {
   undeclaredSources,
   ungroundedPlanRefusals,
   ungroundedRequirements,
+  unverifiedPreconditions,
   unwitnessedPlanRefusals,
   unwitnessedSources,
   validateCoverage,
@@ -1174,6 +1175,35 @@ export function quotePickCorrection(
  */
 
 /** La seconde écriture : même payload, plus les vues réellement observées. */
+/**
+ * Publie les préconditions qu'aucune preuve ne tranche.
+ *
+ * La porte ne les refuse pas — un état déjà établi par l'application rendrait ce
+ * refus faux — et ne les passe pas sous silence : sans cette publication, un run
+ * dont les assertions reposent sur un état supposé (montant attendu hérité,
+ * session déjà ouverte) se lit comme entièrement vérifié.
+ */
+function publishUnverifiedPreconditions(
+  result: RunResult,
+  context: PrContext
+): void {
+  if (!result.plan) {
+    return;
+  }
+  const unverified = unverifiedPreconditions(
+    result.plan,
+    sourceLineMaterial(context)
+  );
+  if (unverified.length === 0) {
+    return;
+  }
+  result.unverifiedPreconditions = unverified;
+  logger.info(
+    { runId: result.id, unverified: unverified.length },
+    "Preconditions the gate could not verify"
+  );
+}
+
 function planWithObservedViews(input: {
   catalog: TrustedCatalog;
   config: Config;
@@ -1324,6 +1354,7 @@ async function executePlan(
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
   settlePlan(result.plan, context, config, result.id);
+  publishUnverifiedPreconditions(result, context);
   const refined = config.QA_VIEW_PROBE
     ? await probeAndReplan({
         askPlanner: (views) =>

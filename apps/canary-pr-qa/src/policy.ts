@@ -3508,6 +3508,60 @@ function missingInteractionRefusal(
  * refus fatal. Une seule fonction exportée garde le module lisible depuis la
  * politique sans ajouter deux symboles à sa surface publique.
  */
+/** Une précondition que la porte ne peut pas trancher faute d'observation. */
+export interface UnverifiedPrecondition {
+  assertionId: string;
+  attribute: string;
+  /** La condition qui décide de l'existence de la valeur assertée. */
+  condition: string;
+  scenarioId: string;
+  /** Où le code l'écrit : `chemin:ligne`. */
+  source?: string;
+}
+
+/**
+ * Les préconditions qu'aucune preuve ne tranche : une garde d'**appelant**
+ * (`required ? f(...) : null`) dépend d'un état que le diff ne montre pas — le
+ * montant attendu d'une caisse, une session déjà ouverte. La porte ne les refuse
+ * pas (ce serait un refus faux sur un plan réel) et ne les ignore pas : elle les
+ * publie, pour qu'un run ne puisse plus passer pour vérifié alors qu'il repose
+ * sur un état supposé.
+ */
+export function unverifiedPreconditions(
+  plan: Pick<Plan, "scenarios">,
+  material: SourceLineMaterial[]
+): UnverifiedPrecondition[] {
+  const found: UnverifiedPrecondition[] = [];
+  for (const scenario of plan.scenarios) {
+    for (const assertion of scenario.assertions) {
+      const marker = markerOf(assertion);
+      if (!marker || assertsAbsence(assertion)) {
+        continue;
+      }
+      const expression = markerExpression(material, marker.attribute);
+      if (!expression) {
+        continue;
+      }
+      const caller = markerGuards(
+        material,
+        expression.expression,
+        expression.path
+      ).find((guard) => guard.caller);
+      if (!caller?.caller) {
+        continue;
+      }
+      found.push({
+        assertionId: assertion.id,
+        attribute: marker.attribute,
+        condition: caller.condition,
+        scenarioId: scenario.id,
+        source: caller.caller.source,
+      });
+    }
+  }
+  return found;
+}
+
 function markerOrderFinding(
   plan: Pick<Plan, "scenarios">,
   material: SourceLineMaterial[]

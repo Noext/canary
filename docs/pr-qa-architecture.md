@@ -130,6 +130,20 @@ désignation de ligne par le gate ; correction contrainte par indice ; refus nom
 séparation `blocked`/`failed`/`skipped`/`stale` et recheck SHA ; réservation de tokens avant envoi ;
 `redact` et empreintes dans les journaux ; skip critique approuvé sur la branche de base.
 
+## 5 bis. Mesures déjà obtenues
+
+| Lot | Build | Sonde de vues | Runs verts | Scénarios verts | Tokens | Appels |
+| --- | --- | --- | --- | --- | --- | --- |
+| BA | `8143ac9` | non | 7/10 | 87 | 2 810 804 | 16 |
+| BB | `7a6050b` | oui | 7/10 | 92 | 5 378 250 | 32 |
+
+La sonde de navigation double le coût (+91 % de tokens, +16 appels) pour cinq
+scénarios verts de plus et **aucun run vert supplémentaire** sur dix. Elle reste
+livrée, désactivée par défaut (`QA_VIEW_PROBE=false`), parce qu'un gain non
+démontré ne justifie pas un coût démontré : elle sera réactivée quand un
+déclencheur plus étroit sera mesuré (par exemple seulement pour les plans dont
+une assertion vise une vue qui n'est pas la page d'entrée).
+
 ## 6. Mesure
 
 Référence : `8143ac9`. Lots de 10, runs appariés et entrelacés à version figée, plus les rejeux
