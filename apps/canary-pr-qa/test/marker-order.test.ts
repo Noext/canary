@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { unwitnessedPlanRefusals } from "../src/policy.js";
+import {
+  unverifiedPreconditions,
+  unwitnessedPlanRefusals,
+} from "../src/policy.js";
 import type { Plan, SourceLineMaterial } from "../src/schema.js";
 
 /** Le patch qui porte ces lignes : `postChangeHunks` en tire le matériel. */
@@ -843,5 +846,42 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
         (line) => line.includes("data-stage-problem")
       )
     ).toEqual([]);
+  });
+
+  it("publie la précondition que la porte ne peut pas trancher", () => {
+    // `required ? f(...) : null` : la porte ne refuse pas (ce serait un faux
+    // refus si l'état est déjà là), mais elle ne se tait pas non plus : la
+    // condition, sa provenance et l'assertion concernée sont publiées.
+    const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    const unverified = unverifiedPreconditions(plan, CHAIN_MATERIAL);
+    expect(unverified).toEqual([
+      {
+        assertionId: "stage-too-long",
+        attribute: "data-stage-problem",
+        condition: "required",
+        scenarioId: "order-case",
+        source: "src/view-state.ts:4",
+      },
+    ]);
+  });
+
+  it("ne publie rien quand la valeur ne dépend d'aucune condition d'appelant", () => {
+    const plain: SourceLineMaterial[] = CHAIN_MATERIAL.map((source) =>
+      source.path === "src/view-state.ts"
+        ? {
+            ...source,
+            lines: source.lines.map((line) =>
+              line.line === 4
+                ? {
+                    ...line,
+                    text: "  const problem = problemOf(session.draft);",
+                  }
+                : line
+            ),
+          }
+        : source
+    );
+    const plan = planWith(STEP_WITHOUT_EXPECTED, [ASSERTION_STAGE_TOO_LONG]);
+    expect(unverifiedPreconditions(plan, plain)).toEqual([]);
   });
 });

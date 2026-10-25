@@ -1246,6 +1246,17 @@ export interface RunResult {
   scenarios: ScenarioResult[];
   sha?: string;
   startedAt: string;
+  /**
+   * Les préconditions qu'aucune preuve ne tranche : la porte les publie au lieu
+   * de les refuser à tort ou de les passer sous silence.
+   */
+  unverifiedPreconditions?: {
+    assertionId: string;
+    attribute: string;
+    condition: string;
+    scenarioId: string;
+    source?: string;
+  }[];
   usage?: {
     tokens: number;
     costUsd: number;
