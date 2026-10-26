@@ -218,9 +218,15 @@ moins. Le défaut par défaut est donc passé à zéro : les fichiers entiers re
 disponibles pour un dépôt où la jointure manque vraiment, mais ils ne sont plus
 payés sans preuve.
 
-Sur les vingt runs de la configuration finale : **17 verts, 0 échec produit,
-2 scénarios bloqués** (longueurs fausses, attributs inventés), 153 préconditions
-publiées, contre 7/10 et 2 échecs produit pour la référence `8143ac9`.
+Sur les vingt runs de la configuration finale : **17 verts**, 2 scénarios bloqués
+(tous deux `MARKER_ORDER_UNREACHABLE` : la saisie ne franchit pas la borne que
+l'assertion suppose), 153 préconditions publiées, contre 7/10 pour la référence
+`8143ac9`. Le classement des échecs n'est plus une prose : `src/failure-class.ts`
+le calcule (`plan-impossible`, `plan-defective`, `product-regression`,
+`infrastructure`, `unclassified`) et `docs/pr-qa-measurements.md`, généré par
+`test/measurements-report.test.ts`, applique cette règle run par run — c'est ce qui
+a requalifié les deux « échecs produit » du lot BA en `plan-impossible`, puisque le
+gate d'aujourd'hui refuse ces plans.
 
 Deux effets mesurés sur ces lots, et un seul est favorable :
 
