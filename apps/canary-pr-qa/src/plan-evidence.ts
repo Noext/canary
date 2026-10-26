@@ -2032,6 +2032,58 @@ export function declaredControlLabels(
   return labels;
 }
 
+/**
+ * Les cibles concrètes que CE diff expose : attributs et libellés réellement
+ * écrits par les fichiers modifiés, plus l'attribut d'état quand il s'en déduit
+ * du nom (`data-*-state`).
+ *
+ * Le prompt a été rendu générique — il ne nomme plus aucune application — et le
+ * planificateur a cessé de copier des cibles réelles : sur une paire entrelacée,
+ * les cibles introuvables sont passées de 3 à 11. La concrétude ne doit pas venir
+ * d'un dépôt connu à l'avance : elle vient du diff du run, et c'est reproductible
+ * pour n'importe quel projet.
+ */
+export function concreteTargets(
+  material: SourceLineMaterial[],
+  limit = 24
+): { attributes: string[]; labels: string[]; stateAttribute?: string } {
+  const labels = uniqueMatches(material, /aria-label="([^"]{1,80})"/g, limit);
+  const attributes = uniqueMatches(
+    material,
+    /\b(data-[a-z0-9-]{2,40})[=\s>]/g,
+    limit
+  );
+  const stateAttribute = attributes.find((name) => /(^|-)state$/.test(name));
+  return {
+    attributes,
+    labels,
+    ...(stateAttribute === undefined ? {} : { stateAttribute }),
+  };
+}
+
+/** Les valeurs distinctes qu'un motif capture dans le matériel, dans l'ordre. */
+function uniqueMatches(
+  material: SourceLineMaterial[],
+  pattern: RegExp,
+  limit: number
+): string[] {
+  const found: string[] = [];
+  for (const source of material) {
+    for (const line of source.lines) {
+      for (const match of line.text.matchAll(pattern)) {
+        const value = match[1] ?? "";
+        if (value && !found.includes(value)) {
+          found.push(value);
+        }
+        if (found.length >= limit) {
+          return found;
+        }
+      }
+    }
+  }
+  return found;
+}
+
 export function planPayload(
   context: PrContext,
   preview: Preview,
@@ -2048,6 +2100,11 @@ export function planPayload(
      * existant au lieu d'en inventer un (lot FF : « Pièce de 5 € »).
      */
     controlLabels: declaredControlLabels(sourceLineMaterial(context)),
+    /**
+     * Les cibles réelles de CE diff : le prompt est générique, la concrétude
+     * vient du run. Voir `concreteTargets`.
+     */
+    concreteTargets: concreteTargets(sourceLineMaterial(context)),
     fileTexts: files,
     fixtures: catalog,
     /**
