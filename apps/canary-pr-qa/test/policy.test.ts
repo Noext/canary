@@ -1377,6 +1377,27 @@ it("says no changed file carries the quote and proposes none outside the diff", 
   expect(outsideLine).not.toContain("declare that file");
 });
 
+it("donne les cibles concrètes du diff : attributs, libellés, attribut d'état", () => {
+  // La paire entrelacée a montré le coût d'un prompt générique sans concret :
+  // 11 cibles introuvables contre 3. Ces exemples viennent du diff du run.
+  const payload = planPayload(
+    contextWith([
+      {
+        filename: "src/view.tsx",
+        patch:
+          '@@ -1,1 +1,3 @@\n+<input aria-label="Montant attendu" />\n+<div data-order-state="open" data-history-entry="1">',
+      },
+    ]),
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  expect(payload.concreteTargets.labels).toContain("Montant attendu");
+  expect(payload.concreteTargets.attributes).toContain("data-history-entry");
+  expect(payload.concreteTargets.stateAttribute).toBe("data-order-state");
+});
+
 it("donne les libellés que le diff écrit, pour ne pas en inventer", () => {
   // Lot FF : le plan visait « Quantité · Pièce de 5 € », que la page n'a pas.
   const payload = planPayload(
