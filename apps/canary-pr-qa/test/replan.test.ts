@@ -3,6 +3,7 @@ import {
   invariantObservations,
   replannedScenarios,
   replanPayload,
+  targetObservations,
 } from "../src/plan-evidence.js";
 import type { Plan, ScenarioResult } from "../src/schema.js";
 
@@ -74,9 +75,69 @@ describe("re-planification après observation", () => {
     const plan = {
       scenarios: [{ id: "a" }, { id: "b" }, { id: "c" }],
     } as unknown as Plan;
-    const selected = replannedScenarios(plan, [
-      { assertionId: "a1", code: "TRANSITION_ON_INVARIANT", scenarioId: "b" },
-    ]);
+    const selected = replannedScenarios(plan, [{ scenarioId: "b" }]);
     expect(selected.map((scenario) => scenario.id)).toEqual(["b"]);
+  });
+});
+
+describe("re-planification d'une cible absente", () => {
+  it("remonte ce que la page offrait, sans nouvelle visite", () => {
+    const observations = targetObservations([
+      {
+        artifacts: [],
+        assertions: [],
+        diagnostic: {
+          code: "TARGET_NOT_FOUND",
+          hint: "",
+          message: "Canary action failed: Timeout",
+        },
+        outcome: "blocked",
+        scenario: { id: "caisse" } as ScenarioResult["scenario"],
+        steps: [
+          {
+            action: { type: "fill" } as never,
+            index: 1,
+            observation: "",
+            observedTargets: "role=button name=Piece de 5 EUR",
+            ok: false,
+            reason: "timeout",
+          },
+        ],
+      },
+      {
+        artifacts: [],
+        assertions: [],
+        outcome: "passed",
+        scenario: { id: "sain" } as ScenarioResult["scenario"],
+        steps: [],
+      },
+    ]);
+    expect(observations).toEqual([
+      {
+        code: "TARGET_NOT_FOUND",
+        offered: "role=button name=Piece de 5 EUR",
+        scenarioId: "caisse",
+        stepId: "1",
+      },
+    ]);
+  });
+
+  it("transmet les deux familles dans la même réécriture", () => {
+    const payload = replanPayload({
+      observations: [],
+      plan: { scenarios: [] } as unknown as Plan,
+      targets: [
+        {
+          code: "TARGET_NOT_FOUND",
+          offered: "role=button name=Save",
+          scenarioId: "s",
+          stepId: "s1",
+        },
+      ],
+    });
+    expect(payload.targets).toHaveLength(1);
+    expect(payload.instruction).toContain(
+      "copy a target from it character by character"
+    );
   });
 });

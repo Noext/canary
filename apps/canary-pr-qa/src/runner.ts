@@ -38,6 +38,7 @@ import {
   replannedScenarios,
   replanPayload,
   stateTargetReadRefusals,
+  targetObservations,
   unstableSelectorRefusals,
   validatePlanEvidence,
 } from "./plan-evidence.js";
@@ -1300,7 +1301,8 @@ async function replanObservedInvariants(input: {
     return;
   }
   const observations = invariantObservations(input.result.scenarios);
-  if (observations.length === 0) {
+  const targets = targetObservations(input.result.scenarios);
+  if (observations.length === 0 && targets.length === 0) {
     return;
   }
   checkBudget();
@@ -1315,7 +1317,7 @@ async function replanObservedInvariants(input: {
         input.config,
         input.files
       ),
-      ...replanPayload({ observations, plan: input.result.plan }),
+      ...replanPayload({ observations, plan: input.result.plan, targets }),
     },
     plannerPlanSchema(input.material),
     input.config.QA_PLAN_MAX_TOKENS,
@@ -1336,7 +1338,7 @@ async function replanObservedInvariants(input: {
   );
   settlePlan(revised, input.context, input.config, input.result.id);
   input.result.plan = revised;
-  const replanned = replannedScenarios(revised, observations);
+  const replanned = replannedScenarios(revised, [...observations, ...targets]);
   input.result.replannedScenarioIds = replanned.map((scenario) => scenario.id);
   for (const scenario of replanned) {
     logger.info(
