@@ -181,8 +181,14 @@ const envSchema = z.object({
   QA_MODEL_RETRIES: z.coerce.number().int().min(0).max(5).default(3),
   /**
    * Ce que les fichiers modifiés, EN ENTIER, peuvent peser dans le message du
-   * planificateur. Le diff ne dit pas comment une valeur affichée est calculée
-   * plus loin dans le même fichier ; ce budget achète cette jointure.
+   * planificateur.
+   *
+   * Zéro par défaut, et ce n'est pas un renoncement : le lot HH (10 runs, même
+   * build, même PR, même modèle) est passé à 10/10 avec 86 scénarios et 2,44 M de
+   * tokens là où le même build avec 120 000 caractères de fichiers entiers
+   * donnait 5/10 et 3,83 M. Le message plus court est lu plus fidèlement ; les
+   * fichiers entiers restent disponibles pour un dépôt où la jointure manque
+   * vraiment, mais ils ne sont plus payés par défaut.
    */
   /**
    * Rejouer le préfixe de navigation du plan pour observer la vue réellement
@@ -204,12 +210,7 @@ const envSchema = z.object({
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)
     .transform((value) => value === true || value === "true"),
-  QA_PLAN_FILE_CHARS: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(1_000_000)
-    .default(120_000),
+  QA_PLAN_FILE_CHARS: z.coerce.number().int().min(0).max(1_000_000).default(0),
   QA_CONTEXT_CHARS: z.coerce
     .number()
     .int()

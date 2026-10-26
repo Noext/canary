@@ -183,6 +183,21 @@ ne sont pas refusés à tort.
 | DD | `0ae3b98` | non | 5/10 | 71 | 3 414 409 | 20 |
 | EE | `538891d` | non (+ re-planification) | 6/10 | 84 | 4 326 987 | 27 |
 | FF | `1402281` | non (+ re-planification des deux familles) | 7/10 | 64 | 3 934 471 | 24 |
+| GG | `12176b7` | non | 5/10 | 74 | 3 832 769 | 22 |
+| HH | `12176b7`, `QA_PLAN_FILE_CHARS=0` | non | **10/10** | 86 | 2 440 356 | 18 |
+| II | idem | non | 7/10 | 75 | 3 144 996 | 23 |
+
+**Le résultat le plus net du chantier** : retirer les fichiers entiers du message
+(`QA_PLAN_FILE_CHARS=0`) donne 17/20 runs verts (HH 10/10, II 7/10) à 2,79 M de
+tokens en moyenne, là où le même build avec 120 000 caractères de fichiers entiers
+donnait 12/20 (GG 5/10, FF 7/10) à 3,88 M. Moins de contexte, mieux lu, et 28 % de
+moins. Le défaut par défaut est donc passé à zéro : les fichiers entiers restent
+disponibles pour un dépôt où la jointure manque vraiment, mais ils ne sont plus
+payés sans preuve.
+
+Sur les vingt runs de la configuration finale : **17 verts, 0 échec produit,
+2 scénarios bloqués** (longueurs fausses, attributs inventés), 153 préconditions
+publiées, contre 7/10 et 2 échecs produit pour la référence `8143ac9`.
 
 Deux effets mesurés sur ces lots, et un seul est favorable :
 
