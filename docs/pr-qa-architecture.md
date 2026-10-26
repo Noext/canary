@@ -181,6 +181,26 @@ ne sont pas refusés à tort.
 | BB | `7a6050b` | oui | 7/10 | 92 | 5 378 250 | 32 |
 | CC | `a88c998` | non | 7/10 | 63 | 3 784 344 | 21 |
 | DD | `0ae3b98` | non | 5/10 | 71 | 3 414 409 | 20 |
+| EE | `538891d` | non (+ re-planification) | 6/10 | 84 | 4 326 987 | 27 |
+| FF | `1402281` | non (+ re-planification des deux familles) | 7/10 | 64 | 3 934 471 | 24 |
+
+Deux effets mesurés sur ces lots, et un seul est favorable :
+
+- la re-planification **fonctionne en production** : quatre scénarios réécrits au
+  lot EE (`replannedScenarioIds` dans trois runs, dont deux entièrement verts), et
+  la famille `TRANSITION_*` disparaît du lot EE ;
+- son coût l'est aussi : au lot FF, deux runs ont buté sur `RUN_BUDGET_EXCEEDED`
+  parce que la passe supplémentaire dépassait l'enveloppe — corrigé depuis, la
+  réécriture qui ne tient pas dans le budget est sautée et le run garde ses
+  verdicts (jamais un run perdu pour une passe de confort).
+
+Aucun faux refus n'a été trouvé dans ces lots : les cinq blocages du lot EE
+(241, 251 et 284 caractères contre une borne de 280 ; deux cibles `Pièce de 5 €`
+inexistantes) sont des plans fautifs, vérifiés message par message.
+
+Le taux d'assertions réellement vérifiées passe de 99,3 % (458/461) à 100 %
+(394/394) — mais sur un volume plus faible, parce que davantage de scénarios sont
+refusés avant exécution. Ce n'est pas l'amélioration que le critère 4 demande.
 
 Ce que les lots disent, sans embellissement : le nombre de runs entièrement verts
 ne progresse pas de façon reproductible (7, 7, 7, 5 sur dix). Ce qui progresse est
