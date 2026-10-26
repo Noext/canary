@@ -17,7 +17,7 @@ import {
   structuralSelectorReason,
   unstableSelectorReason,
 } from "./plan-selector.js";
-import { numberedSourceLines } from "./policy.js";
+import { numberedSourceLines, sourceLineMaterial } from "./policy.js";
 import {
   type EstablishingClickFault,
   establishingClickFault,
@@ -1991,6 +1991,36 @@ function plannerPayloadLimit(context: PrContext, config: Config): number {
  * tout le diff (voir `sourceLineMaterial`), donc une ligne que l'affichage a
  * coupée reste désignable par son numéro.
  */
+/**
+ * Les libellés accessibles que le diff écrit, dans l'ordre où il les écrit.
+ *
+ * Le planificateur inventait des contrôles plausibles mais inexistants
+ * (`input[aria-label="Quantité · Pièce de 5 €"]`, lot FF) alors que le fichier
+ * modifié nomme les siens. Les lui donner ne restreint rien : c'est la liste de
+ * ce qui existe, pas une obligation, et un libellé absent reste permis s'il est
+ * copié du fichier.
+ */
+export function declaredControlLabels(
+  material: SourceLineMaterial[],
+  limit = 40
+): string[] {
+  const labels: string[] = [];
+  for (const source of material) {
+    for (const line of source.lines) {
+      for (const match of line.text.matchAll(/aria-label="([^"]{1,80})"/g)) {
+        const label = match[1] ?? "";
+        if (label && !labels.includes(label)) {
+          labels.push(label);
+        }
+        if (labels.length >= limit) {
+          return labels;
+        }
+      }
+    }
+  }
+  return labels;
+}
+
 export function planPayload(
   context: PrContext,
   preview: Preview,
@@ -2002,6 +2032,11 @@ export function planPayload(
 ) {
   const payload = {
     changedFiles: context.files.map((file) => file.filename),
+    /**
+     * Les libellés que le diff écrit pour ses contrôles : de quoi copier un nom
+     * existant au lieu d'en inventer un (lot FF : « Pièce de 5 € »).
+     */
+    controlLabels: declaredControlLabels(sourceLineMaterial(context)),
     fileTexts: files,
     fixtures: catalog,
     /**

@@ -1377,6 +1377,27 @@ it("says no changed file carries the quote and proposes none outside the diff", 
   expect(outsideLine).not.toContain("declare that file");
 });
 
+it("donne les libellés que le diff écrit, pour ne pas en inventer", () => {
+  // Lot FF : le plan visait « Quantité · Pièce de 5 € », que la page n'a pas.
+  const payload = planPayload(
+    contextWith([
+      {
+        filename: "src/view.tsx",
+        patch:
+          '@@ -1,1 +1,3 @@\n+<input aria-label="Quantité · Billet de 500 €" />\n+<input aria-label="Montant attendu" />',
+      },
+    ]),
+    PLAN_PREVIEW,
+    PLAN_PAGE,
+    PLAN_FIXTURES,
+    config
+  );
+  expect(payload.controlLabels).toEqual([
+    "Quantité · Billet de 500 €",
+    "Montant attendu",
+  ]);
+});
+
 it("porte les vues observées dans le message du planificateur", () => {
   // Le modèle ne doit pas imaginer ce qu'un clic révèle : la sonde lui envoie
   // l'instantané réel de chaque écran traversé, borné.
