@@ -2113,23 +2113,61 @@ export function invariantObservations(
 export function replanPayload(input: {
   observations: InvariantObservation[];
   plan: Plan;
+  targets?: TargetObservation[];
 }): {
   instruction: string;
   observations: InvariantObservation[];
   plan: Plan;
+  targets: TargetObservation[];
 } {
   return {
     instruction:
-      "The plan below was executed. For the scenarios listed in observations, the verification demanded a CHANGE on a value that did not change: the value measured before the step, the value measured after it, and the expected value are given. Rewrite ONLY what is wrong: keep every scenario and every step that proved something, and change the verification or the expected value so that it describes what the application actually does. Use state with afterStep when the value is an invariant and the assertion only needs to show it is there; keep transition only where a step genuinely moves the value. Return the complete corrected plan.",
+      "The plan below was executed. Read the two lists before rewriting. observations: for these scenarios the verification demanded a CHANGE on a value that did not change — the value before the step, the value after it and the expected value are given; use state with afterStep when the value is an invariant, and keep transition only where a step genuinely moves it. targets: for these steps the locator matched nothing — offered lists what the page actually exposed at that moment, copy a target from it character by character, and if the element the step wanted truly does not exist, rewrite the step to reach the state another way. Rewrite ONLY what is wrong, keep every scenario and every step that proved something, and return the complete corrected plan.",
     observations: input.observations,
     plan: input.plan,
+    targets: input.targets ?? [],
   };
+}
+
+/**
+ * Les étapes dont la cible n'existe pas dans la page, avec ce qu'elle offrait
+ * réellement. `observedTargets` est déjà relevé au moment de l'échec (bounded à
+ * huit libellés) : la réécriture n'a donc besoin d'aucune seconde visite.
+ */
+export interface TargetObservation {
+  code: string;
+  /** Ce que la page proposait à cet instant, tel que l'artefact le porte. */
+  offered?: string;
+  scenarioId: string;
+  stepId: string;
+}
+
+export function targetObservations(
+  scenarios: ScenarioResult[]
+): TargetObservation[] {
+  const found: TargetObservation[] = [];
+  for (const scenario of scenarios) {
+    const code = scenario.diagnostic?.code ?? "";
+    if (code !== "TARGET_NOT_FOUND") {
+      continue;
+    }
+    const failed = scenario.steps.find(
+      (step) => !step.ok && step.observedTargets !== undefined
+    );
+    found.push({
+      code,
+      offered: failed?.observedTargets,
+      scenarioId: scenario.scenario.id,
+      stepId: failed === undefined ? "" : String(failed.index),
+    });
+  }
+  return found;
 }
 
 /** Les scénarios à réexécuter, avec leur version réécrite. */
 export function replannedScenarios(
   plan: Plan,
-  observations: InvariantObservation[]
+  observations: { scenarioId: string }[]
 ): Scenario[] {
   const ids = new Set(observations.map((item) => item.scenarioId));
   return plan.scenarios.filter((scenario) => ids.has(scenario.id));
