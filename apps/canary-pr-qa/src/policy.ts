@@ -3444,6 +3444,20 @@ function assertsAbsence(assertion: {
   return assertion.kind === "count" && String(assertion.expected) === "0";
 }
 
+/**
+ * La longueur exacte qui satisfait la comparaison de la garde : `> n` demande
+ * n + 1, `>= n` demande n, `< n` demande n - 1, `<= n` demande n. Un message qui
+ * dit « une valeur dont la longueur satisfait la condition » laisse le modèle
+ * recompter — et il s'est trompé trois fois de suite dans le lot EE (241, 251 et
+ * 284 caractères pour la même borne). Nommer le nombre supprime le comptage.
+ */
+function wantedLength(condition: string, limit: number): number {
+  if (condition.includes("> ") || condition.includes(">=")) {
+    return condition.includes(">=") ? limit : limit + 1;
+  }
+  return condition.includes("<=") ? limit : Math.max(0, limit - 1);
+}
+
 /** Le premier contrôle d'une garde que le scénario n'a pas joué avant l'assertion. */
 function unmetControl(
   guard: MarkerGuard,
@@ -3514,7 +3528,9 @@ function missingInteractionRefusal(
     return;
   }
   if (first.lengthConflict) {
-    return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the last write in "${first.control}" holds ${first.lengthConflict.measured} characters and the limit that decides this value is ${first.lengthConflict.limit}. Rewrite the step with a value whose length satisfies ${first.guard.condition}, then assert the marker.`;
+    const { limit, measured } = first.lengthConflict;
+    const wanted = wantedLength(first.guard.condition, limit);
+    return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the last write in "${first.control}" holds ${measured} characters and the limit that decides this value is ${limit}. Write exactly ${wanted} characters so that ${first.guard.condition} holds, then assert the marker.`;
   }
   if (first.guard.caller) {
     return `Scenario ${scenarioId}: assertion ${first.assertionId} expects ${first.attribute}="${first.expected}", but the view returns NO value for it until a condition written at ${first.guard.caller.source} holds: ${first.guard.condition}. Nothing in the scenario commands "${first.control}", which sets ${first.field ?? "a field of that condition"}; without it the marker stays at its fallback "${first.guard.caller.fallback}". Add a step that ${first.action}s "${first.control}" BEFORE the assertion step.`;
