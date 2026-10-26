@@ -613,7 +613,7 @@ describe("le prompt enseigne la forme référence, sans l'imposer", () => {
     );
     // Littéral d'un côté : la ligne mesurée qui écrit le statut.
     expect(prompt).toMatch(
-      /line 144 of `packages\/domain\/src\/cash\.ts` writes `status: "ecart-justifie"`, so designating that line IS the expected `ecart-justifie`/
+      /line 144 of a changed file writes `status: "ecart-justifie"`, so designating that line IS the expected `ecart-justifie`/
     );
     // Composé de l'autre : le montant calculé et le total compté, qu'aucun
     // littéral ne porte.

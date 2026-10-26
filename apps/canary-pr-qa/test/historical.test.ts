@@ -208,3 +208,47 @@ describe("rejeu des plans historiques contre la porte, sans modèle", () => {
     });
   }
 });
+describe("les deux cas non refusés sont classés, et la preuve vient du run", () => {
+  /** Le matériel numéroté du diff de la PR : ce que la porte peut lire. */
+  const materialText = snapshot.files
+    .map((file) => file.patch ?? "")
+    .join("\n");
+
+  it("790fde72 : la valeur ne bouge pas, et l'artefact le prouve", () => {
+    // L'assertion visée est une `transition`, et son relevé montre la même
+    // valeur avant et après l'étape, égale à l'attendu. Le classement
+    // TRANSITION_ON_INVARIANT n'est donc pas une opinion : c'est le run.
+    const record = cases["790fde72"]!.failing[0];
+    const measured = record?.assertionResults?.[0] as
+      | { actual?: unknown; baseline?: unknown; id?: string }
+      | undefined;
+    expect(measured?.baseline).toBe(1);
+    expect(measured?.actual).toBe(1);
+    const scenario = cases["790fde72"]!.plan.scenarios.find(
+      (item) => (item as { id?: string }).id === record?.id
+    ) as { assertions?: { verification?: string; id?: string }[] } | undefined;
+    const assertion = scenario?.assertions?.find(
+      (item) => item.id === measured?.id
+    );
+    expect(assertion?.verification).toBe("transition");
+    // Et la porte ne refuse pas : rien dans le diff ne prouve cet invariant.
+    expect(verdictOf(cases["790fde72"] as HistoricalCase).refusals).toEqual([]);
+  });
+
+  it("afcc9846 : la cible est déclarée dans le diff, absente à cet instant", () => {
+    // Le diagnostic nomme l'élément attendu. Son attribut EST écrit par le diff
+    // — la cible n'est pas inventée — mais il n'est rendu qu'après une clôture,
+    // donc absent au moment où l'étape le vise : défaut de plan (état non
+    // établi), que la porte ne peut pas prouver sans navigateur.
+    const record = cases.afcc9846!.failing[0];
+    expect(record?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+    const locator = /waiting for locator\('([^']+)'\)/.exec(
+      record?.diagnostic?.message ?? ""
+    )?.[1];
+    expect(locator).toBeDefined();
+    const attribute = /\[([a-z-]+)[=\]]/i.exec(locator ?? "")?.[1];
+    expect(attribute).toBe("data-cash-history-comment");
+    expect(materialText).toContain(attribute ?? "");
+    expect(verdictOf(cases.afcc9846 as HistoricalCase).refusals).toEqual([]);
+  });
+});
