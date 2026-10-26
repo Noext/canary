@@ -125,10 +125,13 @@ montant attendu saisi, une session laissée ouverte ou une ligne créée survive
 d'un scénario à l'autre et d'un run à l'autre. Aucun mécanisme du harnais ne peut
 l'annuler sans modifier l'application testée.
 
-Ce que le harnais fait de cette limite : toute assertion dont la valeur observée
-avant l'étape satisfaisait déjà l'attendu porte `preMatched: true`. Un lecteur du
-rapport sait alors que l'assertion ne démontre pas que l'étape a produit cet état.
-Le verdict, lui, n'est jamais requalifié pour autant.
+Ce que le harnais fait de cette limite : la valeur d'avant l'étape est relevée
+pour **toute assertion ancrée sur une interaction** (clic, saisie, sélection,
+case, touche), quelle que soit sa vérification. Si elle satisfaisait déjà
+l'attendu, l'assertion porte `preMatched: true`, le commentaire de PR compte ces
+assertions et le rapport HTML les marque « already satisfied before the step ».
+Un lecteur sait donc que l'assertion démontre la présence de l'état, pas que
+l'étape l'a produit. Le verdict, lui, n'est jamais requalifié pour autant.
 
 Ce qu'il ne fait pas, et qui reste interdit : conclure d'un run vert que l'état
 initial était celui attendu. Un scénario qui dépend d'un état préexistant doit le
@@ -154,7 +157,27 @@ séparation `blocked`/`failed`/`skipped`/`stale` et recheck SHA ; réservation d
 
 ## 5 bis. Mesures déjà obtenues
 
-### Comparaison appariée déterministe (la plus solide)
+### Comparaison appariée sur les plans réellement produits
+
+`apps/canary-pr-qa/test/replay-comparison.test.ts` rejoue **79 plans réellement
+produits** (lots BA à II) à travers deux portes : celle de `8143ac9`, dont les
+verdicts sont figés dans `test/historical/baseline-verdicts.json`, et celle
+d'aujourd'hui. Mêmes entrées, aucun modèle, aucun navigateur — donc aucun effet
+temporel, et le test vérifie que deux exécutions rendent le même verdict.
+
+| Mesure | Résultat |
+| --- | --- |
+| Plans comparés | 79 |
+| Refusés par la porte d'origine | 5 |
+| Refusés aujourd'hui | 15 |
+| Nouvellement refusés | 10 |
+| Nouvellement refusés dont le scénario visé était **vert** dans son run | **0** (aucun faux refus) |
+| Acceptés aujourd'hui alors que refusés à l'origine | **0** (aucun contrôle affaibli) |
+
+Le détail par run, avec tokens, appels et durée, est dans
+[`pr-qa-measurements.md`](pr-qa-measurements.md), généré depuis les artefacts.
+
+### Comparaison appariée déterministe (les sept cas historiques)
 
 Les sept plans historiques sont rejoués par le même harnais, sans modèle : la
 comparaison est appariée plan par plan et indépendante du temps.

@@ -45,6 +45,18 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
           `- ${clean(item.scenario.title)}: step \`${clean(step.stepId ?? String(step.index))}\` skipped — its target was absent, so the state it establishes was already in place`
       )
   );
+  // Une assertion dont la valeur satisfaisait déjà l'attendu avant l'étape ne
+  // prouve rien sur cette étape : le rapport le dit, sans nommer la cible, et
+  // sans changer le verdict.
+  const inherited = result.scenarios.flatMap((item) =>
+    item.assertions.filter((assertion) => assertion.preMatched)
+  );
+  const satisfiedBefore =
+    inherited.length === 0
+      ? []
+      : [
+          `- ${inherited.length} assertion(s) already satisfied before their step: they prove the state is there, not that the step produced it`,
+        ];
   return [
     "<!-- canary-pr-qa -->",
     "## Canary autonomous PR QA",
@@ -65,6 +77,7 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
       .map(
         (item) => `- ${clean(item.scenario.title)}: ${clean(item.error ?? "")}`
       ),
+    ...satisfiedBefore,
     ...substitutions,
     ...skippedSteps,
     ...(result.plan?.skipped.map(
@@ -113,7 +126,7 @@ ${item.artifacts
       `<video controls preload="metadata" src="${escapeHtml(item.scenario.id)}/${escapeHtml(file)}"></video>`
   )
   .join("")}
-<ul>${item.assertions.map((a) => `<li>${escapeHtml(a.id)}: ${a.passed ? "PASS" : "FAIL"} — actual: ${escapeHtml(JSON.stringify(a.actual))}</li>`).join("")}</ul>
+<ul>${item.assertions.map((a) => `<li>${escapeHtml(a.id)}: ${a.passed ? "PASS" : "FAIL"}${a.preMatched ? " (already satisfied before the step)" : ""} — actual: ${escapeHtml(JSON.stringify(a.actual))}</li>`).join("")}</ul>
 <details><summary>Executed steps</summary><pre>${escapeHtml(JSON.stringify(item.steps, null, 2))}</pre></details></section>`
     )
     .join("");

@@ -3817,7 +3817,7 @@ it("forbids stitching fragments read in different places in the planner prompt",
   );
   // Le contre-exemple réel du lot G est enseigné : ses deux fragments mesurés,
   // le chemin du fichier du cas, et la jointure qu'ils ont produite.
-  expect(prompt).toContain("apps/web/app/page.tsx");
+  expect(prompt).not.toContain("apps/web/");
   expect(prompt).toContain(STITCH_FRAGMENT_A);
   expect(prompt).toContain(STITCH_FRAGMENT_B);
   expect(prompt).toContain("joined them with a space");
@@ -3853,7 +3853,7 @@ it("asks for the first character of a quote without forbidding a verbatim fragme
   // L'exemple enseigné est le cas mesuré avec son invention, et la ligne réelle
   // qu'il vise : le début de la ligne, la copie fautive, et le remède exact.
   expect(prompt).toMatch(/Another real refusal: a planner quoted/i);
-  expect(prompt).toContain(COUNTED_PAGE_PATH);
+  expect(prompt).not.toContain(COUNTED_PAGE_PATH);
   expect(prompt).toContain(COUNTED_LINE_HEAD);
   expect(prompt).toContain(COUNTED_LINE);
   expect(prompt).toContain(COUNTED_TAIL_QUOTE);
@@ -3878,7 +3878,7 @@ it("teaches the character-by-character copy of an expression to the planner", ()
     /These rules never replace the gate: an exact substring of the file is a witness/i
   );
   // Les deux refus mesurés du lot K sont enseignés avec leurs citations.
-  expect(prompt).toContain(RETYPED_TEMPLATE_PATH);
+  expect(prompt).not.toContain(RETYPED_TEMPLATE_PATH);
   expect(prompt).toContain(RETYPED_TEMPLATE_QUOTE);
   expect(prompt).toContain(RETYPED_ARROW_QUOTE);
 });

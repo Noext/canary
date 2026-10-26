@@ -176,7 +176,13 @@ export async function captureBaselines(
   for (const assertion of scenario.assertions) {
     if (
       assertion.afterStep === stepId &&
-      ["transition", "persisted"].includes(assertion.verification) &&
+      // Toute assertion peut être déjà satisfaite par ce qu'un scénario
+      // précédent a laissé : la mesure d'avant l'étape n'est pas réservée aux
+      // vérifications de changement. Elle n'est relevée que pour un pas
+      // d'interaction — une assertion ancrée sur `goto` ne peut rien hériter
+      // d'un scénario précédent, elle lit la page telle qu'elle arrive.
+      (!["state"].includes(assertion.verification) ||
+        interactionStep(scenario, stepId)) &&
       !baselines.has(assertion.id)
     ) {
       const observation = await canary.act(
@@ -187,4 +193,18 @@ export async function captureBaselines(
       baselines.set(assertion.id, observation.actual);
     }
   }
+}
+
+/** Vrai quand l'étape nommée écrit quelque chose, plutôt que d'ouvrir la page. */
+function interactionStep(
+  scenario: Scenario,
+  stepId: string | undefined
+): boolean {
+  const step = scenario.steps.find((item) => item.id === stepId);
+  if (!step) {
+    return false;
+  }
+  return ["check", "click", "fill", "press", "select"].includes(
+    step.action.type
+  );
 }

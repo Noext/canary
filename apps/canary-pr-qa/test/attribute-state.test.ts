@@ -1425,9 +1425,11 @@ describe("état de la caisse hérité d'un run antérieur", () => {
       (item) => item.id === "etabli-ouvert"
     );
     expect(opened?.passed).toBe(true);
-    // Vérifiée en `state`, l'assertion d'établissement ne capture pas de
-    // baseline : elle prouve l'état atteint, pas un déplacement.
-    expect(opened?.baseline).toBeUndefined();
+    // L'assertion d'établissement est vérifiée en `state`, mais elle suit une
+    // INTERACTION : sa valeur d'avant l'étape est désormais relevée, pour que le
+    // rapport dise si l'état venait déjà de là (héritage) ou de l'étape.
+    expect(opened?.baseline).toBe(false);
+    expect(opened?.preMatched).toBeUndefined();
     expect(opened?.actual).toBe(true);
     // La transition est réservée à la clôture, qui déplace réellement la valeur.
     const closed = result.scenarios[0]?.assertions.find(

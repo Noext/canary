@@ -1,0 +1,644 @@
+[
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "0ce50724-7dbb-43dd-b14b-cacebbfb1851",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "f83f0762-a58e-4839-9699-a7656c93341c",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "0675aba9-a69a-4b86-a71f-eefb366c6a07",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "afcc9846-ec93-4cde-8ecf-77c01d433c82",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "24db19b8-fc22-4cfb-9b6c-44caaedcc3fb",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "d830e035-3a85-4cbb-86f7-989c3362c228",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "ec6445c9-b8a1-4c78-853a-0c98c46fe4d5",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "94673c0a-baff-466f-9d33-4cfd71348313",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "8bc0711c-1d9f-4dc6-9d5f-f8da0bf1c58c",
+    "source": null
+  },
+  {
+    "batch": "BA",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "dc7e9356-10e8-490e-a0e1-b1ee82948286",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "7db8c556-7dad-4e71-91a3-516ffed7d9c2",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "cb1a3dab-1c06-42dd-8516-be8f4240385d",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "ddd8a0a0-d246-41ba-8bce-68eed555f3b5",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "450099db-a721-4282-9edb-6812387eb395",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "50dae25e-5f7d-48e4-bfd5-c735f8f9c93f",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "1193dcf5-e685-4104-b858-da310dd8f9a2",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "c1d77bba-ab71-4d70-a425-4e1474b847ac",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "56ae5df7-57a1-4bb8-8fe4-e05514c503da",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "0637d181-5a87-4981-85a8-4e599a801c8f",
+    "source": null
+  },
+  {
+    "batch": "CC",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "500a02a9-f4ac-45b1-af9c-db04342303e0",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "b8818582-62e3-4064-a5d7-bbefa9d2a7ca",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "0b71b8a3-5f6a-42b3-b957-793dcae25938",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 1,
+    "error": null,
+    "refusals": [
+      "Scenario cash-invalid-quantity-unavailable declares packages/domain/src/cash.ts without a source requirement witness. Add a requirement whose quote exists verbatim in packages/domain/src/cash.ts; this critical file canno"
+    ],
+    "run": "f5ecbaac-babb-451c-824e-f296bf0c0969",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "bed1253d-78c9-412c-b58b-b8fa56ca43e2",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "b5711fb7-dc32-4307-8eac-c607f4778208",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 1,
+    "error": null,
+    "refusals": [
+      "Scenario caisse-commentaire-hors-borne declares packages/domain/AGENTS.md without a source requirement witness. A requirement already cites packages/domain/AGENTS.md, but its exact quote carries no visible code content t"
+    ],
+    "run": "bc0e083e-5573-41f7-b229-ad61311781b3",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "3f60a8d1-b7d1-47dc-bf19-e0219e60942f",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "fe361a8b-f390-4a85-bbea-e067919d3254",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "b498e8f1-0930-42d5-9417-9375fca2e412",
+    "source": null
+  },
+  {
+    "batch": "DD",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "a30c3d72-2c3d-485b-ac2d-a988f1dcc7b6",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "28525781-e499-4ca7-a9f9-19152e973ed0",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "74fb516d-db15-4b9a-9ea7-1100429770fb",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "8a16f402-7316-446d-9387-08974707e9d2",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "d07c4ed4-8c34-4f0e-94c1-fb7d04f30c94",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "f031c109-f38d-4c8a-bf46-824023c7feb0",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "c7136c7b-b4d8-44c9-be0a-6be09553efde",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "273dc450-6029-4674-8472-e352149a4f06",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "cd62137e-5d8f-4176-9061-1ff5ed23ab97",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 1,
+    "error": null,
+    "refusals": [
+      "Scenario cash-compte-juste-et-cloture declares packages/domain/src/cash.ts without a source requirement witness. Add a requirement whose quote exists verbatim in packages/domain/src/cash.ts; this critical file cannot be "
+    ],
+    "run": "4bde1657-5d68-4097-93de-30c6c31a7233",
+    "source": null
+  },
+  {
+    "batch": "EE",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "f7c2778e-04b3-4469-aaaf-9ce5f1971a08",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "403d43d2-3510-4d2b-98a1-e7041f260661",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "441bfc0e-0ec3-40dd-b60b-c645cb743b24",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "34f76fd9-72ba-4df5-85f2-5c4c59936cee",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "cd6d22f6-939d-4565-b997-018537c48789",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "6dd36613-4ff9-464c-b882-8b6ac4c04197",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "7900e46d-cd65-4034-a4b4-486c5a52507b",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "896d4967-e806-4615-b133-fd33cfc79cbe",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "bfc43f8e-92dc-472d-8d26-1a7feab4fc8f",
+    "source": null
+  },
+  {
+    "batch": "FF",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "510b96f2-4f30-48c7-9e2c-f9780c0a4d29",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "ca55513b-ec2c-4407-8def-9554378e02fe",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "e3f3ad2b-c5e4-4222-b1f9-36a12434dda9",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "160792a9-c627-4e3d-a511-822d06ded918",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "74f1cfea-58a5-47a0-98fd-6f2abbf4ca48",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "bc46290b-a760-46ef-baac-ba9322de4122",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "6832a9e4-ad59-4963-ac9e-edb194179912",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "d8b73758-2b1a-4b19-a19b-01a566261d6d",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 1,
+    "error": null,
+    "refusals": [
+      "Scenario cash-empty-drawer-blocked declares packages/domain/src/cash.ts without a source requirement witness. Add a requirement whose quote exists verbatim in packages/domain/src/cash.ts; this critical file cannot be dro"
+    ],
+    "run": "5afc804a-5d22-4867-a593-66a3d4df3da3",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "c22a89f1-4161-4648-84de-147deddf516a",
+    "source": null
+  },
+  {
+    "batch": "GG",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "566ffe64-c4fb-41ed-9add-7c16cf04dfe2",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "b6641dfb-bbd7-4d94-98e2-e6fcd964ee16",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "6db4cf7e-bcf7-467c-bb96-a2b9c875433d",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "13d0aaac-b9c1-4b89-8c1d-8ea1ad5f5522",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "79f33027-917d-4725-ada2-59b6103b2a16",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "4f684ac2-73ab-46ec-9724-399588916ed2",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "9da45e20-46ab-422b-85ce-3c80206d491d",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "7c0983ed-0ed9-4bf1-8d83-87a8c8afe9a1",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "43aae022-2f19-43a8-a9bb-239d61a6091b",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "1b960768-26bc-4562-9763-1a8bdbfd8eca",
+    "source": null
+  },
+  {
+    "batch": "HH",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "53133517-e829-419d-8626-0aa10b2aad2b",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "5deb7c69-edc0-46fc-9eb7-50aa07d1c373",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "0da1a10e-a2ab-4d57-b458-4c3ac3413029",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "437ec805-86fe-4e4f-b563-8995edb823ad",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 1,
+    "error": null,
+    "refusals": [
+      "Scenario caisse-comptage-invalide-sans-ecart declares packages/domain/src/__tests__/cash.spec.ts without a source requirement witness. Add a requirement whose quote exists verbatim in packages/domain/src/__tests__/cash.s"
+    ],
+    "run": "c61cb8dc-b926-42fc-b1ff-3f7d99aecfbf",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "d9f65e49-c6db-4406-8046-e6ab6ca4fb13",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "6e3f63fa-9c76-487e-bd7d-331c3422296c",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "bd230341-982c-4eba-96bc-26bb44a8415e",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "72ce4151-9b0f-46ad-81cc-83bb27f1b6e7",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "e9752df0-3867-4dea-b0a4-b1e7ecaad85e",
+    "source": null
+  },
+  {
+    "batch": "II",
+    "count": 0,
+    "error": null,
+    "refusals": [],
+    "run": "851b62d2-60fa-4067-bab5-7437786b1864",
+    "source": null
+  }
+]
