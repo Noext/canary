@@ -218,13 +218,13 @@ describe("les deux cas non refusés sont classés, et la preuve vient du run", (
     // L'assertion visée est une `transition`, et son relevé montre la même
     // valeur avant et après l'étape, égale à l'attendu. Le classement
     // TRANSITION_ON_INVARIANT n'est donc pas une opinion : c'est le run.
-    const record = cases["790fde72"].failing[0];
+    const record = cases["790fde72"]!.failing[0];
     const measured = record?.assertionResults?.[0] as
       | { actual?: unknown; baseline?: unknown; id?: string }
       | undefined;
     expect(measured?.baseline).toBe(1);
     expect(measured?.actual).toBe(1);
-    const scenario = cases["790fde72"].plan.scenarios.find(
+    const scenario = cases["790fde72"]!.plan.scenarios.find(
       (item) => (item as { id?: string }).id === record?.id
     ) as { assertions?: { verification?: string; id?: string }[] } | undefined;
     const assertion = scenario?.assertions?.find(
@@ -240,7 +240,7 @@ describe("les deux cas non refusés sont classés, et la preuve vient du run", (
     // — la cible n'est pas inventée — mais il n'est rendu qu'après une clôture,
     // donc absent au moment où l'étape le vise : défaut de plan (état non
     // établi), que la porte ne peut pas prouver sans navigateur.
-    const record = cases.afcc9846.failing[0];
+    const record = cases.afcc9846!.failing[0];
     expect(record?.diagnostic?.code).toBe("TARGET_NOT_FOUND");
     const locator = /waiting for locator\('([^']+)'\)/.exec(
       record?.diagnostic?.message ?? ""
