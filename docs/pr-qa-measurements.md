@@ -112,9 +112,12 @@ périmée fait échouer la CI.
 | NN | `8143ac9` | 6/10 | 62 | 1 | 2307186 |
 | OO | `a683f86` | 4/9 | 51 | 0 | 1892214 |
 | PP | `a683f86` | 7/10 | 70 | 0 | 2551153 |
+| QQ | `345b972` | 5/10 | 77 | 1 | 2746767 |
 
 Référence `8143ac9` : **12/20** runs verts, 137 scénarios, 4897191 tokens.
 Build courant : **18/29** runs verts, 214 scénarios, 7248093 tokens.
+
+Politique par scénario (QQ, drapeau `QA_PER_SCENARIO_COVERAGE`) : **5/10** runs verts et 77 scénarios — contre 7/10 et 70 avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.
 
 Lecture honnête : **aucun gain reproductible** du taux de runs verts
 (60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est

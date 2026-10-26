@@ -207,6 +207,10 @@ describe("le document de mesures est généré, et ses classes viennent du code"
     const currentRows = interleaved.filter((row) =>
       ["MM", "OO", "PP"].includes(row.batch)
     );
+    // QQ teste la politique « un défaut de contrat coûte le scénario » : elle est
+    // pire que la politique fatale sur ce corpus, et le document le dit.
+    const perScenario = interleaved.filter((row) => row.batch === "QQ");
+    const fatal = interleaved.filter((row) => row.batch === "PP");
     const sum = (
       rows: typeof interleaved,
       key: "green" | "runs" | "tokens" | "verts"
@@ -224,6 +228,8 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       "",
       `Référence \`8143ac9\` : **${sum(baselineRows, "verts")}/${sum(baselineRows, "runs")}** runs verts, ${sum(baselineRows, "green")} scénarios, ${sum(baselineRows, "tokens")} tokens.`,
       `Build courant : **${sum(currentRows, "verts")}/${sum(currentRows, "runs")}** runs verts, ${sum(currentRows, "green")} scénarios, ${sum(currentRows, "tokens")} tokens.`,
+      "",
+      `Politique par scénario (QQ, drapeau \`QA_PER_SCENARIO_COVERAGE\`) : **${sum(perScenario, "verts")}/${sum(perScenario, "runs")}** runs verts et ${sum(perScenario, "green")} scénarios — contre ${sum(fatal, "verts")}/${sum(fatal, "runs")} et ${sum(fatal, "green")} avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.`,
       "",
       "Lecture honnête : **aucun gain reproductible** du taux de runs verts",
       "(60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est",
