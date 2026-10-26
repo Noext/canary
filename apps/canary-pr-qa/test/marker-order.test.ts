@@ -935,4 +935,19 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
     expect(refusals[0]?.error.code).toBe("MARKER_ORDER_UNREACHABLE");
     expect(refusals[0]?.error.message).toMatch(/holds \d+ characters/);
   });
+
+  it("nomme la longueur exacte à écrire, au lieu de la condition à recalculer", () => {
+    // Le modèle s'est trompé trois fois de suite sur la même borne (241, 251 et
+    // 284 caractères, lot EE) : le message donne désormais le nombre.
+    const plan = planWith(STEP_EXPECTED_AND_NOTE("x".repeat(251)), [
+      ASSERTION_STAGE_TOO_LONG,
+    ]);
+    const refusals = unwitnessedPlanRefusals(
+      plan,
+      CONTEXT_WITH(LENGTH_MATERIAL),
+      POLICY
+    ).filter((line) => line.includes("data-stage-problem"));
+    expect(refusals[0]).toContain("holds 251 characters");
+    expect(refusals[0]).toContain("Write exactly 281 characters");
+  });
 });
