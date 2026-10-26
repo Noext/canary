@@ -27,6 +27,7 @@ import {
   attributeValueRefusals,
   changedFileTexts,
   type DiscoveryEvidence,
+  type InvariantObservation,
   ifPresentRefusals,
   invariantObservations,
   missingExpectationRefusals,
@@ -38,6 +39,7 @@ import {
   replannedScenarios,
   replanPayload,
   stateTargetReadRefusals,
+  type TargetObservation,
   targetObservations,
   unstableSelectorRefusals,
   validatePlanEvidence,
@@ -1281,7 +1283,7 @@ function settlePlan(
  * réelle. Ce qui change est la demande — `transition` là où la valeur ne bouge
  * pas devenait une preuve impossible — et c'est le planificateur qui la change.
  */
-async function replanObservedInvariants(input: {
+interface ReplanInput {
   canary: Canary;
   catalog: TrustedCatalog;
   config: Config;
@@ -1296,7 +1298,9 @@ async function replanObservedInvariants(input: {
   progress: Progress;
   result: RunResult;
   root: string;
-}): Promise<void> {
+}
+
+async function replanObservedInvariants(input: ReplanInput): Promise<void> {
   if (!(input.config.QA_REPLAN_ON_INVARIANT && input.result.plan)) {
     return;
   }
@@ -1305,6 +1309,31 @@ async function replanObservedInvariants(input: {
   if (observations.length === 0 && targets.length === 0) {
     return;
   }
+  // La réécriture est un supplément, jamais une condition de survie : si
+  // l'enveloppe de tokens ne la couvre pas, on garde le verdict d'origine au
+  // lieu de perdre le run entier (mesuré au lot FF : deux runs bloqués en
+  // RUN_BUDGET_EXCEEDED pour une passe de confort).
+  try {
+    await replanWithObservations(
+      input,
+      input.result.plan,
+      observations,
+      targets
+    );
+  } catch (error) {
+    logger.warn(
+      { runId: input.result.id, error: String(error) },
+      "Replan skipped, keeping the executed verdicts"
+    );
+  }
+}
+
+async function replanWithObservations(
+  input: ReplanInput,
+  plan: Plan,
+  observations: InvariantObservation[],
+  targets: TargetObservation[]
+): Promise<void> {
   checkBudget();
   const revised = await input.model.json(
     PLANNER_PROMPT,
@@ -1317,7 +1346,7 @@ async function replanObservedInvariants(input: {
         input.config,
         input.files
       ),
-      ...replanPayload({ observations, plan: input.result.plan, targets }),
+      ...replanPayload({ observations, plan, targets }),
     },
     plannerPlanSchema(input.material),
     input.config.QA_PLAN_MAX_TOKENS,
