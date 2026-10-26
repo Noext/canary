@@ -64,5 +64,16 @@
     "blocked": 2,
     "tokens": 2551153,
     "calls": 20
+  },
+  {
+    "batch": "QQ",
+    "build": "345b972",
+    "runs": 10,
+    "verts": 5,
+    "green": 77,
+    "product": 1,
+    "blocked": 10,
+    "tokens": 2746767,
+    "calls": 25
   }
 ]
