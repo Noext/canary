@@ -111,6 +111,65 @@ export function describeTarget(target: ObservedTarget): string {
  * quand l'étape peut être rejouée, `undefined` quand l'échec d'origine doit
  * rester l'échec du scénario.
  */
+/** Le libellé qu'une action nomme, quand elle en nomme un. */
+function requestedLabel(
+  action: Scenario["steps"][number]["action"]
+): string | undefined {
+  const locator = (
+    action as { locator?: { by: string; name?: string; value: string } }
+  ).locator;
+  if (!locator) {
+    return;
+  }
+  if (locator.by === "role") {
+    return locator.name;
+  }
+  return locator.by === "label" ? locator.value : undefined;
+}
+
+const words = (label: string) =>
+  label.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+/**
+ * Le remplacement DÉTERMINISTE quand un seul candidat observé ne diffère du
+ * libellé demandé que par **un mot alphabétique**.
+ *
+ * Mesuré (lot QQ) : cinq scénarios bloqués en `TARGET_NOT_FOUND`, cinq étapes
+ * avec des cibles observées, **zéro réparation** — le modèle a refusé, faute de
+ * candidat qu'il jugeait sûr, alors que la page exposait « Billet de 20 € » là où
+ * le plan écrivait « Pièce de 20 € ». La substitution reste bornée : un seul
+ * candidat, un seul mot de différence, et **jamais quand la différence est un
+ * nombre** — remplacer « Billet de 5 € » par « Billet de 10 € » changerait ce que
+ * le test prouve.
+ */
+export function nearestObservedTarget(
+  action: Scenario["steps"][number]["action"],
+  targets: ObservedTarget[]
+): ObservedTarget | undefined {
+  const label = requestedLabel(action);
+  if (!label) {
+    return;
+  }
+  const wanted = words(label);
+  const candidates = targets.filter((target) => {
+    const offered = words(target.name);
+    if (offered.length !== wanted.length) {
+      return false;
+    }
+    const different = wanted.filter((word, index) => word !== offered[index]);
+    if (different.length !== 1) {
+      return false;
+    }
+    // La différence doit être un mot, jamais un nombre : une quantité substituée
+    // change le comportement testé au lieu de réparer une cible.
+    return !(
+      /\d/.test(different[0] ?? "") ||
+      /\d/.test(offered[wanted.indexOf(different[0] ?? "")] ?? "")
+    );
+  });
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 export async function repairStepTarget(args: {
   model: Model | undefined;
   preview: string;
@@ -184,7 +243,22 @@ export async function repairStepTarget(args: {
     return;
   }
   if (!chosen) {
-    return skip("model-declined");
+    // Le modèle refuse quand aucun candidat ne lui paraît sûr. Un candidat qui
+    // ne diffère du libellé demandé que par UN mot alphabétique est pourtant une
+    // réparation démontrable : mesuré (lot QQ), cinq scénarios perdaient leur
+    // étape sur « Pièce de 20 € » là où la page expose « Billet de 20 € ». Un
+    // nombre n'est jamais substitué : il changerait ce que le test prouve.
+    const nearest = nearestObservedTarget(step.action, targets ?? []);
+    if (!nearest) {
+      return skip("model-declined");
+    }
+    return {
+      step: {
+        ...step,
+        action: { ...step.action, locator: repairedLocator(nearest) },
+      } as Scenario["steps"][number],
+      target: nearest,
+    };
   }
   // La tentative rejouée porte sa propre copie de l'action : le plan partagé,
   // son hash de contrat et l'entrée de la tentative échouée gardent la cible
