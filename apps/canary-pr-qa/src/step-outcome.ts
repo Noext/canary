@@ -1,7 +1,11 @@
+import { createLogger } from "@usecanary/logger";
 import { type Canary, compileProbe } from "./canary.js";
 import { type Diagnostic, QaError } from "./diagnostics.js";
 import type { explainMissingTarget } from "./missing-target.js";
 import type { ProgressEvent } from "./progress.js";
+
+const logger = createLogger({ name: "pr-qa-baselines" });
+
 import type { Scenario, ScenarioResult } from "./schema.js";
 
 /**
@@ -185,12 +189,27 @@ export async function captureBaselines(
         interactionStep(scenario, stepId)) &&
       !baselines.has(assertion.id)
     ) {
-      const observation = await canary.act(
-        sessionId,
-        `baseline-${assertion.id}`,
-        compileProbe(assertion, preview)
-      );
-      baselines.set(assertion.id, observation.actual);
+      // Une sonde qui échoue ne doit JAMAIS faire tomber le scénario : la cible
+      // peut légitimement ne pas exister encore (un marqueur rendu après
+      // l'interaction). Sans mesure, `preMatched` reste absent — donc inconnu,
+      // jamais silencieusement « pas hérité ».
+      try {
+        const observation = await canary.act(
+          sessionId,
+          `baseline-${assertion.id}`,
+          compileProbe(assertion, preview)
+        );
+        baselines.set(assertion.id, observation.actual);
+      } catch (error) {
+        logger.info(
+          {
+            assertion: assertion.id,
+            error:
+              error instanceof Error ? error.message.slice(0, 120) : "unknown",
+          },
+          "Baseline probe failed, keeping the assertion unflagged"
+        );
+      }
     }
   }
 }
