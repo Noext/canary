@@ -1399,6 +1399,24 @@ async function replanWithObservations(
   await saveReport(input.root, input.result, input.config);
 }
 
+/**
+ * Les refus qui n'empêchent pas le run : ordre des marqueurs, et — quand le
+ * drapeau est posé — les défauts de contrat propres à un scénario.
+ */
+function preExecutionFindings(
+  plan: Plan,
+  context: PrContext,
+  policy: Policy,
+  config: Config
+): { error: QaError; scenarioId: string }[] {
+  const findings = planFindings(plan, sourceLineMaterial(context), {
+    config,
+    context,
+    policy,
+  });
+  return [...findings.refusals, ...findings.coverageRefusals];
+}
+
 async function executePlan(
   result: RunResult,
   context: PrContext,
@@ -1567,7 +1585,7 @@ async function executePlan(
     ).map((item) => [item.scenario.id, item.error] as const),
     // L'ordre des marqueurs coûte le scénario, jamais le run : un plan dont une
     // assertion est impossible garde ses autres scénarios exécutables.
-    ...planFindings(result.plan, sourceLineMaterial(context)).refusals.map(
+    ...preExecutionFindings(result.plan, context, policy, config).map(
       (item) => [item.scenarioId, item.error] as const
     ),
   ]);

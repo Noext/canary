@@ -206,6 +206,17 @@ const envSchema = z.object({
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)
     .transform((value) => value === true || value === "true"),
+  /**
+   * Un défaut de contrat qui ne concerne qu'un scénario (exigence non témoignée,
+   * source non déclarée, contrat hors budget) coûte-t-il le run entier, ou
+   * seulement le scénario ? Mesuré : la moitié des runs bloqués du corpus
+   * produisent ZÉRO scénario pour l'un de ces trois défauts. Le drapeau existe
+   * pour comparer les deux politiques sur des lots réels avant de trancher.
+   */
+  QA_PER_SCENARIO_COVERAGE: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .default(false)
+    .transform((value) => value === true || value === "true"),
   QA_VIEW_PROBE: z
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)
