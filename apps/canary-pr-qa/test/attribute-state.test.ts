@@ -591,7 +591,7 @@ describe("valeur d'attribut visée par une assertion de texte", () => {
     expect(error?.message).toContain('reads [data-cash-state] for "cloture"');
     // Le remède est actionnable : la cible qui porte l'attribut, la voie de
     // lecture correcte, et l'étape qui établit l'état.
-    expect(error?.hint).toContain('[data-cash-state="ouvert"]');
+    expect(error?.hint).toContain('[data-state="open"]');
     expect(error?.hint).toContain('kind "visible"');
     expect(error?.hint).toContain("Réouvrir le comptage");
     expect(error?.hint).toContain("establish it first");
@@ -1363,7 +1363,7 @@ describe("état de la caisse hérité d'un run antérieur", () => {
     // Le canal de correction porte le message et son remède, comme les autres
     // refus rendus au planificateur.
     expect(feedback[0]).toContain("expects an attribute's value");
-    expect(feedback[0]).toContain('[data-cash-state="ouvert"]');
+    expect(feedback[0]).toContain('[data-state="open"]');
     expect(feedback[0]).toContain("establish it first");
     expect(result.outcome, result.scenarios[0]?.error ?? "").toBe("passed");
     expect(result.plan?.scenarios[0]?.assertions[0]?.kind).toBe("visible");
