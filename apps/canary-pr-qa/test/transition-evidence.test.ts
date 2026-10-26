@@ -438,12 +438,12 @@ it("teaches that a text assertion never reads an attribute value", () => {
     /Never plan kind "value" on an element that is not an input/i
   );
   expect(prompt).toMatch(
-    /\[data-cash-state="ouvert"\] with kind "visible", or kind "count" expecting 1/i
+    /\[data-state="open"\] with kind "visible", or kind "count" expecting 1/i
   );
   expect(prompt).toMatch(
     /must ESTABLISH that state with an observable step before asserting it/i
   );
-  expect(prompt).toMatch(/put the "ouvert" assertion AFTER that step/i);
+  expect(prompt).toMatch(/put the "open" assertion AFTER that step/i);
 });
 
 it("teaches the two readable forms and when a transition is provable", () => {
@@ -453,7 +453,7 @@ it("teaches the two readable forms and when a transition is provable", () => {
   // ne doit pas confondre un sélecteur d'attribut d'état avec un rôle dont le
   // texte visible est le contenu.
   expect(prompt).toMatch(
-    /put the "ouvert" assertion AFTER that step, with verification "state" on the step that established it/i
+    /put the "open" assertion AFTER that step, with verification "state" on the step that established it/i
   );
   expect(prompt).toMatch(
     /verification "transition" is only for a step that genuinely moves the value/i
@@ -462,10 +462,10 @@ it("teaches the two readable forms and when a transition is provable", () => {
   // reste. La consigne nomme les deux cas et la question qui tranche avant de
   // choisir `transition`.
   expect(prompt).toMatch(
-    /assertion s3-status of scenario cash-manque-justifie-cloture/
+    /a status label with a text its own description says the view KEEPS/i
   );
   expect(prompt).toMatch(
-    /assertion s3-state of scenario caisse-manque-40-euros/
+    /the other asserted a state with a count of one on a state the page already carried/i
   );
   expect(prompt).toMatch(
     /when the value you expect is the one already read before the step, or the one the description says stays, the verification is state with afterStep set to the interaction/i
@@ -501,15 +501,17 @@ it("teaches where to read a text the view shows, instead of the state it pins", 
   expect(prompt).toMatch(
     /Never read a target selected by a state VALUE either/i
   );
-  expect(prompt).toMatch(/run 210357d8/);
+  expect(prompt).toMatch(
+    /Six scenarios of one measured plan were refused for exactly this/i
+  );
   expect(prompt).toContain(
-    'assertion units read [data-cash-state="ouvert"] while expecting "6 unités comptées"'
+    "each read a text from the container that carries the state"
   );
   expect(prompt).toMatch(
     /The text you expect names the element that renders it/i
   );
   expect(prompt).toMatch(
-    /the container with its presence form \[data-cash-state\] — no value, so it exists in every state/i
+    /the container with its presence form \[data-state\] — no value, so it exists in every state/i
   );
   expect(prompt).toMatch(
     /named by its role and accessible name from the discovery snapshot/i
@@ -534,7 +536,7 @@ it("teaches the effect of a blocking rule, not the mechanism it imagines", () =>
   expect(prompt).toMatch(
     /A BLOCKING rule the PR states .* asserted by its EFFECT/i
   );
-  expect(prompt).toContain("canAttemptClose");
+  expect(prompt).toMatch(/the predicate that decides it ignores the field/i);
   expect(prompt).toMatch(/never expect a disabled attribute/i);
 });
 
@@ -563,7 +565,9 @@ it("établit les problèmes antérieurs avant d'asserter le suivant", () => {
   // remplissage, alors que `cashJustificationProblem` teste le motif d'abord —
   // sans motif valide la vue reste sur `motif-manquant`.
   expect(prompt).toMatch(/documented PRIORITY ORDER/i);
-  expect(prompt).toContain("cashJustificationProblem");
+  expect(prompt).toMatch(
+    /the function that computes the problem checks the reason/i
+  );
   expect(prompt).toMatch(
     /Establish every earlier condition with its own step/i
   );

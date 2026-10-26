@@ -132,3 +132,101 @@ function unresolvedTarget(message: string): boolean {
     !message.includes("while waiting for event")
   );
 }
+
+// --- Classe d'un échec ----------------------------------------------------
+/**
+ * La classe d'un échec — décidée par une règle, jamais par une prose.
+ *
+ * Un run qui ne passe pas doit dire **de quoi** il souffre : un plan que le gate
+ * d'aujourd'hui refuserait (défaut de plan démontrable), un plan fautif que rien
+ * de statique ne tranche, une régression produit, ou une panne d'infrastructure.
+ * Sans cette fonction, chaque rapport classe à la main et se trompe : le lot BA
+ * comptait `TRANSITION_NOT_OBSERVED` et une borne fausse comme « échecs produit »,
+ * alors que le gate refuse aujourd'hui ces deux plans.
+ */
+
+export type FailureClass =
+  | "plan-impossible"
+  | "plan-defective"
+  | "product-regression"
+  | "infrastructure"
+  | "unclassified";
+
+/**
+ * Les codes qui disent qu'un plan est fautif par construction : citation non
+ * témoignée, cible inventée, vérification inapplicable, ordre de marqueur
+ * impossible, précondition non déclarée, contrat incomplet. Aucun n'est un défaut
+ * du produit testé : ils décrivent ce que le plan a demandé.
+ */
+const PLAN_CODES = new Set([
+  "CONTRACT_INCOMPLETE",
+  "CRITICAL_COVERAGE_MISSING",
+  "MARKER_ORDER_UNREACHABLE",
+  "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
+  "PLAN_CHANGED_FILE_UNCOVERED",
+  "PLAN_EVIDENCE_INCOMPLETE",
+  "PLAN_SCENARIO_ID_RESERVED",
+  "PLAN_SCHEMA_INVALID",
+  "PLAN_STATE_TARGET_READ_AS_TEXT",
+  "PLAN_TARGET_MISSING",
+  "PRECONDITION_UNVERIFIED",
+  "REQUIREMENT_UNGROUNDED",
+  "TARGET_NOT_FOUND",
+  "TRANSITION_NOT_OBSERVED",
+  "TRANSITION_ON_INVARIANT",
+]);
+
+/** Les codes qui disent que le service n'a pas pu travailler. */
+const INFRASTRUCTURE_CODES = new Set([
+  "MODEL_OUTPUT_INCOMPLETE",
+  "MODEL_JSON_INVALID",
+  "QA_ERROR",
+  "RUN_BUDGET_EXCEEDED",
+  "STALE_HEAD",
+  "WORKER_STOPPING",
+]);
+
+export function classifyFailure(input: {
+  /** Le diagnostic du run ou du scénario, s'il y en a un. */
+  code?: string;
+  /**
+   * Vrai quand le gate d'aujourd'hui refuse le plan : le défaut est alors
+   * démontrable, et l'échec est un défaut de plan, même si l'exécution l'a
+   * rapporté comme une assertion fausse.
+   */
+  refusedByGate?: boolean;
+}): FailureClass {
+  const code = input.code ?? "";
+  if (input.refusedByGate) {
+    return "plan-impossible";
+  }
+  if (INFRASTRUCTURE_CODES.has(code)) {
+    return "infrastructure";
+  }
+  if (PLAN_CODES.has(code)) {
+    return "plan-defective";
+  }
+  if (code === "") {
+    return "unclassified";
+  }
+  // Tout autre diagnostic vient de l'exécution : une assertion qui a observé
+  // autre chose que l'attendu sur un plan que le gate accepte.
+  return "product-regression";
+}
+
+/** Un résumé lisible, pour le rapport et les mesures. */
+export function summarizeFailures(
+  classes: FailureClass[]
+): Record<FailureClass, number> {
+  const summary: Record<FailureClass, number> = {
+    infrastructure: 0,
+    "plan-defective": 0,
+    "plan-impossible": 0,
+    "product-regression": 0,
+    unclassified: 0,
+  };
+  for (const item of classes) {
+    summary[item] += 1;
+  }
+  return summary;
+}

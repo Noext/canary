@@ -1082,9 +1082,16 @@ const STATE_ATTRIBUTES = new Set([
   "aria-invalid",
   "aria-pressed",
   "aria-selected",
-  "data-cash-state",
-  "data-state",
 ]);
+
+/**
+ * Un attribut `data-*` qui se termine par `state` porte un état, quel que soit
+ * le préfixe du dépôt (`data-state`, `data-order-state`, `data-cash-state`…) :
+ * la règle se déduit du nom, elle ne nomme aucune application. Un `data-*` qui
+ * ne finit pas par `state` reste un crochet stable, et une assertion qui le lit
+ * n'est jamais fautive par sa seule syntaxe.
+ */
+const STATE_ATTRIBUTE_NAME = /(^|-)state$/;
 
 /**
  * L'attribut fait-il partie de l'énumération fermée `STATE_ATTRIBUTES` ? C'est
@@ -1093,7 +1100,11 @@ const STATE_ATTRIBUTES = new Set([
  * jamais fautive par sa seule syntaxe.
  */
 function carriesStateValue(name: string): boolean {
-  return STATE_ATTRIBUTES.has(name.toLowerCase());
+  const lower = name.toLowerCase();
+  if (STATE_ATTRIBUTES.has(lower)) {
+    return true;
+  }
+  return lower.startsWith("data-") && STATE_ATTRIBUTE_NAME.test(lower);
 }
 
 /**
@@ -1241,7 +1252,7 @@ export function attributeValueRefusals(
       error: new QaError(
         "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
         `Scenario ${scenario.id} expects an attribute's value from a selector that renders text: ${offenders.join(" ; ")}`,
-        'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-cash-state="ouvert"] with kind "visible" (or kind "count" expecting 1) and keep verification "state" with afterStep set to the step that established it; "transition" fails whenever the state was already the expected one, because the baseline and the observed value are then identical. Reserve "transition" for a step that genuinely moves the value, such as closing a session that was open. To prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert state after that step.'
+        'kind "text" reads the visible text INSIDE the target and kind "value" the content of an input: an element carrying a data attribute is the container of the view, so neither returns the attribute value. To prove an attribute value, target it with presence, for instance [data-state="open"] with kind "visible" (or kind "count" expecting 1) and keep verification "state" with afterStep set to the step that established it; "transition" fails whenever the state was already the expected one, because the baseline and the observed value are then identical. Reserve "transition" for a step that genuinely moves the value, such as closing a session that was open. To prove the state the view displays, target the region and expect its visible text, for instance "Session en cours" or "Session clôturée : le comptage est verrouillé.". If the scenario needs an open session to start, establish it first with an observable step (click the "Réouvrir le comptage" button when the view offers it), then assert state after that step.'
       ),
     });
   }
@@ -1612,7 +1623,7 @@ export function stateTargetReadRefusals(
       error: new QaError(
         "PLAN_STATE_TARGET_READ_AS_TEXT",
         `Scenario ${scenario.id} reads an element selected by a state value as if it carried text: ${faults.map((fault) => fault.line).join(" ; ")}`,
-        `An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (measured: run 76f7b2a9 waited 5000 ms for [data-cash-state="cloture"] at innerText). Prove the state by presence instead — [data-cash-state="cloture"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-cash-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value. Visible target for this plan: ${visibleTargetAdvice(faults, evidence?.aria)}.`
+        `An element selected by a state VALUE exists only while that value holds, so reading it makes the read conditional on the state: when the scenario did not reach the state, the step fails on a timeout that names no text at all (a measured run waited 5000 ms for a pinned state value at innerText). Prove the state by presence instead — [data-state="closed"] with kind "visible", or kind "count" expecting 1 — and read the text the view displays on the selector that carries it whatever the state: [data-state], the container itself, with the exact text the view shows, or [role="status"] when the view exposes a status region, or the element that displays the text. Keep verification "state" with afterStep set to the step that established the state, and reserve "transition" for a step that genuinely moves the value. Visible target for this plan: ${visibleTargetAdvice(faults, evidence?.aria)}.`
       ),
     });
   }

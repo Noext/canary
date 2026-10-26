@@ -209,11 +209,6 @@ describe("rejeu des plans historiques contre la porte, sans modèle", () => {
   }
 });
 describe("les deux cas non refusés sont classés, et la preuve vient du run", () => {
-  /** Le matériel numéroté du diff de la PR : ce que la porte peut lire. */
-  const materialText = snapshot.files
-    .map((file) => file.patch ?? "")
-    .join("\n");
-
   it("790fde72 : la valeur ne bouge pas, et l'artefact le prouve", () => {
     // L'assertion visée est une `transition`, et son relevé montre la même
     // valeur avant et après l'étape, égale à l'attendu. Le classement
@@ -229,8 +224,12 @@ describe("les deux cas non refusés sont classés, et la preuve vient du run", (
     ) as { assertions?: { verification?: string; id?: string }[] } | undefined;
     const assertion = scenario?.assertions?.find(
       (item) => item.id === measured?.id
-    );
+    ) as { expected?: unknown; verification?: string } | undefined;
     expect(assertion?.verification).toBe("transition");
+    // La prémisse du classement : la valeur attendue est celle observée, donc
+    // « la valeur ne change pas » et « l'attendu est déjà là » sont vérifiés
+    // tous les deux par l'artefact, pas seulement le premier.
+    expect(String(assertion?.expected)).toBe("1");
     // Et la porte ne refuse pas : rien dans le diff ne prouve cet invariant.
     expect(verdictOf(cases["790fde72"] as HistoricalCase).refusals).toEqual([]);
   });
@@ -248,7 +247,21 @@ describe("les deux cas non refusés sont classés, et la preuve vient du run", (
     expect(locator).toBeDefined();
     const attribute = /\[([a-z-]+)[=\]]/i.exec(locator ?? "")?.[1];
     expect(attribute).toBe("data-cash-history-comment");
-    expect(materialText).toContain(attribute ?? "");
+    // L'attribut est écrit par la page, mais DANS UNE BRANCHE CONDITIONNELLE :
+    // l'élément n'existe que si l'historique est non vide, donc au moment où
+    // l'étape le vise il est absent. La seconde occurrence du corpus est une
+    // fiche de documentation, pas un rendu — c'est pourquoi chercher la chaîne
+    // n'importe où dans le matériel ne prouverait rien.
+    const rendered = snapshot.files
+      .filter((file) => file.filename.endsWith("page.tsx"))
+      .flatMap((file) => (file.patch ?? "").split("\n"))
+      .find((line) => line.includes(attribute ?? ""));
+    expect(rendered).toBeDefined();
+    expect(rendered).toContain("?");
+    const documented = snapshot.files
+      .filter((file) => file.filename.endsWith(".md"))
+      .some((file) => (file.patch ?? "").includes(attribute ?? ""));
+    expect(documented).toBe(true);
     expect(verdictOf(cases.afcc9846 as HistoricalCase).refusals).toEqual([]);
   });
 });

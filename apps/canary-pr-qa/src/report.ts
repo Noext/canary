@@ -2,7 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolvedTargetName } from "./canary.js";
 import type { Config } from "./config.js";
-import { type Diagnostic, redact } from "./diagnostics.js";
+import { classifyFailure, type Diagnostic, redact } from "./diagnostics.js";
 import type { RunResult } from "./schema.js";
 
 export async function writeJson(path: string, data: unknown) {
@@ -75,7 +75,8 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
     ...result.scenarios
       .filter((item) => item.error)
       .map(
-        (item) => `- ${clean(item.scenario.title)}: ${clean(item.error ?? "")}`
+        (item) =>
+          `- ${clean(item.scenario.title)}: ${clean(item.error ?? "")} — class: \`${classifyFailure({ code: item.diagnostic?.code })}\``
       ),
     ...satisfiedBefore,
     ...substitutions,
