@@ -2542,6 +2542,57 @@ export function contractBudgetRefusals(plan: Plan, config: Config): QaError[] {
     .filter((refusal): refusal is QaError => refusal !== undefined);
 }
 
+/**
+ * Les refus qui ne concernent QU'UN scénario, rendus séparément pour que le run
+ * puisse continuer (`QA_PER_SCENARIO_COVERAGE`).
+ */
+function scenarioCoverageRefusals(
+  plan: Plan,
+  context: PrContext,
+  policy: Policy,
+  config: Config
+): { error: QaError; scenarioId: string }[] {
+  const changed = new Set(context.files.map((file) => file.filename));
+  const found: { error: QaError; scenarioId: string }[] = [];
+  for (const scenario of plan.scenarios) {
+    const [undeclared] = undeclaredFiles(scenario);
+    if (undeclared !== undefined) {
+      found.push({
+        error: undeclaredRequirementSource(
+          scenario.id,
+          undeclared,
+          scenario.sourceFiles,
+          changed.has(undeclared)
+        ),
+        scenarioId: scenario.id,
+      });
+      continue;
+    }
+    const budget = contractBudgetRefusal(scenario, config);
+    if (budget) {
+      found.push({ error: budget, scenarioId: scenario.id });
+      continue;
+    }
+    const index = scenario.requirements.findIndex(
+      (requirement) => !requirementHasWitness(requirement, context)
+    );
+    const requirement = scenario.requirements[index];
+    if (requirement) {
+      found.push({
+        error: ungroundedRequirement(
+          scenario.id,
+          requirement,
+          context,
+          policy,
+          index + 1
+        ),
+        scenarioId: scenario.id,
+      });
+    }
+  }
+  return found;
+}
+
 export function validateCoverage(
   plan: Plan,
   context: PrContext,
@@ -2551,24 +2602,33 @@ export function validateCoverage(
   const covered = new Set<string>();
   const changed = new Set(context.files.map((file) => file.filename));
   validateProvider(policy, config);
-  const source = requirementSourceRefusal(plan, context);
+  // Politique par défaut : le refus tue le run. Avec le drapeau, ces trois
+  // défauts descendent au scénario (voir `scenarioCoverageRefusals`), et le
+  // scénario fautif est bloqué par le runner sans être joué.
+  const source = config.QA_PER_SCENARIO_COVERAGE
+    ? undefined
+    : requirementSourceRefusal(plan, context);
   if (source) {
     throw source;
   }
   for (const scenario of plan.scenarios) {
-    const budget = contractBudgetRefusal(scenario, config);
+    const budget = config.QA_PER_SCENARIO_COVERAGE
+      ? undefined
+      : contractBudgetRefusal(scenario, config);
     if (budget) {
       throw budget;
     }
-    for (const [index, requirement] of scenario.requirements.entries()) {
-      if (!requirementHasWitness(requirement, context)) {
-        throw ungroundedRequirement(
-          scenario.id,
-          requirement,
-          context,
-          policy,
-          index + 1
-        );
+    if (!config.QA_PER_SCENARIO_COVERAGE) {
+      for (const [index, requirement] of scenario.requirements.entries()) {
+        if (!requirementHasWitness(requirement, context)) {
+          throw ungroundedRequirement(
+            scenario.id,
+            requirement,
+            context,
+            policy,
+            index + 1
+          );
+        }
       }
     }
     coverWitnessedSourceFiles(covered, scenario, context);
@@ -3646,13 +3706,24 @@ function markerOrderFinding(
  * même marqueur.
  */
 export function planFindings(
-  plan: Pick<Plan, "scenarios">,
-  material: SourceLineMaterial[]
+  plan: Plan,
+  material: SourceLineMaterial[],
+  coverage?: { config: Config; context: PrContext; policy: Policy }
 ): {
+  coverageRefusals: { error: QaError; scenarioId: string }[];
   refusals: { error: QaError; scenarioId: string }[];
   unverified: UnverifiedPrecondition[];
 } {
   return {
+    coverageRefusals:
+      coverage === undefined || !coverage.config.QA_PER_SCENARIO_COVERAGE
+        ? []
+        : scenarioCoverageRefusals(
+            plan,
+            coverage.context,
+            coverage.policy,
+            coverage.config
+          ),
     refusals: markerOrderScenarioRefusals(plan, material),
     unverified: unverifiedPreconditions(plan, material),
   };

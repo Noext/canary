@@ -15,6 +15,7 @@ import {
   isDocumentationPath,
   numberedSourceLines,
   PolicySchema,
+  planFindings,
   quoteDivergence,
   quoteExcerpt,
   quoteHasWitness,
@@ -1417,6 +1418,45 @@ it("donne les libellés que le diff écrit, pour ne pas en inventer", () => {
     "Quantité · Billet de 500 €",
     "Montant attendu",
   ]);
+});
+
+it("un défaut d'un scénario coûte le scénario, pas le run, quand le drapeau est posé", () => {
+  const healthy = planWithWitnesses([
+    {
+      id: "sain",
+      sourceFiles: ["src/cash.ts"],
+      requirements: [{ sourceFile: "src/cash.ts", quote: REFLOWED_QUOTE }],
+    },
+  ]).scenarios[0]!;
+  const faulty = {
+    ...structuredClone(healthy),
+    id: "fautif",
+    requirements: [
+      {
+        behavior: "exigence non témoignée",
+        quote: "absent partout",
+        sourceFile: "src/cash.ts",
+      },
+    ],
+  };
+  const plan = PlanSchema.parse({
+    scenarios: [faulty, healthy],
+    skipped: [],
+    summary: "un fautif, un sain",
+  });
+  const perScenario = { ...config, QA_PER_SCENARIO_COVERAGE: true };
+  // Le refus ne tue plus le run : il est rendu par scénario.
+  const refusals = planFindings(plan, sourceLineMaterial(reflowedCashContext), {
+    config: perScenario,
+    context: reflowedCashContext,
+    policy: policyFor(),
+  }).coverageRefusals;
+  expect(refusals.map((item) => item.scenarioId)).toEqual(["fautif"]);
+  expect(refusals[0]?.error.code).toBe("REQUIREMENT_UNGROUNDED");
+  // Politique par défaut inchangée : le run est refusé.
+  expect(() =>
+    validateCoverage(plan, reflowedCashContext, policyFor(), config)
+  ).toThrow(/No source witness/i);
 });
 
 it("porte les vues observées dans le message du planificateur", () => {
