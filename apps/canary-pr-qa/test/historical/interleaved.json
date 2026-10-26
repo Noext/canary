@@ -1,0 +1,68 @@
+[
+  {
+    "batch": "JJ",
+    "build": "8143ac9",
+    "runs": 10,
+    "verts": 6,
+    "green": 75,
+    "product": 3,
+    "blocked": 3,
+    "tokens": 2590005,
+    "calls": 22
+  },
+  {
+    "batch": "KK",
+    "build": "922159d",
+    "runs": 10,
+    "verts": 1,
+    "green": 61,
+    "product": 0,
+    "blocked": 14,
+    "tokens": 4370933,
+    "calls": 32
+  },
+  {
+    "batch": "MM",
+    "build": "8f831ab",
+    "runs": 10,
+    "verts": 7,
+    "green": 93,
+    "product": 2,
+    "blocked": 3,
+    "tokens": 2804726,
+    "calls": 20
+  },
+  {
+    "batch": "NN",
+    "build": "8143ac9",
+    "runs": 10,
+    "verts": 6,
+    "green": 62,
+    "product": 1,
+    "blocked": 3,
+    "tokens": 2307186,
+    "calls": 18
+  },
+  {
+    "batch": "OO",
+    "build": "a683f86",
+    "runs": 9,
+    "verts": 4,
+    "green": 51,
+    "product": 0,
+    "blocked": 1,
+    "tokens": 1892214,
+    "calls": 14
+  },
+  {
+    "batch": "PP",
+    "build": "a683f86",
+    "runs": 10,
+    "verts": 7,
+    "green": 70,
+    "product": 0,
+    "blocked": 2,
+    "tokens": 2551153,
+    "calls": 20
+  }
+]

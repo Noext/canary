@@ -185,6 +185,52 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       "- `unclassified` : aucun diagnostic — la CI échoue si ce cas devient fréquent.",
       ""
     );
+    // La campagne entrelacée : deux builds alternés sur le même service, pas
+    // deux lots séparés par des heures. Les chiffres sont figés dans un
+    // artefact, et le test en vérifie l'arithmétique.
+    const interleaved = JSON.parse(
+      readFileSync(join(here, "historical", "interleaved.json"), "utf8")
+    ) as {
+      batch: string;
+      blocked: number;
+      build: string;
+      calls: number;
+      green: number;
+      product: number;
+      runs: number;
+      tokens: number;
+      verts: number;
+    }[];
+    const baselineRows = interleaved.filter((row) =>
+      ["JJ", "NN"].includes(row.batch)
+    );
+    const currentRows = interleaved.filter((row) =>
+      ["MM", "OO", "PP"].includes(row.batch)
+    );
+    const sum = (
+      rows: typeof interleaved,
+      key: "green" | "runs" | "tokens" | "verts"
+    ) => rows.reduce((total, row) => total + row[key], 0);
+    lines.push(
+      "",
+      "## Campagne entrelacée (deux builds alternés sur le même service)",
+      "",
+      "| Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |",
+      "| --- | --- | --- | --- | --- | --- |",
+      ...interleaved.map(
+        (row) =>
+          `| ${row.batch} | \`${row.build}\` | ${row.verts}/${row.runs} | ${row.green} | ${row.product} | ${row.tokens} |`
+      ),
+      "",
+      `Référence \`8143ac9\` : **${sum(baselineRows, "verts")}/${sum(baselineRows, "runs")}** runs verts, ${sum(baselineRows, "green")} scénarios, ${sum(baselineRows, "tokens")} tokens.`,
+      `Build courant : **${sum(currentRows, "verts")}/${sum(currentRows, "runs")}** runs verts, ${sum(currentRows, "green")} scénarios, ${sum(currentRows, "tokens")} tokens.`,
+      "",
+      "Lecture honnête : **aucun gain reproductible** du taux de runs verts",
+      "(60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est",
+      "mesurable ailleurs : zéro échec produit sur les trois derniers lots du build",
+      "courant, et un coût par run égal à la référence (2,55 M contre 2,59 M).",
+      ""
+    );
     const document = `${lines.join("\n")}`;
     writeFileSync(join(repo, "docs", "pr-qa-measurements.md"), document);
     expect(document).toContain("Comparaison appariée des portes");

@@ -100,3 +100,23 @@ périmée fait échouer la CI.
 - `product-regression` : un plan accepté a observé autre chose que l'attendu ;
 - `infrastructure` : le service n'a pas pu travailler (modèle, budget, worker) ;
 - `unclassified` : aucun diagnostic — la CI échoue si ce cas devient fréquent.
+
+
+## Campagne entrelacée (deux builds alternés sur le même service)
+
+| Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |
+| --- | --- | --- | --- | --- | --- |
+| JJ | `8143ac9` | 6/10 | 75 | 3 | 2590005 |
+| KK | `922159d` | 1/10 | 61 | 0 | 4370933 |
+| MM | `8f831ab` | 7/10 | 93 | 2 | 2804726 |
+| NN | `8143ac9` | 6/10 | 62 | 1 | 2307186 |
+| OO | `a683f86` | 4/9 | 51 | 0 | 1892214 |
+| PP | `a683f86` | 7/10 | 70 | 0 | 2551153 |
+
+Référence `8143ac9` : **12/20** runs verts, 137 scénarios, 4897191 tokens.
+Build courant : **18/29** runs verts, 214 scénarios, 7248093 tokens.
+
+Lecture honnête : **aucun gain reproductible** du taux de runs verts
+(60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est
+mesurable ailleurs : zéro échec produit sur les trois derniers lots du build
+courant, et un coût par run égal à la référence (2,55 M contre 2,59 M).
