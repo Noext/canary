@@ -15,13 +15,27 @@ stockés pour les comptes de scénarios. Recalculée par `test/campaign-runs.tes
 | `QA_ERROR` | 7 | CC, KK, LL, MM, NN, OO | 0 |
 | `TRANSITION_ON_INVARIANT` | 5 | BA, DD, QQ, RR | 3 |
 | `RUN_BUDGET_EXCEEDED` | 4 | FF, NN, TT | 0 |
-| `sans-diagnostic` | 4 | JJ, MM, TT | 1 |
+| `sans-diagnostic` | 4 | JJ, MM, TT | 0 |
 | `PLAN_CHANGED_FILE_UNCOVERED` | 2 | OO, PP | 0 |
 | `PLAN_STATE_TARGET_READ_AS_TEXT` | 1 | KK | 0 |
 | `HTTP_502` | 1 | OO | 0 |
 | `COVERAGE_WITNESS_MISSING` | 1 | QQ | 0 |
 | `PLAN_SCHEMA_INVALID` | 1 | TT | 0 |
 | `PLAN_SELECTOR_UNSTABLE` | 1 | UU | 0 |
+
+## Lots connus dont les identifiants ne sont plus disponibles
+
+Le lot **`BB`** (build `7a6050b`) a bien été mesuré — 10 runs, 7 verts, 92 scénarios
+verts, 5 378 250 tokens, chiffres conservés dans
+[`pr-qa-architecture.md`](pr-qa-architecture.md) — mais ses identifiants de run ne
+figurent dans aucun artefact versionné, et le service ne les liste plus (rétention).
+Il est donc **compté dans les taux agrégés** de l'architecture et **absent de la
+taxonomie par famille**, faute de code par run : ce n'est pas une exclusion, c'est une
+limite de traçabilité, écrite ici plutôt que comblée par une estimation.
+
+70 des 200 runs du corpus portent le build `0000000` : leur lignée de code n'est pas
+traçable non plus, et aucune conclusion par build ne les utilise — les agrégats par
+famille ne dépendent que du verdict et du diagnostic, jamais du hash.
 
 ## Répartition par catégorie (un run non vert compté une fois)
 
@@ -36,6 +50,6 @@ code n'est enregistré, bucket séparé et non fondu dans la planification.
 | découverte de l'interface | 26 |
 | infrastructure | 12 |
 | dépendance d'état | 11 |
-| sans diagnostic | 4 |
+| sans diagnostic (4 runs JJ/MM/TT, un échec produit chacun, aucun code) | 4 |
 
 Total des runs non verts : 80 sur 200.
