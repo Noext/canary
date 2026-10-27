@@ -23,7 +23,10 @@ const runs = JSON.parse(read("campaign-runs.json")) as {
   outcome: string;
   productFailures: number;
   run: string;
+  runDiagnostic?: string | null;
+  scenarioCodes?: string[];
   tokens: number;
+  unverifiedPreconditions?: number;
 }[];
 const batches = JSON.parse(read("interleaved.json")) as {
   batch: string;
