@@ -8,7 +8,8 @@
     "product": 3,
     "blocked": 3,
     "tokens": 2590005,
-    "calls": 22
+    "calls": 22,
+    "phase": "baseline"
   },
   {
     "batch": "KK",
@@ -19,7 +20,8 @@
     "product": 0,
     "blocked": 14,
     "tokens": 4370933,
-    "calls": 32
+    "calls": 32,
+    "phase": "lineage"
   },
   {
     "batch": "MM",
@@ -30,7 +32,8 @@
     "product": 2,
     "blocked": 3,
     "tokens": 2804726,
-    "calls": 20
+    "calls": 20,
+    "phase": "lineage"
   },
   {
     "batch": "NN",
@@ -41,7 +44,8 @@
     "product": 1,
     "blocked": 3,
     "tokens": 2307186,
-    "calls": 18
+    "calls": 18,
+    "phase": "baseline"
   },
   {
     "batch": "OO",
@@ -52,7 +56,8 @@
     "product": 0,
     "blocked": 1,
     "tokens": 1892214,
-    "calls": 14
+    "calls": 14,
+    "phase": "lineage"
   },
   {
     "batch": "PP",
@@ -63,7 +68,8 @@
     "product": 0,
     "blocked": 2,
     "tokens": 2551153,
-    "calls": 20
+    "calls": 20,
+    "phase": "lineage"
   },
   {
     "batch": "QQ",
@@ -74,7 +80,8 @@
     "product": 1,
     "blocked": 10,
     "tokens": 2746767,
-    "calls": 25
+    "calls": 25,
+    "phase": "lineage"
   },
   {
     "batch": "RR",
@@ -85,7 +92,8 @@
     "product": 1,
     "blocked": 6,
     "tokens": 3033696,
-    "calls": 24
+    "calls": 24,
+    "phase": "lineage"
   },
   {
     "batch": "SS",
@@ -96,6 +104,7 @@
     "product": 1,
     "blocked": 1,
     "tokens": 2921272,
-    "calls": 22
+    "calls": 22,
+    "phase": "current"
   }
 ]

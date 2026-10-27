@@ -121,11 +121,17 @@ lot défavorable n'est jamais retiré du calcul.
 | SS | `c5b3634` | 9/10 | 93 | 1 | 2921272 |
 
 Référence `8143ac9` (20 runs) : **60 %** de runs verts, 6.9 scénarios verts par run, 0.2 échec produit par run, 244859.6 tokens par run.
-Lignée courante (69 runs, tous lots confondus) : **55 %** de runs verts, 7.7 scénarios verts par run, 0.1 échec produit par run, 294503.8 tokens par run.
+Toute la lignée non-référence (69 runs, y compris les builds dont un défaut a été corrigé depuis) : **55 %** de runs verts, 7.7 scénarios verts par run, 0.1 échec produit par run, 294503.8 tokens par run.
 
-Conclusion mesurée : **le taux de runs entièrement verts n'est pas amélioré**
-(55 % contre 60 %), et le coût par run augmente de
-20 %. Ce qui progresse : les scénarios verts par run (7.7 contre 6.9) et les échecs produit par run (0.1 contre 0.2).
+Lignée historique seule (59 runs, builds antérieurs au build courant) : **49 %**.
+
+**Build courant seul** (10 runs du même commit) : **90 %** de runs verts, 9.3 scénarios verts par run, 0.1 échec produit par run, 292127.2 tokens par run.
+
+Les deux agrégats sont publiés parce qu'ils répondent à deux questions différentes :
+« la lignée a-t-elle progressé depuis la référence ? » (tous lots, y compris les
+régressions corrigées depuis) et « le code d'aujourd'hui fait-il mieux que la
+référence ? » (même commit). Le second n'a de sens que comparé à une campagne
+fraîche de la référence : c'est ce que la prochaine campagne mesure.
 
 Expériences isolées (un lot de chaque côté, jamais agrégées) :
 
