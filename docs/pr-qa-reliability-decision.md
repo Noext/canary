@@ -6,7 +6,12 @@ Document **écrit à la main** à partir des artefacts, puis **vérifié** par l
 run). `test/campaign-runs.test.ts` recalcule chaque agrégat depuis les runs et refuse un
 document dont une famille, une catégorie ou un taux cité diverge ; `test/historical-excerpts.test.ts`
 refuse une citation qui n'est pas un fragment littéral du message du run qu'elle nomme.
-Ce qui n'est **pas** vérifié mécaniquement est dit à l'endroit où cela compte.
+Ce qui n'est **pas** vérifié mécaniquement est dit à l'endroit où cela compte. En
+particulier, les extraits de `excerpts.json` ont été tirés des rapports de run le
+2026-10-27 avec le jeton du service ; le point d'artefacts répond **401** sans jeton, donc un
+relecteur ne peut pas les re-tirer lui-même. Ce qui est vérifiable depuis le dépôt : chaque
+extrait nomme son run, ce run est dans un artefact versionné, il porte le code cité, et la
+citation publiée est un fragment littéral du message stocké.
 
 Le corpus couvre **les 200 runs identifiés** des lots BA→UU, y compris les 19 artefacts que
 seul `plans.json.gz` portait (10 lot BA, 9 lot CC) : ils étaient absents du corpus de la
