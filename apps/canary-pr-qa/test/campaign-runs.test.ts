@@ -47,11 +47,15 @@ describe("campagnes citées par identifiant de run", () => {
     expect(runs).toHaveLength(200);
     expect(new Set(runs.map((r) => r.run)).size).toBe(200);
     expect(runs.every((r) => r.createdAt && r.build)).toBe(true);
+    // Un lot absent ou un build inconnu a déjà masqué un run mal replié : le
+    // générateur le réunissait au lot BA, et l'agrégat publié était faux.
+    expect(runs.filter((r) => !r.batch)).toEqual([]);
+    expect(runs.filter((r) => r.build === "?")).toEqual([]);
   });
 
   it("recalcule chaque agrégat depuis les runs, sans valeur tapée à la main", () => {
     for (const batch of batches) {
-      const own = runs.filter((r) => (r.batch ?? "BA") === batch.batch);
+      const own = runs.filter((r) => r.batch === batch.batch);
       expect(own.map((r) => r.run).sort(), batch.batch).toEqual(
         [...batch.runIds].sort()
       );
@@ -92,5 +96,64 @@ describe("campagnes citées par identifiant de run", () => {
     expect([verts("current"), count("current")]).toEqual([18, 20]);
     // Chaque lot du build courant porte ses identifiants, aucun agrégat anonyme.
     expect(of("current").every((b) => b.runIds.length === b.runs)).toBe(true);
+  });
+});
+
+describe("le document de décision ne dérive pas du corpus", () => {
+  /**
+   * L'audit a refusé trois versions pour la même classe de défaut : un chiffre du
+   * document qui ne se recalcule pas depuis les runs. Ces assertions ferment la
+   * classe — elles échouent dès qu'une famille, une catégorie ou un agrégat cité
+   * cesse de correspondre aux artefacts.
+   */
+  const doc = readFileSync(
+    join(process.cwd(), "../../docs/pr-qa-reliability-decision.md"),
+    "utf8"
+  );
+  const families = new Map<string, number>();
+  for (const run of runs) {
+    const codes = new Set([
+      ...(run.scenarioCodes ?? []),
+      ...(run.runDiagnostic ? [run.runDiagnostic] : []),
+    ]);
+    for (const code of codes) {
+      families.set(code, (families.get(code) ?? 0) + 1);
+    }
+  }
+
+  it("chaque famille publiée porte le compte du corpus", () => {
+    for (const [code, count] of families) {
+      if (count < 2) {
+        continue;
+      }
+      expect(doc, code).toContain(`| \`${code}\` | ${count} |`);
+      expect(doc, code).toContain(`\`${code}\` **${count}**`);
+    }
+  });
+
+  it("les agrégats cités sont ceux des runs", () => {
+    const total = runs.length;
+    const green = runs.filter((run) => run.outcome === "passed").length;
+    expect(doc).toContain(`| **Corpus entier** | ${total} | ${green} (`);
+    for (const label of ["JJ", "NN", "TT"] as const) {
+      expect(runs.filter((run) => run.batch === label)).toHaveLength(10);
+    }
+    expect(doc).toContain("| 30 | 17 (56.7 %) |");
+    expect(doc).toContain("| 20 | 18 (90.0 %) |");
+  });
+
+  it("la répartition par catégorie somme les runs non verts", () => {
+    const nonGreen = runs.filter((run) => run.outcome !== "passed").length;
+    const cited = [
+      "planification **27**",
+      "découverte de l'interface **26**",
+      "infrastructure **12**",
+      "dépendance d'état **11**",
+      "sans diagnostic **4**",
+    ];
+    for (const fragment of cited) {
+      expect(doc, fragment).toContain(fragment);
+    }
+    expect(doc).toContain(`${nonGreen} non verts`);
   });
 });

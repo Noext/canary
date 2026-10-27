@@ -1,7 +1,7 @@
 [
   {
-    "batch": null,
-    "build": "?",
+    "batch": "CC",
+    "build": "pre-8143ac9",
     "run": "500a02a9-f4ac-45b1-af9c-db04342303e0",
     "createdAt": "2026-10-25T20:23:35.943000+00:00",
     "outcome": "passed",

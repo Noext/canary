@@ -1,25 +1,24 @@
 [
   {
-    "batch": "BA",
-    "build": "?",
+    "batch": "CC",
+    "build": "pre-8143ac9",
     "phase": "lineage",
-    "runs": 11,
-    "verts": 8,
-    "green": 96,
-    "product": 2,
-    "tokens": 3370861,
+    "runs": 10,
+    "verts": 7,
+    "green": 63,
+    "product": 0,
+    "tokens": 3784344,
     "runIds": [
       "500a02a9-f4ac-45b1-af9c-db04342303e0",
-      "0ce50724-7dbb-43dd-b14b-cacebbfb1851",
-      "f83f0762-a58e-4839-9699-a7656c93341c",
-      "0675aba9-a69a-4b86-a71f-eefb366c6a07",
-      "afcc9846-ec93-4cde-8ecf-77c01d433c82",
-      "24db19b8-fc22-4cfb-9b6c-44caaedcc3fb",
-      "d830e035-3a85-4cbb-86f7-989c3362c228",
-      "ec6445c9-b8a1-4c78-853a-0c98c46fe4d5",
-      "94673c0a-baff-466f-9d33-4cfd71348313",
-      "8bc0711c-1d9f-4dc6-9d5f-f8da0bf1c58c",
-      "dc7e9356-10e8-490e-a0e1-b1ee82948286"
+      "7db8c556-7dad-4e71-91a3-516ffed7d9c2",
+      "cb1a3dab-1c06-42dd-8516-be8f4240385d",
+      "ddd8a0a0-d246-41ba-8bce-68eed555f3b5",
+      "450099db-a721-4282-9edb-6812387eb395",
+      "50dae25e-5f7d-48e4-bfd5-c735f8f9c93f",
+      "1193dcf5-e685-4104-b858-da310dd8f9a2",
+      "c1d77bba-ab71-4d70-a425-4e1474b847ac",
+      "56ae5df7-57a1-4bb8-8fe4-e05514c503da",
+      "0637d181-5a87-4981-85a8-4e599a801c8f"
     ]
   },
   {
@@ -419,24 +418,25 @@
     ]
   },
   {
-    "batch": "CC",
+    "batch": "BA",
     "build": "pre-8143ac9",
     "phase": "lineage",
-    "runs": 9,
-    "verts": 6,
-    "green": 54,
-    "product": 0,
-    "tokens": 3224287,
+    "runs": 10,
+    "verts": 7,
+    "green": 87,
+    "product": 2,
+    "tokens": 2810804,
     "runIds": [
-      "7db8c556-7dad-4e71-91a3-516ffed7d9c2",
-      "cb1a3dab-1c06-42dd-8516-be8f4240385d",
-      "ddd8a0a0-d246-41ba-8bce-68eed555f3b5",
-      "450099db-a721-4282-9edb-6812387eb395",
-      "50dae25e-5f7d-48e4-bfd5-c735f8f9c93f",
-      "1193dcf5-e685-4104-b858-da310dd8f9a2",
-      "c1d77bba-ab71-4d70-a425-4e1474b847ac",
-      "56ae5df7-57a1-4bb8-8fe4-e05514c503da",
-      "0637d181-5a87-4981-85a8-4e599a801c8f"
+      "0ce50724-7dbb-43dd-b14b-cacebbfb1851",
+      "f83f0762-a58e-4839-9699-a7656c93341c",
+      "0675aba9-a69a-4b86-a71f-eefb366c6a07",
+      "afcc9846-ec93-4cde-8ecf-77c01d433c82",
+      "24db19b8-fc22-4cfb-9b6c-44caaedcc3fb",
+      "d830e035-3a85-4cbb-86f7-989c3362c228",
+      "ec6445c9-b8a1-4c78-853a-0c98c46fe4d5",
+      "94673c0a-baff-466f-9d33-4cfd71348313",
+      "8bc0711c-1d9f-4dc6-9d5f-f8da0bf1c58c",
+      "dc7e9356-10e8-490e-a0e1-b1ee82948286"
     ]
   }
 ]

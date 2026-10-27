@@ -221,6 +221,18 @@ const envSchema = z.object({
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)
     .transform((value) => value === true || value === "true"),
+  /**
+   * Prévenir plutôt que refuser : un défaut d'ordre de marqueur rend l'assertion
+   * impossible, et le planificateur sait le corriger quand on le lui dit — il
+   * reçoit aujourd'hui ce refus seulement APRÈS la planification, quand le
+   * scénario coûte déjà un échec. Posé, le défaut entre dans la correction du
+   * plan candidat : le plan incorrect n'est pas produit, au lieu d'être refusé
+   * à l'exécution. Le refus de lecture reste le dernier filet.
+   */
+  QA_PREVENT_MARKER_ORDER: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .default(true)
+    .transform((value) => value === true || value === "true"),
   QA_PLAN_FILE_CHARS: z.coerce.number().int().min(0).max(1_000_000).default(0),
   QA_CONTEXT_CHARS: z.coerce
     .number()
