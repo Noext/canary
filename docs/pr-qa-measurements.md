@@ -110,7 +110,7 @@ lot défavorable n'est jamais retiré du calcul.
 
 | Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |
 | --- | --- | --- | --- | --- | --- |
-| BA | `?` | 1/1 | 9 | 0 | 560057 |
+| BA | `?` | 8/11 | 96 | 2 | 3370861 |
 | DD | `0000000` | 5/10 | 71 | 1 | 3414409 |
 | EE | `0000000` | 6/10 | 84 | 0 | 4326987 |
 | FF | `0000000` | 8/10 | 74 | 0 | 4291666 |
@@ -129,11 +129,12 @@ lot défavorable n'est jamais retiré du calcul.
 | SS | `c5b3634` | 9/10 | 93 | 1 | 2921272 |
 | TT | `8143ac9` | 4/10 | 72 | 4 | 3060539 |
 | UU | `f8a6959` | 9/10 | 88 | 0 | 2843491 |
+| CC | `pre-8143ac9` | 6/9 | 54 | 0 | 3224287 |
 
 Référence `8143ac9` (30 runs) : **57 %** de runs verts, 7.4 scénarios verts par run, 0.3 échec produit par run, 288456.1 tokens par run.
-Toute la lignée non-référence (151 runs, y compris les builds dont un défaut a été corrigé depuis) : **60 %** de runs verts, 7.8 scénarios verts par run, 0.1 échec produit par run, 323848.3 tokens par run.
+Toute la lignée non-référence (170 runs, y compris les builds dont un défaut a été corrigé depuis) : **61 %** de runs verts, 7.7 scénarios verts par run, 0.1 échec produit par run, 323154 tokens par run.
 
-Lignée historique seule (131 runs, builds antérieurs au build courant) : **55 %**.
+Lignée historique seule (150 runs, builds antérieurs au build courant) : **57 %**.
 
 **Build courant seul** (20 runs du même commit) : **90 %** de runs verts, 9.1 scénarios verts par run, 0.1 échec produit par run, 288238.2 tokens par run.
 
