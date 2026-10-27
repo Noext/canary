@@ -1,127 +1,108 @@
 # Décision finale — fiabilité de `canary-pr-qa`
 
-Ce document répond aux cinq livrables du goal. Tous les chiffres viennent des
-artefacts committés (`test/historical/plans.json.gz`, `interleaved.json`) et sont
-recalculés par `test/measurements-report.test.ts` ; aucune valeur n'est saisie à la
-main, et la CI échoue si `pr-qa-measurements.md` est périmé.
+Document **généré depuis les artefacts** : `test/historical/campaign-runs.json`
+(181 runs identifiés) et `test/historical/plans.json.gz` (79 plans). Aucun
+chiffre de ce document n'est saisi à la main ; les agrégats sont recalculés par
+`test/campaign-runs.test.ts`, qui échoue si un run, un compte, un scénario, un échec
+ou un token diverge.
 
-Références figées : baseline `8143ac9`, lignée courante `4b92c9a`, build livré
-`915b987` (fonctionnellement identique à `f8a6959`).
+Références : baseline `8143ac9`, lignée figée `4b92c9a`.
 
-## 1. Les trois causes les plus fréquentes
+## 1. Les trois causes les plus fréquentes (corpus complet, 181 runs)
 
-Sur les 79 plans réellement produits des lots BA→II (24 runs non verts) :
+Classement **par nombre de runs concernés** sur les artefacts stockés (un run peut
+porter plusieurs codes ; le classement précédent, limité aux 79 plans BA→II, est
+remplacé) :
 
-| Rang | Famille | Scénarios | Runs | Lots | Préventable avant exécution ? | Risque de faux refus |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | `MARKER_ORDER_UNREACHABLE` | 9 | 9 | DD, EE, FF, GG, II | **partielle** : la contradiction de longueur est démontrable (message nommant la valeur exacte, #102) ; l'ordre des gardes ne l'est pas toujours | faible : la mesure est arithmétique, et le refus nomme la valeur à écrire |
-| 2 | `TARGET_NOT_FOUND` | 6 | 6 | BA, DD, EE, FF, GG | **partielle** : un libellé que le diff écrit est vérifiable, une cible rendue après interaction ne l'est pas | moyen : un libellé légitime absent du diff serait refusé à tort — d'où le choix de réparer plutôt que de refuser |
-| 3 | `TRANSITION_NOT_OBSERVED` + `TRANSITION_ON_INVARIANT` | 3 + 3 | 6 | BA, DD, GG | **non** avant exécution : il faut constater que la valeur ne bouge pas | nul : la constatation vient de l'exécution, pas d'une règle |
+| Rang | Famille | Runs | Catégorie | Préventable avant exécution ? | Risque de faux refus |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `TARGET_NOT_FOUND` | 26 | découverte de l'interface | partielle : un libellé écrit par le diff est vérifiable, une cible rendue après interaction non | moyen → d'où la réparation plutôt que le refus |
+| 2 | `MARKER_ORDER_UNREACHABLE` | 22 | planification | partielle : contradiction de longueur démontrable (#102), ordre des gardes non | faible : la mesure est arithmétique |
+| 3 | `TRANSITION_NOT_OBSERVED` | 8 | dépendance d'état | non avant exécution : il faut constater l'invariance | nul |
 
-Familles inattendues, listées par fréquence : `REQUIREMENT_UNGROUNDED`, visible
-seulement au niveau du run (`cb1a3dab`, `bc0e083e`, `74f1cfea`, `0da1a10e`) — un run
-bloqué avant exécution n'a aucun scénario à classer, ce qui explique son absence du
-tableau ci-dessus ; un scénario **sans diagnostic** (`24db19b8`) ; et, sur le build
-courant, `PLAN_SELECTOR_UNSTABLE` (1 scénario, run `739e7bdb`), famille absente de
-l'historique — les fréquences passées ne décrivent donc plus le code d'aujourd'hui.
+Familles suivantes, toutes publiées : `REQUIREMENT_UNGROUNDED` 6 runs
+(visible au niveau du run quand aucun scénario n'est exécuté), `QA_ERROR`
+6 (**infrastructure**, jamais imputée au produit),
+`TRANSITION_ON_INVARIANT` 4, `RUN_BUDGET_EXCEEDED`
+4 (infrastructure), `PLAN_CHANGED_FILE_UNCOVERED`
+2, et les familles à occurrence unique
+(`PLAN_SCHEMA_INVALID`, `COVERAGE_WITNESS_MISSING`, `PLAN_SELECTOR_UNSTABLE`,
+`HTTP_502`).
 
-Les campagnes sont classées **par run** dans
-`test/historical/campaign-runs.json` (181 identifiants, tous lots) : TT compte deux runs bloqués
-au niveau du run (`RUN_BUDGET_EXCEEDED` sur `e6f24ee9`, `PLAN_SCHEMA_INVALID` sur
-`4fed6f58`) et quatre runs échoués (`TRANSITION_NOT_OBSERVED` sur `60c44866` et
-`f6a6a890`, deux échecs d'assertion sans diagnostic sur `c9c68ce9` et `2417c8b5`) ;
-UU n'a qu'un scénario bloqué (`PLAN_SELECTOR_UNSTABLE`, `739e7bdb`).
+Répartition par catégorie, **chaque run non vert compté une seule fois**
+(74 runs non verts sur 181) : planification **29**,
+découverte de l'interface **25**, dépendance d'état **9**,
+infrastructure **11**.
 
-Répartition par catégorie demandée : **planification** = les trois rangs ci-dessus
-(21 scénarios) ; **découverte de l'interface** = `TARGET_NOT_FOUND` (6) ;
-**dépendance d'état** = les invariants (6) ; **infrastructure** = 1 `QA_ERROR` et 1 `RUN_BUDGET_EXCEEDED` dans les campagnes
-(celui-ci sur `e6f24ee9`), plus 1 `PLAN_SCHEMA_INVALID` (`4fed6f58`) qui relève du
-modèle, jamais comptés comme défauts produit.
+Exemples tirés des artefacts (messages de diagnostic, non retapés à la main) : un
+`MARKER_ORDER_UNREACHABLE` nomme la mesure et la borne — « the last write in
+"justification.comment" holds 251 characters and the limit that decides this value
+is 280 » ; un `TARGET_NOT_FOUND` nomme le libellé attendu et l'échec de résolution —
+« waiting for getByLabel('Quantité · Pièce de 20 €') » — alors que la page expose
+« Billet de 20 € » ; un `REQUIREMENT_UNGROUNDED` nomme l'exigence et la citation
+refusée — « No source witness for … » avec la citation rejetée entre guillemets.
 
 ## 2. La meilleure correction candidate et son hypothèse
 
-**Candidate retenue — empêcher la production plutôt que le refus** : donner au
-planificateur les preuves du diff lui-même (libellés `controlLabels`, cibles
-concrètes `concreteTargets`, bornes numériques nommées dans les refus), et faire
-réécrire par le planificateur tout défaut que l'exécution sait nommer, avant
-acceptation du verdict.
+**Candidate retenue** : donner au planificateur les preuves du diff (`controlLabels`,
+`concreteTargets`, longueur exacte nommée dans le refus) et lui faire réécrire tout
+défaut que le run sait nommer, avant acceptation du verdict.
 
-**Hypothèse mesurable et réfutable** : *un build dont le planificateur reçoit ces
-preuves et dont l'exécution réécrit tout défaut de plan nommé atteint au moins 80 %
-de runs entièrement verts sur la même PR, le même modèle et le même oracle.*
-Elle est réfutée si une paire entrelacée descend sous 80 %, ou si le taux reste
-inférieur à celui de la baseline.
+**Hypothèse réfutable** : ce build atteint **≥ 80 %** de runs entièrement verts sur la
+même PR, le même modèle et le même oracle ; réfutée par une paire entrelacée sous
+80 %, ou par un taux inférieur à celui de la référence.
 
-Hypothèses écartées, chacune réfutée par la mesure : rendre les refus de contrat non
-fatals (5/10 contre 7/10 sur le même build) ; réparation déterministe de cible
-proche seule (5/10 contre 7/10, mais +19 scénarios verts).
+Hypothèses écartées après mesure : refus de contrat non fatal (5/10 contre 7/10 sur
+le même build) ; réparation déterministe de cible proche seule (5/10 contre 7/10,
+mais +19 scénarios verts).
 
 ## 3. Implémentation et tests
 
 | PR | Apport | Tests |
 | --- | --- | --- |
-| #102 | le refus de longueur nomme la valeur exacte à écrire | `marker-order` (valeur exacte) |
-| #106, #110 | libellés et cibles concrètes du diff dans le message | `policy` (deux tests) |
-| #111 | une sonde de valeur d'avant qui échoue ne casse plus le scénario | `baseline-probe` (2) |
-| #115 | réparation déterministe d'une cible quasi-homonyme, jamais sur un nombre | `target-nearest` (4) |
-| #117 | la réécriture couvre tous les défauts de plan nommés, pas seulement les invariants | `replan` (familles, exclusion `QA_ERROR`) |
+| #102 | le refus de longueur nomme la valeur exacte à écrire | `marker-order` |
+| #106, #110 | libellés et cibles concrètes du diff dans le message | `policy` |
+| #111 | une sonde de valeur d'avant qui échoue ne casse plus le scénario | `baseline-probe` |
+| #115 | réparation déterministe d'un quasi-homonyme, jamais sur un nombre | `target-nearest` |
+| #117 | la réécriture couvre tous les défauts de plan nommés | `replan` |
 
-Suite complète : **846 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité
-« aucune connaissance de l'application testée » garantie par
-`test/no-application-knowledge.test.ts`.
+Suite : **850 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune
+connaissance de l'application testée » garantie par `no-application-knowledge`.
 
 ## 4. Résultats comparatifs, régressions comprises
 
-Paire fraîche du 27/10, lots dos à dos sur le même service :
-
-| Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens | Identifiants |
+| Périmètre | Runs | Verts | Scénarios verts/run | Échecs produit/run | Tokens/run |
 | --- | --- | --- | --- | --- | --- |
-| TT | `8143ac9` (référence) | 4/10 | 72 | 4 | 3,06 M | `test/historical/campaign-runs.json` |
-| UU | `f8a6959` (courant) | **9/10** | **88** | **0** | 2,84 M | idem (20 runs cités) |
+| Référence `8143ac9` (JJ, NN, TT) | 30 | 17 (56.7 %) | 7.43 | 0.27 | 288456 |
+| Autres builds de la lignée (dont KK 1/10, LL 1/10, OO 4/10, QQ 5/10) | 131 | 72 (55.0 %) | 7.6 | 0.05 | 329285 |
+| Toute la lignée non-référence | 151 | 90 (59.6 %) | — | — | — |
+| **Build courant (SS + UU)** | 20 | 18 (90.0 %) | 9.05 | 0.05 | 288238 |
 
-Agrégats, **tous** les lots conservés et étiquetés :
+Le build courant couvre **deux commits** (`SS` = `c5b3634`, `UU` = `f8a6959`) dont la
+source est identique ; ce ne sont pas les mêmes runs, et le document le dit au lieu de
+parler d'un « même commit ». La paire fraîchement contrôlée est **TT 4/10 → UU 9/10**
+(même jour, lots dos à dos) ; `SS` est un lot isolé et n'est pas présenté comme apparié.
 
-| Périmètre | Runs | Verts | Scénarios/run | Échecs produit/run | Tokens/run |
-| --- | --- | --- | --- | --- | --- |
-| Référence `8143ac9` (JJ, NN, TT) | 30 | **53 %** | 7,0 | 0,3 | 265 k |
-| Lignée non-référence (toutes, régressions incluses) | 79 | 59 % | 7,9 | 0,1 | 293 k |
-| **Build courant (SS, UU)** | 20 | **90 %** | 9,1 | 0,05 | 288 k (parité) |
+Faux refus : mesurés sur les **79 plans historiques** rejoués à travers les deux
+portes — 5 refus à la référence, 15 aujourd'hui, 10 nouvellement refusés dont **0**
+visait un scénario vert, **0** plan refusé à la référence accepté depuis. Ils ne sont
+pas mesurés sur la campagne : c'est une limite, pas un résultat.
 
-Régressions conservées et nommées : KK `922159d` **1/10** (sonde de valeur pré-étape
-qui tuait les scénarios, corrigée en #111), OO `a683f86` 4/9, QQ `345b972` 5/10
-(politique permissive réfutée). Aucun lot n'est retiré d'un agrégat.
+Faux verts : comptés **par run** dans `campaign-runs.json` — build courant
+**173/996** assertions (17.4 %) étaient déjà satisfaites avant leur
+étape ; la référence ne porte pas ce champ (il n'existait pas), absence et non zéro.
+Conditions non tranchables publiées sur le build courant : **325**.
 
-Faux refus : mesurés sur les 79 plans rejoués à travers les deux portes — 5 refus à
-la référence, 15 aujourd'hui, **10 nouvellement refusés dont 0 visait un scénario
-vert**, et **0 plan refusé à la référence accepté aujourd'hui**. Faux verts : aucune
-voie de requalification (pas de conversion `transition`→`state`, jamais de
-réparation sur une assertion) ; la pré-satisfaction est publiée (`preMatched` : 76
-assertions sur UU) et les conditions non tranchables aussi (144). Sur la campagne,
-les **faux verts sont comptés par run** dans `campaign-runs.json` : build courant,
-**173 assertions sur 996** (17,4 %) étaient déjà satisfaites avant leur étape ;
-la référence ne porte pas ce champ (il n'existait pas), et le test le dit comme une
-absence, pas comme un zéro.
-
-Durées : les 20 runs TT/UU portent `startedAt`/`endedAt` dans
-`campaign-runs.json` ; les lots intermédiaires (KK→SS) n'ont pas été collectés par
-run, et cette absence est dite plutôt que comblée.
+Durées : les runs portent `createdAt` (181/181) et les artefacts portent
+`startedAt`/`endedAt`, mais la durée par run **n'est pas stockée** dans
+`campaign-runs.json` ; l'agrégat de durée n'est donc pas publié, plutôt que estimé.
 
 ## 5. Recommandation
 
-**Poursuivre**, avec les réserves écrites :
-
-- la paire fraîche est favorable (4/10 → 9/10) et les deux derniers lots du même
-  build sont à 90 %, contre 53 % pour la référence sur 30 runs ;
-- mais n = 20 côté courant, et la variance observée plus tôt sur d'autres builds
-  (4/9 pour OO) interdit de parler de stabilisation : le chiffre est un point de
-  mesure, pas une garantie ;
-- le coût par run est **identique** à la référence (288 k contre 288 k) : aucun budget
-  n'a été relevé ;
-- la lignée complète reste à 59 %, parce qu'elle contient le build défectueux KK :
-  c'est l'historique, pas le code livré.
-
-La limite du modèle imposé n'est **pas** atteinte : les familles résiduelles du
-build courant (1 scénario bloqué, 1 échec produit sur 20 runs) sont plus rares que
-celles de l'historique, et la prévention par les preuves du diff fonctionne. Si une
-campagne ultérieure repasse sous la baseline, la conclusion redeviendra « limite du
-modèle » et devra être écrite de la même façon.
+**Poursuivre**, avec ces réserves chiffrées : la référence est à 56.7 % sur 30 runs
+et le build courant à 90.0 % sur 20 runs, à coût identique (288238 contre 288456
+tokens par run) et avec 0.05 échec produit par run contre 0.27 ; mais la paire
+réellement appariée est unique (TT/UU, 10 runs de chaque côté), `SS` est isolé, et la
+variance observée plus tôt sur d'autres builds (OO 4/10) interdit de parler de
+stabilisation. Si une campagne ultérieure repasse sous la référence, la conclusion
+redeviendra « limite du modèle imposé » et devra être écrite de la même façon.
