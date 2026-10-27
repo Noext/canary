@@ -114,15 +114,15 @@ périmée fait échouer la CI.
 | PP | `a683f86` | 7/10 | 70 | 0 | 2551153 |
 | QQ | `345b972` | 5/10 | 77 | 1 | 2746767 |
 | RR | `9d563e0` | 5/10 | 89 | 1 | 3033696 |
+| SS | `c5b3634` | 9/10 | 93 | 1 | 2921272 |
 
 Référence `8143ac9` : **12/20** runs verts, 137 scénarios, 4897191 tokens.
-Build courant : **18/29** runs verts, 214 scénarios, 7248093 tokens.
+Build courant : **32/49** runs verts, 396 scénarios, 13203061 tokens.
 
 Politique par scénario (QQ, drapeau `QA_PER_SCENARIO_COVERAGE`) : **5/10** runs verts et 77 scénarios — contre 7/10 et 70 avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.
 
+Réécriture élargie à tous les défauts de plan nommés par le run (SS) : **9/10** runs verts et 93 scénarios, un seul défaut résiduel — le meilleur lot de la campagne.
+
 Réparation d'une cible proche (RR) : **5/10** runs verts et 89 scénarios — contre 7/10 et 70 avant (PP). Les cibles introuvables baissent (2 contre 5), les scénarios verts montent (+19), mais les runs verts baissent et le coût monte : la réparation débloque des étapes sans rendre les plans justes.
 
-Lecture honnête : **aucun gain reproductible** du taux de runs verts
-(60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est
-mesurable ailleurs : zéro échec produit sur les trois derniers lots du build
-courant, et un coût par run égal à la référence (2,55 M contre 2,59 M).
+Lecture honnête : **65 % de runs verts** contre 60 % pour la référence — cinq lots contre deux, écarts qui se recouvrent encore. Le gain qui ne se discute pas est ailleurs : 8.1 scénarios verts par run contre 6.9, et les échecs produit tombent de 0,20 à 0,10 par run.

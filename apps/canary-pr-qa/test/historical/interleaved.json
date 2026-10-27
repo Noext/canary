@@ -86,5 +86,16 @@
     "blocked": 6,
     "tokens": 3033696,
     "calls": 24
+  },
+  {
+    "batch": "SS",
+    "build": "c5b3634",
+    "runs": 10,
+    "verts": 9,
+    "green": 93,
+    "product": 1,
+    "blocked": 1,
+    "tokens": 2921272,
+    "calls": 22
   }
 ]

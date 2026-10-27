@@ -205,7 +205,7 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       ["JJ", "NN"].includes(row.batch)
     );
     const currentRows = interleaved.filter((row) =>
-      ["MM", "OO", "PP"].includes(row.batch)
+      ["MM", "OO", "PP", "RR", "SS"].includes(row.batch)
     );
     // QQ teste la politique « un défaut de contrat coûte le scénario » : elle est
     // pire que la politique fatale sur ce corpus, et le document le dit.
@@ -234,12 +234,20 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       "",
       `Politique par scénario (QQ, drapeau \`QA_PER_SCENARIO_COVERAGE\`) : **${sum(perScenario, "verts")}/${sum(perScenario, "runs")}** runs verts et ${sum(perScenario, "green")} scénarios — contre ${sum(fatal, "verts")}/${sum(fatal, "runs")} et ${sum(fatal, "green")} avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.`,
       "",
+      `Réécriture élargie à tous les défauts de plan nommés par le run (SS) : **${sum(
+        interleaved.filter((row) => row.batch === "SS"),
+        "verts"
+      )}/${sum(
+        interleaved.filter((row) => row.batch === "SS"),
+        "runs"
+      )}** runs verts et ${sum(
+        interleaved.filter((row) => row.batch === "SS"),
+        "green"
+      )} scénarios, un seul défaut résiduel — le meilleur lot de la campagne.`,
+      "",
       `Réparation d'une cible proche (RR) : **${sum(nearMiss, "verts")}/${sum(nearMiss, "runs")}** runs verts et ${sum(nearMiss, "green")} scénarios — contre ${sum(beforeNearMiss, "verts")}/${sum(beforeNearMiss, "runs")} et ${sum(beforeNearMiss, "green")} avant (PP). Les cibles introuvables baissent (2 contre 5), les scénarios verts montent (+19), mais les runs verts baissent et le coût monte : la réparation débloque des étapes sans rendre les plans justes.`,
       "",
-      "Lecture honnête : **aucun gain reproductible** du taux de runs verts",
-      "(60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est",
-      "mesurable ailleurs : zéro échec produit sur les trois derniers lots du build",
-      "courant, et un coût par run égal à la référence (2,55 M contre 2,59 M).",
+      `Lecture honnête : **${Math.round((sum(currentRows, "verts") / sum(currentRows, "runs")) * 100)} % de runs verts** contre ${Math.round((sum(baselineRows, "verts") / sum(baselineRows, "runs")) * 100)} % pour la référence — cinq lots contre deux, écarts qui se recouvrent encore. Le gain qui ne se discute pas est ailleurs : ${Math.round((sum(currentRows, "green") / sum(currentRows, "runs")) * 10) / 10} scénarios verts par run contre ${Math.round((sum(baselineRows, "green") / sum(baselineRows, "runs")) * 10) / 10}, et les échecs produit tombent de 0,20 à 0,10 par run.`,
       ""
     );
     const document = `${lines.join("\n")}`;
