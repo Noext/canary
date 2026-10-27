@@ -279,6 +279,11 @@ describe.sequential("QuickJS sandbox file I/O", () => {
     cleanupPaths.add(symlinkPath);
     cleanupPaths.add(targetPath);
 
+    // Le répertoire contrôlé survit à un run interrompu : un lien laissé par une
+    // exécution précédente faisait échouer `symlink` en EEXIST, et la CI tombait
+    // sur cet état résiduel plutôt que sur le comportement testé. On repart d'un
+    // état propre sans changer ce que le test vérifie.
+    await rm(symlinkPath, { force: true });
     await writeFileFs(targetPath, "outside", "utf8");
     await symlink(targetPath, symlinkPath);
 
