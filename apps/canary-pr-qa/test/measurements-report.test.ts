@@ -194,6 +194,7 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       batch: string;
       blocked: number;
       build: string;
+      phase?: string;
       calls: number;
       green: number;
       product: number;
@@ -206,8 +207,12 @@ describe("le document de mesures est généré, et ses classes viennent du code"
     // Le générateur précédent énumérait les lots retenus à la main et laissait
     // tomber KK (1/10) : c'est exactement la lecture opportuniste que l'objectif
     // interdit, et elle a été corrigée ici.
-    const baselineRows = interleaved.filter((row) => row.build === "8143ac9");
-    const currentRows = interleaved.filter((row) => row.build !== "8143ac9");
+    const baselineRows = interleaved.filter((row) => row.phase === "baseline");
+    const lineageRows = interleaved.filter((row) => row.phase === "lineage");
+    const currentRows = interleaved.filter((row) => row.phase === "current");
+    const nonBaselineRows = interleaved.filter(
+      (row) => row.phase !== "baseline"
+    );
     const sum = (
       rows: typeof interleaved,
       key: "green" | "product" | "runs" | "tokens" | "verts"
@@ -235,11 +240,17 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       ),
       "",
       `Référence \`8143ac9\` (${sum(baselineRows, "runs")} runs) : **${percent(baselineRows)} %** de runs verts, ${perRun(baselineRows, "green")} scénarios verts par run, ${perRun(baselineRows, "product")} échec produit par run, ${perRun(baselineRows, "tokens")} tokens par run.`,
-      `Lignée courante (${sum(currentRows, "runs")} runs, tous lots confondus) : **${percent(currentRows)} %** de runs verts, ${perRun(currentRows, "green")} scénarios verts par run, ${perRun(currentRows, "product")} échec produit par run, ${perRun(currentRows, "tokens")} tokens par run.`,
+      `Toute la lignée non-référence (${sum(nonBaselineRows, "runs")} runs, y compris les builds dont un défaut a été corrigé depuis) : **${percent(nonBaselineRows)} %** de runs verts, ${perRun(nonBaselineRows, "green")} scénarios verts par run, ${perRun(nonBaselineRows, "product")} échec produit par run, ${perRun(nonBaselineRows, "tokens")} tokens par run.`,
       "",
-      "Conclusion mesurée : **le taux de runs entièrement verts n'est pas amélioré**",
-      `(${percent(currentRows)} % contre ${percent(baselineRows)} %), et le coût par run augmente de`,
-      `${Math.round((perRun(currentRows, "tokens") / perRun(baselineRows, "tokens") - 1) * 100)} %. Ce qui progresse : les scénarios verts par run (${perRun(currentRows, "green")} contre ${perRun(baselineRows, "green")}) et les échecs produit par run (${perRun(currentRows, "product")} contre ${perRun(baselineRows, "product")}).`,
+      `Lignée historique seule (${sum(lineageRows, "runs")} runs, builds antérieurs au build courant) : **${percent(lineageRows)} %**.`,
+      "",
+      `**Build courant seul** (${sum(currentRows, "runs")} runs du même commit) : **${percent(currentRows)} %** de runs verts, ${perRun(currentRows, "green")} scénarios verts par run, ${perRun(currentRows, "product")} échec produit par run, ${perRun(currentRows, "tokens")} tokens par run.`,
+      "",
+      "Les deux agrégats sont publiés parce qu'ils répondent à deux questions différentes :",
+      "« la lignée a-t-elle progressé depuis la référence ? » (tous lots, y compris les",
+      "régressions corrigées depuis) et « le code d'aujourd'hui fait-il mieux que la",
+      "référence ? » (même commit). Le second n'a de sens que comparé à une campagne",
+      "fraîche de la référence : c'est ce que la prochaine campagne mesure.",
       "",
       "Expériences isolées (un lot de chaque côté, jamais agrégées) :",
       "",
