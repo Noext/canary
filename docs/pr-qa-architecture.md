@@ -210,67 +210,18 @@ ne sont pas refusés à tort.
 | HH | `12176b7`, `QA_PLAN_FILE_CHARS=0` | non | **10/10** | 86 | 2 440 356 | 18 |
 | II | idem | non | 7/10 | 75 | 3 144 996 | 23 |
 
-**Le résultat le plus net du chantier** : retirer les fichiers entiers du message
-(`QA_PLAN_FILE_CHARS=0`) donne 17/20 runs verts (HH 10/10, II 7/10) à 2,79 M de
-tokens en moyenne, là où le même build avec 120 000 caractères de fichiers entiers
-donnait 12/20 (GG 5/10, FF 7/10) à 3,88 M. Moins de contexte, mieux lu, et 28 % de
-moins. Le défaut par défaut est donc passé à zéro : les fichiers entiers restent
-disponibles pour un dépôt où la jointure manque vraiment, mais ils ne sont plus
-payés sans preuve.
+Les campagnes de runs, leurs classes d'échec, leurs tokens et leurs durées vivent
+dans [`pr-qa-measurements.md`](pr-qa-measurements.md), **généré** par
+`test/measurements-report.test.ts` depuis les artefacts et comparé par la CI : une
+mesure périmée fait échouer la suite au lieu d'être réécrite en silence.
 
-Sur les vingt runs de la configuration finale : **17 verts**, 2 scénarios bloqués
-(tous deux `MARKER_ORDER_UNREACHABLE` : la saisie ne franchit pas la borne que
-l'assertion suppose), 153 préconditions publiées, contre 7/10 pour la référence
-`8143ac9`. Le classement des échecs n'est plus une prose : `src/failure-class.ts`
-le calcule (`plan-impossible`, `plan-defective`, `product-regression`,
-`infrastructure`, `unclassified`) et `docs/pr-qa-measurements.md`, généré par
-`test/measurements-report.test.ts`, applique cette règle run par run — c'est ce qui
-a requalifié les deux « échecs produit » du lot BA en `plan-impossible`, puisque le
-gate d'aujourd'hui refuse ces plans.
-
-Deux effets mesurés sur ces lots, et un seul est favorable :
-
-- la re-planification **fonctionne en production** : quatre scénarios réécrits au
-  lot EE (`replannedScenarioIds` dans trois runs, dont deux entièrement verts), et
-  la famille `TRANSITION_*` disparaît du lot EE ;
-- son coût l'est aussi : au lot FF, deux runs ont buté sur `RUN_BUDGET_EXCEEDED`
-  parce que la passe supplémentaire dépassait l'enveloppe — corrigé depuis, la
-  réécriture qui ne tient pas dans le budget est sautée et le run garde ses
-  verdicts (jamais un run perdu pour une passe de confort).
-
-Aucun faux refus n'a été trouvé dans ces lots : les cinq blocages du lot EE
-(241, 251 et 284 caractères contre une borne de 280 ; deux cibles `Pièce de 5 €`
-inexistantes) sont des plans fautifs, vérifiés message par message.
-
-Le taux d'assertions réellement vérifiées passe de 99,3 % (458/461) à 100 %
-(394/394) — mais sur un volume plus faible, parce que davantage de scénarios sont
-refusés avant exécution. Ce n'est pas l'amélioration que le critère 4 demande.
-
-Ce que les lots disent, sans embellissement : le nombre de runs entièrement verts
-ne progresse pas de façon reproductible (7, 7, 7, 5 sur dix). Ce qui progresse est
-mesurable ailleurs : sur CC, **aucun échec produit** et deux runs refusés avant le
-navigateur coûtent le scénario, pas le run (correctif #99) ; sur DD, les quatre
-blocages sont des scénarios et non des runs. La variance à n = 10 reste du même
-ordre que l'écart entre versions : aucune conclusion de fiabilité ne peut être
-tirée de ces lots.
-
-Coût : +21 % de tokens par rapport à la baseline (3,78 M contre 2,81 M pour deux
-runs refusés en moins), dû aux fichiers modifiés entiers ; la sonde de vues, elle,
-coûte +91 % et n'a rien apporté sur dix runs — elle reste désactivée.
-
-Familles résiduelles, mesurées sur CC + DD : `TRANSITION_ON_INVARIANT` (3
-scénarios), `TRANSITION_NOT_OBSERVED` (1), `TARGET_NOT_FOUND` (1),
-`REQUIREMENT_UNGROUNDED` (2 runs), `MARKER_ORDER_UNREACHABLE` (2 scénarios). Les
-deux premières sont la même faute de plan — demander un changement là où la valeur
-ne bouge pas — et demandent une boucle de re-planification après classification à
-l'exécution, pas une requalification.
-
-La sonde de navigation double le coût (+91 % de tokens, +16 appels) pour cinq
-scénarios verts de plus et **aucun run vert supplémentaire** sur dix. Elle reste
-livrée, désactivée par défaut (`QA_VIEW_PROBE=false`), parce qu'un gain non
-démontré ne justifie pas un coût démontré : elle sera réactivée quand un
-déclencheur plus étroit sera mesuré (par exemple seulement pour les plans dont
-une assertion vise une vue qui n'est pas la page d'entrée).
+La lecture qui s'en dégage, et qu'il faut lire en entier : sur la campagne
+entrelacée (deux builds alternés sur le même service, tous les lots agrégés, y
+compris ceux qui régressent), **le taux de runs entièrement verts n'est pas
+amélioré** — autour de 55 % contre 60 % pour `8143ac9` — pour un coût par run
+supérieur d'environ 20 %. Ce qui progresse est mesuré séparément : scénarios verts
+par run et échecs produit par run, plus la classification et la publication des
+préconditions.
 
 ## 6. Mesure
 
