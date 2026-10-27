@@ -211,6 +211,9 @@ describe("le document de mesures est généré, et ses classes viennent du code"
     // pire que la politique fatale sur ce corpus, et le document le dit.
     const perScenario = interleaved.filter((row) => row.batch === "QQ");
     const fatal = interleaved.filter((row) => row.batch === "PP");
+    // RR teste la réparation déterministe d'une cible proche (modèle qui refuse).
+    const nearMiss = interleaved.filter((row) => row.batch === "RR");
+    const beforeNearMiss = interleaved.filter((row) => row.batch === "PP");
     const sum = (
       rows: typeof interleaved,
       key: "green" | "runs" | "tokens" | "verts"
@@ -230,6 +233,8 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       `Build courant : **${sum(currentRows, "verts")}/${sum(currentRows, "runs")}** runs verts, ${sum(currentRows, "green")} scénarios, ${sum(currentRows, "tokens")} tokens.`,
       "",
       `Politique par scénario (QQ, drapeau \`QA_PER_SCENARIO_COVERAGE\`) : **${sum(perScenario, "verts")}/${sum(perScenario, "runs")}** runs verts et ${sum(perScenario, "green")} scénarios — contre ${sum(fatal, "verts")}/${sum(fatal, "runs")} et ${sum(fatal, "green")} avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.`,
+      "",
+      `Réparation d'une cible proche (RR) : **${sum(nearMiss, "verts")}/${sum(nearMiss, "runs")}** runs verts et ${sum(nearMiss, "green")} scénarios — contre ${sum(beforeNearMiss, "verts")}/${sum(beforeNearMiss, "runs")} et ${sum(beforeNearMiss, "green")} avant (PP). Les cibles introuvables baissent (2 contre 5), les scénarios verts montent (+19), mais les runs verts baissent et le coût monte : la réparation débloque des étapes sans rendre les plans justes.`,
       "",
       "Lecture honnête : **aucun gain reproductible** du taux de runs verts",
       "(60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est",
