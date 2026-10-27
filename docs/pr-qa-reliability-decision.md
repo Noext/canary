@@ -18,16 +18,25 @@ Sur les 79 plans réellement produits des lots BA→II (24 runs non verts) :
 | 2 | `TARGET_NOT_FOUND` | 6 | 6 | BA, DD, EE, FF, GG | **partielle** : un libellé que le diff écrit est vérifiable, une cible rendue après interaction ne l'est pas | moyen : un libellé légitime absent du diff serait refusé à tort — d'où le choix de réparer plutôt que de refuser |
 | 3 | `TRANSITION_NOT_OBSERVED` + `TRANSITION_ON_INVARIANT` | 3 + 3 | 6 | BA, DD, GG | **non** avant exécution : il faut constater que la valeur ne bouge pas | nul : la constatation vient de l'exécution, pas d'une règle |
 
-Familles inattendues, listées par fréquence : un run bloqué **sans diagnostic**
-(`0da1a10e`, corrigé en classification depuis), et, sur le build courant,
-`PLAN_SELECTOR_UNSTABLE` (1 scénario, UU) — famille absente de l'historique, ce qui
-confirme que les fréquences passées ne décrivent plus le code d'aujourd'hui.
+Familles inattendues, listées par fréquence : `REQUIREMENT_UNGROUNDED`, visible
+seulement au niveau du run (`cb1a3dab`, `bc0e083e`, `74f1cfea`, `0da1a10e`) — un run
+bloqué avant exécution n'a aucun scénario à classer, ce qui explique son absence du
+tableau ci-dessus ; un scénario **sans diagnostic** (`24db19b8`) ; et, sur le build
+courant, `PLAN_SELECTOR_UNSTABLE` (1 scénario, run `739e7bdb`), famille absente de
+l'historique — les fréquences passées ne décrivent donc plus le code d'aujourd'hui.
+
+Les campagnes sont classées **par run** dans
+`test/historical/campaign-runs.json` (181 identifiants, tous lots) : TT compte deux runs bloqués
+au niveau du run (`RUN_BUDGET_EXCEEDED` sur `e6f24ee9`, `PLAN_SCHEMA_INVALID` sur
+`4fed6f58`) et quatre runs échoués (`TRANSITION_NOT_OBSERVED` sur `60c44866` et
+`f6a6a890`, deux échecs d'assertion sans diagnostic sur `c9c68ce9` et `2417c8b5`) ;
+UU n'a qu'un scénario bloqué (`PLAN_SELECTOR_UNSTABLE`, `739e7bdb`).
 
 Répartition par catégorie demandée : **planification** = les trois rangs ci-dessus
 (21 scénarios) ; **découverte de l'interface** = `TARGET_NOT_FOUND` (6) ;
-**dépendance d'état** = les invariants (6) ; **infrastructure** = 2 `QA_ERROR` et
-1 `RUN_BUDGET_EXCEEDED` observés dans les campagnes, jamais comptés comme défauts
-produit.
+**dépendance d'état** = les invariants (6) ; **infrastructure** = 1 `QA_ERROR` et 1 `RUN_BUDGET_EXCEEDED` dans les campagnes
+(celui-ci sur `e6f24ee9`), plus 1 `PLAN_SCHEMA_INVALID` (`4fed6f58`) qui relève du
+modèle, jamais comptés comme défauts produit.
 
 ## 2. La meilleure correction candidate et son hypothèse
 
@@ -65,10 +74,10 @@ Suite complète : **846 tests verts, 5 ignorés** ; arcovia **90,10** ; conformi
 
 Paire fraîche du 27/10, lots dos à dos sur le même service :
 
-| Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |
+| Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens | Identifiants |
 | --- | --- | --- | --- | --- | --- |
-| TT | `8143ac9` (référence) | 4/10 | 72 | 4 | 3,06 M |
-| UU | `f8a6959` (courant) | **9/10** | **88** | **0** | 2,84 M |
+| TT | `8143ac9` (référence) | 4/10 | 72 | 4 | 3,06 M | `test/historical/campaign-runs.json` |
+| UU | `f8a6959` (courant) | **9/10** | **88** | **0** | 2,84 M | idem (20 runs cités) |
 
 Agrégats, **tous** les lots conservés et étiquetés :
 
@@ -76,7 +85,7 @@ Agrégats, **tous** les lots conservés et étiquetés :
 | --- | --- | --- | --- | --- | --- |
 | Référence `8143ac9` (JJ, NN, TT) | 30 | **53 %** | 7,0 | 0,3 | 265 k |
 | Lignée non-référence (toutes, régressions incluses) | 79 | 59 % | 7,9 | 0,1 | 293 k |
-| **Build courant (SS, UU)** | 20 | **90 %** | 9,1 | 0,1 | 288 k (+9 %) |
+| **Build courant (SS, UU)** | 20 | **90 %** | 9,1 | 0,05 | 288 k (parité) |
 
 Régressions conservées et nommées : KK `922159d` **1/10** (sonde de valeur pré-étape
 qui tuait les scénarios, corrigée en #111), OO `a683f86` 4/9, QQ `345b972` 5/10
@@ -87,10 +96,15 @@ la référence, 15 aujourd'hui, **10 nouvellement refusés dont 0 visait un scé
 vert**, et **0 plan refusé à la référence accepté aujourd'hui**. Faux verts : aucune
 voie de requalification (pas de conversion `transition`→`state`, jamais de
 réparation sur une assertion) ; la pré-satisfaction est publiée (`preMatched` : 76
-assertions sur UU) et les conditions non tranchables aussi (144).
+assertions sur UU) et les conditions non tranchables aussi (144). Sur la campagne,
+les **faux verts sont comptés par run** dans `campaign-runs.json` : build courant,
+**173 assertions sur 996** (17,4 %) étaient déjà satisfaites avant leur étape ;
+la référence ne porte pas ce champ (il n'existait pas), et le test le dit comme une
+absence, pas comme un zéro.
 
-Durées : collectées pour les lots BA→II, **non collectées** pour la campagne
-entrelacée — l'absence est dite, pas comblée.
+Durées : les 20 runs TT/UU portent `startedAt`/`endedAt` dans
+`campaign-runs.json` ; les lots intermédiaires (KK→SS) n'ont pas été collectés par
+run, et cette absence est dite plutôt que comblée.
 
 ## 5. Recommandation
 
@@ -101,8 +115,8 @@ entrelacée — l'absence est dite, pas comblée.
 - mais n = 20 côté courant, et la variance observée plus tôt sur d'autres builds
   (4/9 pour OO) interdit de parler de stabilisation : le chiffre est un point de
   mesure, pas une garantie ;
-- le coût augmente de 9 % par run, ce qui reste dans l'enveloppe (aucun budget
-  relevé) ;
+- le coût par run est **identique** à la référence (288 k contre 288 k) : aucun budget
+  n'a été relevé ;
 - la lignée complète reste à 59 %, parce qu'elle contient le build défectueux KK :
   c'est l'historique, pas le code livré.
 

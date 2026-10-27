@@ -1,111 +1,366 @@
 [
   {
-    "batch": "JJ",
-    "build": "8143ac9",
+    "batch": "BA",
+    "build": "?",
+    "phase": "lineage",
+    "runs": 1,
+    "verts": 1,
+    "green": 9,
+    "product": 0,
+    "tokens": 560057,
+    "runIds": ["500a02a9-f4ac-45b1-af9c-db04342303e0"]
+  },
+  {
+    "batch": "DD",
+    "build": "0000000",
+    "phase": "lineage",
+    "runs": 10,
+    "verts": 5,
+    "green": 71,
+    "product": 1,
+    "tokens": 3414409,
+    "runIds": [
+      "b8818582-62e3-4064-a5d7-bbefa9d2a7ca",
+      "0b71b8a3-5f6a-42b3-b957-793dcae25938",
+      "f5ecbaac-babb-451c-824e-f296bf0c0969",
+      "bed1253d-78c9-412c-b58b-b8fa56ca43e2",
+      "b5711fb7-dc32-4307-8eac-c607f4778208",
+      "bc0e083e-5573-41f7-b229-ad61311781b3",
+      "3f60a8d1-b7d1-47dc-bf19-e0219e60942f",
+      "fe361a8b-f390-4a85-bbea-e067919d3254",
+      "b498e8f1-0930-42d5-9417-9375fca2e412",
+      "a30c3d72-2c3d-485b-ac2d-a988f1dcc7b6"
+    ]
+  },
+  {
+    "batch": "EE",
+    "build": "0000000",
+    "phase": "lineage",
     "runs": 10,
     "verts": 6,
+    "green": 84,
+    "product": 0,
+    "tokens": 4326987,
+    "runIds": [
+      "28525781-e499-4ca7-a9f9-19152e973ed0",
+      "74fb516d-db15-4b9a-9ea7-1100429770fb",
+      "8a16f402-7316-446d-9387-08974707e9d2",
+      "d07c4ed4-8c34-4f0e-94c1-fb7d04f30c94",
+      "f031c109-f38d-4c8a-bf46-824023c7feb0",
+      "c7136c7b-b4d8-44c9-be0a-6be09553efde",
+      "273dc450-6029-4674-8472-e352149a4f06",
+      "cd62137e-5d8f-4176-9061-1ff5ed23ab97",
+      "4bde1657-5d68-4097-93de-30c6c31a7233",
+      "f7c2778e-04b3-4469-aaaf-9ce5f1971a08"
+    ]
+  },
+  {
+    "batch": "FF",
+    "build": "0000000",
+    "phase": "lineage",
+    "runs": 10,
+    "verts": 8,
+    "green": 74,
+    "product": 0,
+    "tokens": 4291666,
+    "runIds": [
+      "403d43d2-3510-4d2b-98a1-e7041f260661",
+      "441bfc0e-0ec3-40dd-b60b-c645cb743b24",
+      "34f76fd9-72ba-4df5-85f2-5c4c59936cee",
+      "d5151bca-f216-4350-af99-5cc0e24373bc",
+      "cd6d22f6-939d-4565-b997-018537c48789",
+      "6dd36613-4ff9-464c-b882-8b6ac4c04197",
+      "7900e46d-cd65-4034-a4b4-486c5a52507b",
+      "896d4967-e806-4615-b133-fd33cfc79cbe",
+      "bfc43f8e-92dc-472d-8d26-1a7feab4fc8f",
+      "510b96f2-4f30-48c7-9e2c-f9780c0a4d29"
+    ]
+  },
+  {
+    "batch": "GG",
+    "build": "0000000",
+    "phase": "lineage",
+    "runs": 10,
+    "verts": 5,
+    "green": 74,
+    "product": 1,
+    "tokens": 3832769,
+    "runIds": [
+      "ca55513b-ec2c-4407-8def-9554378e02fe",
+      "e3f3ad2b-c5e4-4222-b1f9-36a12434dda9",
+      "160792a9-c627-4e3d-a511-822d06ded918",
+      "74f1cfea-58a5-47a0-98fd-6f2abbf4ca48",
+      "bc46290b-a760-46ef-baac-ba9322de4122",
+      "6832a9e4-ad59-4963-ac9e-edb194179912",
+      "d8b73758-2b1a-4b19-a19b-01a566261d6d",
+      "5afc804a-5d22-4867-a593-66a3d4df3da3",
+      "c22a89f1-4161-4648-84de-147deddf516a",
+      "566ffe64-c4fb-41ed-9add-7c16cf04dfe2"
+    ]
+  },
+  {
+    "batch": "HH",
+    "build": "0000000",
+    "phase": "lineage",
+    "runs": 10,
+    "verts": 10,
+    "green": 86,
+    "product": 0,
+    "tokens": 2440356,
+    "runIds": [
+      "b6641dfb-bbd7-4d94-98e2-e6fcd964ee16",
+      "6db4cf7e-bcf7-467c-bb96-a2b9c875433d",
+      "13d0aaac-b9c1-4b89-8c1d-8ea1ad5f5522",
+      "79f33027-917d-4725-ada2-59b6103b2a16",
+      "4f684ac2-73ab-46ec-9724-399588916ed2",
+      "9da45e20-46ab-422b-85ce-3c80206d491d",
+      "7c0983ed-0ed9-4bf1-8d83-87a8c8afe9a1",
+      "43aae022-2f19-43a8-a9bb-239d61a6091b",
+      "1b960768-26bc-4562-9763-1a8bdbfd8eca",
+      "53133517-e829-419d-8626-0aa10b2aad2b"
+    ]
+  },
+  {
+    "batch": "II",
+    "build": "0000000",
+    "phase": "lineage",
+    "runs": 10,
+    "verts": 7,
     "green": 75,
+    "product": 0,
+    "tokens": 3144996,
+    "runIds": [
+      "5deb7c69-edc0-46fc-9eb7-50aa07d1c373",
+      "0da1a10e-a2ab-4d57-b458-4c3ac3413029",
+      "437ec805-86fe-4e4f-b563-8995edb823ad",
+      "c61cb8dc-b926-42fc-b1ff-3f7d99aecfbf",
+      "d9f65e49-c6db-4406-8046-e6ab6ca4fb13",
+      "6e3f63fa-9c76-487e-bd7d-331c3422296c",
+      "bd230341-982c-4eba-96bc-26bb44a8415e",
+      "72ce4151-9b0f-46ad-81cc-83bb27f1b6e7",
+      "e9752df0-3867-4dea-b0a4-b1e7ecaad85e",
+      "851b62d2-60fa-4067-bab5-7437786b1864"
+    ]
+  },
+  {
+    "batch": "JJ",
+    "build": "8143ac9",
+    "phase": "baseline",
+    "runs": 10,
+    "verts": 7,
+    "green": 84,
     "product": 3,
-    "blocked": 3,
-    "tokens": 2590005,
-    "calls": 22,
-    "phase": "baseline"
+    "tokens": 3013492,
+    "runIds": [
+      "df72d1b7-6beb-4170-8f74-466ec9ed8091",
+      "aae64659-c78d-43ad-b865-b341aa7f2932",
+      "40f7bd8e-abba-45dc-8c7d-19de98d140a1",
+      "c248a054-419e-48dc-ab6d-aab798fcea35",
+      "4bf8c739-4042-438d-a963-23cde6857160",
+      "d4e1a8c4-88fb-4634-8689-66bc98c0cc99",
+      "be9084c6-d005-4ec9-8439-2eb47c0c3381",
+      "16067199-aaa1-42a5-9d92-fffe1921127f",
+      "2717d205-9896-4b14-aacf-a0f25812379c",
+      "eae033b7-561f-421d-b698-ba1d52db5b0c"
+    ]
   },
   {
     "batch": "KK",
     "build": "922159d",
+    "phase": "lineage",
     "runs": 10,
     "verts": 1,
-    "green": 61,
+    "green": 69,
     "product": 0,
-    "blocked": 14,
-    "tokens": 4370933,
-    "calls": 32,
-    "phase": "lineage"
+    "tokens": 4768170,
+    "runIds": [
+      "90315438-a0a6-4c6d-aa67-87deecadb6e8",
+      "d2d3cf14-8b9b-4067-aa98-17dcdeab1d1d",
+      "e5ee0dd5-0560-41a0-b148-dbda40777fb1",
+      "445231d5-eac8-4f23-bf88-38c3692479d8",
+      "97ec3d9d-5a13-417b-aa3a-01685942c7dd",
+      "361d115a-f48d-465c-ae3e-b044f44a9638",
+      "51644ed9-bb66-4984-a5c3-86a6796aa61f",
+      "ca37803e-bff2-4e82-aeb9-7653750c8ccf",
+      "eb8a7336-8094-4480-85f0-868fbc2993c9",
+      "50cfa0d8-4ab8-4d5f-9c06-c60ce0adef6c"
+    ]
+  },
+  {
+    "batch": "LL",
+    "build": "0000000",
+    "phase": "lineage",
+    "runs": 10,
+    "verts": 1,
+    "green": 66,
+    "product": 1,
+    "tokens": 3061792,
+    "runIds": [
+      "779e5398-376b-45d9-a1a1-870b25fb3e3e",
+      "3674c055-6b8b-4dd6-be38-61680dcd5e40",
+      "e336f483-ab9c-40fc-a781-57f36e36c788",
+      "e86df885-7b9c-4ab5-9326-7f92d2c9ed5a",
+      "d7345e75-36ec-4254-b391-195e1b9cad8a",
+      "979044da-063d-47c7-be1d-d7ad41defc68",
+      "7e1a2c04-3a9d-416c-a664-2d39ab74acb9",
+      "9fd1e99e-bcfc-4c26-8cd0-9a4a2ba6bae5",
+      "ee3bf230-b305-44ef-9c5e-0e471d524aa7",
+      "2dc37d11-3d6f-45cf-981e-127342c47a9a"
+    ]
   },
   {
     "batch": "MM",
     "build": "8f831ab",
+    "phase": "lineage",
     "runs": 10,
     "verts": 7,
     "green": 93,
     "product": 2,
-    "blocked": 3,
     "tokens": 2804726,
-    "calls": 20,
-    "phase": "lineage"
+    "runIds": [
+      "839cee08-d757-46f1-9b1b-f816ea597fb3",
+      "08aed2dc-67a3-41b9-ae68-9e96d67887c0",
+      "f7f0ce21-c383-4f09-9fa6-3811776eb4d6",
+      "7b83ec7b-9a90-49cf-b7f0-f4609e3ee34a",
+      "2884c4a0-a981-47ff-9e07-1dd37be92cda",
+      "f95ef2d1-ce08-4de8-9203-f7c2af5d6e64",
+      "776a3483-6dac-4949-9ff6-eb4d6e1d20a7",
+      "942fa7a8-5ded-4ad6-a6bf-a41be6d276a4",
+      "9a7b18e7-ad19-4c5f-be75-9cf827e55858",
+      "99ec13c1-30a7-42c7-b3f1-2f19ad9a2ea9"
+    ]
   },
   {
     "batch": "NN",
     "build": "8143ac9",
+    "phase": "baseline",
     "runs": 10,
     "verts": 6,
-    "green": 62,
+    "green": 67,
     "product": 1,
-    "blocked": 3,
-    "tokens": 2307186,
-    "calls": 18,
-    "phase": "baseline"
+    "tokens": 2579651,
+    "runIds": [
+      "a4387f43-9d3f-4c65-b35b-9f04f24d97fa",
+      "4ef0f88b-cf6d-4d4b-9f94-bbb787c5bb34",
+      "6c2d9572-c5c1-4c36-a8fb-2c1c4d5fd272",
+      "59422872-3c14-411e-9ec5-b16585317c0f",
+      "d8e87de6-4259-4f28-bae1-92a77db4a86d",
+      "9c45b17e-e993-4d29-9af3-987cb3f2fb52",
+      "8fc389ff-a881-43bb-b3eb-0ad8c4763f6f",
+      "bf7655cd-f434-4f89-92fe-e0c888ffd17d",
+      "401b7d16-8193-4208-8e16-26aef4ca6851",
+      "1b8d8d87-ca65-42e7-874a-ca6e5a80c7a0"
+    ]
   },
   {
     "batch": "OO",
     "build": "a683f86",
-    "runs": 9,
+    "phase": "lineage",
+    "runs": 10,
     "verts": 4,
-    "green": 51,
+    "green": 58,
     "product": 0,
-    "blocked": 1,
-    "tokens": 1892214,
-    "calls": 14,
-    "phase": "lineage"
+    "tokens": 2158790,
+    "runIds": [
+      "f3ce365a-9737-48eb-b4b7-8e97ec2d539c",
+      "790fe5b5-ac89-4769-a836-7b7c60b61cf3",
+      "4d1f7d43-2d4f-4d46-9262-539b5ce2e4dc",
+      "01dc01ab-6d14-47e1-952d-035a378a0217",
+      "802841cc-44d8-4dac-ae80-87386cc20626",
+      "586668b3-51d0-4e33-84e5-c2d0204b6cb5",
+      "552d9171-1b1d-4b85-8308-27c088fdca90",
+      "2db6f362-3ddc-45bb-8b09-28acd1a68696",
+      "827e2108-bf09-47fe-a193-9ef0c9a9724b",
+      "7b121e6d-3767-44f5-9224-6602b706e080"
+    ]
   },
   {
     "batch": "PP",
     "build": "a683f86",
+    "phase": "lineage",
     "runs": 10,
     "verts": 7,
     "green": 70,
     "product": 0,
-    "blocked": 2,
     "tokens": 2551153,
-    "calls": 20,
-    "phase": "lineage"
+    "runIds": [
+      "91e62a68-6210-4ae1-9699-5fb409bc53e3",
+      "3b0c50e9-9a78-4467-bc9b-9c1bd957d5aa",
+      "425e70e7-643f-4f31-949c-cb2bfbf63013",
+      "4f334337-5ea8-4643-ade6-2960c6973a97",
+      "631a21f9-d300-4d67-996d-0b4e3082fb21",
+      "9e5c2edc-41af-4ccf-9681-06ef042f7fa9",
+      "fff2aab3-6d99-4cee-a334-5b642f645bf1",
+      "4e6d8499-2814-46bd-9332-f383f8ca8e5c",
+      "f6e3edda-f727-4c4f-b3f3-76f37fe43739",
+      "f6c74998-d3ba-4376-8f05-32964328d1fe"
+    ]
   },
   {
     "batch": "QQ",
     "build": "345b972",
+    "phase": "lineage",
     "runs": 10,
     "verts": 5,
     "green": 77,
     "product": 1,
-    "blocked": 10,
     "tokens": 2746767,
-    "calls": 25,
-    "phase": "lineage"
+    "runIds": [
+      "56149663-3d33-4027-bd97-4418a6398cd2",
+      "306961e2-f6c1-4ffd-92e7-f598f75376b0",
+      "ee0c72b8-ad63-4e84-96d8-9f6e19e00e1d",
+      "18642437-f8d0-4094-86ba-fcc812f6b7b0",
+      "e29f3f7a-96b7-446c-9800-8104f2a95627",
+      "254f7c71-fa95-49bb-b76d-a36032b9247e",
+      "82d3a0e4-e4a5-4e14-bc11-295959d993a1",
+      "28bcb05f-245b-4c6d-9736-af6463c77ae2",
+      "e56bb5ce-8b78-434d-aab2-75eaf554219a",
+      "a2e88c67-6e53-4ea8-b530-298b8526acce"
+    ]
   },
   {
     "batch": "RR",
     "build": "9d563e0",
+    "phase": "lineage",
     "runs": 10,
     "verts": 5,
     "green": 89,
     "product": 1,
-    "blocked": 6,
     "tokens": 3033696,
-    "calls": 24,
-    "phase": "lineage"
+    "runIds": [
+      "06e61c3b-a967-4571-9e6d-ff25c2b55dd1",
+      "2a749ab5-db7d-4877-bf6b-5179cb418eb6",
+      "e90c9e75-dc13-4d09-8fe3-7fdc6bdb212e",
+      "a9a2e5b7-e9ca-44cc-a1d7-9017be6c22e8",
+      "fa788485-3c56-41ac-84f7-7ad9f96f024d",
+      "875a24c9-8275-4131-baa9-c4e0428713aa",
+      "0b8ddefe-28a4-4762-b28c-8de4cb875ede",
+      "22f8d228-2e98-47e9-b786-0337a3bf584b",
+      "b8086467-5308-4b6b-9447-436c144a7f3c",
+      "0f05b09e-d6cb-4ec2-8390-1327d87a5c34"
+    ]
   },
   {
     "batch": "SS",
     "build": "c5b3634",
+    "phase": "current",
     "runs": 10,
     "verts": 9,
     "green": 93,
     "product": 1,
-    "blocked": 1,
     "tokens": 2921272,
-    "calls": 22,
-    "phase": "current"
+    "runIds": [
+      "5897da1f-4b7a-47ca-8e78-9049ce5c9b45",
+      "9d13eb24-2e38-41d3-9d88-220e9caeb52f",
+      "277dee09-5ee1-49b9-9ff6-dff2d4c93ece",
+      "aec10c71-db68-4678-b5c9-583090877af6",
+      "2f5feed6-160c-42a1-8299-0496a9d36249",
+      "d6daf2ac-dd2e-4a9c-a54e-5459077eb4b3",
+      "7b4255d3-4913-4fae-b149-47950bc63876",
+      "e40ef37c-7014-4564-b5a6-202d23243a35",
+      "5d680404-bcf4-4c75-91e1-8a7f793e93a8",
+      "94ee07c5-bddc-4b01-afc8-cba93dd90a8c"
+    ]
   },
   {
     "batch": "TT",
@@ -115,9 +370,19 @@
     "verts": 4,
     "green": 72,
     "product": 4,
-    "blocked": 0,
     "tokens": 3060539,
-    "calls": 22
+    "runIds": [
+      "33b981d9-740c-410a-906d-71d084e72880",
+      "e6f24ee9-2312-42d9-89f7-b70f66acad3b",
+      "4fed6f58-f70a-4744-85e6-bd20178b9cb6",
+      "60c44866-56a6-4a6b-a607-bded2968f917",
+      "25054a3c-fbe7-4ec4-919e-83c6f6958226",
+      "1e262bec-712b-49c7-ad15-d244d199f954",
+      "f6a6a890-3bd6-462c-9177-0291f62a4d32",
+      "c9c68ce9-91f6-470c-9752-a0a6cc2990e2",
+      "2417c8b5-fc11-405b-8696-4bbae7d28f19",
+      "898208fb-fadd-49cb-9579-ed010d8348e8"
+    ]
   },
   {
     "batch": "UU",
@@ -127,8 +392,18 @@
     "verts": 9,
     "green": 88,
     "product": 0,
-    "blocked": 1,
     "tokens": 2843491,
-    "calls": 21
+    "runIds": [
+      "395cb351-2179-4219-ada7-0d3db01e5738",
+      "3871c489-3d61-4230-8bef-9a9416e54135",
+      "a9de6566-73f0-47cb-a85f-da21c9ad1594",
+      "739e7bdb-715f-4345-b26b-0ed6ea3664af",
+      "c3ca9f41-72fe-4965-afe1-22a5168b97f3",
+      "2bbce1b7-e9f8-4f2d-91a4-b6ea3e3b8800",
+      "a75c7de5-b5a0-4a77-8fa9-1c16513a0e7e",
+      "3de20471-53e2-4abd-8850-59fbe4dbbc73",
+      "eb459560-31a4-47fa-9fd5-033accd5d378",
+      "5cf86575-30b0-47f7-9567-115a0758d1b0"
+    ]
   }
 ]
