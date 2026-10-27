@@ -201,26 +201,31 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       tokens: number;
       verts: number;
     }[];
-    const baselineRows = interleaved.filter((row) =>
-      ["JJ", "NN"].includes(row.batch)
-    );
-    const currentRows = interleaved.filter((row) =>
-      ["MM", "OO", "PP", "RR", "SS"].includes(row.batch)
-    );
-    // QQ teste la politique « un défaut de contrat coûte le scénario » : elle est
-    // pire que la politique fatale sur ce corpus, et le document le dit.
-    const perScenario = interleaved.filter((row) => row.batch === "QQ");
-    const fatal = interleaved.filter((row) => row.batch === "PP");
-    // RR teste la réparation déterministe d'une cible proche (modèle qui refuse).
-    const nearMiss = interleaved.filter((row) => row.batch === "RR");
-    const beforeNearMiss = interleaved.filter((row) => row.batch === "PP");
+    // Aucune sélection : la référence est « tous les lots du build 8143ac9 » et
+    // la lignée courante « tous les autres lots », y compris ceux qui régressent.
+    // Le générateur précédent énumérait les lots retenus à la main et laissait
+    // tomber KK (1/10) : c'est exactement la lecture opportuniste que l'objectif
+    // interdit, et elle a été corrigée ici.
+    const baselineRows = interleaved.filter((row) => row.build === "8143ac9");
+    const currentRows = interleaved.filter((row) => row.build !== "8143ac9");
     const sum = (
       rows: typeof interleaved,
-      key: "green" | "runs" | "tokens" | "verts"
+      key: "green" | "product" | "runs" | "tokens" | "verts"
     ) => rows.reduce((total, row) => total + row[key], 0);
+    const perRun = (
+      rows: typeof interleaved,
+      key: "green" | "tokens" | "product"
+    ) =>
+      Math.round((sum(rows, key) / Math.max(sum(rows, "runs"), 1)) * 10) / 10;
+    const percent = (rows: typeof interleaved) =>
+      Math.round((sum(rows, "verts") / Math.max(sum(rows, "runs"), 1)) * 100);
     lines.push(
       "",
       "## Campagne entrelacée (deux builds alternés sur le même service)",
+      "",
+      "Les lots sont alternés entre `8143ac9` et la lignée courante sur le même",
+      "service. **Tous** les lots sont agrégés, y compris ceux qui régressent : un",
+      "lot défavorable n'est jamais retiré du calcul.",
       "",
       "| Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |",
       "| --- | --- | --- | --- | --- | --- |",
@@ -229,29 +234,38 @@ describe("le document de mesures est généré, et ses classes viennent du code"
           `| ${row.batch} | \`${row.build}\` | ${row.verts}/${row.runs} | ${row.green} | ${row.product} | ${row.tokens} |`
       ),
       "",
-      `Référence \`8143ac9\` : **${sum(baselineRows, "verts")}/${sum(baselineRows, "runs")}** runs verts, ${sum(baselineRows, "green")} scénarios, ${sum(baselineRows, "tokens")} tokens.`,
-      `Build courant : **${sum(currentRows, "verts")}/${sum(currentRows, "runs")}** runs verts, ${sum(currentRows, "green")} scénarios, ${sum(currentRows, "tokens")} tokens.`,
+      `Référence \`8143ac9\` (${sum(baselineRows, "runs")} runs) : **${percent(baselineRows)} %** de runs verts, ${perRun(baselineRows, "green")} scénarios verts par run, ${perRun(baselineRows, "product")} échec produit par run, ${perRun(baselineRows, "tokens")} tokens par run.`,
+      `Lignée courante (${sum(currentRows, "runs")} runs, tous lots confondus) : **${percent(currentRows)} %** de runs verts, ${perRun(currentRows, "green")} scénarios verts par run, ${perRun(currentRows, "product")} échec produit par run, ${perRun(currentRows, "tokens")} tokens par run.`,
       "",
-      `Politique par scénario (QQ, drapeau \`QA_PER_SCENARIO_COVERAGE\`) : **${sum(perScenario, "verts")}/${sum(perScenario, "runs")}** runs verts et ${sum(perScenario, "green")} scénarios — contre ${sum(fatal, "verts")}/${sum(fatal, "runs")} et ${sum(fatal, "green")} avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.`,
+      "Conclusion mesurée : **le taux de runs entièrement verts n'est pas amélioré**",
+      `(${percent(currentRows)} % contre ${percent(baselineRows)} %), et le coût par run augmente de`,
+      `${Math.round((perRun(currentRows, "tokens") / perRun(baselineRows, "tokens") - 1) * 100)} %. Ce qui progresse : les scénarios verts par run (${perRun(currentRows, "green")} contre ${perRun(baselineRows, "green")}) et les échecs produit par run (${perRun(currentRows, "product")} contre ${perRun(baselineRows, "product")}).`,
       "",
-      `Réécriture élargie à tous les défauts de plan nommés par le run (SS) : **${sum(
-        interleaved.filter((row) => row.batch === "SS"),
-        "verts"
-      )}/${sum(
-        interleaved.filter((row) => row.batch === "SS"),
-        "runs"
-      )}** runs verts et ${sum(
-        interleaved.filter((row) => row.batch === "SS"),
-        "green"
-      )} scénarios, un seul défaut résiduel — le meilleur lot de la campagne.`,
+      "Expériences isolées (un lot de chaque côté, jamais agrégées) :",
       "",
-      `Réparation d'une cible proche (RR) : **${sum(nearMiss, "verts")}/${sum(nearMiss, "runs")}** runs verts et ${sum(nearMiss, "green")} scénarios — contre ${sum(beforeNearMiss, "verts")}/${sum(beforeNearMiss, "runs")} et ${sum(beforeNearMiss, "green")} avant (PP). Les cibles introuvables baissent (2 contre 5), les scénarios verts montent (+19), mais les runs verts baissent et le coût monte : la réparation débloque des étapes sans rendre les plans justes.`,
+      "- `QQ` (politique « un défaut de contrat coûte le scénario ») : 5/10 contre 7/10",
+      "  pour `PP` sur le même build — l'hypothèse « le refus fatal coûte des runs verts »",
+      "  est réfutée par la mesure.",
+      "- `RR` (réparation déterministe d'une cible proche) : 5/10 contre 7/10 pour `PP`,",
+      "  mais 89 scénarios verts contre 70 — la réparation débloque des étapes sans",
+      "  rendre les plans justes.",
+      "- `SS` (réécriture élargie à tous les défauts de plan) : 9/10 et 93 scénarios,",
+      "  le meilleur lot de la campagne ; il n'est pas présenté comme une moyenne.",
       "",
-      `Lecture honnête : **${Math.round((sum(currentRows, "verts") / sum(currentRows, "runs")) * 100)} % de runs verts** contre ${Math.round((sum(baselineRows, "verts") / sum(baselineRows, "runs")) * 100)} % pour la référence — cinq lots contre deux, écarts qui se recouvrent encore. Le gain qui ne se discute pas est ailleurs : ${Math.round((sum(currentRows, "green") / sum(currentRows, "runs")) * 10) / 10} scénarios verts par run contre ${Math.round((sum(baselineRows, "green") / sum(baselineRows, "runs")) * 10) / 10}, et les échecs produit tombent de 0,20 à 0,10 par run.`,
+      "**Durées** : la campagne entrelacée n'a pas enregistré de durée par run ; les",
+      "lots BA à II en portent une dans le tableau ci-dessus. L'absence est dite, pas",
+      "comblée.",
       ""
     );
     const document = `${lines.join("\n")}`;
-    writeFileSync(join(repo, "docs", "pr-qa-measurements.md"), document);
+    // Le document est comparé, jamais réécrit en silence : une mesure périmée fait
+    // échouer la CI. On le régénère explicitement avec UPDATE_MEASUREMENTS=1.
+    const target = join(repo, "docs", "pr-qa-measurements.md");
+    if (process.env.UPDATE_MEASUREMENTS === "1") {
+      writeFileSync(target, document);
+    } else {
+      expect(readFileSync(target, "utf8")).toBe(document);
+    }
     expect(document).toContain("Comparaison appariée des portes");
     expect(rows.length).toBe(79);
   });

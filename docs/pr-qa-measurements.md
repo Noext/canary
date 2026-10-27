@@ -104,6 +104,10 @@ périmée fait échouer la CI.
 
 ## Campagne entrelacée (deux builds alternés sur le même service)
 
+Les lots sont alternés entre `8143ac9` et la lignée courante sur le même
+service. **Tous** les lots sont agrégés, y compris ceux qui régressent : un
+lot défavorable n'est jamais retiré du calcul.
+
 | Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |
 | --- | --- | --- | --- | --- | --- |
 | JJ | `8143ac9` | 6/10 | 75 | 3 | 2590005 |
@@ -116,13 +120,24 @@ périmée fait échouer la CI.
 | RR | `9d563e0` | 5/10 | 89 | 1 | 3033696 |
 | SS | `c5b3634` | 9/10 | 93 | 1 | 2921272 |
 
-Référence `8143ac9` : **12/20** runs verts, 137 scénarios, 4897191 tokens.
-Build courant : **32/49** runs verts, 396 scénarios, 13203061 tokens.
+Référence `8143ac9` (20 runs) : **60 %** de runs verts, 6.9 scénarios verts par run, 0.2 échec produit par run, 244859.6 tokens par run.
+Lignée courante (69 runs, tous lots confondus) : **55 %** de runs verts, 7.7 scénarios verts par run, 0.1 échec produit par run, 294503.8 tokens par run.
 
-Politique par scénario (QQ, drapeau `QA_PER_SCENARIO_COVERAGE`) : **5/10** runs verts et 77 scénarios — contre 7/10 et 70 avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.
+Conclusion mesurée : **le taux de runs entièrement verts n'est pas amélioré**
+(55 % contre 60 %), et le coût par run augmente de
+20 %. Ce qui progresse : les scénarios verts par run (7.7 contre 6.9) et les échecs produit par run (0.1 contre 0.2).
 
-Réécriture élargie à tous les défauts de plan nommés par le run (SS) : **9/10** runs verts et 93 scénarios, un seul défaut résiduel — le meilleur lot de la campagne.
+Expériences isolées (un lot de chaque côté, jamais agrégées) :
 
-Réparation d'une cible proche (RR) : **5/10** runs verts et 89 scénarios — contre 7/10 et 70 avant (PP). Les cibles introuvables baissent (2 contre 5), les scénarios verts montent (+19), mais les runs verts baissent et le coût monte : la réparation débloque des étapes sans rendre les plans justes.
+- `QQ` (politique « un défaut de contrat coûte le scénario ») : 5/10 contre 7/10
+  pour `PP` sur le même build — l'hypothèse « le refus fatal coûte des runs verts »
+  est réfutée par la mesure.
+- `RR` (réparation déterministe d'une cible proche) : 5/10 contre 7/10 pour `PP`,
+  mais 89 scénarios verts contre 70 — la réparation débloque des étapes sans
+  rendre les plans justes.
+- `SS` (réécriture élargie à tous les défauts de plan) : 9/10 et 93 scénarios,
+  le meilleur lot de la campagne ; il n'est pas présenté comme une moyenne.
 
-Lecture honnête : **65 % de runs verts** contre 60 % pour la référence — cinq lots contre deux, écarts qui se recouvrent encore. Le gain qui ne se discute pas est ailleurs : 8.1 scénarios verts par run contre 6.9, et les échecs produit tombent de 0,20 à 0,10 par run.
+**Durées** : la campagne entrelacée n'a pas enregistré de durée par run ; les
+lots BA à II en portent une dans le tableau ci-dessus. L'absence est dite, pas
+comblée.
