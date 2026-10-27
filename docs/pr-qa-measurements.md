@@ -113,11 +113,14 @@ périmée fait échouer la CI.
 | OO | `a683f86` | 4/9 | 51 | 0 | 1892214 |
 | PP | `a683f86` | 7/10 | 70 | 0 | 2551153 |
 | QQ | `345b972` | 5/10 | 77 | 1 | 2746767 |
+| RR | `9d563e0` | 5/10 | 89 | 1 | 3033696 |
 
 Référence `8143ac9` : **12/20** runs verts, 137 scénarios, 4897191 tokens.
 Build courant : **18/29** runs verts, 214 scénarios, 7248093 tokens.
 
 Politique par scénario (QQ, drapeau `QA_PER_SCENARIO_COVERAGE`) : **5/10** runs verts et 77 scénarios — contre 7/10 et 70 avec la politique fatale sur le même build (PP). L'hypothèse « le refus fatal coûte des runs verts » est donc **réfutée** par la mesure : les runs concernés échouent ailleurs, et la politique permissive brûle des tokens pour des scénarios qui échouent autrement.
+
+Réparation d'une cible proche (RR) : **5/10** runs verts et 89 scénarios — contre 7/10 et 70 avant (PP). Les cibles introuvables baissent (2 contre 5), les scénarios verts montent (+19), mais les runs verts baissent et le coût monte : la réparation débloque des étapes sans rendre les plans justes.
 
 Lecture honnête : **aucun gain reproductible** du taux de runs verts
 (60 % contre 62 %, intervalles qui se recouvrent). Ce qui progresse est

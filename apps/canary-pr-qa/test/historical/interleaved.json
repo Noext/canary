@@ -75,5 +75,16 @@
     "blocked": 10,
     "tokens": 2746767,
     "calls": 25
+  },
+  {
+    "batch": "RR",
+    "build": "9d563e0",
+    "runs": 10,
+    "verts": 5,
+    "green": 89,
+    "product": 1,
+    "blocked": 6,
+    "tokens": 3033696,
+    "calls": 24
   }
 ]
