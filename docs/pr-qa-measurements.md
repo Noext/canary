@@ -119,13 +119,15 @@ lot défavorable n'est jamais retiré du calcul.
 | QQ | `345b972` | 5/10 | 77 | 1 | 2746767 |
 | RR | `9d563e0` | 5/10 | 89 | 1 | 3033696 |
 | SS | `c5b3634` | 9/10 | 93 | 1 | 2921272 |
+| TT | `8143ac9` | 4/10 | 72 | 4 | 3060539 |
+| UU | `f8a6959` | 9/10 | 88 | 0 | 2843491 |
 
-Référence `8143ac9` (20 runs) : **60 %** de runs verts, 6.9 scénarios verts par run, 0.2 échec produit par run, 244859.6 tokens par run.
-Toute la lignée non-référence (69 runs, y compris les builds dont un défaut a été corrigé depuis) : **55 %** de runs verts, 7.7 scénarios verts par run, 0.1 échec produit par run, 294503.8 tokens par run.
+Référence `8143ac9` (30 runs) : **53 %** de runs verts, 7 scénarios verts par run, 0.3 échec produit par run, 265257.7 tokens par run.
+Toute la lignée non-référence (79 runs, y compris les builds dont un défaut a été corrigé depuis) : **59 %** de runs verts, 7.9 scénarios verts par run, 0.1 échec produit par run, 293218.4 tokens par run.
 
 Lignée historique seule (59 runs, builds antérieurs au build courant) : **49 %**.
 
-**Build courant seul** (10 runs du même commit) : **90 %** de runs verts, 9.3 scénarios verts par run, 0.1 échec produit par run, 292127.2 tokens par run.
+**Build courant seul** (20 runs du même commit) : **90 %** de runs verts, 9.1 scénarios verts par run, 0.1 échec produit par run, 288238.2 tokens par run.
 
 Les deux agrégats sont publiés parce qu'ils répondent à deux questions différentes :
 « la lignée a-t-elle progressé depuis la référence ? » (tous lots, y compris les
