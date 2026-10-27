@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Les campagnes, citées **par identifiant de run** : `campaign-runs.json` porte les
- * 181 runs observés (id, horodatage, verdict, scénarios verts, échecs produit,
+ * 200 runs observés (id, horodatage, verdict, scénarios verts, échecs produit,
  * tokens, diagnostics), et `interleaved.json` n'est plus qu'un agrégat recalculable.
  * Ce test recalcule chaque ligne d'agrégat depuis les runs : un chiffre tapé à la
  * main qui divergerait des artefacts fait échouer la CI.
@@ -43,9 +43,9 @@ const sum = (
 ) => rows.reduce((total, row) => total + row[key], 0);
 
 describe("campagnes citées par identifiant de run", () => {
-  it("couvre 181 runs, tous identifiés et horodatés", () => {
-    expect(runs).toHaveLength(181);
-    expect(new Set(runs.map((r) => r.run)).size).toBe(181);
+  it("couvre 200 runs, tous identifiés et horodatés", () => {
+    expect(runs).toHaveLength(200);
+    expect(new Set(runs.map((r) => r.run)).size).toBe(200);
     expect(runs.every((r) => r.createdAt && r.build)).toBe(true);
   });
 
