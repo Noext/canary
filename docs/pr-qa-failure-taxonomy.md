@@ -1,39 +1,67 @@
 # Taxonomie des familles d'échec — état figé
 
-Généré depuis les artefacts stockés (`test/historical/plans.json.gz` : 79 plans réels
-des lots BA→II ; `test/historical/interleaved.json` : 9 lots entrelacés JJ→SS).
-Aucun chiffre saisi à la main. Références figées : baseline `8143ac9`, lignée `4b92c9a`.
+Deux sources, toutes deux committées et recalculées par des tests :
+`test/historical/plans.json.gz` (79 plans réels des lots BA→II, identifiants et
+diagnostics de scénario) et `test/historical/campaign-runs.json` (**181 runs**, un
+identifiant par ligne, verdict, scénarios verts, échecs produit, tokens, diagnostic
+de run et codes de scénario). `interleaved.json` n'est plus qu'un agrégat dérivé.
 
-## Familles observées sur les 79 plans stockés (24 runs non verts)
+Références figées : baseline `8143ac9`, lignée `4b92c9a`.
 
-| Famille | Scénarios | Runs concernés | Lots | Préventable avant exécution ? |
-| --- | --- | --- | --- | --- |
-| `MARKER_ORDER_UNREACHABLE` | 9 | 9 (437ec805, 5afc804a, 6832a9e4, 6e3f63fa…) | DD, EE, FF, GG, II | partielle : la contradiction de longueur est démontrable (message nommant la valeur exacte depuis #102) ; l'ordre des gardes ne l'est pas toujours |
-| `TARGET_NOT_FOUND` | 6 | 6 (28525781, 7900e46d, afcc9846, b8818582…) | BA, DD, EE, FF, GG | partielle : un libellé du diff est vérifiable statiquement, une cible rendue après interaction ne l'est pas (d'où la réécriture) |
-| `TRANSITION_NOT_OBSERVED` | 3 | 3 (160792a9, f5ecbaac, f83f0762…) | BA, DD, GG | partielle : le gate requalifie en bloqué ; prévenir demande l'observation de l'exécution |
-| `TRANSITION_ON_INVARIANT` | 3 | 3 (24db19b8, b5711fb7, bed1253d…) | BA, DD | partielle : idem, corrigé par la réécriture après observation (#101/#117) |
-| `no-diagnostic` | 1 | 1 (24db19b8…) | BA | non : un run bloqué sans diagnostic est un trou d'instrumentation |
+## A. Familles sur les 79 plans des lots BA→II
 
-## Campagnes entrelacées (agrégats, tous lots)
+| Famille | Scénarios | Runs | Lots |
+| --- | --- | --- | --- |
+| `MARKER_ORDER_UNREACHABLE` | 9 | 9 : `b5711fb7`, `8a16f402`, `d07c4ed4`, `cd62137e`, `7900e46d`, `6832a9e4`, `5afc804a`, `437ec805`, `6e3f63fa` | DD, EE, FF, GG, II |
+| `TARGET_NOT_FOUND` | 6 | 6 : `afcc9846`, `b8818582`, `28525781`, `d07c4ed4`, `7900e46d`, `ca55513b` | BA, DD, EE, FF, GG |
+| `TRANSITION_NOT_OBSERVED` | 3 | 3 : `f83f0762`, `f5ecbaac`, `160792a9` | BA, DD, GG |
+| `TRANSITION_ON_INVARIANT` | 3 | 3 : `24db19b8`, `bed1253d`, `b5711fb7` | BA, DD |
+| `no-diagnostic` | 1 | 1 : `24db19b8` | BA |
 
-| Lot | Build | Verts | Scénarios verts | Échecs produit | Bloqués | Tokens |
-| --- | --- | --- | --- | --- | --- | --- |
-| JJ | `8143ac9` | 6/10 | 75 | 3 | 3 | 2590005 |
-| KK | `922159d` | 1/10 | 61 | 0 | 14 | 4370933 |
-| MM | `8f831ab` | 7/10 | 93 | 2 | 3 | 2804726 |
-| NN | `8143ac9` | 6/10 | 62 | 1 | 3 | 2307186 |
-| OO | `a683f86` | 4/9 | 51 | 0 | 1 | 1892214 |
-| PP | `a683f86` | 7/10 | 70 | 0 | 2 | 2551153 |
-| QQ | `345b972` | 5/10 | 77 | 1 | 10 | 2746767 |
-| RR | `9d563e0` | 5/10 | 89 | 1 | 6 | 3033696 |
-| SS | `c5b3634` | 9/10 | 93 | 1 | 1 | 2921272 |
+## B. Familles sur les 181 runs des campagnes (identifiants complets dans le fichier)
 
-Total : **50/89 = 56 %** de runs entièrement verts.
+| Famille | Occurrences | Lots concernés |
+| --- | --- | --- |
+| `TARGET_NOT_FOUND` | 26 | DD, EE, FF, GG, JJ, KK, LL, NN, PP, QQ, RR |
+| `MARKER_ORDER_UNREACHABLE` | 22 | DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS |
+| `QA_ERROR` | 9 | KK, LL, MM, NN, OO |
+| `TRANSITION_NOT_OBSERVED` | 8 | DD, GG, JJ, NN, RR, TT |
+| `REQUIREMENT_UNGROUNDED` | 6 | DD, GG, II, KK, OO, QQ |
+| `TRANSITION_ON_INVARIANT` | 4 | DD, QQ, RR |
+| `RUN_BUDGET_EXCEEDED` | 4 | FF, NN, TT |
+| `PLAN_CHANGED_FILE_UNCOVERED` | 2 | OO, PP |
+| `PLAN_STATE_TARGET_READ_AS_TEXT` | 1 | KK |
+| `HTTP_502` | 1 | OO |
+| `COVERAGE_WITNESS_MISSING` | 1 | QQ |
+| `PLAN_SCHEMA_INVALID` | 1 | TT |
+| `PLAN_SELECTOR_UNSTABLE` | 1 | UU |
 
-## Ce que la taxonomie ne dit pas encore
+Les runs non verts et leur diagnostic, lot par lot :
 
-- Les familles ci-dessus viennent des lots BA→II. Le lot le plus récent (SS, réécriture
-  élargie) ne laisse qu'un scénario bloqué et un échec produit : la composition a changé,
-  et les fréquences historiques ne décrivent plus le build courant.
-- Les 9 lots entrelacés n'ont pas de classification par run stockée (agrégats seulement) :
-  c'est le premier manque à combler pour la campagne suivante.
+| Lot | Runs non verts (identifiant court → diagnostic) |
+| --- | --- |
+| DD | `b8818582`→TARGET_NOT_FOUND ; `f5ecbaac`→TRANSITION_NOT_OBSERVED ; `bed1253d`→TRANSITION_ON_INVARIANT ; `b5711fb7`→MARKER_ORDER_UNREACHABLE,TRANSITION_ON_INVARIANT ; `bc0e083e`→REQUIREMENT_UNGROUNDED |
+| EE | `28525781`→TARGET_NOT_FOUND ; `8a16f402`→MARKER_ORDER_UNREACHABLE ; `d07c4ed4`→MARKER_ORDER_UNREACHABLE,TARGET_NOT_FOUND ; `cd62137e`→MARKER_ORDER_UNREACHABLE |
+| FF | `d5151bca`→RUN_BUDGET_EXCEEDED ; `7900e46d`→RUN_BUDGET_EXCEEDED |
+| GG | `ca55513b`→TARGET_NOT_FOUND ; `160792a9`→TRANSITION_NOT_OBSERVED ; `74f1cfea`→REQUIREMENT_UNGROUNDED ; `6832a9e4`→MARKER_ORDER_UNREACHABLE ; `5afc804a`→MARKER_ORDER_UNREACHABLE |
+| II | `0da1a10e`→REQUIREMENT_UNGROUNDED ; `437ec805`→MARKER_ORDER_UNREACHABLE ; `6e3f63fa`→MARKER_ORDER_UNREACHABLE |
+| JJ | `df72d1b7`→TRANSITION_NOT_OBSERVED ; `aae64659`→TARGET_NOT_FOUND,TRANSITION_NOT_OBSERVED ; `be9084c6`→no-diagnostic |
+| KK | `90315438`→REQUIREMENT_UNGROUNDED ; `d2d3cf14`→TARGET_NOT_FOUND ; `e5ee0dd5`→TARGET_NOT_FOUND ; `97ec3d9d`→QA_ERROR ; `361d115a`→TARGET_NOT_FOUND ; `51644ed9`→TARGET_NOT_FOUND ; `ca37803e`→PLAN_STATE_TARGET_READ_AS_TEXT,TARGET_NOT_FOUND ; `eb8a7336`→MARKER_ORDER_UNREACHABLE,TARGET_NOT_FOUND ; `50cfa0d8`→TARGET_NOT_FOUND |
+| LL | `779e5398`→TARGET_NOT_FOUND ; `3674c055`→TARGET_NOT_FOUND ; `e336f483`→TARGET_NOT_FOUND ; `e86df885`→TARGET_NOT_FOUND ; `d7345e75`→TARGET_NOT_FOUND ; `979044da`→TARGET_NOT_FOUND ; `7e1a2c04`→QA_ERROR ; `9fd1e99e`→QA_ERROR ; `ee3bf230`→MARKER_ORDER_UNREACHABLE |
+| MM | `839cee08`→QA_ERROR ; `9a7b18e7`→no-diagnostic ; `99ec13c1`→MARKER_ORDER_UNREACHABLE |
+| NN | `a4387f43`→RUN_BUDGET_EXCEEDED ; `6c2d9572`→TARGET_NOT_FOUND ; `8fc389ff`→TARGET_NOT_FOUND,TRANSITION_NOT_OBSERVED ; `1b8d8d87`→QA_ERROR |
+| OO | `790fe5b5`→HTTP_502 ; `4d1f7d43`→REQUIREMENT_UNGROUNDED ; `01dc01ab`→PLAN_CHANGED_FILE_UNCOVERED ; `2db6f362`→MARKER_ORDER_UNREACHABLE ; `827e2108`→MARKER_ORDER_UNREACHABLE ; `7b121e6d`→QA_ERROR |
+| PP | `425e70e7`→MARKER_ORDER_UNREACHABLE ; `9e5c2edc`→TARGET_NOT_FOUND ; `f6c74998`→PLAN_CHANGED_FILE_UNCOVERED |
+| QQ | `56149663`→MARKER_ORDER_UNREACHABLE ; `e29f3f7a`→TRANSITION_ON_INVARIANT ; `28bcb05f`→COVERAGE_WITNESS_MISSING ; `e56bb5ce`→MARKER_ORDER_UNREACHABLE,TARGET_NOT_FOUND ; `a2e88c67`→REQUIREMENT_UNGROUNDED,TARGET_NOT_FOUND |
+| RR | `e90c9e75`→TARGET_NOT_FOUND,TRANSITION_ON_INVARIANT ; `0b8ddefe`→TRANSITION_NOT_OBSERVED ; `22f8d228`→MARKER_ORDER_UNREACHABLE ; `b8086467`→MARKER_ORDER_UNREACHABLE ; `0f05b09e`→MARKER_ORDER_UNREACHABLE |
+| SS | `277dee09`→MARKER_ORDER_UNREACHABLE |
+| TT | `e6f24ee9`→RUN_BUDGET_EXCEEDED ; `4fed6f58`→PLAN_SCHEMA_INVALID ; `60c44866`→TRANSITION_NOT_OBSERVED ; `f6a6a890`→TRANSITION_NOT_OBSERVED ; `c9c68ce9`→no-diagnostic ; `2417c8b5`→no-diagnostic |
+| UU | `739e7bdb`→PLAN_SELECTOR_UNSTABLE |
+
+## C. Périmètres publiés (recalculés depuis les runs)
+
+| Périmètre | Runs | Verts | Scénarios verts/run | Échecs produit/run | Tokens/run |
+| --- | --- | --- | --- | --- | --- |
+| Référence `8143ac9` | 30 | 17 (57 %) | 7.4 | 0.27 | 288456 |
+| Build courant (SS, UU) | 20 | 18 (90 %) | 9.1 | 0.05 | 288238 |
+| Autres builds de la lignée | 131 | 72 (55 %) | 7.6 | 0.05 | 329285 |

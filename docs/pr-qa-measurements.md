@@ -110,11 +110,19 @@ lot défavorable n'est jamais retiré du calcul.
 
 | Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |
 | --- | --- | --- | --- | --- | --- |
-| JJ | `8143ac9` | 6/10 | 75 | 3 | 2590005 |
-| KK | `922159d` | 1/10 | 61 | 0 | 4370933 |
+| BA | `?` | 1/1 | 9 | 0 | 560057 |
+| DD | `0000000` | 5/10 | 71 | 1 | 3414409 |
+| EE | `0000000` | 6/10 | 84 | 0 | 4326987 |
+| FF | `0000000` | 8/10 | 74 | 0 | 4291666 |
+| GG | `0000000` | 5/10 | 74 | 1 | 3832769 |
+| HH | `0000000` | 10/10 | 86 | 0 | 2440356 |
+| II | `0000000` | 7/10 | 75 | 0 | 3144996 |
+| JJ | `8143ac9` | 7/10 | 84 | 3 | 3013492 |
+| KK | `922159d` | 1/10 | 69 | 0 | 4768170 |
+| LL | `0000000` | 1/10 | 66 | 1 | 3061792 |
 | MM | `8f831ab` | 7/10 | 93 | 2 | 2804726 |
-| NN | `8143ac9` | 6/10 | 62 | 1 | 2307186 |
-| OO | `a683f86` | 4/9 | 51 | 0 | 1892214 |
+| NN | `8143ac9` | 6/10 | 67 | 1 | 2579651 |
+| OO | `a683f86` | 4/10 | 58 | 0 | 2158790 |
 | PP | `a683f86` | 7/10 | 70 | 0 | 2551153 |
 | QQ | `345b972` | 5/10 | 77 | 1 | 2746767 |
 | RR | `9d563e0` | 5/10 | 89 | 1 | 3033696 |
@@ -122,10 +130,10 @@ lot défavorable n'est jamais retiré du calcul.
 | TT | `8143ac9` | 4/10 | 72 | 4 | 3060539 |
 | UU | `f8a6959` | 9/10 | 88 | 0 | 2843491 |
 
-Référence `8143ac9` (30 runs) : **53 %** de runs verts, 7 scénarios verts par run, 0.3 échec produit par run, 265257.7 tokens par run.
-Toute la lignée non-référence (79 runs, y compris les builds dont un défaut a été corrigé depuis) : **59 %** de runs verts, 7.9 scénarios verts par run, 0.1 échec produit par run, 293218.4 tokens par run.
+Référence `8143ac9` (30 runs) : **57 %** de runs verts, 7.4 scénarios verts par run, 0.3 échec produit par run, 288456.1 tokens par run.
+Toute la lignée non-référence (151 runs, y compris les builds dont un défaut a été corrigé depuis) : **60 %** de runs verts, 7.8 scénarios verts par run, 0.1 échec produit par run, 323848.3 tokens par run.
 
-Lignée historique seule (59 runs, builds antérieurs au build courant) : **49 %**.
+Lignée historique seule (131 runs, builds antérieurs au build courant) : **55 %**.
 
 **Build courant seul** (20 runs du même commit) : **90 %** de runs verts, 9.1 scénarios verts par run, 0.1 échec produit par run, 288238.2 tokens par run.
 
