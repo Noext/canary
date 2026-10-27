@@ -2163,8 +2163,21 @@ export function planPayload(
 
 /** Les codes qui disent « la vérification demandée ne peut rien prouver ici ». */
 export const REPLANNABLE_CODES = new Set([
+  // Vérifications inapplicables : le plan demande un changement qui n'a pas lieu.
   "TRANSITION_NOT_OBSERVED",
   "TRANSITION_ON_INVARIANT",
+  // Défauts de plan que l'exécution a constatés : cible absente, ordre de
+  // marqueur impossible, lecture d'attribut, exigence non témoignée, couverture.
+  // Le gate les refuse en nommant la cause ; la réécriture les donne au
+  // planificateur avec ce que le run a réellement vu.
+  "COVERAGE_WITNESS_MISSING",
+  "MARKER_ORDER_UNREACHABLE",
+  "PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT",
+  "PLAN_CHANGED_FILE_UNCOVERED",
+  "PLAN_STATE_TARGET_READ_AS_TEXT",
+  "PLAN_TARGET_MISSING",
+  "REQUIREMENT_UNGROUNDED",
+  "TARGET_NOT_FOUND",
 ]);
 
 /** Ce que l'exécution a réellement vu pour une assertion fautive. */
@@ -2173,6 +2186,8 @@ export interface InvariantObservation {
   baseline?: unknown;
   code: string;
   effective?: unknown;
+  /** Le diagnostic du run, tel que l'exécution l'a écrit : la cause exacte. */
+  reason?: string;
   scenarioId: string;
 }
 
@@ -2202,6 +2217,7 @@ export function invariantObservations(
       baseline: measured?.baseline,
       code,
       effective: measured?.actual,
+      reason: scenario.diagnostic?.message.slice(0, 400),
       scenarioId: scenario.scenario.id,
     });
   }
@@ -2225,7 +2241,7 @@ export function replanPayload(input: {
 } {
   return {
     instruction:
-      "The plan below was executed. Read the two lists before rewriting. observations: for these scenarios the verification demanded a CHANGE on a value that did not change — the value before the step, the value after it and the expected value are given; use state with afterStep when the value is an invariant, and keep transition only where a step genuinely moves it. targets: for these steps the locator matched nothing — offered lists what the page actually exposed at that moment, copy a target from it character by character, and if the element the step wanted truly does not exist, rewrite the step to reach the state another way. Rewrite ONLY what is wrong, keep every scenario and every step that proved something, and return the complete corrected plan.",
+      "The plan below was executed and the gate or the run named, for each scenario in observations, exactly what is wrong (code and message). Read them before rewriting. When the verification demanded a CHANGE on a value that did not change, the value before the step, the value after it and the expected value are given: use state with afterStep when the value is an invariant, and keep transition only where a step genuinely moves it. When a target does not exist, a marker cannot be reached in that order, a requirement cites no witness or a changed file is not covered, fix that defect itself. targets: for these steps the locator matched nothing — offered lists what the page actually exposed at that moment, copy a target from it character by character, and if the element the step wanted truly does not exist, rewrite the step to reach the state another way. Rewrite ONLY what is wrong, keep every scenario and every step that proved something, and return the complete corrected plan.",
     observations: input.observations,
     plan: input.plan,
     targets: input.targets ?? [],

@@ -36,14 +36,25 @@ function result(
 }
 
 describe("re-planification après observation", () => {
-  it("ne retient que les vérifications que l'exécution a démenties", () => {
+  it("retient les défauts de plan, jamais un échec produit ni une panne", () => {
+    // La réécriture ne couvre plus seulement les transitions : une cible
+    // absente, un ordre de marqueur impossible ou une exigence non témoignée
+    // sont des défauts de plan que l'exécution a constatés, et le planificateur
+    // peut les corriger. Un échec produit et une panne restent hors de sa portée.
     const observations = invariantObservations([
       result("a", "TRANSITION_ON_INVARIANT"),
       result("b", "TRANSITION_NOT_OBSERVED"),
       result("c", undefined),
       result("d", "TARGET_NOT_FOUND"),
+      result("e", "MARKER_ORDER_UNREACHABLE"),
+      result("f", "QA_ERROR"),
     ]);
-    expect(observations.map((item) => item.scenarioId)).toEqual(["a", "b"]);
+    expect(observations.map((item) => item.scenarioId)).toEqual([
+      "a",
+      "b",
+      "d",
+      "e",
+    ]);
     expect(observations[0]).toMatchObject({
       assertionId: "banner-after",
       baseline: "Aperçu · vérifié",
