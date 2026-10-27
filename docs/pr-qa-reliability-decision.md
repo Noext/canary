@@ -1,10 +1,14 @@
 # Décision finale — fiabilité de `canary-pr-qa`
 
-Document **généré depuis les artefacts** : `test/historical/campaign-runs.json`
-(181 runs identifiés) et `test/historical/plans.json.gz` (79 plans). Aucun
-chiffre de ce document n'est saisi à la main ; les agrégats sont recalculés par
-`test/campaign-runs.test.ts`, qui échoue si un run, un compte, un scénario, un échec
-ou un token diverge.
+Document **écrit à la main** à partir des artefacts : `test/historical/campaign-runs.json`
+(181 runs identifiés) et `test/historical/plans.json.gz` (79 plans). Les agrégats
+cités sont recalculés par `test/campaign-runs.test.ts` depuis ces runs ; en revanche
+les phrases de ce document ne sont pas générées, et une valeur qui divergerait des
+artefacts ne ferait échouer la CI que si elle apparaît aussi dans
+`pr-qa-measurements.md` (qui, lui, est comparé). Deux limites connues : le corpus de
+181 runs n'inclut pas les 19 artefacts de `plans.json.gz` absents de la liste du
+service (10 lot BA, 9 lot CC), et les citations ci-dessous sont des extraits
+d'artefacts, pas des messages regénérés.
 
 Références : baseline `8143ac9`, lignée figée `4b92c9a`.
 
@@ -35,11 +39,12 @@ découverte de l'interface **25**, dépendance d'état **9**,
 infrastructure **11**.
 
 Exemples tirés des artefacts (messages de diagnostic, non retapés à la main) : un
-`MARKER_ORDER_UNREACHABLE` nomme la mesure et la borne — « the last write in
-"justification.comment" holds 251 characters and the limit that decides this value
-is 280 » ; un `TARGET_NOT_FOUND` nomme le libellé attendu et l'échec de résolution —
-« waiting for getByLabel('Quantité · Pièce de 20 €') » — alors que la page expose
-« Billet de 20 € » ; un `REQUIREMENT_UNGROUNDED` nomme l'exigence et la citation
+`MARKER_ORDER_UNREACHABLE` nomme la mesure et la borne — extrait du run `56ae5df7`
+(lot CC) : « the last write in "justification.comment" holds 261 characters and the
+limit that decides this value is 280 » ; un `TARGET_NOT_FOUND` nomme le libellé
+attendu et l'échec de résolution — extrait du run `e56bb5ce` : attente sur
+« Quantité · Pièce de 20 € » alors que le plan stocké écrit « Quantité · Billet de
+20 € » ; un `REQUIREMENT_UNGROUNDED` nomme l'exigence et la citation
 refusée — « No source witness for … » avec la citation rejetée entre guillemets.
 
 ## 2. La meilleure correction candidate et son hypothèse
