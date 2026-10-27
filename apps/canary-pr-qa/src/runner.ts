@@ -36,6 +36,7 @@ import {
   type PlanFileText,
   planEvidenceDiagnostic,
   planPayload,
+  preventionMessages,
   replannedScenarios,
   replanPayload,
   stateTargetReadRefusals,
@@ -863,6 +864,15 @@ function planRefusalParts(
       // donne au plan lu le même message nommé.
       ...ifPresentRefusals(candidate).map(
         (item) => `${item.error.message}. ${item.error.hint}`
+      ),
+      // Prévention : le défaut d'ordre de marqueur est dicible au planificateur
+      // pendant qu'il écrit le plan, au lieu de coûter le scénario à l'exécution.
+      // Le refus de lecture reste posé plus loin, pour un plan qui n'aurait pas
+      // été corrigé malgré le message.
+      ...preventionMessages(
+        candidate,
+        sourceLineMaterial(context),
+        config.QA_PREVENT_MARKER_ORDER
       ),
     ],
   };

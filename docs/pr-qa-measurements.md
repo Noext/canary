@@ -110,7 +110,7 @@ lot défavorable n'est jamais retiré du calcul.
 
 | Lot | Build | Runs verts | Scénarios verts | Échecs produit | Tokens |
 | --- | --- | --- | --- | --- | --- |
-| BA | `?` | 8/11 | 96 | 2 | 3370861 |
+| CC | `pre-8143ac9` | 7/10 | 63 | 0 | 3784344 |
 | DD | `0000000` | 5/10 | 71 | 1 | 3414409 |
 | EE | `0000000` | 6/10 | 84 | 0 | 4326987 |
 | FF | `0000000` | 8/10 | 74 | 0 | 4291666 |
@@ -129,19 +129,19 @@ lot défavorable n'est jamais retiré du calcul.
 | SS | `c5b3634` | 9/10 | 93 | 1 | 2921272 |
 | TT | `8143ac9` | 4/10 | 72 | 4 | 3060539 |
 | UU | `f8a6959` | 9/10 | 88 | 0 | 2843491 |
-| CC | `pre-8143ac9` | 6/9 | 54 | 0 | 3224287 |
+| BA | `pre-8143ac9` | 7/10 | 87 | 2 | 2810804 |
 
 Référence `8143ac9` (30 runs) : **57 %** de runs verts, 7.4 scénarios verts par run, 0.3 échec produit par run, 288456.1 tokens par run.
 Toute la lignée non-référence (170 runs, y compris les builds dont un défaut a été corrigé depuis) : **61 %** de runs verts, 7.7 scénarios verts par run, 0.1 échec produit par run, 323154 tokens par run.
 
 Lignée historique seule (150 runs, builds antérieurs au build courant) : **57 %**.
 
-**Build courant seul** (20 runs du même commit) : **90 %** de runs verts, 9.1 scénarios verts par run, 0.1 échec produit par run, 288238.2 tokens par run.
+**Build courant seul** (20 runs de deux commits de source identique — SS `c5b3634`, UU `f8a6959`) : **90 %** de runs verts, 9.1 scénarios verts par run, 0.1 échec produit par run, 288238.2 tokens par run.
 
 Les deux agrégats sont publiés parce qu'ils répondent à deux questions différentes :
 « la lignée a-t-elle progressé depuis la référence ? » (tous lots, y compris les
 régressions corrigées depuis) et « le code d'aujourd'hui fait-il mieux que la
-référence ? » (même commit). Le second n'a de sens que comparé à une campagne
+référence ? » (code identique). Le second n'a de sens que comparé à une campagne
 fraîche de la référence : c'est ce que la prochaine campagne mesure.
 
 Expériences isolées (un lot de chaque côté, jamais agrégées) :

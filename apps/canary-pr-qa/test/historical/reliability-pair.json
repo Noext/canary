@@ -1,0 +1,181 @@
+{
+  "pr": "https://github.com/pharmania/arpilabe-pilotage/pull/20",
+  "preview": "https://20.arpilabe.pharmania.fr/",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "service": "canary.pharmania.fr",
+  "note": "Essai contrôlé du 2026-10-27 : même service, même PR, même modèle, même oracle, deux lots dos à dos sur deux builds, tous les runs comptés — y compris les échecs et les blocages.",
+  "blocks": [
+    {
+      "lot": "X1",
+      "build": "8143ac9",
+      "runs": [
+        {
+          "run": "1caf71f4-9bbe-49d2-9c6c-c03cf57c421a",
+          "outcome": "passed",
+          "greenScenarios": 12,
+          "productFailures": 0,
+          "tokens": 283764,
+          "codes": []
+        },
+        {
+          "run": "5c9a9dc8-4a56-4ffe-bc1d-9af8dfe9d995",
+          "outcome": "passed",
+          "greenScenarios": 7,
+          "productFailures": 0,
+          "tokens": 279089,
+          "codes": []
+        },
+        {
+          "run": "b1a30b8c-8c50-4725-8e05-b70a3000f2c5",
+          "outcome": "passed",
+          "greenScenarios": 12,
+          "productFailures": 0,
+          "tokens": 297786,
+          "codes": []
+        },
+        {
+          "run": "029a0221-1355-40ab-9bcb-2651e0633644",
+          "outcome": "blocked",
+          "greenScenarios": 7,
+          "productFailures": 0,
+          "tokens": 271900,
+          "codes": ["TRANSITION_ON_INVARIANT"]
+        },
+        {
+          "run": "89ddfab8-d5e0-4630-b3c6-5ae8b81bd517",
+          "outcome": "passed",
+          "greenScenarios": 9,
+          "productFailures": 0,
+          "tokens": 134285,
+          "codes": []
+        },
+        {
+          "run": "6e17108d-29b1-4861-b63d-ca2106b84cdd",
+          "outcome": "passed",
+          "greenScenarios": 10,
+          "productFailures": 0,
+          "tokens": 140291,
+          "codes": []
+        },
+        {
+          "run": "cb84e96d-909c-4e12-97e3-171b264ad7fc",
+          "outcome": "failed",
+          "greenScenarios": 7,
+          "productFailures": 1,
+          "tokens": 139594,
+          "codes": []
+        },
+        {
+          "run": "17f5a321-8b3a-46e6-97bc-58aa4433fad4",
+          "outcome": "blocked",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "tokens": 267909,
+          "codes": ["TARGET_NOT_FOUND"]
+        },
+        {
+          "run": "defe8850-6d70-47d6-aa50-43f4f2a48589",
+          "outcome": "failed",
+          "greenScenarios": 8,
+          "productFailures": 1,
+          "tokens": 279188,
+          "codes": []
+        },
+        {
+          "run": "641d7df9-caa2-42a4-a68a-ddd113682450",
+          "outcome": "blocked",
+          "greenScenarios": 0,
+          "productFailures": 0,
+          "tokens": 0,
+          "codes": ["QA_ERROR"]
+        }
+      ]
+    },
+    {
+      "lot": "Y1",
+      "build": "e698deb",
+      "runs": [
+        {
+          "run": "d205419d-dcc1-4383-8e09-4ae20bbfb335",
+          "outcome": "failed",
+          "greenScenarios": 10,
+          "productFailures": 2,
+          "tokens": 422846,
+          "codes": []
+        },
+        {
+          "run": "1a264155-19f8-4123-8931-30dec0e9678a",
+          "outcome": "passed",
+          "greenScenarios": 7,
+          "productFailures": 0,
+          "tokens": 302312,
+          "codes": []
+        },
+        {
+          "run": "25013899-2749-41f1-b55a-648ba8e32b75",
+          "outcome": "blocked",
+          "greenScenarios": 0,
+          "productFailures": 0,
+          "tokens": 283561,
+          "codes": ["COVERAGE_REQUIREMENT_SOURCE_MISSING"]
+        },
+        {
+          "run": "b0539d5c-6056-4413-bc36-a86ec66a23b5",
+          "outcome": "passed",
+          "greenScenarios": 9,
+          "productFailures": 0,
+          "tokens": 530596,
+          "codes": []
+        },
+        {
+          "run": "236d1871-a856-46f3-a303-a4b7eae0c438",
+          "outcome": "passed",
+          "greenScenarios": 10,
+          "productFailures": 0,
+          "tokens": 141093,
+          "codes": []
+        },
+        {
+          "run": "03d4dd34-e39d-4658-b2aa-8c579af8755f",
+          "outcome": "passed",
+          "greenScenarios": 9,
+          "productFailures": 0,
+          "tokens": 152089,
+          "codes": []
+        },
+        {
+          "run": "1c9ce977-8585-4d5b-a16e-cf229d204496",
+          "outcome": "passed",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "tokens": 378717,
+          "codes": []
+        },
+        {
+          "run": "dc015fa0-2209-4dde-995a-850ad99a18cb",
+          "outcome": "passed",
+          "greenScenarios": 11,
+          "productFailures": 0,
+          "tokens": 284068,
+          "codes": []
+        },
+        {
+          "run": "5e36f9ea-902f-420b-983a-41f8c06649b2",
+          "outcome": "passed",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "tokens": 275240,
+          "codes": []
+        },
+        {
+          "run": "a11afdc9-7f28-4956-a326-c81d7a393bd4",
+          "outcome": "passed",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "tokens": 264173,
+          "codes": []
+        }
+      ]
+    }
+  ]
+}
