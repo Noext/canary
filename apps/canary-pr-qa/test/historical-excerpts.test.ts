@@ -31,6 +31,21 @@ const excerpts = JSON.parse(
   message: string;
   quote: string;
 }[];
+const trialRuns = new Map<string, Set<string>>();
+for (const name of [
+  "prevention-trial.json",
+  "reliability-pair.json",
+  "controlled-campaign.json",
+]) {
+  const artifact = JSON.parse(readFileSync(join(dir, name), "utf8")) as {
+    blocks?: { runs: { run: string; codes?: string[] }[] }[];
+  };
+  for (const block of artifact.blocks ?? []) {
+    for (const run of block.runs) {
+      trialRuns.set(run.run.slice(0, 8), new Set(run.codes ?? []));
+    }
+  }
+}
 const doc = readFileSync(
   join(import.meta.dirname, "../../../docs/pr-qa-reliability-decision.md"),
   "utf8"
@@ -106,7 +121,14 @@ describe("attribution des identifiants dans le document", () => {
           id.startsWith(short[1]!)
         );
         if (!full) {
-          offenders.push(`${short[1]} absent du corpus`);
+          // Un run de campagne récente (essai, paire ou campagne entrelacée) est
+          // une preuve versionnée au même titre que le corpus historique.
+          const codes = trialRuns.get(short[1]!);
+          if (!codes) {
+            offenders.push(`${short[1]} absent des artefacts`);
+          } else if (!codes.has(row[1]!)) {
+            offenders.push(`${short[1]} ne porte pas ${row[1]}`);
+          }
           continue;
         }
         if (!families.get(full)?.has(row[1]!)) {

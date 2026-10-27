@@ -8,9 +8,16 @@ document dont une famille, une catégorie ou un taux cité diverge ; `test/histo
 refuse une citation qui n'est pas un fragment littéral du message du run qu'elle nomme.
 Ce qui n'est **pas** vérifié mécaniquement est dit à l'endroit où cela compte.
 
-Le corpus couvre **les 200 runs** des lots BA→UU, y compris les 19 artefacts que seul
-`plans.json.gz` portait (10 lot BA, 9 lot CC) : ils étaient absents du corpus de la version
-précédente, et deux versions du document ont été refusées pour cette raison.
+Le corpus couvre **les 200 runs identifiés** des lots BA→UU, y compris les 19 artefacts que
+seul `plans.json.gz` portait (10 lot BA, 9 lot CC) : ils étaient absents du corpus de la
+version précédente, et deux versions du document ont été refusées pour cette raison.
+
+Deux limites de traçabilité sont écrites, pas comblées : le lot **`BB`** (build `7a6050b`,
+10 runs, 7 verts, 92 scénarios, 5 378 250 tokens, mesuré et conservé dans
+`pr-qa-architecture.md`) n'a **aucun identifiant de run** dans les artefacts versionnés et le
+service ne le liste plus — il est donc absent de la taxonomie par famille, et non retiré ; et
+70 des 200 runs portent le build `0000000`, donc aucune conclusion par build ne s'appuie sur
+eux.
 
 Références figées par l'objectif : lignée `4b92c9a` à 55 %, baseline `8143ac9` à 60 %,
 coût +20 %.
@@ -76,7 +83,7 @@ fichiers entiers dans la charge utile (plus cher et moins bon, #107).
 
 | Changement | Apport | Tests |
 | --- | --- | --- |
-| `src/plan-prevention.ts`, `QA_PREVENT_MARKER_ORDER` (défaut posé) | le défaut d'ordre entre dans la correction du plan candidat | `marker-order` : défaut remonté, plan conforme silencieux, drapeau coupé silencieux et refus de lecture intact |
+| `preventionMessages` dans `src/plan-evidence.ts`, `QA_PREVENT_MARKER_ORDER` (défaut posé) | le défaut d'ordre entre dans la correction du plan candidat | `marker-order` : défaut remonté, plan conforme silencieux, drapeau coupé silencieux et refus de lecture intact |
 | #76, retiré | porte statique sur les cibles : mesurée 0 VP / 14 FP | — (décision de retrait conservée) |
 | #102 | le refus de longueur nomme la valeur exacte à écrire | `marker-order` |
 | #106, #110 | libellés et cibles concrètes du diff dans le message | `policy` |
@@ -84,7 +91,7 @@ fichiers entiers dans la charge utile (plus cher et moins bon, #107).
 | #115 | réparation déterministe d'un quasi-homonyme, jamais sur un nombre | `target-nearest` |
 | #117 | la réécriture couvre tous les défauts de plan nommés | `replan` |
 
-Suite : **861 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
+Suite : **872 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
 de l'application testée » garantie par `no-application-knowledge`.
 
 ## 4. Résultats comparatifs, régressions comprises
@@ -106,6 +113,33 @@ Régression écrite : le build `922159d` (lot KK) tombe à 1/10 — le nettoyage
 connaissances applicatives a cassé la spécificité du prompt ; il est dans le corpus et dans
 les 60,6 %.
 
+### Campagne contrôlée entrelacée (protocole de l'objectif)
+
+Lots **alternés** baseline/courant sur le même service, la même PR, le même modèle et le même
+oracle : **P1** (baseline) → **Q1** (courant) → **P2** (baseline) → **Q2** (courant), cinq runs
+par lot, **dix runs par bras**, tous comptés (artefact
+`test/historical/controlled-campaign.json`, recalculé par `test/controlled-campaign.test.ts`) :
+
+| Bras | Build | Runs verts | Scénarios verts/run | Échecs produit/run | Faux refus | Faux verts (assertions) | Tokens/run | Durée |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Baseline | `8143ac9` | **9/10 (90 %)** | 8.20 | 0.10 | 0 | 0/471 | 256746 | collectée |
+| Courant | `e698deb` | **5/10 (50 %)** | 8.80 | 0.30 | 0 | 0/505 | 246981 | collectée |
+
+**Le build courant fait moins bien que la référence sur le critère principal**, dans une
+campagne où les deux bras alternent : −40 points, avec davantage de scénarios verts par run
+(8.80 contre 8.20) et plus d'échecs produit (0.30 contre 0.10), pour un coût légèrement
+inférieur. Les cinq échecs du bras courant sont `TRANSITION_NOT_OBSERVED` (3),
+`TRANSITION_ON_INVARIANT` (1) et `TARGET_NOT_FOUND` (1) ; celui de la référence est
+`TRANSITION_NOT_OBSERVED`. La famille dominante de cette campagne est donc l'assertion de
+transition sur une valeur qui ne bouge pas — exactement celle que la prévention ne peut pas
+traiter avant exécution.
+
+Faux verts : aucun des 976 assertions des deux bras n'était pré-satisfaite, et aucune
+précondition non tranchable n'a été enregistrée — l'indicateur est mesuré à zéro sur cette
+campagne, pas supposé.
+
+### Essai séquentiel antérieur (plus faible, conservé pour la trace)
+
 **Essai contrôlé du 2026-10-27** (`test/historical/reliability-pair.json`), même service,
 même PR, même modèle, même oracle, deux lots dos à dos :
 
@@ -114,8 +148,10 @@ même PR, même modèle, même oracle, deux lots dos à dos :
 | X1 | `8143ac9` (référence) | 5/10 (50 %) | 80 | 2 | 209381 |
 | Y1 | `e698deb` (courant) | 8/10 (80 %) | 80 | 2 | 303470 |
 
-Le critère principal progresse de **+30 points** sur cette paire, sans gain de scénarios ni
-d'échecs produit, mais à **+45 % de tokens par run** : c'est une **régression de coût**
+Cet essai est **séquentiel** (dix runs baseline puis dix runs courants) : il est plus faible
+que la campagne entrelacée ci-dessus, et c'est la campagne qui tranche. Sur cette paire, le
+critère progresse de **+30 points**, sans gain de scénarios ni d'échecs produit, mais à
+**+45 % de tokens par run** : c'est une **régression de coût**
 publiée comme telle, au-delà des +20 % que l'objectif figeait. Les cinq runs non verts de la
 référence (`029a0221` `TRANSITION_ON_INVARIANT`, `17f5a321` `TARGET_NOT_FOUND`, `641d7df9`
 `QA_ERROR`, `cb84e96d` et `defe8850` échecs produit) et les deux du build courant
@@ -128,34 +164,42 @@ lot isolé du même code. Le build courant couvre donc deux commits de **source 
 
 ## 5. Recommandation
 
-**Poursuivre**, avec les réserves qui suivent. La direction est mesurée : 56,7 % sur la
-référence (17/30), 90 % sur le build courant (18/20), à coût par run identique (288 238
-contre 288 456) et avec 0,05 échec produit par run contre 0,27. Aucune stabilisation n'est
-annoncée : la variance mesurée (KK 1/10, LL 1/10, OO 4/10) l'interdit, et le corpus entier
-reste à 60,0 % parce qu'il contient les régressions.
+**Changer d'approche**, et le dire avec les chiffres qui l'imposent.
 
-La campagne de prévention **ne démontre pas** les 10 points annoncés : sur deux bras du même
-build, le drapeau posé donne 4/5 contre 5/5, et un run aux dix scénarios verts est bloqué par
-le refus de lecture. La conclusion à écrire est donc double, et aucune des deux n'est une
-redéfinition du critère :
+La campagne entrelacée ne montre **aucune amélioration** : 9/10 pour la référence contre
+5/10 pour le build courant, dans une alternance de lots qui départage les deux bras sur la
+même PR, le même modèle et le même oracle. Les deux essais séquentiels antérieurs (5/10 → 8/10
+sur le build courant, et 5/5 contre 4/5 pour le drapeau de prévention) ne suffisent donc pas
+à établir un gain : ils ne sont pas entrelacés avec la référence, et la campagne qui l'est les
+contredit.
 
-1. **le critère principal progresse** sur l'essai contrôlé du jour (5/10 → 8/10), porté par les
-   corrections antérieures (#102, #106, #110, #111, #115, #117), **pas** par la prévention ;
-2. **aucune modification testée dans ce tour n'améliore le critère au-delà de l'existant** :
-   la prévention du défaut d'ordre est réfutée à n = 5 par bras, et elle a un coût mesuré — le
-   refus de lecture bloque des runs dont tous les scénarios passent. Le prochain changement
-   justifiable n'est donc pas d'ajouter une correction, mais de rendre ce refus non fatal au
-   niveau du run, ce qui reste à mesurer et n'est pas revendiqué ici.
+Ce que l'objectif permet de conclure, sans le maquiller :
 
-Le coût par run doit être suivi : +45 % sur la paire du jour contre la référence, à gains de
-scénarios nuls.
+1. **la candidate de prévention est réfutée** (4/5 contre 5/5 à drapeau posé/coupé) et son
+   coût est identifié : le refus de lecture bloque des runs dont tous les scénarios passent ;
+2. **aucune modification testée dans ce tour n'améliore le critère principal** ; le corpus
+   entier reste à 60,0 % et la lignée n'est pas distinguable de la référence dans une
+   campagne contrôlée ;
+3. **la famille dominante de la campagne est `TRANSITION_NOT_OBSERVED`** (3 des 5 échecs du
+   bras courant) : le plan affirme un changement que la page n'exécute pas dans la séquence
+   décrite. C'est un défaut qui ne se prévient pas à la lecture — il faut l'observation — et
+   la sonde de navigation qui l'aurait fournie a été mesurée à +91 % de tokens sans gain
+   (#94). La limite est donc dans ce que le modèle impose sait déduire du diff, pas dans une
+   porte manquante ;
+4. si une nouvelle campagne ne renverse pas ce résultat, la conclusion à écrire est celle que
+   l'objectif prévoit explicitement : **limite du modèle imposé** sur ce dépôt, sans
+   redéfinition du critère.
+
+Le coût reste un indicateur de premier plan : parité sur `SS+UU` (288 238), +45 % sur la
+paire séquentielle du jour, −4 % dans la campagne entrelacée (246 981 contre 256 746). Aucune
+de ces trois mesures ne soutient l'hypothèse d'un gain à coût constant.
 
 ## Annexe — preuve par cause sur le corpus de 200 runs
 
 | Cause | Runs | Lots | Identifiants | Mécanisme | Préventable | Risque de faux refus |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TARGET_NOT_FOUND` | 27 | BA, DD, EE, FF, GG, JJ, KK, LL, NN, PP, QQ, RR | `e90c9e75`, `b8818582`, `28525781` | le plan vise un libellé absent de la vue observée ; l'échec se découvre à l'exécution | non (porte statique refutée, #76) | refuser à la lecture coûterait des plans qui auraient réussi : la réparation à l'exécution a été préférée |
-| `MARKER_ORDER_UNREACHABLE` | 23 | CC, DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS | `277dee09`, `56ae5df7`, `d07c4ed4` | le plan écrit un marqueur dont l'état antérieur n'est pas établi par une étape jouée avant lui | oui — mesure, borne et contrôle amont sont dans le diff | aucun refus ajouté : la correction remplace le refus, et le refus de lecture reste pour le plan non corrigé |
+| `MARKER_ORDER_UNREACHABLE` | 23 | CC, DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS | `277dee09`, `56ae5df7`, `d07c4ed4` | le plan écrit un marqueur dont l'état antérieur n'est pas établi par une étape jouée avant lui | oui — mesure, borne et contrôle amont sont dans le diff | **mesuré négatif** : un plan non corrigé est bloqué par le refus de lecture alors que ses dix scénarios passent (run `c98274a3`) — le refus est donc fatal au niveau du run, et c'est ce coût qui a fait réfuter la candidate |
 | `TRANSITION_NOT_OBSERVED` | 9 | BA, DD, GG, JJ, NN, RR, TT | `f6a6a890`, `160792a9`, `df72d1b7` | le plan attend un changement que l'application n'effectue pas dans la séquence décrite | non : il faut constater l'invariance | nul (réécriture après observation, budgétée) |
 
 | `REQUIREMENT_UNGROUNDED` | 7 | CC, DD, GG, II, KK, OO, QQ | `bc0e083e`, `0da1a10e` | l'exigence citée ne se retrouve pas dans le fichier qu'elle déclare (citation faible ou recousue) | oui à la lecture, mesuré : la porte refuse le plan avant exécution | refus au niveau du scénario quand aucun scénario n'est exécuté ; c'est la porte la plus coûteuse en faux refus mesurés (10 plans nouvellement refusés sur 79, 0 visant un scénario vert) |
@@ -170,17 +214,21 @@ fragment littéral du message du run.
 
 ### Chiffres figés de l'objectif
 
-- **55 % lignée `4b92c9a`** : reproduit à l'identique par 72/131 = **55.0 %** (non-baseline,
-  non-courant, avant repli des lots BA et CC). Avec ces deux lots, la même lignée donne
-  86/150 = 57.3 %.
+- **55 % lignée `4b92c9a`** : deux dérivations, publiées ensemble pour qu'aucune ne passe
+  pour « la » reproduction — **72/131 = 55.0 %** sur le sous-ensemble non-baseline et
+  non-courant avant repli des lots BA et CC, et **85/150 = 56.7 %** sur la lignée complète
+  (phase `lineage` d'`interleaved.json`, BA et CC compris). L'écart entre les deux est
+  exactement les 14 runs verts que les deux lots repliés ajoutent.
 - **60 % baseline `8143ac9`** : ne se reproduit sur aucun agrégat de la référence, qui donne
   17/30 = **56.7 %**. Le seul agrégat à 60.0 % est le corpus entier (120/200). L'écart est
   déclaré, pas absorbé : la valeur figée reste la référence de l'objectif, et seul un essai
   contrôlé pourrait la corriger.
 - **+20 % de coût** : la lignée hors référence est à 323 154 tokens/run contre 288 456, soit
-  **+12.0 %** ; le build courant est à parité (288 238). Le +20 % provient d'une synthèse
+  **+12.0 %** ; le build mesuré `SS+UU` est à **parité** (288 238), mais l'essai frais du
+  2026-10-27 est à **+45.0 %** (303 470 contre 209 381). Le +20 % provient d'une synthèse
   antérieure portant sur un corpus plus étroit (294 504 contre 244 860) ; il n'est pas
-  reproduit par les 200 runs.
+  reproduit par les 200 runs, et il est **dépassé** par la paire du jour — c'est la paire
+  du jour qui doit guider la suite, pas la parité historique.
 
 ### Limites des indicateurs
 
@@ -188,10 +236,13 @@ fragment littéral du message du run.
   assertions (17.4 %) déjà satisfaites avant leur étape ; conditions non tranchables **325**.
   La référence porte le champ **à 0** : ses assertions n'ont pas été instrumentées, donc son
   zéro est une absence de mesure et non une mesure ;
-- faux refus : mesurés sur les **79 plans historiques** rejoués contre les deux portes (5
-  refus à la référence, 15 aujourd'hui, 10 nouvellement refusés, **0** visant un scénario qui
-  était vert, **0** plan refusé à la référence et accepté aujourd'hui) — mesure reproductible,
-  mais sur les plans, pas sur la campagne ;
-- durées : `campaign-runs.json` ne porte que `createdAt` ; `pr-qa-measurements.md` publie
-  `startedAt`/`endedAt` pour les 79 runs BA→II. L'indicateur est disponible pour ce
-  sous-ensemble et absent pour les 121 autres — absence de collecte, pas absence de mesure.
+- faux refus, deux mesures distinctes : sur la **campagne entrelacée**, zéro run bloqué dont
+  tous les scénarios passent (compté par run dans `controlled-campaign.json`) ; sur les
+  **79 plans historiques** rejoués contre les deux portes, 5 refus à la référence, 15
+  aujourd'hui, 10 nouvellement refusés, **0** visant un scénario qui était vert et **0** plan
+  refusé à la référence puis accepté aujourd'hui. Le cas `c98274a3` (dix scénarios verts, run
+  bloqué) reste le contre-exemple le plus net du coût d'un refus fatal au niveau du run ;
+- durées : collectées pour les **20 runs de la campagne entrelacée** (`startedAt`/`endedAt`
+  dans `controlled-campaign.json`) et pour les 79 runs BA→II dans `pr-qa-measurements.md` ;
+  `campaign-runs.json`, lui, ne porte que `createdAt` — absence de collecte sur les 121 runs
+  restants, pas absence de mesure.
