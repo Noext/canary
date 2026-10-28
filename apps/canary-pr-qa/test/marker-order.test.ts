@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { preventionMessages } from "../src/plan-evidence.js";
 import { planFindings, unwitnessedPlanRefusals } from "../src/policy.js";
 import type { Plan, SourceLineMaterial } from "../src/schema.js";
 
@@ -954,73 +953,48 @@ describe("l'ordre d'un marqueur se lit dans le diff, pas dans une convention", (
   });
 });
 
-describe("prévenir plutôt que refuser après coup", () => {
+describe("le refus d'ordre était déjà remis au planificateur", () => {
   /**
-   * Les deux directions : le défaut est dicible au planificateur quand on l'a
-   * mesuré, et la fonction ne dit rien d'un plan conforme ou d'un drapeau coupé —
-   * sans quoi l'essai contrôlé comparerait deux fois la même chose.
+   * Le candidat que j'ai ajouté (`preventionMessages`, `QA_PREVENT_MARKER_ORDER`)
+   * dupliquait un chemin existant : `unwitnessedPlanRefusals` porte déjà le refus
+   * d'ordre, et `planRefusals` l'envoie dans la correction du plan candidat depuis
+   * #86. Ce test fige le fait, pour que la conclusion du document repose sur le
+   * code et non sur une impression — et pour que la suppression du doublon ne
+   * puisse pas retirer, sans le dire, le refus lui-même.
    */
-  const STEPS_WITHOUT_SELECT = [
-    { action: { type: "goto", path: "/" }, description: "open", id: "open" },
-    {
-      action: {
-        type: "fill",
-        locator: {
-          by: "role",
-          name: "Note about the case",
-          value: "textbox",
+  it("nomme le défaut mesuré et le contrôle amont, sans aucun drapeau", () => {
+    const plan = planWith(
+      [
+        {
+          action: { type: "goto", path: "/" },
+          description: "open",
+          id: "open",
         },
-        value: "x".repeat(281),
-      },
-      description: "write an over-long note",
-      id: "write-long",
-    },
-    {
-      action: { assertionId: "problem-too-long", type: "assert" },
-      description: "assert the marker",
-      id: "assert-long",
-    },
-  ] as never;
-  const STEPS_WITH_SELECT = [
-    { action: { type: "goto", path: "/" }, description: "open", id: "open" },
-    {
-      action: {
-        type: "select",
-        locator: {
-          by: "role",
-          name: "Kind of the note",
-          value: "combobox",
+        {
+          action: {
+            type: "fill",
+            locator: {
+              by: "role",
+              name: "Note about the case",
+              value: "textbox",
+            },
+            value: "x".repeat(281),
+          },
+          description: "write an over-long note",
+          id: "write-long",
         },
-        value: "rendu",
-      },
-      description: "choose the kind",
-      id: "choose",
-    },
-    ...(STEPS_WITHOUT_SELECT as unknown[]).slice(1),
-  ] as never;
-
-  it("remonte le défaut mesuré au planificateur, avant l'exécution", () => {
-    const plan = planWith(STEPS_WITHOUT_SELECT, [MARKER_ASSERTION]);
-    const messages = preventionMessages(plan, MATERIAL, true);
-    expect(messages.length).toBeGreaterThan(0);
-    const joined = messages.join(" ");
-    expect(joined).toContain('data-stage-problem="note-too-long"');
-    expect(joined).toContain("Kind of the note");
-  });
-
-  it("ne dit rien d'un plan conforme", () => {
-    const plan = planWith(STEPS_WITH_SELECT, [MARKER_ASSERTION]);
-    expect(preventionMessages(plan, MATERIAL, true)).toEqual([]);
-  });
-
-  it("ne dit rien quand le drapeau est coupé : la bras de comparaison reste intacte", () => {
-    const plan = planWith(STEPS_WITHOUT_SELECT, [MARKER_ASSERTION]);
-    expect(preventionMessages(plan, MATERIAL, false)).toEqual([]);
-    // Le refus de lecture, lui, ne dépend pas du drapeau : il reste le filet.
-    expect(
-      unwitnessedPlanRefusals(plan, CONTEXT, POLICY).filter((line) =>
-        line.includes("data-stage-problem")
-      )
-    ).not.toEqual([]);
+        {
+          action: { assertionId: "problem-too-long", type: "assert" },
+          description: "assert the marker",
+          id: "assert-long",
+        },
+      ] as never,
+      [MARKER_ASSERTION]
+    );
+    const inCorrection = unwitnessedPlanRefusals(plan, CONTEXT, POLICY).join(
+      " "
+    );
+    expect(inCorrection).toContain("data-stage-problem");
+    expect(inCorrection).toContain("Kind of the note");
   });
 });
