@@ -217,6 +217,16 @@ const envSchema = z.object({
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)
     .transform((value) => value === true || value === "true"),
+  /**
+   * Le chemin observe→act : l'objectif et les preuves viennent du diff, les
+   * actions sont résolues à l'exécution depuis l'instantané observé. Désactivé
+   * par défaut : le plan figé reste le bras de comparaison jusqu'à ce que la
+   * campagne ait tranché (voir docs/pr-qa-architecture-target.md).
+   */
+  QA_OBSERVE_ACT: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .default(false)
+    .transform((value) => value === true || value === "true"),
   QA_VIEW_PROBE: z
     .union([z.boolean(), z.enum(["true", "false"])])
     .default(false)

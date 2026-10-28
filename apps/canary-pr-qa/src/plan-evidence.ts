@@ -2291,3 +2291,72 @@ export function replannedScenarios(
   const ids = new Set(observations.map((item) => item.scenarioId));
   return plan.scenarios.filter((scenario) => ids.has(scenario.id));
 }
+
+/**
+ * Les preuves que le plan doit porter quand l'exécution décide à partir de
+ * l'observation (`QA_OBSERVE_ACT`).
+ *
+ * Deux champs, et deux refus nommés : chaque scénario déclare l'assertion qui
+ * prouve son objectif, et chaque assertion cite l'indice de l'exigence qui
+ * justifie sa valeur attendue. Sans eux, le moteur ne peut pas distinguer une
+ * valeur dérivée du diff d'une valeur inventée, et un scénario peut être vert
+ * sans avoir rien démontré — c'est exactement ce que l'invariant I3 interdit.
+ *
+ * Drapeau coupé : aucun refus. Le chemin figé reste le bras de comparaison, et
+ * l'absence de preuve y est mesurée (`objectiveProven`), pas tolérée en silence.
+ */
+export function provenanceRefusals(
+  plan: Plan,
+  enabled: boolean
+): { error: QaError; scenarioId: string }[] {
+  if (!enabled) {
+    return [];
+  }
+  const refusals: { error: QaError; scenarioId: string }[] = [];
+  for (const scenario of plan.scenarios) {
+    const ids = new Set(scenario.assertions.map((assertion) => assertion.id));
+    if (!scenario.objective) {
+      refusals.push({
+        error: new QaError(
+          "PLAN_SCHEMA_INVALID",
+          `Scenario ${scenario.id} declares no objective`,
+          "Set the objective field to the id of the assertion that proves what this scenario exists to demonstrate. A scenario without that proof cannot be green, because nothing it asserts is designated as the goal."
+        ),
+        scenarioId: scenario.id,
+      });
+    } else if (!ids.has(scenario.objective)) {
+      refusals.push({
+        error: new QaError(
+          "PLAN_SCHEMA_INVALID",
+          `Scenario ${scenario.id} names objective ${JSON.stringify(scenario.objective)}, which is not one of its assertions`,
+          `Name one of these assertion ids as the objective: ${[...ids].join(", ")}.`
+        ),
+        scenarioId: scenario.id,
+      });
+    }
+    for (const assertion of scenario.assertions) {
+      if (assertion.requirement === undefined) {
+        refusals.push({
+          error: new QaError(
+            "PLAN_SCHEMA_INVALID",
+            `Assertion ${assertion.id} of scenario ${scenario.id} cites no requirement`,
+            "Set the requirement field to the index of the requirement in this scenario whose line or quote justifies the expected value. A value that no requirement justifies is indistinguishable from an invented one."
+          ),
+          scenarioId: scenario.id,
+        });
+        continue;
+      }
+      if (assertion.requirement >= scenario.requirements.length) {
+        refusals.push({
+          error: new QaError(
+            "PLAN_SCHEMA_INVALID",
+            `Assertion ${assertion.id} of scenario ${scenario.id} cites requirement ${assertion.requirement}, but the scenario declares ${scenario.requirements.length}`,
+            `Use an index between 0 and ${scenario.requirements.length - 1}.`
+          ),
+          scenarioId: scenario.id,
+        });
+      }
+    }
+  }
+  return refusals;
+}
