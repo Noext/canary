@@ -127,6 +127,10 @@ describe("le document de décision ne dérive pas du corpus", () => {
   it("chaque famille publiée porte le compte du corpus", () => {
     for (const [code, count] of families) {
       if (count < 2) {
+        // Une famille à occurrence unique n'a pas de ligne de tableau : le
+        // document doit quand même la nommer, sinon « aucune famille écartée »
+        // serait faux pour elle précisément.
+        expect(doc, code).toContain(`\`${code}\``);
         continue;
       }
       const forms = [
