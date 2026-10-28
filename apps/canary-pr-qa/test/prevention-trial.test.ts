@@ -72,7 +72,7 @@ describe("essai contrôlé du candidat de prévention", () => {
     }
   });
 
-  it("le bras sans prévention ne régresse pas sur ce lot", () => {
+  it("aucun gain n'apparaît sur ce lot, à cinq runs par bras", () => {
     // Constat mesuré, écrit tel quel : à n = 5 par bras, le candidat n'améliore
     // pas le critère principal, et un run est bloqué par le refus de lecture
     // alors que ses dix scénarios ont passé. L'assertion fige la mesure pour

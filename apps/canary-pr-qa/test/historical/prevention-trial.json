@@ -5,7 +5,7 @@
   "build": "e698deb160d31cc2bedf969ab82e7d01e3b05d6d",
   "flag": "QA_PREVENT_MARKER_ORDER",
   "service": "canary.pharmania.fr",
-  "note": "Deux bras du MÊME build, séparés par la seule variable QA_PREVENT_MARKER_ORDER : le drapeau est la seule différence, la branche, la PR, le modèle et l'oracle sont identiques. Le déploiement de chaque bras est enregistré pour que l'activation soit inspectable.",
+  "note": "Deux bras du MÊME build, séparés par la seule variable QA_PREVENT_MARKER_ORDER. Cinq runs par bras : cet effectif ne départage pas les deux réglages, il constate seulement qu'aucun gain n'apparaît, et il documente le coût mesuré du refus de lecture (run c98274a3 : dix scénarios verts, run bloqué).",
   "blocks": [
     {
       "lot": "V1",
