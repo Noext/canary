@@ -1,0 +1,22 @@
+{
+  "purpose": "Le seul refus de lecture mesuré sur un artefact de cette campagne, et ce qu'il coûte. Un refus de lecture est un scénario arrêté avant sa première étape (`steps` vide) avec un code ; un scénario qui a joué puis échoué porte aussi un code, et ce n'est pas un refus.",
+  "refusals": [
+    {
+      "run": "c98274a3-8ba4-4adb-8e2e-bfb09e6458e4",
+      "build": "e698deb",
+      "batch": "W1",
+      "code": "MARKER_ORDER_UNREACHABLE",
+      "runOutcome": "blocked",
+      "executedScenarios": 10,
+      "executedGreen": 10,
+      "refusedScenarios": 1,
+      "message": "Scenario cash-comment-boundary: assertion too-long-problem expects data-cash-justification-problem=\"commentaire-trop-long\", but the last write in \"justification.comment\" holds 261 characters and the limit that decides this value is 280",
+      "falseRefusal": true,
+      "why": "Les dix scénarios exécutés passent ; le run est bloqué par le refus d'un seul scénario. Le refus existe dans les deux bras de l'essai de prévention — il ne dépend pas du drapeau — donc il ne peut pas expliquer un écart entre les bras : il est un coût préexistant, partagé, et c'est ce coût qui motive de ne PAS changer le verdict d'un refus (un run dont un scénario est refusé n'est pas entièrement vert)."
+    }
+  ],
+  "campaignRefusals": {
+    "note": "Sur les 20 runs de la campagne contrôlée entrelacée, zéro refus de lecture dans les deux bras : les deux runs non verts de la référence sont des échecs d'exécution (TARGET_NOT_FOUND sur un span[aria-live], TRANSITION_NOT_OBSERVED sur une valeur inchangée).",
+    "count": 0
+  }
+}

@@ -17,11 +17,7 @@ import {
   structuralSelectorReason,
   unstableSelectorReason,
 } from "./plan-selector.js";
-import {
-  numberedSourceLines,
-  planFindings,
-  sourceLineMaterial,
-} from "./policy.js";
+import { numberedSourceLines, sourceLineMaterial } from "./policy.js";
 import {
   type EstablishingClickFault,
   establishingClickFault,
@@ -2294,30 +2290,4 @@ export function replannedScenarios(
 ): Scenario[] {
   const ids = new Set(observations.map((item) => item.scenarioId));
   return plan.scenarios.filter((scenario) => ids.has(scenario.id));
-}
-
-/**
- * Les défauts qu'un plan peut encore corriger pendant qu'il est écrit.
- *
- * Un défaut d'ordre de marqueur rend l'assertion impossible : le scénario perd
- * son échec à l'exécution, mais le plan fautif a déjà été produit. Ces messages
- * partent donc dans la correction du plan candidat, où le planificateur les lit
- * et réécrit — le plan incorrect n'est pas produit, au lieu d'être refusé après
- * coup. Le refus de lecture reste posé plus loin, pour le plan qui n'aurait pas
- * été corrigé malgré le message.
- *
- * Drapeau coupé : la fonction ne rend rien, et le comportement d'avant (refus à
- * l'exécution seulement) est intact — c'est la bras de comparaison de l'essai.
- */
-export function preventionMessages(
-  plan: Plan,
-  material: SourceLineMaterial[],
-  enabled: boolean
-): string[] {
-  if (!enabled) {
-    return [];
-  }
-  return planFindings(plan, material).refusals.map(
-    (item) => `${item.error.message}. ${item.error.hint}`
-  );
 }

@@ -34,11 +34,7 @@ const excerpts = JSON.parse(
   quote: string;
 }[];
 const trialRuns = new Map<string, Set<string>>();
-for (const name of [
-  "prevention-trial.json",
-  "reliability-pair.json",
-  "controlled-campaign.json",
-]) {
+for (const name of ["reliability-pair.json", "controlled-campaign.json"]) {
   const artifact = JSON.parse(readFileSync(join(dir, name), "utf8")) as {
     blocks?: { runs: { run: string; codes?: string[] }[] }[];
   };
@@ -47,6 +43,12 @@ for (const name of [
       trialRuns.set(run.run.slice(0, 8), new Set(run.codes ?? []));
     }
   }
+}
+const refusals = JSON.parse(
+  readFileSync(join(dir, "refusal-evidence.json"), "utf8")
+) as { refusals: { run: string; code: string }[] };
+for (const refusal of refusals.refusals) {
+  trialRuns.set(refusal.run.slice(0, 8), new Set([refusal.code]));
 }
 const doc = readFileSync(
   join(import.meta.dirname, "../../../docs/pr-qa-reliability-decision.md"),

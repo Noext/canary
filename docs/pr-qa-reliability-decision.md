@@ -71,39 +71,44 @@ scénario ; JJ→UU ne portent que des comptes de scénarios verts par run.
 
 ## 2. La meilleure correction candidate et son hypothèse
 
-**Candidate retenue : prévenir la production du plan fautif** — le défaut d'ordre de
-marqueur (cause n° 2, 23 runs) entre dans la correction du plan candidat, au lieu de n'être
-refusé qu'à l'exécution. Le planificateur reçoit la mesure exacte, la borne et le contrôle à
-jouer d'abord ; le plan réécrit est celui qui s'exécute. Le refus de lecture reste le filet.
+**Candidat étudié : prévenir à la planification le défaut d'ordre de marqueur**, la deuxième
+famille du corpus (23 runs). Hypothèse réfutable, posée avant mesure : à drapeau coupé contre
+drapeau posé, sur la même PR, le même modèle et le même oracle, le taux de runs entièrement
+verts progresse d'au moins **10 points**, sans nouveaux refus de lecture.
 
-**Hypothèse réfutable** : à drapeau coupé contre drapeau posé, sur la même PR, le même
-modèle et le même oracle, le taux de runs entièrement verts progresse d'au moins **10
-points**, sans augmenter les faux refus (plans refusés à la lecture). Réfutée par une
-progression inférieure à 10 points, par une baisse, ou par une hausse des faux refus.
+**Ce que la vérification du code a montré, et que le document disait à tort.** La correction du
+plan candidat recevait **déjà** ce refus : `unwitnessedPlanRefusals` porte le défaut d'ordre
+(`src/policy.ts`), il alimente `planRefusalParts.before`, que `planRefusals` envoie au
+planificateur depuis **#86** — avant tout drapeau. La fonction que j'ai ajoutée
+(`preventionMessages`, `QA_PREVENT_MARKER_ORDER`) n'ajoutait donc qu'un doublon du même
+message, à la fin d'une liste que la fenêtre de 2 000 caractères tronque en dernier. Le test
+`test/marker-order.test.ts` (« le refus d'ordre était déjà remis au planificateur ») fige ce
+fait : le refus nomme le contrôle amont et la mesure, sans aucun drapeau.
 
-**Verdict mesuré : hypothèse non soutenue, et l'échantillon ne permet pas de la réfuter.** Les deux bras du même build
-`e698deb` (drapeau coupé puis posé, déploiements `qqvncqlid2stp8hzcjjaor5u` et
-`dqovvc2yui0zorxey7d54rxz`, consignés dans `test/historical/prevention-trial.json`) donnent
-**5/5** verts sans prévention contre **4/5** avec. Le mécanisme du coût est dans l'artefact :
-le run `c98274a3` a ses **dix scénarios verts** et il est malgré tout **bloqué**, parce que la
-correction du plan n'a pas suffi et que le refus de lecture a transformé un run qui aurait été
-vert en run bloqué. À cinq runs par bras, cet écart n'est pas significatif et ne réfute rien : il constate
-seulement qu'aucun gain n'apparaît. Ce qui est en revanche mesuré et reproductible, c'est le
-mécanisme de coût : quand la correction échoue, le refus de lecture bloque un run dont tous
-les scénarios passent. Le drapeau reste donc **posé par défaut** — le build mesuré dans la
-campagne est celui qui le porte, et le couper serait un changement non mesuré — mais il est
-signalé ici comme non démontré.
+**Conséquence, appliquée sans réinterprétation.** La règle enregistrée dit : réfutée par une
+progression inférieure à 10 points, ou par une baisse. Mesure : **5/5** sans le drapeau contre
+**4/5** avec, à cinq runs par bras — une **baisse de 20 points**. L'hypothèse est donc
+**réfutée**, par la règle telle qu'elle était écrite ; la faible puissance de l'échantillon
+(n = 5) est une limite de la mesure, pas une raison de changer la règle après coup.
 
-Candidates écartées par la mesure, pas par préférence : porte statique sur les cibles du diff
-(0 vrai positif / 14 faux positifs, #76) ; politique de couverture par scénario (5/10 contre
-7/10, 10 runs bloqués, #114) ; sonde de navigation (+91 % de tokens, aucun gain, #94) ;
-fichiers entiers dans la charge utile (plus cher et moins bon, #107).
+Le doublon a été **retiré** : la fonction, le drapeau et son essai ne sont plus dans le code, et
+le refus existant est gardé par le test ci-dessus, pour que la suppression ne puisse pas
+emporter le comportement avec elle.
+
+**Le coût du refus, séparé de l'essai.** Le refus de lecture est indépendant du drapeau : il
+existe dans les deux bras, donc il ne peut expliquer aucun écart entre eux. Ce qu'il coûte est
+enregistré à part (`test/historical/refusal-evidence.json`) : le run `c98274a3` a ses **dix
+scénarios exécutés verts** et il est **bloqué** par le refus d'un seul scénario. Ce coût n'est
+pas corrigé ici, et il ne doit pas l'être en changeant le verdict : un run dont un scénario est
+refusé n'est pas entièrement vert, et le déclarer vert serait exactement la requalification que
+l'objectif interdit.
 
 ## 3. Implémentation et tests
 
 | Changement | Apport | Tests |
 | --- | --- | --- |
-| `preventionMessages` dans `src/plan-evidence.ts`, `QA_PREVENT_MARKER_ORDER` (défaut posé) | le défaut d'ordre entre dans la correction du plan candidat | `marker-order` : défaut remonté, plan conforme silencieux, drapeau coupé silencieux et refus de lecture intact |
+| #86, antérieur : `unwitnessedPlanRefusals` → `planRefusalParts.before` → correction du plan | le défaut d'ordre était déjà remis au planificateur | `marker-order` : le refus nomme le contrôle amont et la mesure, sans drapeau |
+| doublon ajouté puis **retiré** (`preventionMessages`, `QA_PREVENT_MARKER_ORDER`) | n'ajoutait qu'une copie du même message, après la fenêtre de troncature | `marker-order` : le test fige le chemin préexistant, pour que le retrait ne l'emporte pas |
 | #76, retiré | porte statique sur les cibles : mesurée 0 VP / 14 FP | — (décision de retrait conservée) |
 | #102 | le refus de longueur nomme la valeur exacte à écrire | `marker-order` |
 | #106, #110 | libellés et cibles concrètes du diff dans le message | `policy` |
@@ -111,7 +116,7 @@ fichiers entiers dans la charge utile (plus cher et moins bon, #107).
 | #115 | réparation déterministe d'un quasi-homonyme, jamais sur un nombre | `target-nearest` |
 | #117 | la réécriture couvre tous les défauts de plan nommés | `replan` |
 
-Suite : **878 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
+Suite : **873 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
 de l'application testée » garantie par `no-application-knowledge`.
 
 ## 4. Résultats comparatifs, régressions comprises
@@ -157,8 +162,7 @@ défavorable. Aucun de ces trois écarts n'est présenté comme une amélioratio
 Faux refus, définition et examen : un **refus de lecture** est un scénario arrêté avant la
 première étape (`steps` vide) avec un code. Sur les 20 runs de la campagne, il y en a **zéro**
 dans les deux bras. Les deux runs non verts de la référence sont des **échecs d'exécution**, pas
-des refus : `a5c8eb3f` échoue sur `TARGET_NOT_FOUND` (attente de
-`span[aria-live="polite"]` expirée) et `32d79c30` sur `TRANSITION_NOT_OBSERVED`
+des refus : `a5c8eb3f` échoue sur `TARGET_NOT_FOUND` et `32d79c30` sur `TRANSITION_NOT_OBSERVED`
 (`no change observed — the value after step s6-fill280 is identical to the baseline probed
 before it`). Le seul refus de lecture mesuré dans un artefact de ce tour est `c98274a3` (essai
 de prévention), et il est **faux au sens de la tâche 7** : le run est bloqué alors que ses dix
@@ -204,7 +208,6 @@ n'est pas une dérobade : il est chiffré.
 | Comparaison | Effet mesuré sur les runs verts | Erreur-type de la différence | Verdict |
 | --- | --- | --- | --- |
 | Campagne entrelacée, courant `6c5a746` contre référence `8143ac9` (10 runs/bras) | +2 runs (+20 pts) | ±1,3 run (12,6 pts) | 1,6 σ — indistinguable de zéro |
-| Essai du candidat, drapeau posé contre coupé, même build (5 runs/bras) | −1 run (−20 pts) | ±0,9 run (17,9 pts) | 1,1 σ — indistinguable de zéro |
 | Corpus historique, build courant `SS+UU` (18/20) contre référence (17/30) | +33,3 pts | ±11,3 pts | 3,0 σ — **significatif hors contrôle** |
 
 L'écart historique est donc réel **en tant qu'observation**, et il ne se réplique pas dans la
@@ -220,8 +223,10 @@ constitue une amélioration démontrée.
 
 Trois faits restent établis, chacun avec sa preuve :
 
-1. la **candidate de prévention** ne montre aucun gain à cinq runs par bras, et son **coût** est
-   démontré : un refus de lecture bloque un run dont les dix scénarios passent (`c98274a3`) ;
+1. la **candidate de prévention** a été **retirée** : elle dupliquait une correction livrée en
+   #86, son essai (5/5 contre 4/5) ne mesurait donc qu'un doublon, et la règle enregistrée la
+   réfute ; le coût du refus de lecture, lui, préexiste et est partagé par les deux bras
+   (`refusal-evidence.json`, run `c98274a3`) ;
 2. la **première campagne** (9/10 contre 5/10) était invalide — deux déploiements échoués
    laissaient la référence des deux côtés, et l'absence de clé `preMatched` dans ces runs le
    prouve ; elle est conservée à part, retirée comme preuve ;
@@ -240,7 +245,7 @@ résultat de premier rang. Si cette approche ne départage pas non plus les bras
 | Cause | Runs | Lots | Identifiants | Mécanisme | Préventable | Risque de faux refus |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TARGET_NOT_FOUND` | 27 | BA, DD, EE, FF, GG, JJ, KK, LL, NN, PP, QQ, RR | `e90c9e75`, `b8818582`, `28525781` | le plan vise un libellé absent de la vue observée ; l'échec se découvre à l'exécution | non (porte statique refutée, #76) | refuser à la lecture coûterait des plans qui auraient réussi : la réparation à l'exécution a été préférée |
-| `MARKER_ORDER_UNREACHABLE` | 23 | CC, DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS | `277dee09`, `56ae5df7`, `d07c4ed4` | le plan écrit un marqueur dont l'état antérieur n'est pas établi par une étape jouée avant lui | oui — mesure, borne et contrôle amont sont dans le diff | **mesuré négatif** : un plan non corrigé est bloqué par le refus de lecture alors que ses dix scénarios passent (run `c98274a3`) — le refus est donc fatal au niveau du run ; c'est ce coût qui explique qu'aucun gain n'apparaisse (5/5 contre 4/5, non concluant à n = 5) |
+| `MARKER_ORDER_UNREACHABLE` | 23 | CC, DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS | `277dee09`, `56ae5df7`, `d07c4ed4` | le plan écrit un marqueur dont l'état antérieur n'est pas établi par une étape jouée avant lui | oui — mesure, borne et contrôle amont sont dans le diff | **mesuré négatif** : un plan non corrigé est bloqué par le refus de lecture alors que ses dix scénarios passent (run `c98274a3`) — le refus est donc fatal au niveau du run — il coûte dans les deux bras, donc il n'explique aucun écart entre eux |
 | `TRANSITION_NOT_OBSERVED` | 9 | BA, DD, GG, JJ, NN, RR, TT | `f6a6a890`, `160792a9`, `df72d1b7` | le plan attend un changement que l'application n'effectue pas dans la séquence décrite | non : il faut constater l'invariance | nul (réécriture après observation, budgétée) |
 
 | `REQUIREMENT_UNGROUNDED` | 7 | CC, DD, GG, II, KK, OO, QQ | `bc0e083e`, `0da1a10e` | l'exigence citée ne se retrouve pas dans le fichier qu'elle déclare (citation faible ou recousue) | oui à la lecture, mesuré : la porte refuse le plan avant exécution | refus au niveau du scénario quand aucun scénario n'est exécuté ; c'est la porte la plus coûteuse en faux refus mesurés (10 plans nouvellement refusés sur 79, 0 visant un scénario vert) |
@@ -268,8 +273,9 @@ fragment littéral du message du run.
   **+12.0 %** ; le build mesuré `SS+UU` est à **parité** (288 238), mais l'essai frais du
   2026-10-27 est à **+45.0 %** (303 470 contre 209 381). Le +20 % provient d'une synthèse
   antérieure portant sur un corpus plus étroit (294 504 contre 244 860) ; il n'est pas
-  reproduit par les 200 runs, et il est **dépassé** par la paire du jour — c'est la paire
-  du jour qui doit guider la suite, pas la parité historique.
+  reproduit par les 200 runs, et il est **dépassé** par la paire du jour — c'est la campagne
+  entrelacée qui tranche le coût (−7 % de tokens, +15 % de durée, deux écarts non séparables) ;
+  la paire séquentielle reste publiée mais n'est pas l'autorité.
 
 ### Limites des indicateurs
 

@@ -36,7 +36,6 @@ import {
   type PlanFileText,
   planEvidenceDiagnostic,
   planPayload,
-  preventionMessages,
   replannedScenarios,
   replanPayload,
   stateTargetReadRefusals,
@@ -869,11 +868,6 @@ function planRefusalParts(
       // pendant qu'il écrit le plan, au lieu de coûter le scénario à l'exécution.
       // Le refus de lecture reste posé plus loin, pour un plan qui n'aurait pas
       // été corrigé malgré le message.
-      ...preventionMessages(
-        candidate,
-        sourceLineMaterial(context),
-        config.QA_PREVENT_MARKER_ORDER
-      ),
     ],
   };
 }
