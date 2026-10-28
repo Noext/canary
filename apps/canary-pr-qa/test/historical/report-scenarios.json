@@ -1,936 +1,1129 @@
 {
-  "purpose": "Les scénarios vus dans les rapports de run encore servis par le service, run par run, pour que les totaux publiés soient recalculables et attribuables. Ce n'est pas le corpus entier : les autres rapports ne sont plus joignables (le point d'artefacts répond 404 ou 401), et l'absence est dite plutôt que comblée.",
+  "purpose": "Les scénarios vus dans les rapports de run encore servis, un enregistrement par scénario non vert (identifiant, verdict, code, refus avant exécution) : les totaux publiés se recalculent depuis ces enregistrements, pas depuis un compteur posé à la main.",
   "runs": [
     {
       "run": "51644ed9-bb66-4984-a5c3-86a6796aa61f",
       "batch": "KK",
       "outcome": "blocked",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "TARGET_NOT_FOUND": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "missing-justify-then-close",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "ca37803e-bff2-4e82-aeb9-7653750c8ccf",
       "batch": "KK",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 2,
-      "codes": {
-        "TARGET_NOT_FOUND": 1,
-        "PLAN_STATE_TARGET_READ_AS_TEXT": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "manque-40-justifie",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "montant-attendu-illisible",
+          "outcome": "blocked",
+          "code": "PLAN_STATE_TARGET_READ_AS_TEXT",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "eb8a7336-8094-4480-85f0-868fbc2993c9",
       "batch": "KK",
       "outcome": "blocked",
       "scenarios": 9,
-      "nonGreen": 4,
-      "codes": {
-        "TARGET_NOT_FOUND": 3,
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "exact-count-closes",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "negative-variance-guided-justification",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "positive-variance-blocks-and-justifies",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "comment-boundary-280-281",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "50cfa0d8-4ab8-4d5f-9c06-c60ce0adef6c",
       "batch": "KK",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "TARGET_NOT_FOUND": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "justification-guidee-puis-cloture-archivee",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "779e5398-376b-45d9-a1a1-870b25fb3e3e",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 2,
-      "codes": {
-        "TARGET_NOT_FOUND": 2
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "s1-compte-juste-cloture-sans-motif",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "s2b-manque-cloture-et-historique",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "3674c055-6b8b-4dd6-be38-61680dcd5e40",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 11,
-      "nonGreen": 2,
-      "codes": {
-        "TARGET_NOT_FOUND": 2
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "caisse-manque-justification-cloture",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "caisse-reouverture-reblocage",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "e336f483-ab9c-40fc-a781-57f36e36c788",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 8,
-      "nonGreen": 1,
-      "codes": {
-        "TARGET_NOT_FOUND": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "justification-guided-then-closed-and-archived",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "e86df885-7b9c-4ab5-9326-7f92d2c9ed5a",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 11,
-      "nonGreen": 2,
-      "codes": {
-        "TARGET_NOT_FOUND": 2
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "ecart-negatif-justifie",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "cloture-reouverture-historique",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "d7345e75-36ec-4254-b391-195e1b9cad8a",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 8,
-      "nonGreen": 1,
-      "codes": {
-        "TARGET_NOT_FOUND": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "caisse-cloture-reouverture-historique",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "979044da-063d-47c7-be1d-d7ad41defc68",
       "batch": "LL",
       "outcome": "failed",
       "scenarios": 11,
-      "nonGreen": 4,
-      "codes": {
-        "TARGET_NOT_FOUND": 3,
-        "sans-diagnostic": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "exact-count-close-history-reopen",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "missing-40-history-and-reopen",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "excess-50-blocked-justified",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "invalid-expected-amount",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "7e1a2c04-3a9d-416c-a664-2d39ab74acb9",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "9fd1e99e-bcfc-4c26-8cd0-9a4a2ba6bae5",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "ee3bf230-b305-44ef-9c5e-0e471d524aa7",
       "batch": "LL",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-comment-boundary",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "2dc37d11-3d6f-45cf-981e-127342c47a9a",
       "batch": "LL",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "839cee08-d757-46f1-9b1b-f816ea597fb3",
       "batch": "MM",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 3,
-      "codes": {
-        "sans-diagnostic": 1,
-        "MARKER_ORDER_UNREACHABLE": 1,
-        "QA_ERROR": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-negative-variance-justification-then-close",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "cash-comment-boundary-281-vs-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        },
+        {
+          "scenario": "cash-state-per-pharmacy-and-view-switch",
+          "outcome": "blocked",
+          "code": "QA_ERROR",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "08aed2dc-67a3-41b9-ae68-9e96d67887c0",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "f7f0ce21-c383-4f09-9fa6-3811776eb4d6",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "7b83ec7b-9a90-49cf-b7f0-f4609e3ee34a",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "2884c4a0-a981-47ff-9e07-1dd37be92cda",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "f95ef2d1-ce08-4de8-9203-f7c2af5d6e64",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 11,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "776a3483-6dac-4949-9ff6-eb4d6e1d20a7",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 14,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "942fa7a8-5ded-4ad6-a6bf-a41be6d276a4",
       "batch": "MM",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "9a7b18e7-ad19-4c5f-be75-9cf827e55858",
       "batch": "MM",
       "outcome": "failed",
       "scenarios": 12,
-      "nonGreen": 1,
-      "codes": {
-        "sans-diagnostic": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "comment-boundary-281-280",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "99ec13c1-30a7-42c7-b3f1-2f19ad9a2ea9",
       "batch": "MM",
       "outcome": "blocked",
       "scenarios": 6,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-justification-length-boundary",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "a4387f43-9d3f-4c65-b35b-9f04f24d97fa",
       "batch": "NN",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "4ef0f88b-cf6d-4d4b-9f94-bbb787c5bb34",
       "batch": "NN",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "6c2d9572-c5c1-4c36-a8fb-2c1c4d5fd272",
       "batch": "NN",
       "outcome": "blocked",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "TARGET_NOT_FOUND": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-comptage-invalide-indisponible",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "59422872-3c14-411e-9ec5-b16585317c0f",
       "batch": "NN",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "d8e87de6-4259-4f28-bae1-92a77db4a86d",
       "batch": "NN",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "9c45b17e-e993-4d29-9af3-987cb3f2fb52",
       "batch": "NN",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "8fc389ff-a881-43bb-b3eb-0ad8c4763f6f",
       "batch": "NN",
       "outcome": "failed",
       "scenarios": 8,
-      "nonGreen": 3,
-      "codes": {
-        "TARGET_NOT_FOUND": 2,
-        "TRANSITION_NOT_OBSERVED": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-compte-juste-cloture",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "cash-manque-40-justification-cloture-reouverture",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "cash-commentaire-borne-281-280",
+          "outcome": "failed",
+          "code": "TRANSITION_NOT_OBSERVED",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "bf7655cd-f434-4f89-92fe-e0c888ffd17d",
       "batch": "NN",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "401b7d16-8193-4208-8e16-26aef4ca6851",
       "batch": "NN",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "1b8d8d87-ca65-42e7-874a-ca6e5a80c7a0",
       "batch": "NN",
       "outcome": "blocked",
       "scenarios": 6,
-      "nonGreen": 1,
-      "codes": {
-        "QA_ERROR": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "commentaire-hors-borne-refuse-puis-accepte",
+          "outcome": "blocked",
+          "code": "QA_ERROR",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "f3ce365a-9737-48eb-b4b7-8e97ec2d539c",
       "batch": "OO",
       "outcome": "passed",
       "scenarios": 12,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "790fe5b5-ac89-4769-a836-7b7c60b61cf3",
       "batch": "OO",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "4d1f7d43-2d4f-4d46-9262-539b5ce2e4dc",
       "batch": "OO",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "01dc01ab-6d14-47e1-952d-035a378a0217",
       "batch": "OO",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "802841cc-44d8-4dac-ae80-87386cc20626",
       "batch": "OO",
       "outcome": "passed",
       "scenarios": 12,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "586668b3-51d0-4e33-84e5-c2d0204b6cb5",
       "batch": "OO",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "552d9171-1b1d-4b85-8308-27c088fdca90",
       "batch": "OO",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "2db6f362-3ddc-45bb-8b09-28acd1a68696",
       "batch": "OO",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "comment-length-bound-281-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "827e2108-bf09-47fe-a193-9ef0c9a9724b",
       "batch": "OO",
       "outcome": "blocked",
       "scenarios": 8,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "commentaire-borne-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "7b121e6d-3767-44f5-9224-6602b706e080",
       "batch": "OO",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "91e62a68-6210-4ae1-9699-5fb409bc53e3",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 11,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "3b0c50e9-9a78-4467-bc9b-9c1bd957d5aa",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "425e70e7-643f-4f31-949c-cb2bfbf63013",
       "batch": "PP",
       "outcome": "blocked",
       "scenarios": 7,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "borne-commentaire-281-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "4f334337-5ea8-4643-ade6-2960c6973a97",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "631a21f9-d300-4d67-996d-0b4e3082fb21",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "9e5c2edc-41af-4ccf-9681-06ef042f7fa9",
       "batch": "PP",
       "outcome": "blocked",
       "scenarios": 6,
-      "nonGreen": 1,
-      "codes": {
-        "TARGET_NOT_FOUND": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "compte-juste-cloture-sans-justification",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "fff2aab3-6d99-4cee-a334-5b642f645bf1",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "4e6d8499-2814-46bd-9332-f383f8ca8e5c",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "f6e3edda-f727-4c4f-b3f3-76f37fe43739",
       "batch": "PP",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "f6c74998-d3ba-4376-8f05-32964328d1fe",
       "batch": "PP",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "56149663-3d33-4027-bd97-4418a6398cd2",
       "batch": "QQ",
       "outcome": "blocked",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "borne-commentaire-281-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "306961e2-f6c1-4ffd-92e7-f598f75376b0",
       "batch": "QQ",
       "outcome": "passed",
       "scenarios": 11,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "ee0c72b8-ad63-4e84-96d8-9f6e19e00e1d",
       "batch": "QQ",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "18642437-f8d0-4094-86ba-fcc812f6b7b0",
       "batch": "QQ",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "e29f3f7a-96b7-446c-9800-8104f2a95627",
       "batch": "QQ",
       "outcome": "blocked",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "TRANSITION_ON_INVARIANT": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "justification-guidee-cloture",
+          "outcome": "blocked",
+          "code": "TRANSITION_ON_INVARIANT",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "254f7c71-fa95-49bb-b76d-a36032b9247e",
       "batch": "QQ",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "82d3a0e4-e4a5-4e14-bc11-295959d993a1",
       "batch": "QQ",
       "outcome": "passed",
       "scenarios": 11,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "28bcb05f-245b-4c6d-9736-af6463c77ae2",
       "batch": "QQ",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "e56bb5ce-8b78-434d-aab2-75eaf554219a",
       "batch": "QQ",
       "outcome": "failed",
       "scenarios": 10,
-      "nonGreen": 6,
-      "codes": {
-        "TARGET_NOT_FOUND": 4,
-        "sans-diagnostic": 1,
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "exact-count-closes-without-justification",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "positive-variance-blocks-closure",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "justification-guided-close-and-history",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "view-roundtrip-and-pharmacy-isolation",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "one-cent-variance-blocks",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "comment-length-boundary",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "a2e88c67-6e53-4ea8-b530-298b8526acce",
       "batch": "QQ",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 3,
-      "codes": {
-        "TARGET_NOT_FOUND": 1,
-        "REQUIREMENT_UNGROUNDED": 2
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-compte-juste-cloture",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "cash-justification-puis-cloture",
+          "outcome": "blocked",
+          "code": "REQUIREMENT_UNGROUNDED",
+          "refusedBeforeExecution": true
+        },
+        {
+          "scenario": "cash-reouverture-reblocage",
+          "outcome": "blocked",
+          "code": "REQUIREMENT_UNGROUNDED",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "06e61c3b-a967-4571-9e6d-ff25c2b55dd1",
       "batch": "RR",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "2a749ab5-db7d-4877-bf6b-5179cb418eb6",
       "batch": "RR",
       "outcome": "passed",
       "scenarios": 12,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "e90c9e75-dc13-4d09-8fe3-7fdc6bdb212e",
       "batch": "RR",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 3,
-      "codes": {
-        "TARGET_NOT_FOUND": 2,
-        "TRANSITION_ON_INVARIANT": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "q2-compte-juste-cloture-sans-justification",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "q3-manque-40-justification-guidee",
+          "outcome": "blocked",
+          "code": "TRANSITION_ON_INVARIANT",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "q4-excedent-50-bloquant",
+          "outcome": "blocked",
+          "code": "TARGET_NOT_FOUND",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "a9a2e5b7-e9ca-44cc-a1d7-9017be6c22e8",
       "batch": "RR",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "fa788485-3c56-41ac-84f7-7ad9f96f024d",
       "batch": "RR",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "875a24c9-8275-4131-baa9-c4e0428713aa",
       "batch": "RR",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "0b8ddefe-28a4-4762-b28c-8de4cb875ede",
       "batch": "RR",
       "outcome": "failed",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "TRANSITION_NOT_OBSERVED": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-justification-max-length-boundary",
+          "outcome": "failed",
+          "code": "TRANSITION_NOT_OBSERVED",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "22f8d228-2e98-47e9-b786-0337a3bf584b",
       "batch": "RR",
       "outcome": "blocked",
       "scenarios": 11,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "borne-commentaire-281-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "b8086467-5308-4b6b-9447-436c144a7f3c",
       "batch": "RR",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-comment-boundary-281-280",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "0f05b09e-d6cb-4ec2-8390-1327d87a5c34",
       "batch": "RR",
       "outcome": "blocked",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-comment-length-boundary",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "5897da1f-4b7a-47ca-8e78-9049ce5c9b45",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "9d13eb24-2e38-41d3-9d88-220e9caeb52f",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "277dee09-5ee1-49b9-9ff6-dff2d4c93ece",
       "batch": "SS",
       "outcome": "failed",
       "scenarios": 12,
-      "nonGreen": 2,
-      "codes": {
-        "sans-diagnostic": 1,
-        "MARKER_ORDER_UNREACHABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "negative-variance-requires-justification",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        },
+        {
+          "scenario": "comment-length-boundary",
+          "outcome": "blocked",
+          "code": "MARKER_ORDER_UNREACHABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "aec10c71-db68-4678-b5c9-583090877af6",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "2f5feed6-160c-42a1-8299-0496a9d36249",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "d6daf2ac-dd2e-4a9c-a54e-5459077eb4b3",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "7b4255d3-4913-4fae-b149-47950bc63876",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "e40ef37c-7014-4564-b5a6-202d23243a35",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "5d680404-bcf4-4c75-91e1-8a7f793e93a8",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 11,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "94ee07c5-bddc-4b01-afc8-cba93dd90a8c",
       "batch": "SS",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "33b981d9-740c-410a-906d-71d084e72880",
       "batch": "TT",
       "outcome": "passed",
       "scenarios": 13,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "e6f24ee9-2312-42d9-89f7-b70f66acad3b",
       "batch": "TT",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "4fed6f58-f70a-4744-85e6-bd20178b9cb6",
       "batch": "TT",
       "outcome": "blocked",
       "scenarios": 0,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "60c44866-56a6-4a6b-a607-bded2968f917",
       "batch": "TT",
       "outcome": "failed",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "TRANSITION_NOT_OBSERVED": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "caisse-commentaire-borne-281-280",
+          "outcome": "failed",
+          "code": "TRANSITION_NOT_OBSERVED",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "25054a3c-fbe7-4ec4-919e-83c6f6958226",
       "batch": "TT",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "1e262bec-712b-49c7-ad15-d244d199f954",
       "batch": "TT",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "f6a6a890-3bd6-462c-9177-0291f62a4d32",
       "batch": "TT",
       "outcome": "failed",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "TRANSITION_NOT_OBSERVED": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-comment-boundary-281-then-280",
+          "outcome": "failed",
+          "code": "TRANSITION_NOT_OBSERVED",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "c9c68ce9-91f6-470c-9752-a0a6cc2990e2",
       "batch": "TT",
       "outcome": "failed",
       "scenarios": 9,
-      "nonGreen": 1,
-      "codes": {
-        "sans-diagnostic": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "cash-comment-boundary-280-281",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "2417c8b5-fc11-405b-8696-4bbae7d28f19",
       "batch": "TT",
       "outcome": "failed",
       "scenarios": 10,
-      "nonGreen": 1,
-      "codes": {
-        "sans-diagnostic": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "comment-boundary-281-then-280",
+          "outcome": "failed",
+          "code": "sans-diagnostic",
+          "refusedBeforeExecution": false
+        }
+      ]
     },
     {
       "run": "898208fb-fadd-49cb-9579-ed010d8348e8",
       "batch": "TT",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "395cb351-2179-4219-ada7-0d3db01e5738",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "3871c489-3d61-4230-8bef-9a9416e54135",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "a9de6566-73f0-47cb-a85f-da21c9ad1594",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "739e7bdb-715f-4345-b26b-0ed6ea3664af",
       "batch": "UU",
       "outcome": "blocked",
       "scenarios": 11,
-      "nonGreen": 1,
-      "codes": {
-        "PLAN_SELECTOR_UNSTABLE": 1
-      }
+      "nonGreenScenarios": [
+        {
+          "scenario": "long-comment-history-archived",
+          "outcome": "blocked",
+          "code": "PLAN_SELECTOR_UNSTABLE",
+          "refusedBeforeExecution": true
+        }
+      ]
     },
     {
       "run": "c3ca9f41-72fe-4965-afe1-22a5168b97f3",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 6,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "2bbce1b7-e9f8-4f2d-91a4-b6ea3e3b8800",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 8,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "a75c7de5-b5a0-4a77-8fa9-1c16513a0e7e",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 11,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "3de20471-53e2-4abd-8850-59fbe4dbbc73",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 7,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "eb459560-31a4-47fa-9fd5-033accd5d378",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 10,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     },
     {
       "run": "5cf86575-30b0-47f7-9567-115a0758d1b0",
       "batch": "UU",
       "outcome": "passed",
       "scenarios": 9,
-      "nonGreen": 0,
-      "codes": {}
+      "nonGreenScenarios": []
     }
-  ],
-  "totals": {
-    "runsWithReport": 104,
-    "scenarios": 863,
-    "nonGreenScenarios": 60,
-    "codes": {
-      "TARGET_NOT_FOUND": 28,
-      "PLAN_STATE_TARGET_READ_AS_TEXT": 1,
-      "MARKER_ORDER_UNREACHABLE": 13,
-      "sans-diagnostic": 7,
-      "QA_ERROR": 2,
-      "TRANSITION_NOT_OBSERVED": 4,
-      "TRANSITION_ON_INVARIANT": 2,
-      "REQUIREMENT_UNGROUNDED": 2,
-      "PLAN_SELECTOR_UNSTABLE": 1
-    }
-  }
+  ]
 }

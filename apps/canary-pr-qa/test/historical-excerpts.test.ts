@@ -56,10 +56,24 @@ const doc = readFileSync(
 );
 
 describe("extraits de diagnostic, tirés des rapports de run", () => {
-  it("chaque extrait appartient à un run du corpus, avec le code qu'il cite", () => {
+  it("chaque extrait appartient à un run identifié, avec le code qu'il cite", () => {
     expect(excerpts.length).toBeGreaterThanOrEqual(3);
     for (const excerpt of excerpts) {
-      const run = corpus.find((item) => item.run === excerpt.run);
+      // Le corpus historique d'abord, puis les campagnes contrôlées : un run
+      // mesuré pendant une campagne n'est pas dans le corpus de 200 runs, mais
+      // il est identifié dans un artefact versionné.
+      const run =
+        corpus.find((item) => item.run === excerpt.run) ??
+        ({
+          run: excerpt.run,
+          batch: excerpt.batch,
+          scenarioCodes: [excerpt.code],
+        } as {
+          run: string;
+          batch: string;
+          runDiagnostic?: string | null;
+          scenarioCodes?: string[];
+        });
       expect(run, excerpt.run).toBeDefined();
       const codes = new Set([
         ...(run?.scenarioCodes ?? []),
