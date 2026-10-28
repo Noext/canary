@@ -48,10 +48,12 @@ const read = (name: string) =>
   ) as { blocks: CampaignBlock[]; protocol: string };
 
 const campaign = read("controlled-campaign.json");
-const invalid = read("campaign-attempt-1-invalid.json") as {
-  blocks: CampaignBlock[];
-  invalidated: string;
-};
+const invalid = JSON.parse(
+  readFileSync(
+    join(import.meta.dirname, "historical", "campaign-attempt-1-invalid.json"),
+    "utf8"
+  )
+) as { blocks: CampaignBlock[]; invalidated: string };
 
 const arms = new Map<string, CampaignRun[]>();
 for (const block of campaign.blocks) {
