@@ -29,11 +29,11 @@ coût +20 %.
 
 ## 1. Les trois causes les plus fréquentes (200 runs, 79 plans)
 
-| Rang | Famille | Runs | Scénarios | Preuve (run) | Prévenir avant exécution ? | Coût d'une correction |
+| Rang | Famille | Runs | Scénarios | Preuve (run) | Prévenir avant exécution ? | Coût / risque de faux refus |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `TARGET_NOT_FOUND` **27** | 6 | `e90c9e75` (RR) : `getByLabel('Quantité · Pièce de 20 €', { exact: true })` | non, mesuré : une porte statique sur les cibles du diff a été essayée et donnait 0 vrai positif pour 14 faux positifs (#76), retirée | réparation à l'exécution (#111, #115) plutôt que refus |
-| 2 | `MARKER_ORDER_UNREACHABLE` **23** | 9 | `277dee09` (SS) : `the last write in "justification.comment" holds` … `the limit that decides this value is 280` | **oui** : le défaut est lisible dans le diff et dicible au planificateur pendant qu'il écrit le plan | un tour de correction supplémentaire par plan fautif, aucun refus supplémentaire |
-| 3 | `TRANSITION_NOT_OBSERVED` **9** | 3 | `f6a6a890` (TT) : `no change observed — the value after step` … `is identical to the baseline probed before it` | non : il faut constater l'invariance à l'exécution | réécriture après observation (#101), sous budget |
+| 1 | `TARGET_NOT_FOUND` | **27** | 6 | `e90c9e75` (RR) : `getByLabel('Quantité · Pièce de 20 €', { exact: true })` | non, mesuré : une porte statique sur les cibles du diff a été essayée et donnait 0 vrai positif pour 14 faux positifs (#76), retirée | la réparation à l'exécution (#111, #115) a été préférée au refus, qui aurait bloqué des plans viables |
+| 2 | `MARKER_ORDER_UNREACHABLE` | **23** | 9 | `277dee09` (SS) : `the last write in "justification.comment" holds` … `the limit that decides this value is 280` | **oui** : le défaut est lisible dans le diff et dicible au planificateur pendant qu'il écrit le plan | un tour de correction par plan fautif ; et un refus de lecture reste fatal au run quand la correction échoue (`c98274a3`, dix scénarios verts, run bloqué) |
+| 3 | `TRANSITION_NOT_OBSERVED` | **9** | 3 | `f6a6a890` (TT) : `no change observed — the value after step` … `is identical to the baseline probed before it` | non : il faut constater l'invariance à l'exécution | réécriture après observation (#101), sous budget ; la sonde qui l'aurait fournie coûtait +91 % de tokens sans gain (#94) |
 
 Familles suivantes, toutes publiées, jamais écartées : `REQUIREMENT_UNGROUNDED` **7** runs
 (`a2e88c67`, QQ : `Weak source witness for` … `Rejected quote`), `QA_ERROR` **7**
@@ -70,14 +70,18 @@ modèle et le même oracle, le taux de runs entièrement verts progresse d'au mo
 points**, sans augmenter les faux refus (plans refusés à la lecture). Réfutée par une
 progression inférieure à 10 points, par une baisse, ou par une hausse des faux refus.
 
-**Verdict mesuré : hypothèse réfutée sur cet échantillon.** Les deux bras du même build
+**Verdict mesuré : hypothèse non soutenue, et l'échantillon ne permet pas de la réfuter.** Les deux bras du même build
 `e698deb` (drapeau coupé puis posé, déploiements `qqvncqlid2stp8hzcjjaor5u` et
 `dqovvc2yui0zorxey7d54rxz`, consignés dans `test/historical/prevention-trial.json`) donnent
 **5/5** verts sans prévention contre **4/5** avec. Le mécanisme du coût est dans l'artefact :
 le run `c98274a3` a ses **dix scénarios verts** et il est malgré tout **bloqué**, parce que la
 correction du plan n'a pas suffi et que le refus de lecture a transformé un run qui aurait été
-vert en run bloqué. La prévention ne s'est donc pas payée ici, et le filet de sécurité coûte
-plus qu'il ne rapporte quand le modèle rate la correction.
+vert en run bloqué. À cinq runs par bras, cet écart n'est pas significatif et ne réfute rien : il constate
+seulement qu'aucun gain n'apparaît. Ce qui est en revanche mesuré et reproductible, c'est le
+mécanisme de coût : quand la correction échoue, le refus de lecture bloque un run dont tous
+les scénarios passent. Le drapeau reste donc **posé par défaut** — le build mesuré dans la
+campagne est celui qui le porte, et le couper serait un changement non mesuré — mais il est
+signalé ici comme non démontré.
 
 Candidates écartées par la mesure, pas par préférence : porte statique sur les cibles du diff
 (0 vrai positif / 14 faux positifs, #76) ; politique de couverture par scénario (5/10 contre
@@ -96,7 +100,7 @@ fichiers entiers dans la charge utile (plus cher et moins bon, #107).
 | #115 | réparation déterministe d'un quasi-homonyme, jamais sur un nombre | `target-nearest` |
 | #117 | la réécriture couvre tous les défauts de plan nommés | `replan` |
 
-Suite : **872 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
+Suite : **874 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
 de l'application testée » garantie par `no-application-knowledge`.
 
 ## 4. Résultats comparatifs, régressions comprises
@@ -120,28 +124,35 @@ les 60,6 %.
 
 ### Campagne contrôlée entrelacée (protocole de l'objectif)
 
-Lots **alternés** baseline/courant sur le même service, la même PR, le même modèle et le même
-oracle : **P1** (baseline) → **Q1** (courant) → **P2** (baseline) → **Q2** (courant), cinq runs
-par lot, **dix runs par bras**, tous comptés (artefact
-`test/historical/controlled-campaign.json`, recalculé par `test/controlled-campaign.test.ts`) :
+Lots **alternés** courant/référence sur le même service, la même PR, le même modèle et le même
+oracle : **R1** (courant) → **S1** (référence) → **R2** (courant) → **S2** (référence), cinq
+runs par lot, **dix runs par bras**, tous comptés (artefact
+`test/historical/controlled-campaign.json`, recalculé par `test/controlled-campaign.test.ts`).
+Chaque bloc porte le **déploiement Coolify** et le **commit** qu'il a réellement servis, et la
+somme `preMatchedKeyed` atteste du bras : le build courant écrit ce champ, la référence
+`8143ac9` ne le connaît pas.
 
-| Bras | Build | Runs verts | Scénarios verts/run | Échecs produit/run | Faux refus | Faux verts (assertions) | Tokens/run | Durée |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Baseline | `8143ac9` | **9/10 (90 %)** | 8.20 | 0.10 | 0 | 0/471 | 256746 | collectée |
-| Courant | `e698deb` | **5/10 (50 %)** | 8.80 | 0.30 | 0 | 0/505 | 246981 | collectée |
+| Bras | Commit | Déploiements | Runs verts | Scénarios verts | Échecs produit | Faux refus | Faux verts (assertions) | Tokens/run | Durée |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Courant | `6c5a746` | `iy50rnncpjv9ubs6ctcm38ex`, `4gft7uaxnryit4vwjttwwobv` | **10/10** | 88/88 | 0 | 0 | **73/465** (15.7 %) | 245966 | collectée |
+| Référence | `8143ac9` | `huw33mbfxh4606d0nvzwinvg`, `o6fkx53hslpx0ezqyhak0hn3` | **8/10** | 81/84 | 3 | 0 | non instrumentée (0 clé `preMatched`) | 265128 | collectée |
 
-**Le build courant fait moins bien que la référence sur le critère principal**, dans une
-campagne où les deux bras alternent : −40 points, avec davantage de scénarios verts par run
-(8.80 contre 8.20) et plus d'échecs produit (0.30 contre 0.10), pour un coût légèrement
-inférieur. Les cinq échecs du bras courant sont `TRANSITION_NOT_OBSERVED` (3),
-`TRANSITION_ON_INVARIANT` (1) et `TARGET_NOT_FOUND` (1) ; celui de la référence est
-`TRANSITION_NOT_OBSERVED`. La famille dominante de cette campagne est donc l'assertion de
-transition sur une valeur qui ne bouge pas — exactement celle que la prévention ne peut pas
-traiter avant exécution.
+Lecture honnête : **deux runs d'écart sur dix par bras**, ce qui ne départage pas les deux
+builds (l'intervalle de confiance d'une différence 10/10 contre 8/10 chevauche largement).
+Le build courant est légèrement moins cher (−7 %), n'a aucun échec produit sur ce lot contre
+trois, et porte 15,7 % d'assertions déjà satisfaites avant leur étape — un faux-vert mesuré,
+pas nul. Les deux échecs de la référence sont `TARGET_NOT_FOUND` et
+`TRANSITION_NOT_OBSERVED`.
 
-Faux verts : aucun des 976 assertions des deux bras n'était pré-satisfaite, et aucune
-précondition non tranchable n'a été enregistrée — l'indicateur est mesuré à zéro sur cette
-campagne, pas supposé.
+Faux refus : zéro run bloqué dont tous les scénarios passent, dans cette campagne — recompté
+depuis `scenarioCount`/`passedScenarios` par run, pas depuis un booléen stocké.
+
+**Tentative précédente, retirée et conservée** (`campaign-attempt-1-invalid.json`) : ses deux
+déploiements « courant » ont échoué (`w6rceollsm27vvswqr6lsbhb`, `lzmfsrieb0f6r2knwqa7yidh`,
+statut `failed`, commit `HEAD`), donc les lots Q1 et Q2 ont servi la référence. La preuve est
+dans les runs : aucune de leurs assertions ne porte de clé `preMatched`, alors que le build
+courant en écrit 73 sur dix runs. Les 9/10 contre 5/10 publiés un moment opposaient le même
+build à lui-même : ils mesuraient la variance, pas un effet, et ils sont retirés comme preuve.
 
 ### Essai séquentiel antérieur (plus faible, conservé pour la trace)
 
@@ -169,42 +180,42 @@ lot isolé du même code. Le build courant couvre donc deux commits de **source 
 
 ## 5. Recommandation
 
-**Changer d'approche**, et le dire avec les chiffres qui l'imposent.
+**Changer d'approche sur la mesure, pas sur le code**, et voici ce que les chiffres autorisent
+à dire.
 
-La campagne entrelacée ne montre **aucune amélioration** : 9/10 pour la référence contre
-5/10 pour le build courant, dans une alternance de lots qui départage les deux bras sur la
-même PR, le même modèle et le même oracle. Les deux essais séquentiels antérieurs (5/10 → 8/10
-sur le build courant, et 5/5 contre 4/5 pour le drapeau de prévention) ne suffisent donc pas
-à établir un gain : ils ne sont pas entrelacés avec la référence, et la campagne qui l'est les
-contredit.
+La campagne entrelacée valide donne **10/10** pour le build courant contre **8/10** pour la
+référence, avec dix runs par bras, un coût par run inférieur de 7 %, zéro échec produit contre
+trois, et 15,7 % d'assertions pré-satisfaites côté courant (indicateur non instrumenté côté
+référence, donc absent et non nul). Deux runs d'écart ne démontrent pas un gain : la campagne
+établit que **le build courant n'est pas pire** que la référence sur ce lot, pas qu'il est
+meilleur.
 
-Ce que l'objectif permet de conclure, sans le maquiller :
+Ce qui reste solide et mesuré :
 
-1. **la candidate de prévention est réfutée** (4/5 contre 5/5 à drapeau posé/coupé) et son
-   coût est identifié : le refus de lecture bloque des runs dont tous les scénarios passent ;
-2. **aucune modification testée dans ce tour n'améliore le critère principal** ; le corpus
-   entier reste à 60,0 % et la lignée n'est pas distinguable de la référence dans une
-   campagne contrôlée ;
-3. **la famille dominante de la campagne est `TRANSITION_NOT_OBSERVED`** (3 des 5 échecs du
-   bras courant) : le plan affirme un changement que la page n'exécute pas dans la séquence
-   décrite. C'est un défaut qui ne se prévient pas à la lecture — il faut l'observation — et
-   la sonde de navigation qui l'aurait fournie a été mesurée à +91 % de tokens sans gain
-   (#94). La limite est donc dans ce que le modèle impose sait déduire du diff, pas dans une
-   porte manquante ;
-4. si une nouvelle campagne ne renverse pas ce résultat, la conclusion à écrire est celle que
-   l'objectif prévoit explicitement : **limite du modèle imposé** sur ce dépôt, sans
-   redéfinition du critère.
+1. la **candidate de prévention** ne montre aucun gain (5/5 drapeau coupé contre 4/5 posé, à
+   cinq runs par bras, donc non concluant) et son **coût** est démontré : un refus de lecture
+   bloque un run aux dix scénarios verts (`c98274a3`) ;
+2. la **fausse campagne** précédente (9/10 contre 5/10) est retirée : deux déploiements
+   échoués avaient laissé la référence en place des deux côtés, et l'absence de clé
+   `preMatched` dans ces runs le prouve. Elle mesurait la variance, pas un effet ;
+3. la **famille dominante du corpus** reste `TRANSITION_NOT_OBSERVED` (9 runs) et elle
+   apparaît aussi dans les deux bras de la campagne : elle ne se prévient pas à la lecture, et
+   la sonde d'observation coûtait +91 % de tokens sans gain (#94).
 
-Le coût reste un indicateur de premier plan : parité sur `SS+UU` (288 238), +45 % sur la
-paire séquentielle du jour, −4 % dans la campagne entrelacée (246 981 contre 256 746). Aucune
-de ces trois mesures ne soutient l'hypothèse d'un gain à coût constant.
+Recommandation : **poursuivre** avec deux changements de méthode, aucun changement de critère —
+(a) ne plus annoncer un effet sous dix runs par bras, et exiger une seconde campagne
+indépendante avant toute conclusion ; (b) attaquer `TRANSITION_NOT_OBSERVED` par l'observation
+ciblée plutôt que par une porte, en mesurant le coût en tokens comme un résultat de premier
+rang. Si une campagne suivante ne départage toujours pas les deux bras, la conclusion à écrire
+est celle que l'objectif prévoit : **limite du modèle imposé** sur ce dépôt, sans redéfinition
+du critère.
 
 ## Annexe — preuve par cause sur le corpus de 200 runs
 
 | Cause | Runs | Lots | Identifiants | Mécanisme | Préventable | Risque de faux refus |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TARGET_NOT_FOUND` | 27 | BA, DD, EE, FF, GG, JJ, KK, LL, NN, PP, QQ, RR | `e90c9e75`, `b8818582`, `28525781` | le plan vise un libellé absent de la vue observée ; l'échec se découvre à l'exécution | non (porte statique refutée, #76) | refuser à la lecture coûterait des plans qui auraient réussi : la réparation à l'exécution a été préférée |
-| `MARKER_ORDER_UNREACHABLE` | 23 | CC, DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS | `277dee09`, `56ae5df7`, `d07c4ed4` | le plan écrit un marqueur dont l'état antérieur n'est pas établi par une étape jouée avant lui | oui — mesure, borne et contrôle amont sont dans le diff | **mesuré négatif** : un plan non corrigé est bloqué par le refus de lecture alors que ses dix scénarios passent (run `c98274a3`) — le refus est donc fatal au niveau du run, et c'est ce coût qui a fait réfuter la candidate |
+| `MARKER_ORDER_UNREACHABLE` | 23 | CC, DD, EE, FF, GG, II, KK, LL, MM, OO, PP, QQ, RR, SS | `277dee09`, `56ae5df7`, `d07c4ed4` | le plan écrit un marqueur dont l'état antérieur n'est pas établi par une étape jouée avant lui | oui — mesure, borne et contrôle amont sont dans le diff | **mesuré négatif** : un plan non corrigé est bloqué par le refus de lecture alors que ses dix scénarios passent (run `c98274a3`) — le refus est donc fatal au niveau du run ; c'est ce coût qui explique qu'aucun gain n'apparaisse (5/5 contre 4/5, non concluant à n = 5) |
 | `TRANSITION_NOT_OBSERVED` | 9 | BA, DD, GG, JJ, NN, RR, TT | `f6a6a890`, `160792a9`, `df72d1b7` | le plan attend un changement que l'application n'effectue pas dans la séquence décrite | non : il faut constater l'invariance | nul (réécriture après observation, budgétée) |
 
 | `REQUIREMENT_UNGROUNDED` | 7 | CC, DD, GG, II, KK, OO, QQ | `bc0e083e`, `0da1a10e` | l'exigence citée ne se retrouve pas dans le fichier qu'elle déclare (citation faible ou recousue) | oui à la lecture, mesuré : la porte refuse le plan avant exécution | refus au niveau du scénario quand aucun scénario n'est exécuté ; c'est la porte la plus coûteuse en faux refus mesurés (10 plans nouvellement refusés sur 79, 0 visant un scénario vert) |
@@ -223,7 +234,7 @@ fragment littéral du message du run.
   pour « la » reproduction — **72/131 = 55.0 %** sur le sous-ensemble non-baseline et
   non-courant avant repli des lots BA et CC, et **85/150 = 56.7 %** sur la lignée complète
   (phase `lineage` d'`interleaved.json`, BA et CC compris). L'écart entre les deux est
-  exactement les 14 runs verts que les deux lots repliés ajoutent.
+  exactement les 13 runs verts que les deux lots repliés ajoutent (85 − 72).
 - **60 % baseline `8143ac9`** : ne se reproduit sur aucun agrégat de la référence, qui donne
   17/30 = **56.7 %**. Le seul agrégat à 60.0 % est le corpus entier (120/200). L'écart est
   déclaré, pas absorbé : la valeur figée reste la référence de l'objectif, et seul un essai
@@ -237,10 +248,12 @@ fragment littéral du message du run.
 
 ### Limites des indicateurs
 
-- faux verts : comptés par run dans `campaign-runs.json` — build courant **173/996**
-  assertions (17.4 %) déjà satisfaites avant leur étape ; conditions non tranchables **325**.
-  La référence porte le champ **à 0** : ses assertions n'ont pas été instrumentées, donc son
-  zéro est une absence de mesure et non une mesure ;
+- faux verts, trois mesures distinctes : **campagne entrelacée** — 73/465 assertions (15.7 %)
+  pré-satisfaites sur le bras courant, et **aucune clé `preMatched`** sur le bras référence,
+  dont le zéro est une absence d'instrumentation et jamais une mesure ; **corpus historique** —
+  173/996 (17.4 %) sur le build courant, 325 conditions non tranchables ; **paire séquentielle**
+  — 0/976, ce qui s'explique par des plans sans assertion ancrée sur une interaction, pas par
+  un zéro « mesuré » ;
 - faux refus, deux mesures distinctes : sur la **campagne entrelacée**, zéro run bloqué dont
   tous les scénarios passent (compté par run dans `controlled-campaign.json`) ; sur les
   **79 plans historiques** rejoués contre les deux portes, 5 refus à la référence, 15

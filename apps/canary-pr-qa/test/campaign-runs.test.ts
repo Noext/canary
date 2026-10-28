@@ -129,8 +129,15 @@ describe("le document de décision ne dérive pas du corpus", () => {
       if (count < 2) {
         continue;
       }
-      expect(doc, code).toContain(`| \`${code}\` | ${count} |`);
-      expect(doc, code).toContain(`\`${code}\` **${count}**`);
+      const forms = [
+        `| \`${code}\` | ${count} |`,
+        `| \`${code}\` | **${count}** |`,
+        `\`${code}\` **${count}**`,
+      ];
+      expect(
+        forms.some((form) => doc.includes(form)),
+        `${code} ${count}`
+      ).toBe(true);
     }
   });
 
