@@ -5,7 +5,8 @@
     "code": "TARGET_NOT_FOUND",
     "message": "Canary action failed: Timeout 10000ms exceeded. Call log: - waiting for getByLabel('Quantité · Pièce de 20 €', { exact: true }).or(getByRole('combobox', { name: 'Quantité · Pièce de 20 €', exact: true })).or(getByRole('listbox', { name: 'Quantité · Pièce de 20 €', exact: true })).or(getByRole('textbox', { name: 'Quantité · Pièce de 20 €', exact: true })) at captureRawStack (<input>",
     "scenario": null,
-    "quote": "getByLabel('Quantité · Pièce de 20 €', { exact: true })"
+    "quote": "getByLabel('Quantité · Pièce de 20 €', { exact: true })",
+    "messageSha256": "f88c348a8d7b4b3147fa6217304e68d23ea950e0904c4928d5972c1410c9f0d1"
   },
   {
     "run": "277dee09-5ee1-49b9-9ff6-dff2d4c93ece",
@@ -13,7 +14,8 @@
     "code": "MARKER_ORDER_UNREACHABLE",
     "message": "Scenario comment-length-boundary: assertion problem-none expects data-cash-justification-problem=\"aucun\", but the last write in \"justification.comment\" holds 290 characters and the limit that decides this value is 280. Write exactly 281 characters so that comment.length > CASH_JUSTIFICATION_MAX_LENGTH holds, then assert the marker.",
     "scenario": null,
-    "quote": "the last write in \"justification.comment\" holds"
+    "quote": "the last write in \"justification.comment\" holds",
+    "messageSha256": "a5687f3cdbfd22681aff213c8f4ed7c3b0558630ebf3a8e7f0548ed9f782636a"
   },
   {
     "run": "f6a6a890-3bd6-462c-9177-0291f62a4d32",
@@ -21,7 +23,8 @@
     "code": "TRANSITION_NOT_OBSERVED",
     "message": "Assertion a6-problem-too-long: no change observed — the value after step s6-fill-281 is identical to the baseline probed before it, so the required transition is not demonstrated",
     "scenario": null,
-    "quote": "no change observed — the value after step"
+    "quote": "no change observed — the value after step",
+    "messageSha256": "a996ddbf5ca9bacd964215f8c3c61847cb3724a04d3a5007dec4548b0f3db3e6"
   },
   {
     "run": "e90c9e75-dc13-4d09-8fe3-7fdc6bdb212e",
@@ -29,7 +32,8 @@
     "code": "TRANSITION_ON_INVARIANT",
     "message": "Assertion c2: the plan requires a change on a value that does not change — the value after step fill-100 is identical to the baseline probed before it, and that unchanged value already satisfies the expected one, so the application shows what the assertion asks for and the verification is what is wrong",
     "scenario": null,
-    "quote": "the plan requires a change on a value that does not change"
+    "quote": "the plan requires a change on a value that does not change",
+    "messageSha256": "726507b43bba165d8adeb87ff497e21f3c05ca4ff175db88f00107506848c5e1"
   },
   {
     "run": "a2e88c67-6e53-4ea8-b530-298b8526acce",
@@ -37,6 +41,7 @@
     "code": "REQUIREMENT_UNGROUNDED",
     "message": "Weak source witness for cash-justification-puis-cloture: apps/web/app/page.tsx (requirement 3). Rejected quote: \"data-cash-history-entry\"",
     "scenario": null,
-    "quote": "Weak source witness for"
+    "quote": "Weak source witness for",
+    "messageSha256": "89bf5830ed0b63c1e767decca95a890996178300bd13f424d2b32546415907bf"
   }
 ]
