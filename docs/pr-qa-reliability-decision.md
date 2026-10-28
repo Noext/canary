@@ -85,11 +85,19 @@ message, à la fin d'une liste que la fenêtre de 2 000 caractères tronque en d
 `test/marker-order.test.ts` (« le refus d'ordre était déjà remis au planificateur ») fige ce
 fait : le refus nomme le contrôle amont et la mesure, sans aucun drapeau.
 
-**Conséquence, appliquée sans réinterprétation.** La règle enregistrée dit : réfutée par une
-progression inférieure à 10 points, ou par une baisse. Mesure : **5/5** sans le drapeau contre
-**4/5** avec, à cinq runs par bras — une **baisse de 20 points**. L'hypothèse est donc
-**réfutée**, par la règle telle qu'elle était écrite ; la faible puissance de l'échantillon
-(n = 5) est une limite de la mesure, pas une raison de changer la règle après coup.
+**Conséquence : l'hypothèse n'est pas réfutée — elle n'est pas mesurable par ce drapeau.**
+L'essai (5/5 contre 4/5, `test/historical/prevention-trial.json`, conservé) oppose deux
+réglages du **doublon** : il ne retire pas la prévention, puisque celle-ci est livrée par le
+chemin #86 et que le drapeau n'y touche pas. La règle enregistrée (« réfutée par une
+progression inférieure à 10 points, ou par une baisse ») s'applique à une différence
+attribuable au candidat ; ici la différence mesure un indice supprimé par la troncature, et
+rien d'autre. Écrire « réfutée » serait un abus de la règle, pas son application.
+
+Ce que le document peut donc affirmer, sans forcer : **la prévention du défaut d'ordre est
+livrée depuis #86**, son hypothèse (prévenir contre ne pas prévenir) ne peut être testée qu'en
+révoquant ce chemin, ce que l'objectif interdit de faire à la légère puisqu'il faudrait
+supprimer un contrôle existant. Le doublon, lui, est retiré, et son essai reste dans l'arbre
+comme trace de l'erreur de conception.
 
 Le doublon a été **retiré** : la fonction, le drapeau et son essai ne sont plus dans le code, et
 le refus existant est gardé par le test ci-dessus, pour que la suppression ne puisse pas
@@ -116,7 +124,7 @@ l'objectif interdit.
 | #115 | réparation déterministe d'un quasi-homonyme, jamais sur un nombre | `target-nearest` |
 | #117 | la réécriture couvre tous les défauts de plan nommés | `replan` |
 
-Suite : **873 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
+Suite : **880 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
 de l'application testée » garantie par `no-application-knowledge`.
 
 ## 4. Résultats comparatifs, régressions comprises
@@ -175,6 +183,31 @@ dans les runs : aucune de leurs assertions ne porte de clé `preMatched`, alors 
 courant en écrit 73 sur dix runs. Les 9/10 contre 5/10 publiés un moment opposaient le même
 build à lui-même : ils mesuraient la variance, pas un effet, et ils sont retirés comme preuve.
 
+### Campagne de vérification sur le build livré
+
+La campagne précédente avait mesuré `6c5a746`, qui portait encore le doublon ; le code livré
+(`52ff4d0`) l'a retiré. Cette campagne mesure donc **le code réellement livré**, alterné avec la
+référence : **D1** (livré) → **B1** (référence) → **D2** (livré) → **B2** (référence), cinq runs
+par lot, dix par bras (`test/historical/delivered-campaign.json`, déploiement et commit par bloc,
+`preMatchedKeyed` 57 côté livré et 0 côté référence pour attester du bras).
+
+| Bras | Commit · déploiements | Verts (tous runs) | Verts (évaluables) | Scénarios verts/run | Échecs produit/run | Tokens/run | Durée/run |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Livré | `52ff4d0` · `3cifqgmhhswe8216ljwmr2ls`, `finnlblyfvc2cvbdxk9g18iy` | 7/10 | **7/8 (87,5 %)** | 7,00 | 0,00 | 243 738 ± 36 190 | 415 s ± 42 |
+| Référence | `8143ac9` · `okkr3c0xgv69lw9xstecghl8`, `9wbhuftiekvilg1ed6oknm6y` | 7/10 | **7/10 (70 %)** | 9,00 | 0,20 | 285 287 ± 22 706 | 570 s ± 37 |
+
+Deux runs du bras livré sont des **pannes d'infrastructure** (`HTTP_429` du fournisseur, zéro
+scénario exécuté) : ils sont **comptés** dans la colonne « tous runs », nommés, et exclus du seul
+calcul « évaluable » — jamais retirés de l'artefact. Toutes les autres valeurs sont calculées sur
+les runs évaluables.
+
+Lecture : **7/8 contre 7/10**, soit **0,9 σ** — indistinguable de zéro, sur des surfaces de test
+différentes (7,00 scénarios verts par run côté livré contre 9,00 côté référence). Le build livré
+n'a **aucun échec produit** sur ces runs et coûte moins (243 738 contre 285 287 tokens par run,
+−15 %), mais l'écart de coût est lui aussi non séparable et il s'explique en partie par une
+surface plus étroite. Aucune amélioration n'est annoncée ici : la campagne établit que le code
+livré n'est pas pire, pas qu'il est meilleur.
+
 ### Essai séquentiel antérieur (plus faible, conservé pour la trace)
 
 **Essai contrôlé du 2026-10-27** (`test/historical/reliability-pair.json`), même service,
@@ -207,7 +240,8 @@ n'est pas une dérobade : il est chiffré.
 
 | Comparaison | Effet mesuré sur les runs verts | Erreur-type de la différence | Verdict |
 | --- | --- | --- | --- |
-| Campagne entrelacée, courant `6c5a746` contre référence `8143ac9` (10 runs/bras) | +2 runs (+20 pts) | ±1,3 run (12,6 pts) | 1,6 σ — indistinguable de zéro |
+| Campagne de vérification, **build livré** `52ff4d0` contre référence (10 runs/bras, 8 évaluables côté livré) | +1,75 run (+17,5 pts) | ±1,9 run (18,6 pts) | 0,9 σ — indistinguable de zéro |
+| Campagne entrelacée antérieure, `6c5a746` contre référence (10 runs/bras) | +2 runs (+20 pts) | ±1,3 run (12,6 pts) | 1,6 σ — indistinguable de zéro |
 | Corpus historique, build courant `SS+UU` (18/20) contre référence (17/30) | +33,3 pts | ±11,3 pts | 3,0 σ — **significatif hors contrôle** |
 
 L'écart historique est donc réel **en tant qu'observation**, et il ne se réplique pas dans la
@@ -223,9 +257,9 @@ constitue une amélioration démontrée.
 
 Trois faits restent établis, chacun avec sa preuve :
 
-1. la **candidate de prévention** a été **retirée** : elle dupliquait une correction livrée en
-   #86, son essai (5/5 contre 4/5) ne mesurait donc qu'un doublon, et la règle enregistrée la
-   réfute ; le coût du refus de lecture, lui, préexiste et est partagé par les deux bras
+1. la **candidate de prévention** était déjà livrée (#86) : mon ajout n'était qu'un doublon,
+   retiré, et son essai (5/5 contre 4/5) ne mesurait que la variable de ce doublon — il ne
+   réfute rien. Le coût du refus de lecture, lui, préexiste et est partagé par les deux bras
    (`refusal-evidence.json`, run `c98274a3`) ;
 2. la **première campagne** (9/10 contre 5/10) était invalide — deux déploiements échoués
    laissaient la référence des deux côtés, et l'absence de clé `preMatched` dans ces runs le
@@ -281,10 +315,9 @@ fragment littéral du message du run.
 
 - faux verts, trois mesures distinctes : **campagne entrelacée** — 73/465 assertions (15.7 %)
   pré-satisfaites sur le bras courant, et **aucune clé `preMatched`** sur le bras référence,
-  dont le zéro est une absence d'instrumentation et jamais une mesure — la référence
-  `8143ac9` est antérieure au commit `641e6df` qui a introduit le champ, ce que `git merge-base
-  --is-ancestor 641e6df 8143ac9` tranche sans ambiguïté, et le fichier ne compte que les clés
-  présentes ; **corpus historique** —
+  dont le compte de clés présentes vaut **0** (champ `preMatchedKeyed`) — c'est un compte, pas
+  une mesure de faux verts, et la référence `8143ac9` est antérieure au commit `641e6df` qui a
+  introduit le champ, ce que `git merge-base --is-ancestor 641e6df 8143ac9` tranche ; **corpus historique** —
   173/996 (17.4 %) sur le build courant, 325 conditions non tranchables ; **paire séquentielle**
   — 0/976, ce qui s'explique par des plans sans assertion ancrée sur une interaction, pas par
   un zéro « mesuré » ;

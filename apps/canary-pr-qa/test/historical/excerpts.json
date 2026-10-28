@@ -43,5 +43,13 @@
     "scenario": null,
     "quote": "Weak source witness for",
     "messageSha256": "89bf5830ed0b63c1e767decca95a890996178300bd13f424d2b32546415907bf"
+  },
+  {
+    "run": "32d79c30-8747-4063-96a0-b7b2d75e5105",
+    "batch": "S2",
+    "code": "TRANSITION_NOT_OBSERVED",
+    "message": "Assertion problem-aucun-6: no change observed — the value after step s6-fill280 is identical to the baseline probed before it, so the required transition is not demonstrated",
+    "messageSha256": "49713791017a3ca4a864b159d21a3f92eb7a8c6e6eff92dfbf198a02a8714b3e",
+    "quote": "no change observed — the value after step"
   }
 ]

@@ -1,0 +1,96 @@
+{
+  "pr": "https://github.com/pharmania/arpilabe-pilotage/pull/20",
+  "preview": "https://20.arpilabe.pharmania.fr/",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "build": "e698deb160d31cc2bedf969ab82e7d01e3b05d6d",
+  "flag": "QA_PREVENT_MARKER_ORDER",
+  "service": "canary.pharmania.fr",
+  "note": "Deux bras du même build e698deb, séparés par QA_PREVENT_MARKER_ORDER. La vérification du code a montré que le refus d'ordre était déjà remis au planificateur par unwitnessedPlanRefusals depuis #86 : ce drapeau n'ajoutait qu'une copie du même message, en fin de liste, dans la fenêtre de 2 000 caractères qui tronque en premier. Le résultat (5/5 contre 4/5) mesure donc la variable de ce doublon, il ne mesure pas la prévention, et il ne la réfute pas. L'artefact est conservé : supprimer un résultat historique n'est pas une option, et c'est la trace de l'erreur de conception.",
+  "blocks": [
+    {
+      "lot": "V1",
+      "flag": false,
+      "deployment": "qqvncqlid2stp8hzcjjaor5u",
+      "runs": [
+        {
+          "run": "3b8f105a-4bbd-45d0-bef6-3c963d992543",
+          "outcome": "passed",
+          "greenScenarios": 9,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "db39ce8d-1d38-4e2d-9831-2907ef6c5b39",
+          "outcome": "passed",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "4dc501fc-b61b-4cac-95ea-4dea6291b422",
+          "outcome": "passed",
+          "greenScenarios": 7,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "b212c742-2a67-45ea-b385-76f9e4fa85e5",
+          "outcome": "passed",
+          "greenScenarios": 9,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "c59be171-ed09-4fdd-b0c9-25a6a98acb84",
+          "outcome": "passed",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "lot": "W1",
+      "flag": true,
+      "deployment": "dqovvc2yui0zorxey7d54rxz",
+      "runs": [
+        {
+          "run": "9c6c0d3f-fd7e-4334-b238-706ae382a703",
+          "outcome": "passed",
+          "greenScenarios": 8,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "c98274a3-8ba4-4adb-8e2e-bfb09e6458e4",
+          "outcome": "blocked",
+          "greenScenarios": 10,
+          "productFailures": 0,
+          "codes": ["MARKER_ORDER_UNREACHABLE"]
+        },
+        {
+          "run": "fb90e09a-2e83-4a37-bf8b-b7af2513faaf",
+          "outcome": "passed",
+          "greenScenarios": 6,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "e005d4a9-49f2-4937-8ed1-8351b78c4dd2",
+          "outcome": "passed",
+          "greenScenarios": 10,
+          "productFailures": 0,
+          "codes": []
+        },
+        {
+          "run": "60cc6222-557b-4a7a-8241-03a21660bc19",
+          "outcome": "passed",
+          "greenScenarios": 7,
+          "productFailures": 0,
+          "codes": []
+        }
+      ]
+    }
+  ],
+  "status": "conservé — il mesure un doublon, pas un candidat"
+}
