@@ -147,6 +147,9 @@ async function readPersisted(
       passed: false,
       actual: observation.actual,
       baseline,
+      ...(assertion.requirement === undefined
+        ? {}
+        : { requirement: assertion.requirement }),
     });
     result.outcome = "failed";
     result.diagnostic = diagnostic;
@@ -223,6 +226,9 @@ async function evaluateAssertion(
     baseline,
     persisted,
     ...(preMatched ? { preMatched } : {}),
+    ...(assertion.requirement === undefined
+      ? {}
+      : { requirement: assertion.requirement }),
   });
   if (!passed) {
     recordUnprovenAssertion(

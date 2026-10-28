@@ -219,6 +219,13 @@ const assertionBase = {
   target: locator.optional(),
   afterStep: text.optional(),
   verification: z.enum(["state", "transition", "persisted"]).default("state"),
+  /**
+   * L'indice de l'exigence qui justifie la valeur attendue. Une assertion sans
+   * provenance ne peut pas être distinguée d'une valeur inventée : le gate
+   * l'exige donc quand le chemin d'observation est actif, et l'exécution
+   * recopie l'indice dans le rapport pour que la preuve soit lisible.
+   */
+  requirement: z.number().int().min(0).optional(),
 };
 /**
  * L'attendu d'un kind qui compare à une valeur. Même acceptation que `text`, mais
@@ -866,6 +873,13 @@ function scenarioSchema<T extends z.ZodTypeAny, A extends z.ZodTypeAny>(
         .max(40),
       requirements: z.array(requirement).min(1).max(20),
       assertions: z.array(assertion).min(1).max(10),
+      /**
+       * L'identifiant de l'assertion qui prouve l'objectif du scénario. Un
+       * scénario ne peut pas être vert si cette assertion n'a pas passé : sans
+       * elle, il n'a rien démontré, même quand toutes ses autres assertions
+       * passent.
+       */
+      objective: text.optional(),
     })
     .strict();
 }
@@ -1223,10 +1237,19 @@ export interface ScenarioResult {
      */
     preMatched?: boolean;
     persisted?: unknown;
+    /** L'indice de l'exigence qui justifie l'attendu : la preuve, dans le rapport. */
+    requirement?: number;
   }[];
   contract?: { completedSteps: string[]; totalSteps: number; hash: string };
   diagnostic?: Diagnostic;
   error?: string;
+  /**
+   * Vrai quand l'assertion désignée comme objectif du scénario a passé. Faux ou
+   * absent quand le plan n'en désigne aucune : la mesure est publiée pour que la
+   * campagne compte les verts sans preuve d'objectif au lieu de les supposer
+   * démontrés.
+   */
+  objectiveProven?: boolean;
   outcome: Outcome;
   scenario: Scenario;
   sessionId?: string;
