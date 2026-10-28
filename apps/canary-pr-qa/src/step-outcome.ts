@@ -1,25 +1,19 @@
 import { createLogger } from "@usecanary/logger";
-import { type Canary, compileProbe } from "./canary.js";
-import { type Diagnostic, QaError } from "./diagnostics.js";
+import { type Canary, compileProbe, type Observation } from "./canary.js";
+import type { Config } from "./config.js";
+import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import type { explainMissingTarget } from "./missing-target.js";
 import type { ProgressEvent } from "./progress.js";
 
 const logger = createLogger({ name: "pr-qa-baselines" });
 
-import type { Scenario, ScenarioResult } from "./schema.js";
+import type { Assertion, Scenario, ScenarioResult } from "./schema.js";
 
 /**
  * Ce que devient une étape finie : son entrée d'artefact, son verdict, la ligne
- * de contrat qu'elle ajoute, et la reprise qui l'a éventuellement rejouée.
- * Isolé de l'exécuteur pour qu'`executor.ts` ne porte que la conduite du
- * scénario — c'est cette séparation qui garde le module sous le seuil de
- * responsabilités de la porte d'architecture.
  */
 /**
  * Une cible qui n'apparaît jamais est une promesse non tenue, pas une panne :
- * un `assert` affirme qu'un élément existe, donc son échec est une assertion
- * fausse et le scénario échoue. Un clic dont la même cible ne résout jamais
- * reste une panne d'exécution (`false`) : l'action n'a pas atteint son but.
  */
 function failAssertionOnMissingTarget(
   result: ScenarioResult,
@@ -46,14 +40,9 @@ function failAssertionOnMissingTarget(
 }
 /**
  * Joue une étape, et la rejoue UNE fois sur une cible observée quand elle a
- * échoué faute de cible. Rend l'échec qui reste, ou rien quand l'étape a été
- * jouée — `repairedTo` disant alors sur quelle cible la reprise l'a fait.
  */
 /**
  * L'étape a échoué et la reprise n'a rien pu corriger : le résultat consigne
- * l'échec, le verdict est posé, et l'erreur remonte avec le diagnostic déjà
- * établi. Une assertion sur une cible absente est une PROMESSE NON TENUE, donc
- * un échec ; un clic qui n'atteint jamais sa cible reste une panne.
  */
 export async function reportStepFailure(
   failure: Awaited<ReturnType<typeof explainMissingTarget>>,
@@ -96,10 +85,6 @@ export async function reportStepFailure(
 
 /**
  * L'étape a été jouée : elle entre au contrat, et le résultat consigne la
- * reprise éventuelle. `observe` comprise — l'ancien exécuteur l'excluait quand
- * elle était un coup d'œil libre du modèle, et l'exclure faisait refuser par
- * `finish()` un contrat pourtant joué en entier (run 91fb1e35 : 6 scénarios sur
- * 6, zéro étape en échec, zéro assertion fausse).
  */
 export async function recordStepPlayed(
   result: ScenarioResult,
@@ -135,9 +120,6 @@ export async function recordStepPlayed(
 
 export /**
  * Le contrat joué doit être EXACTEMENT le contrat planifié : mêmes identifiants,
- * même ordre. Comparer les longueurs laissait passer une étape jouée deux fois
- * compensant une étape sautée, et surtout ne disait pas laquelle manquait : le
- * hint nomme les étapes absentes du relevé.
  */
 function finish(result: ScenarioResult) {
   const planned = result.scenario.steps.map((step) => step.id);
@@ -226,4 +208,92 @@ function interactionStep(
   return ["check", "click", "fill", "press", "select"].includes(
     step.action.type
   );
+}
+
+/**
+ * L'invariant I3 : un scénario n'est vert que si l'assertion qui prouve son
+ */
+
+export function recordUnprovenAssertion(
+  result: ScenarioResult,
+  assertion: Assertion,
+  verification: string,
+  matched: boolean,
+  unchanged: boolean,
+  config: Config
+) {
+  const step = assertion.afterStep ?? "the interaction";
+  if (unchanged && verification === "transition" && matched) {
+    result.outcome = "blocked";
+    result.diagnostic = diagnose(
+      new QaError(
+        "TRANSITION_ON_INVARIANT",
+        `Assertion ${assertion.id}: the plan requires a change on a value that does not change — the value after step ${step} is identical to the baseline probed before it, and that unchanged value already satisfies the expected one, so the application shows what the assertion asks for and the verification is what is wrong`,
+        `Verify this value with "state" and afterStep set to the interaction: an invariant cannot demonstrate a transition. Move the "transition" to the output the step really moves, or drop the interaction if nothing is meant to change.`
+      ),
+      config
+    );
+    result.error = result.diagnostic.message;
+    return;
+  }
+  result.outcome = "failed";
+  if (unchanged) {
+    // Naming the missing transition, not recopying the assertion description:
+    // "the element still shows X" reads as a regression while actual and
+    // baseline agree, and sends the operator after an innocent element.
+    result.diagnostic = diagnose(
+      new QaError(
+        "TRANSITION_NOT_OBSERVED",
+        `Assertion ${assertion.id}: no change observed — the value after step ${step} is identical to the baseline probed before it, so the required ${verification} is not demonstrated`,
+        `Require a change only from a value that must change. For an invariance after an interaction, use verification "state" with afterStep set to the interaction step (the element is still there after clicking X).`
+      ),
+      config
+    );
+    result.error = result.diagnostic.message;
+    return;
+  }
+  result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
+}
+
+export async function readPersisted(
+  sessionId: string,
+  assertion: Assertion,
+  observation: Observation,
+  result: ScenarioResult,
+  preview: string,
+  canary: Canary,
+  config: Config,
+  baseline: unknown
+): Promise<{ handled: true } | { handled: false; persisted: unknown }> {
+  try {
+    const persisted = (
+      await canary.act(
+        sessionId,
+        `persistence-${assertion.id}`,
+        compileProbe(assertion, preview, true)
+      )
+    ).actual;
+    return { handled: false, persisted };
+  } catch (error) {
+    const diagnostic = diagnose(error, config);
+    if (
+      diagnostic.code !== "TARGET_NOT_FOUND" ||
+      observation.actual === undefined
+    ) {
+      throw error;
+    }
+    result.assertions.push({
+      id: assertion.id,
+      passed: false,
+      actual: observation.actual,
+      baseline,
+      ...(assertion.requirement === undefined
+        ? {}
+        : { requirement: assertion.requirement }),
+    });
+    result.outcome = "failed";
+    result.diagnostic = diagnostic;
+    result.error = `Assertion ${assertion.id} failed: the value observed before the reload is no longer present in the target after it — persistence is not demonstrated — ${diagnostic.message}`;
+    return { handled: true };
+  }
 }

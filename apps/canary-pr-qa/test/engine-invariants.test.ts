@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
 import { PLANNER_PROMPT } from "../src/model.js";
-import { provenanceRefusals } from "../src/plan-evidence.js";
-import { enforceObjectiveProof, runQa } from "../src/runner.js";
+import {
+  enforceObjectiveProof,
+  provenanceRefusals,
+} from "../src/plan-evidence.js";
+import { runQa } from "../src/runner.js";
 import type { Plan, ScenarioResult } from "../src/schema.js";
 import { repairStepTarget } from "../src/target-repair.js";
 import { fixture, PR_URL } from "./fixture.js";

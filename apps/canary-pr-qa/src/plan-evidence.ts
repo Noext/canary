@@ -8,7 +8,7 @@ import {
   typographicVariants,
 } from "./canary.js";
 import type { Config } from "./config.js";
-import { QaError } from "./diagnostics.js";
+import { diagnose, QaError } from "./diagnostics.js";
 import { declaredPreconditionNames, type TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
 import {
@@ -2305,6 +2305,40 @@ export function replannedScenarios(
  * Drapeau coupé : aucun refus. Le chemin figé reste le bras de comparaison, et
  * l'absence de preuve y est mesurée (`objectiveProven`), pas tolérée en silence.
  */
+
+export function enforceObjectiveProof(
+  result: ScenarioResult,
+  config: Config
+): ScenarioResult {
+  const objective = result.scenario.objective;
+  const proof = objective
+    ? result.assertions.find((item) => item.id === objective)
+    : undefined;
+  result.objectiveProven = proof?.passed === true;
+  if (result.classification === "indeterminate" || !config.QA_OBSERVE_ACT) {
+    return result;
+  }
+  if (result.objectiveProven) {
+    return result;
+  }
+  const error =
+    proof === undefined
+      ? new QaError(
+          "CONTRACT_INCOMPLETE",
+          `Scenario ${result.scenario.id} never executed its objective assertion ${objective}`,
+          "The objective assertion must be executed and pass before the scenario can be green."
+        )
+      : new QaError(
+          "CONTRACT_INCOMPLETE",
+          `Scenario ${result.scenario.id} did not prove its objective: assertion ${objective} failed`,
+          "A scenario is green only when the assertion designated as its objective passes."
+        );
+  result.outcome = "blocked";
+  result.diagnostic = diagnose(error, config);
+  result.error = error.message;
+  return result;
+}
+
 export function provenanceRefusals(
   plan: Plan,
   enabled: boolean
@@ -2313,48 +2347,41 @@ export function provenanceRefusals(
     return [];
   }
   const refusals: { error: QaError; scenarioId: string }[] = [];
+  const refuse = (scenarioId: string, message: string, hint: string) =>
+    refusals.push({
+      error: new QaError("PLAN_SCHEMA_INVALID", message, hint),
+      scenarioId,
+    });
   for (const scenario of plan.scenarios) {
-    const ids = new Set(scenario.assertions.map((assertion) => assertion.id));
-    if (!scenario.objective) {
-      refusals.push({
-        error: new QaError(
-          "PLAN_SCHEMA_INVALID",
-          `Scenario ${scenario.id} declares no objective`,
-          "Set the objective field to the id of the assertion that proves what this scenario exists to demonstrate. A scenario without that proof cannot be green, because nothing it asserts is designated as the goal."
-        ),
-        scenarioId: scenario.id,
-      });
-    } else if (!ids.has(scenario.objective)) {
-      refusals.push({
-        error: new QaError(
-          "PLAN_SCHEMA_INVALID",
-          `Scenario ${scenario.id} names objective ${JSON.stringify(scenario.objective)}, which is not one of its assertions`,
-          `Name one of these assertion ids as the objective: ${[...ids].join(", ")}.`
-        ),
-        scenarioId: scenario.id,
-      });
+    const ids = scenario.assertions.map((assertion) => assertion.id);
+    const objective = scenario.objective;
+    if (!objective) {
+      refuse(
+        scenario.id,
+        `Scenario ${scenario.id} declares no objective`,
+        "Set objective to the id of the assertion that proves what this scenario exists to demonstrate; a scenario without that proof cannot be green."
+      );
+    } else if (!ids.includes(objective)) {
+      refuse(
+        scenario.id,
+        `Scenario ${scenario.id} names objective ${JSON.stringify(objective)}, which is not one of its assertions`,
+        `Name one of these assertion ids as the objective: ${ids.join(", ")}.`
+      );
     }
     for (const assertion of scenario.assertions) {
-      if (assertion.requirement === undefined) {
-        refusals.push({
-          error: new QaError(
-            "PLAN_SCHEMA_INVALID",
-            `Assertion ${assertion.id} of scenario ${scenario.id} cites no requirement`,
-            "Set the requirement field to the index of the requirement in this scenario whose line or quote justifies the expected value. A value that no requirement justifies is indistinguishable from an invented one."
-          ),
-          scenarioId: scenario.id,
-        });
-        continue;
-      }
-      if (assertion.requirement >= scenario.requirements.length) {
-        refusals.push({
-          error: new QaError(
-            "PLAN_SCHEMA_INVALID",
-            `Assertion ${assertion.id} of scenario ${scenario.id} cites requirement ${assertion.requirement}, but the scenario declares ${scenario.requirements.length}`,
-            `Use an index between 0 and ${scenario.requirements.length - 1}.`
-          ),
-          scenarioId: scenario.id,
-        });
+      const index = assertion.requirement;
+      if (index === undefined) {
+        refuse(
+          scenario.id,
+          `Assertion ${assertion.id} of scenario ${scenario.id} cites no requirement`,
+          "Set requirement to the index of the requirement whose line or quote justifies the expected value; a value no requirement justifies is indistinguishable from an invented one."
+        );
+      } else if (index >= scenario.requirements.length) {
+        refuse(
+          scenario.id,
+          `Assertion ${assertion.id} of scenario ${scenario.id} cites requirement ${index}, but the scenario declares ${scenario.requirements.length}`,
+          `Use an index between 0 and ${scenario.requirements.length - 1}.`
+        );
       }
     }
   }
