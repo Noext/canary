@@ -152,9 +152,10 @@ Expériences isolées (un lot de chaque côté, jamais agrégées) :
 - `RR` (réparation déterministe d'une cible proche) : 5/10 contre 7/10 pour `PP`,
   mais 89 scénarios verts contre 70 — la réparation débloque des étapes sans
   rendre les plans justes.
-- `SS` (réécriture élargie à tous les défauts de plan) : 9/10 et 93 scénarios,
-  le meilleur lot de la campagne ; il n'est pas présenté comme une moyenne.
 
-**Durées** : la campagne entrelacée n'a pas enregistré de durée par run ; les
-lots BA à II en portent une dans le tableau ci-dessus. L'absence est dite, pas
-comblée.
+`SS` et `UU` forment l'agrégat « build courant » : ce ne sont pas des expériences
+isolées, et le meilleur lot n'est pas présenté comme une moyenne séparée.
+
+**Durées** : `startedAt`/`endedAt` sont publiés par run ci-dessus pour les lots BA à
+II, et la campagne contrôlée les enregistre aussi : 492,6 s contre 427,9 s par run,
+un écart non séparable (erreur-type 50 s).

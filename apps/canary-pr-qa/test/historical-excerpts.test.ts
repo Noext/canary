@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,6 +30,7 @@ const excerpts = JSON.parse(
   batch: string;
   code: string;
   message: string;
+  messageSha256: string;
   quote: string;
 }[];
 const trialRuns = new Map<string, Set<string>>();
@@ -68,6 +70,11 @@ describe("extraits de diagnostic, tirés des rapports de run", () => {
       expect(excerpt.batch).toBe(run?.batch);
       // La citation publiée est un fragment littéral du message du run.
       expect(excerpt.message, excerpt.run).toContain(excerpt.quote);
+      // L'empreinte rend le message recalculable sans le service, qui répond 401.
+      expect(
+        createHash("sha256").update(excerpt.message).digest("hex"),
+        excerpt.run
+      ).toBe(excerpt.messageSha256);
     }
   });
 

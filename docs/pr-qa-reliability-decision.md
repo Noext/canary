@@ -10,8 +10,9 @@ Ce qui n'est **pas** vérifié mécaniquement est dit à l'endroit où cela comp
 particulier, les extraits de `excerpts.json` ont été tirés des rapports de run le
 2026-10-27 avec le jeton du service ; le point d'artefacts répond **401** sans jeton, donc un
 relecteur ne peut pas les re-tirer lui-même. Ce qui est vérifiable depuis le dépôt : chaque
-extrait nomme son run, ce run est dans un artefact versionné, il porte le code cité, et la
-citation publiée est un fragment littéral du message stocké.
+extrait nomme son run, ce run est dans un artefact versionné, il porte le code cité, la
+citation publiée est un fragment littéral du message stocké, et l'empreinte `messageSha256`
+permet de recalculer ce message à partir du JSON committé.
 
 Le corpus couvre **les 200 runs identifiés** des lots BA→UU, y compris les 19 artefacts que
 seul `plans.json.gz` portait (10 lot BA, 9 lot CC) : ils étaient absents du corpus de la
@@ -34,6 +35,16 @@ coût +20 %.
 | 1 | `TARGET_NOT_FOUND` | **27** | 6 | `e90c9e75` (RR) : `getByLabel('Quantité · Pièce de 20 €', { exact: true })` | non, mesuré : une porte statique sur les cibles du diff a été essayée et donnait 0 vrai positif pour 14 faux positifs (#76), retirée | la réparation à l'exécution (#111, #115) a été préférée au refus, qui aurait bloqué des plans viables |
 | 2 | `MARKER_ORDER_UNREACHABLE` | **23** | 9 | `277dee09` (SS) : `the last write in "justification.comment" holds` … `the limit that decides this value is 280` | **oui** : le défaut est lisible dans le diff et dicible au planificateur pendant qu'il écrit le plan | un tour de correction par plan fautif ; et un refus de lecture reste fatal au run quand la correction échoue (`c98274a3`, dix scénarios verts, run bloqué) |
 | 3 | `TRANSITION_NOT_OBSERVED` | **9** | 3 | `f6a6a890` (TT) : `no change observed — the value after step` … `is identical to the baseline probed before it` | non : il faut constater l'invariance à l'exécution | réécriture après observation (#101), sous budget ; la sonde qui l'aurait fournie coûtait +91 % de tokens sans gain (#94) |
+
+La colonne « Scénarios » compte les **plans stockés** (lots BA→II, où le diagnostic par
+scénario est enregistré). Comme criterion 1 demande tous les artefacts, une seconde mesure est
+publiée à partir des **rapports encore joignables** — 104 des 200 runs, 863 scénarios dont 60
+non verts (`test/historical/report-scenarios.json`, compté par code) : `TARGET_NOT_FOUND` **28**,
+`MARKER_ORDER_UNREACHABLE` **13**, `TRANSITION_NOT_OBSERVED` **4**, `sans-diagnostic` 7,
+`QA_ERROR` 2, `TRANSITION_ON_INVARIANT` 2, `REQUIREMENT_UNGROUNDED` 2, puis
+`PLAN_STATE_TARGET_READ_AS_TEXT` et `PLAN_SELECTOR_UNSTABLE` 1 chacun. Les deux mesures
+concordent sur le classement des deux premières familles ; elles ne couvrent pas le même
+sous-ensemble (79 plans d'un côté, 104 rapports de l'autre), et c'est dit plutôt que fusionné.
 
 Familles suivantes, toutes publiées, jamais écartées : `REQUIREMENT_UNGROUNDED` **7** runs
 (`a2e88c67`, QQ : `Weak source witness for` … `Rejected quote`), `QA_ERROR` **7**
@@ -100,7 +111,7 @@ fichiers entiers dans la charge utile (plus cher et moins bon, #107).
 | #115 | réparation déterministe d'un quasi-homonyme, jamais sur un nombre | `target-nearest` |
 | #117 | la réécriture couvre tous les défauts de plan nommés | `replan` |
 
-Suite : **874 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
+Suite : **878 tests verts, 5 ignorés** ; arcovia **90,10** ; conformité « aucune connaissance
 de l'application testée » garantie par `no-application-knowledge`.
 
 ## 4. Résultats comparatifs, régressions comprises
@@ -132,20 +143,26 @@ Chaque bloc porte le **déploiement Coolify** et le **commit** qu'il a réelleme
 somme `preMatchedKeyed` atteste du bras : le build courant écrit ce champ, la référence
 `8143ac9` ne le connaît pas.
 
-| Bras | Commit | Déploiements | Runs verts | Scénarios verts | Échecs produit | Faux refus | Faux verts (assertions) | Tokens/run | Durée |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Courant | `6c5a746` | `iy50rnncpjv9ubs6ctcm38ex`, `4gft7uaxnryit4vwjttwwobv` | **10/10** | 88/88 | 0 | 0 | **73/465** (15.7 %) | 245966 | collectée |
-| Référence | `8143ac9` | `huw33mbfxh4606d0nvzwinvg`, `o6fkx53hslpx0ezqyhak0hn3` | **8/10** | 81/84 | 3 | 0 | non instrumentée (0 clé `preMatched`) | 265128 | collectée |
+| Bras | Commit / déploiements | Runs verts | Scénarios verts/run | Échecs produit/run | Faux refus | Faux verts (assertions) | Tokens/run (± erreur-type) | Durée/run (± erreur-type) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Courant | `6c5a746` · `iy50rnncpjv9ubs6ctcm38ex`, `4gft7uaxnryit4vwjttwwobv` | **10/10** | 8.80 | 0.00 | **0** | **73/465** (15,7 %) | **245 966 ± 35 066** | **492,6 s ± 43** |
+| Référence | `8143ac9` · `huw33mbfxh4606d0nvzwinvg`, `o6fkx53hslpx0ezqyhak0hn3` | **8/10** | 8.10 | 0.30 | **0** | non instrumentée (0 clé `preMatched`) | **265 128 ± 21 525** | **427,9 s ± 25** |
 
-Lecture honnête : **deux runs d'écart sur dix par bras**, ce qui ne départage pas les deux
-builds (l'intervalle de confiance d'une différence 10/10 contre 8/10 chevauche largement).
-Le build courant est légèrement moins cher (−7 %), n'a aucun échec produit sur ce lot contre
-trois, et porte 15,7 % d'assertions déjà satisfaites avant leur étape — un faux-vert mesuré,
-pas nul. Les deux échecs de la référence sont `TARGET_NOT_FOUND` et
-`TRANSITION_NOT_OBSERVED`.
+Lecture honnête, avec l'incertitude de chaque indicateur : **deux runs d'écart sur dix par
+bras**, ce qui ne départage pas les deux builds ; l'écart de tokens est de **−19 162 ± 41 140**
+(erreur-type de la différence), donc indistinguable de zéro ; l'écart de durée est de
+**+64,7 s ± 50** (+15,1 %), indistinguable de zéro lui aussi, et publié parce qu'il est
+défavorable. Aucun de ces trois écarts n'est présenté comme une amélioration.
 
-Faux refus : zéro run bloqué dont tous les scénarios passent, dans cette campagne — recompté
-depuis `scenarioCount`/`passedScenarios` par run, pas depuis un booléen stocké.
+Faux refus, définition et examen : un **refus de lecture** est un scénario arrêté avant la
+première étape (`steps` vide) avec un code. Sur les 20 runs de la campagne, il y en a **zéro**
+dans les deux bras. Les deux runs non verts de la référence sont des **échecs d'exécution**, pas
+des refus : `a5c8eb3f` échoue sur `TARGET_NOT_FOUND` (attente de
+`span[aria-live="polite"]` expirée) et `32d79c30` sur `TRANSITION_NOT_OBSERVED`
+(`no change observed — the value after step s6-fill280 is identical to the baseline probed
+before it`). Le seul refus de lecture mesuré dans un artefact de ce tour est `c98274a3` (essai
+de prévention), et il est **faux au sens de la tâche 7** : le run est bloqué alors que ses dix
+scénarios exécutés passent tous.
 
 **Tentative précédente, retirée et conservée** (`campaign-attempt-1-invalid.json`) : ses deux
 déploiements « courant » ont échoué (`w6rceollsm27vvswqr6lsbhb`, `lzmfsrieb0f6r2knwqa7yidh`,
@@ -180,35 +197,43 @@ lot isolé du même code. Le build courant couvre donc deux commits de **source 
 
 ## 5. Recommandation
 
-**Changer d'approche sur la mesure, pas sur le code**, et voici ce que les chiffres autorisent
-à dire.
+**Conclure sur ce que la mesure démontre : aucune modification testée n'améliore le critère
+principal dans ce périmètre.** C'est le constat que l'objectif autorise explicitement, et il
+n'est pas une dérobade : il est chiffré.
 
-La campagne entrelacée valide donne **10/10** pour le build courant contre **8/10** pour la
-référence, avec dix runs par bras, un coût par run inférieur de 7 %, zéro échec produit contre
-trois, et 15,7 % d'assertions pré-satisfaites côté courant (indicateur non instrumenté côté
-référence, donc absent et non nul). Deux runs d'écart ne démontrent pas un gain : la campagne
-établit que **le build courant n'est pas pire** que la référence sur ce lot, pas qu'il est
-meilleur.
+| Comparaison | Effet mesuré sur les runs verts | Erreur-type de la différence | Verdict |
+| --- | --- | --- | --- |
+| Campagne entrelacée, courant `6c5a746` contre référence `8143ac9` (10 runs/bras) | +2 runs (+20 pts) | ±1,3 run (12,6 pts) | 1,6 σ — indistinguable de zéro |
+| Essai du candidat, drapeau posé contre coupé, même build (5 runs/bras) | −1 run (−20 pts) | ±0,9 run (17,9 pts) | 1,1 σ — indistinguable de zéro |
+| Corpus historique, build courant `SS+UU` (18/20) contre référence (17/30) | +33,3 pts | ±11,3 pts | 3,0 σ — **significatif hors contrôle** |
 
-Ce qui reste solide et mesuré :
+L'écart historique est donc réel **en tant qu'observation**, et il ne se réplique pas dans la
+campagne alternée : 3,0 σ hors contrôle, 1,6 σ sous contrôle. Un effet qui ne se réplique pas
+quand les lots alternent n'est pas une amélioration démontrée — c'est le constat à écrire, et
+c'est précisément pour cela que l'objectif exigeait la campagne contrôlée.
 
-1. la **candidate de prévention** ne montre aucun gain (5/5 drapeau coupé contre 4/5 posé, à
-   cinq runs par bras, donc non concluant) et son **coût** est démontré : un refus de lecture
-   bloque un run aux dix scénarios verts (`c98274a3`) ;
-2. la **fausse campagne** précédente (9/10 contre 5/10) est retirée : deux déploiements
-   échoués avaient laissé la référence en place des deux côtés, et l'absence de clé
-   `preMatched` dans ces runs le prouve. Elle mesurait la variance, pas un effet ;
-3. la **famille dominante du corpus** reste `TRANSITION_NOT_OBSERVED` (9 runs) et elle
-   apparaît aussi dans les deux bras de la campagne : elle ne se prévient pas à la lecture, et
-   la sonde d'observation coûtait +91 % de tokens sans gain (#94).
+Ce que la campagne permet donc d'affirmer, sans emphase : le build courant **n'est pas pire**
+que la référence sur ce lot — il n'a ni échec produit (0 contre 3) ni refus de lecture (0 de
+chaque côté), il écrit 15,7 % d'assertions pré-satisfaites que la référence ne mesure pas, et
+il coûte −7 % de tokens pour +15 % de durée, deux écarts non séparables. Rien de cela ne
+constitue une amélioration démontrée.
 
-Recommandation : **poursuivre** avec deux changements de méthode, aucun changement de critère —
-(a) ne plus annoncer un effet sous dix runs par bras, et exiger une seconde campagne
-indépendante avant toute conclusion ; (b) attaquer `TRANSITION_NOT_OBSERVED` par l'observation
-ciblée plutôt que par une porte, en mesurant le coût en tokens comme un résultat de premier
-rang. Si une campagne suivante ne départage toujours pas les deux bras, la conclusion à écrire
-est celle que l'objectif prévoit : **limite du modèle imposé** sur ce dépôt, sans redéfinition
-du critère.
+Trois faits restent établis, chacun avec sa preuve :
+
+1. la **candidate de prévention** ne montre aucun gain à cinq runs par bras, et son **coût** est
+   démontré : un refus de lecture bloque un run dont les dix scénarios passent (`c98274a3`) ;
+2. la **première campagne** (9/10 contre 5/10) était invalide — deux déploiements échoués
+   laissaient la référence des deux côtés, et l'absence de clé `preMatched` dans ces runs le
+   prouve ; elle est conservée à part, retirée comme preuve ;
+3. la famille dominante du corpus, `TRANSITION_NOT_OBSERVED`, apparaît dans les deux bras de la
+   campagne : elle ne se prévient pas à la lecture, et la sonde d'observation coûtait +91 % de
+   tokens sans gain (#94).
+
+Recommandation finale : **changer d'approche** — ne plus chercher un gain par une porte
+supplémentaire (les deux portes essayées ont été réfutées ou non démontrées), et attaquer
+`TRANSITION_NOT_OBSERVED` par l'observation ciblée en traitant le coût en tokens comme un
+résultat de premier rang. Si cette approche ne départage pas non plus les bras, la conclusion à
+écrire reste, sans redéfinition du critère, la **limite du modèle imposé** sur ce dépôt.
 
 ## Annexe — preuve par cause sur le corpus de 200 runs
 
@@ -250,7 +275,10 @@ fragment littéral du message du run.
 
 - faux verts, trois mesures distinctes : **campagne entrelacée** — 73/465 assertions (15.7 %)
   pré-satisfaites sur le bras courant, et **aucune clé `preMatched`** sur le bras référence,
-  dont le zéro est une absence d'instrumentation et jamais une mesure ; **corpus historique** —
+  dont le zéro est une absence d'instrumentation et jamais une mesure — la référence
+  `8143ac9` est antérieure au commit `641e6df` qui a introduit le champ, ce que `git merge-base
+  --is-ancestor 641e6df 8143ac9` tranche sans ambiguïté, et le fichier ne compte que les clés
+  présentes ; **corpus historique** —
   173/996 (17.4 %) sur le build courant, 325 conditions non tranchables ; **paire séquentielle**
   — 0/976, ce qui s'explique par des plans sans assertion ancrée sur une interaction, pas par
   un zéro « mesuré » ;

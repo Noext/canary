@@ -1,0 +1,16 @@
+{
+  "runsWithReport": 104,
+  "scenarios": 863,
+  "nonGreenScenarios": 60,
+  "codes": {
+    "TARGET_NOT_FOUND": 28,
+    "PLAN_STATE_TARGET_READ_AS_TEXT": 1,
+    "MARKER_ORDER_UNREACHABLE": 13,
+    "sans-diagnostic": 7,
+    "QA_ERROR": 2,
+    "TRANSITION_NOT_OBSERVED": 4,
+    "TRANSITION_ON_INVARIANT": 2,
+    "REQUIREMENT_UNGROUNDED": 2,
+    "PLAN_SELECTOR_UNSTABLE": 1
+  }
+}

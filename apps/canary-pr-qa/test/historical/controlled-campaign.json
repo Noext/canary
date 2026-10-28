@@ -29,7 +29,8 @@
           "preMatchedKeyed": 5,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "70aca037-8f97-4491-9ebb-a16b33d50a78",
@@ -47,7 +48,8 @@
           "preMatchedKeyed": 11,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "35ce7fdc-1496-4cac-a9a4-32c7085dee12",
@@ -65,7 +67,8 @@
           "preMatchedKeyed": 6,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "d75a4689-5c4f-48c2-ba18-442842a06cea",
@@ -83,7 +86,8 @@
           "preMatchedKeyed": 4,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "1ab40bd2-9efe-4736-930c-0154cd8fcc07",
@@ -101,7 +105,8 @@
           "preMatchedKeyed": 4,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         }
       ]
     },
@@ -129,7 +134,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "56560843-6035-4a11-8e7d-6a624d3adf66",
@@ -147,7 +153,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "fa8379e8-eac8-4a10-a43a-ccb6bcabbca8",
@@ -165,7 +172,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "ac7f6373-8ec5-4109-9809-5e8de4358af6",
@@ -183,7 +191,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "31be5b63-a875-4312-92d1-0fb23d1c1857",
@@ -201,7 +210,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         }
       ]
     },
@@ -229,7 +239,8 @@
           "preMatchedKeyed": 7,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "8dbbb2c9-cb72-430f-8cd7-11be059a4c9f",
@@ -247,7 +258,8 @@
           "preMatchedKeyed": 6,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "7b010052-a01f-4cda-aa16-97fe12a8f3de",
@@ -265,7 +277,8 @@
           "preMatchedKeyed": 13,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "09d609ea-066d-4301-91c3-3e8cc09a41e0",
@@ -283,7 +296,8 @@
           "preMatchedKeyed": 8,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "b107e942-f5d4-41cc-8ff5-0071703fd2a2",
@@ -301,7 +315,8 @@
           "preMatchedKeyed": 9,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         }
       ]
     },
@@ -329,7 +344,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "a5c8eb3f-c368-4304-a2b9-c9f87a5472b0",
@@ -347,7 +363,8 @@
           "preMatchedKeyed": 0,
           "codes": ["TARGET_NOT_FOUND"],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 1
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "32d79c30-8747-4063-96a0-b7b2d75e5105",
@@ -365,7 +382,8 @@
           "preMatchedKeyed": 0,
           "codes": ["TRANSITION_NOT_OBSERVED"],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 1
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "8c181fa5-b53b-48eb-ad8d-204cf2771e10",
@@ -383,7 +401,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         },
         {
           "run": "8bf647da-ad76-42a9-9b1b-c0edc648685c",
@@ -401,7 +420,8 @@
           "preMatchedKeyed": 0,
           "codes": [],
           "refusedButAllScenariosPassed": false,
-          "scenarioRefusals": 0
+          "scenarioRefusals": 0,
+          "refusalCodes": []
         }
       ]
     }

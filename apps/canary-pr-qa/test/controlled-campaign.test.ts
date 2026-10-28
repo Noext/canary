@@ -27,6 +27,7 @@ interface CampaignRun {
   productFailures: number;
   run: string;
   scenarioCount: number;
+  scenarioRefusals: number;
   startedAt: string;
   tokens: number;
   unverifiedPreconditions: number;
@@ -71,13 +72,22 @@ const summary = (runs: CampaignRun[]) => ({
   ),
   assertions: runs.reduce((total, run) => total + run.assertions, 0),
   preMatchedKeyed: runs.reduce((total, run) => total + run.preMatchedKeyed, 0),
+  // Un refus de lecture : scénario arrêté avant sa première étape, avec un code.
+  // Un scénario qui a joué puis échoué porte aussi un code, et ce n'est pas un
+  // refus — c'est ce que la version précédente confondait.
+  refusals: runs.reduce((total, run) => total + (run.scenarioRefusals ?? 0), 0),
   refusedButAllPassed: runs.filter(
     (run) =>
       run.outcome !== "passed" &&
-      run.scenarioCount > 0 &&
-      run.passedScenarios === run.scenarioCount &&
-      run.codes.length > 0
+      (run.scenarioRefusals ?? 0) > 0 &&
+      run.passedScenarios === run.scenarioCount
   ).length,
+  seconds:
+    runs.reduce(
+      (total, run) =>
+        total + (Date.parse(run.endedAt) - Date.parse(run.startedAt)) / 1000,
+      0
+    ) / runs.length,
 });
 
 describe("campagne contrôlée entrelacée", () => {
@@ -133,6 +143,7 @@ describe("campagne contrôlée entrelacée", () => {
       assertions: 468,
       preMatchedKeyed: 0,
       refusedButAllPassed: 0,
+      refusals: 0,
     });
     expect(current).toMatchObject({
       runs: 10,
@@ -144,6 +155,7 @@ describe("campagne contrôlée entrelacée", () => {
       assertions: 465,
       preMatchedKeyed: 73,
       refusedButAllPassed: 0,
+      refusals: 0,
     });
     for (const runs of arms.values()) {
       for (const run of runs) {
@@ -151,6 +163,20 @@ describe("campagne contrôlée entrelacée", () => {
         expect(Number.isNaN(Date.parse(run.endedAt)), run.run).toBe(false);
       }
     }
+  });
+
+  it("publie les indicateurs par run, y compris la durée défavorable", () => {
+    const baseline = summary(arms.get("baseline") ?? []);
+    const current = summary(arms.get("current") ?? []);
+    // Scénarios et échecs produit par run, comme le demande le contrat.
+    expect(current.scenarios / current.runs).toBeCloseTo(8.8, 5);
+    expect(baseline.scenarios / baseline.runs).toBeCloseTo(8.1, 5);
+    expect(current.product / current.runs).toBe(0);
+    expect(baseline.product / baseline.runs).toBeCloseTo(0.3, 5);
+    // Durée collectée : elle est défavorable au build courant, et publiée.
+    expect(current.seconds).toBeGreaterThan(baseline.seconds);
+    expect(current.seconds).toBeCloseTo(492.6, 0);
+    expect(baseline.seconds).toBeCloseTo(427.9, 0);
   });
 
   it("ne transforme pas 10/10 contre 8/10 en démonstration", () => {
