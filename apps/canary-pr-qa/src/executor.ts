@@ -5,14 +5,14 @@ import {
   assertionMatches,
   type Canary,
   compileAction,
-  compileProbe,
   type Observation,
 } from "./canary.js";
 import type { Config } from "./config.js";
-import { diagnose, QaError } from "./diagnostics.js";
+import { diagnose } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
 import { explainMissingTarget } from "./missing-target.js";
 import type { Model } from "./model.js";
+import { classifyScenarioResult, gateUnobservedStep } from "./observe-act.js";
 import type { ProgressEvent } from "./progress.js";
 import type {
   Assertion,
@@ -23,7 +23,9 @@ import type {
 import {
   captureBaselines,
   finish,
+  readPersisted,
   recordStepPlayed,
+  recordUnprovenAssertion,
   reportStepFailure,
 } from "./step-outcome.js";
 import { describeTarget, repairStepTarget } from "./target-repair.js";
@@ -115,48 +117,6 @@ async function performStep(
  * authentifiée. Elle reste dans l'assertion, c'est-à-dire dans l'artefact
  * d'assertion servi derrière l'autorisation du tableau de bord.
  */
-async function readPersisted(
-  sessionId: string,
-  assertion: Assertion,
-  observation: Observation,
-  result: ScenarioResult,
-  preview: string,
-  canary: Canary,
-  config: Config,
-  baseline: unknown
-): Promise<{ handled: true } | { handled: false; persisted: unknown }> {
-  try {
-    const persisted = (
-      await canary.act(
-        sessionId,
-        `persistence-${assertion.id}`,
-        compileProbe(assertion, preview, true)
-      )
-    ).actual;
-    return { handled: false, persisted };
-  } catch (error) {
-    const diagnostic = diagnose(error, config);
-    if (
-      diagnostic.code !== "TARGET_NOT_FOUND" ||
-      observation.actual === undefined
-    ) {
-      throw error;
-    }
-    result.assertions.push({
-      id: assertion.id,
-      passed: false,
-      actual: observation.actual,
-      baseline,
-      ...(assertion.requirement === undefined
-        ? {}
-        : { requirement: assertion.requirement }),
-    });
-    result.outcome = "failed";
-    result.diagnostic = diagnostic;
-    result.error = `Assertion ${assertion.id} failed: the value observed before the reload is no longer present in the target after it — persistence is not demonstrated — ${diagnostic.message}`;
-    return { handled: true };
-  }
-}
 async function evaluateAssertion(
   sessionId: string,
   assertion: Assertion,
@@ -253,46 +213,6 @@ async function evaluateAssertion(
  * `failed`, comme une valeur inchangée qui n'atteint pas l'attendu, et
  * `persisted` garde la règle précédente.
  */
-function recordUnprovenAssertion(
-  result: ScenarioResult,
-  assertion: Assertion,
-  verification: string,
-  matched: boolean,
-  unchanged: boolean,
-  config: Config
-) {
-  const step = assertion.afterStep ?? "the interaction";
-  if (unchanged && verification === "transition" && matched) {
-    result.outcome = "blocked";
-    result.diagnostic = diagnose(
-      new QaError(
-        "TRANSITION_ON_INVARIANT",
-        `Assertion ${assertion.id}: the plan requires a change on a value that does not change — the value after step ${step} is identical to the baseline probed before it, and that unchanged value already satisfies the expected one, so the application shows what the assertion asks for and the verification is what is wrong`,
-        `Verify this value with "state" and afterStep set to the interaction: an invariant cannot demonstrate a transition. Move the "transition" to the output the step really moves, or drop the interaction if nothing is meant to change.`
-      ),
-      config
-    );
-    result.error = result.diagnostic.message;
-    return;
-  }
-  result.outcome = "failed";
-  if (unchanged) {
-    // Naming the missing transition, not recopying the assertion description:
-    // "the element still shows X" reads as a regression while actual and
-    // baseline agree, and sends the operator after an innocent element.
-    result.diagnostic = diagnose(
-      new QaError(
-        "TRANSITION_NOT_OBSERVED",
-        `Assertion ${assertion.id}: no change observed — the value after step ${step} is identical to the baseline probed before it, so the required ${verification} is not demonstrated`,
-        `Require a change only from a value that must change. For an invariance after an interaction, use verification "state" with afterStep set to the interaction step (the element is still there after clicking X).`
-      ),
-      config
-    );
-    result.error = result.diagnostic.message;
-    return;
-  }
-  result.error = `Assertion ${assertion.id} failed: ${assertion.description}`;
-}
 async function playStepWithRepair(args: {
   baselines: Map<string, unknown>;
   canary: Canary;
@@ -307,6 +227,7 @@ async function playStepWithRepair(args: {
   step: Scenario["steps"][number];
 }): Promise<{
   failure?: Awaited<ReturnType<typeof explainMissingTarget>>;
+  observation?: Observation;
   repairedTo?: string;
 }> {
   const { sessionId, step, index, result, preview, canary, baselines, config } =
@@ -330,7 +251,14 @@ async function playStepWithRepair(args: {
         config,
         repo
       );
-      return { repairedTo };
+      const observation = config.QA_OBSERVE_ACT
+        ? await canary.act(
+            sessionId,
+            `observe-after-${index}`,
+            compileAction({ type: "observe" }, preview)
+          )
+        : undefined;
+      return { repairedTo, observation };
     } catch (error) {
       const failure = await explainMissingTarget(
         error,
@@ -384,7 +312,7 @@ async function driveScenario(
   material: SourceLineMaterial[],
   model?: Model
 ) {
-  await canary.act(
+  let current = await canary.act(
     sessionId,
     "open-preview",
     compileAction({ type: "goto", path: preview }, preview)
@@ -395,6 +323,13 @@ async function driveScenario(
   // et aucun jeton d'exécution n'est dépensé pour recopier le plan.
   for (const [offset, step] of result.scenario.steps.entries()) {
     const index = offset + 1;
+    // Chemin observe→act : une cible absente de l'observation courante n'est pas
+    // jouée ; la porte consigne l'étape et classe le scénario `indeterminate`.
+    if (
+      gateUnobservedStep({ config, index, observation: current, result, step })
+    ) {
+      return;
+    }
     const started = Date.now();
     await captureBaselines(
       sessionId,
@@ -410,7 +345,7 @@ async function driveScenario(
       step: index,
       action: step.action.type,
     });
-    const { failure, repairedTo } = await playStepWithRepair({
+    const played = await playStepWithRepair({
       baselines,
       canary,
       config,
@@ -423,6 +358,8 @@ async function driveScenario(
       sessionId,
       step,
     });
+    current = played.observation ?? current;
+    const { failure, repairedTo } = played;
     if (failure === undefined) {
       await recordStepPlayed(result, step, index, repairedTo, record, started);
     } else {
@@ -510,6 +447,7 @@ export async function executeScenario(
     result.diagnostic = diagnose(error, config);
     result.error = `Fixture cleanup failed: ${result.diagnostic.message}`;
   }
+  classifyScenarioResult(result);
   await record({
     phase: "execution",
     scenarioId: scenario.id,

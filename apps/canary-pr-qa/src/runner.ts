@@ -27,6 +27,7 @@ import {
   attributeValueRefusals,
   changedFileTexts,
   type DiscoveryEvidence,
+  enforceObjectiveProof,
   type InvariantObservation,
   ifPresentRefusals,
   invariantObservations,
@@ -1426,49 +1427,6 @@ function preExecutionFindings(
   ];
 }
 
-/**
- * L'invariant I3 : un scénario n'est vert que si l'assertion qui prouve son
- * objectif a passé.
- *
- * Le plan désigne lui-même cette assertion (`objective`) ; le moteur vérifie
- * qu'elle a bien passé, au lieu de se contenter de « toutes les assertions
- * passent ». Un scénario dont l'objectif n'est pas démontré est `blocked` avec un
- * code nommé — jamais vert, jamais requalifié en échec produit.
- *
- * Drapeau coupé : le chemin figé n'a pas d'objectif déclaré, la mesure est
- * publiée (`objectiveProven`) et le verdict n'est pas touché.
- */
-export function enforceObjectiveProof(
-  result: ScenarioResult,
-  config: Config
-): ScenarioResult {
-  const objective = result.scenario.objective;
-  if (!objective) {
-    result.objectiveProven = false;
-    return result;
-  }
-  const proof = result.assertions.find((item) => item.id === objective);
-  result.objectiveProven = proof?.passed === true;
-  if (result.objectiveProven || !config.QA_OBSERVE_ACT) {
-    return result;
-  }
-  const error =
-    proof === undefined
-      ? new QaError(
-          "CONTRACT_INCOMPLETE",
-          `Scenario ${result.scenario.id} never executed its objective assertion ${objective}`,
-          "The objective assertion must be executed and pass before the scenario can be green. Return a plan whose objective assertion is reached by one of its steps."
-        )
-      : new QaError(
-          "CONTRACT_INCOMPLETE",
-          `Scenario ${result.scenario.id} did not prove its objective: assertion ${objective} failed`,
-          "A scenario is green only when the assertion designated as its objective passes. Fix the plan so the objective is demonstrated, or accept the scenario as unproven."
-        );
-  result.outcome = "blocked";
-  result.diagnostic = diagnose(error, config);
-  result.error = error.message;
-  return result;
-}
 async function executePlan(
   result: RunResult,
   context: PrContext,
