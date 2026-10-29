@@ -6,12 +6,12 @@ import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
-import { PolicySchema, type Policy, sourceLineMaterial } from "./policy.js";
+import { type Policy, PolicySchema, sourceLineMaterial } from "./policy.js";
 import {
-  replayPlanValidation,
   replayPlannerCorrection,
+  replayPlanValidation,
 } from "./replay-validation.js";
-import { PlanSchema, type Plan, plannerPlanSchema } from "./schema.js";
+import { type Plan, PlanSchema, plannerPlanSchema } from "./schema.js";
 
 const fileSchema = z.object({
   filename: z.string(),
@@ -140,16 +140,15 @@ export async function runReplay(
       bundle.payload,
       plannerPlanSchema(sourceLineMaterial(context)),
       config.QA_PLAN_MAX_TOKENS,
-      (candidate) => {
-        return replayPlannerCorrection({
+      (candidate) =>
+        replayPlannerCorrection({
           catalog,
           config: replayConfig,
           context,
           evidence: bundle.evidence,
           plan: candidate,
           policy,
-        });
-      }
+        })
     );
   }
 

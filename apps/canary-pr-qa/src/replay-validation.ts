@@ -1,11 +1,10 @@
 import type { Config } from "./config.js";
 import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
-import { validatePlanEvidence } from "./plan-evidence.js";
+import { provenanceRefusals, validatePlanEvidence } from "./plan-evidence.js";
 import {
   amputationScans,
   type Policy,
-  provenanceRefusals,
   requirementSourceRefusal,
 } from "./policy.js";
 import {
@@ -40,12 +39,10 @@ function replayPlannerRefusals(input: ReplayValidationInput): string[] {
 /**
  * Uses the same correction path as the live planner, including quote-pick repair.
  */
-export function replayPlannerCorrection(
-  input: ReplayValidationInput
-) {
+export function replayPlannerCorrection(input: ReplayValidationInput) {
   const refusals = replayPlannerRefusals(input);
   if (refusals.length === 0) {
-    return undefined;
+    return;
   }
   return (
     quotePickCorrection(
@@ -67,9 +64,10 @@ export function replayPlannerCorrection(
  * opening Chromium. Evidence gaps remain inconclusive rather than being treated
  * as proof of a defect.
  */
-export function replayPlanValidation(
-  input: ReplayValidationInput
-): { refusals: string[]; inconclusive: string[] } {
+export function replayPlanValidation(input: ReplayValidationInput): {
+  refusals: string[];
+  inconclusive: string[];
+} {
   const { config, context, evidence, plan, policy } = input;
   const sourceRefusal = requirementSourceRefusal(plan, context);
   const refusals = [

@@ -78,8 +78,12 @@ import {
 } from "./policy.js";
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
-import { reportMarkdown, saveReport } from "./report.js";
-import { attachReplayRuntimeResults, saveReplayBundle } from "./replay-bundle.js";
+import {
+  attachReplayRuntimeResults,
+  reportMarkdown,
+  saveReplayBundle,
+  saveReport,
+} from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
   type Outcome,
@@ -1691,47 +1695,76 @@ async function executePlan(
     result,
     root,
   });
-  if (config.QA_BASELINE_URL_TEMPLATE) {
-    const url = config.QA_BASELINE_URL_TEMPLATE.replaceAll(
-      "{sha}",
-      context.baseSha
-    ).replaceAll("{pr}", String(context.ref.number));
-    const basePreview = await verifyPreviewUrl(url, context.baseSha, config);
-    const scope = runScope.getStore();
-    if (scope) {
-      scope.previewSha = context.baseSha;
-    }
-    result.baseline = {
-      sha: context.baseSha,
-      url: basePreview.url,
-      scenarios: [],
-    };
-    for (const scenario of result.plan.scenarios) {
-      if (refusals.has(scenario.id) || preExecutionRefusals.has(scenario.id)) {
-        // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
-        continue;
-      }
-      result.baseline.scenarios.push(
-        await executeScenario(
-          scenario,
-          basePreview.url,
-          join(root, "_baseline"),
-          config,
-          canary,
-          (event) => progress.record(event),
-          context.ref.repo,
-          material,
-          model
-        )
-      );
-    }
-    const activeScope = runScope.getStore();
-    if (activeScope) {
-      activeScope.previewSha = context.sha;
-    }
-  }
+  await runBaseline(result, context, {
+    canary,
+    config,
+    material,
+    model,
+    progress,
+    refused: new Set([...refusals.keys(), ...preExecutionRefusals.keys()]),
+    root,
+  });
   if (config.QA_REPLAY_BUNDLE) {
     await attachReplayRuntimeResults(root, result);
+  }
+}
+async function runBaseline(
+  result: RunResult,
+  context: PrContext,
+  options: {
+    canary: Canary;
+    config: Config;
+    material: SourceLineMaterial[];
+    model: Model;
+    progress: Progress;
+    refused: ReadonlySet<string>;
+    root: string;
+  }
+) {
+  const template = options.config.QA_BASELINE_URL_TEMPLATE;
+  const plan = result.plan;
+  if (!(template && plan)) {
+    return;
+  }
+  const url = template
+    .replaceAll("{sha}", context.baseSha)
+    .replaceAll("{pr}", String(context.ref.number));
+  const basePreview = await verifyPreviewUrl(
+    url,
+    context.baseSha,
+    options.config
+  );
+  const scope = runScope.getStore();
+  if (scope) {
+    scope.previewSha = context.baseSha;
+  }
+  result.baseline = {
+    sha: context.baseSha,
+    url: basePreview.url,
+    scenarios: [],
+  };
+  for (const scenario of plan.scenarios) {
+    if (options.refused.has(scenario.id)) {
+      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
+      continue;
+    }
+    result.baseline.scenarios.push(
+      await executeScenario(
+        scenario,
+        basePreview.url,
+        join(options.root, "_baseline"),
+        options.config,
+        options.canary,
+        (event) => options.progress.record(event),
+        context.ref.repo,
+        options.material,
+        options.model
+      )
+    );
+  }
+  const activeScope = runScope.getStore();
+  if (activeScope) {
+    activeScope.previewSha = context.sha;
   }
 }
 async function recheck(
