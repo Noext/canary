@@ -10,7 +10,11 @@ import { BASE_SHA, plan, PR_URL, SHA } from "./fixture.js";
 const cleanup: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(
+    cleanup.splice(0).map((path) =>
+      rm(path, { recursive: true, force: true })
+    )
+  );
 });
 
 function bundle() {
@@ -38,14 +42,16 @@ function bundle() {
         { path: "src/form.ts", ref: BASE_SHA, content: "show('Welcome '+name)" },
       ],
       contextWarnings: [],
-      files: [{
-        filename: "src/form.ts",
-        status: "modified",
-        additions: 1,
-        deletions: 1,
-        changes: 2,
-        patch: "@@ -1 +1 @@\n-show('Hello '+name)\n+show('Welcome '+name)",
-      }],
+      files: [
+        {
+          filename: "src/form.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          changes: 2,
+          patch: "@@ -1 +1 @@\\n-show('Hello '+name)\\n+show('Welcome '+name)",
+        },
+      ],
       headRepo: "fixture/app",
       ref: { repo: "fixture/app", number: 1, url: PR_URL },
       sha: SHA,
@@ -75,12 +81,19 @@ describe("Canary Replay bundle", () => {
     const directory = await mkdtemp(join(tmpdir(), "canary-replay-test-"));
     cleanup.push(directory);
     const path = join(directory, "bundle.json");
-    await writeFile(path, JSON.stringify(bundle()), { encoding: "utf8", mode: 0o600 });
+    await writeFile(path, JSON.stringify(bundle()), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     const modelCall = vi.spyOn(Model.prototype, "json").mockRejectedValue(
       new Error("gate replay must not call the model")
     );
 
-    const result = await runReplay(path, "gate", loadConfig({ QA_DATA_DIR: directory }));
+    const result = await runReplay(
+      path,
+      "gate",
+      loadConfig({ QA_DATA_DIR: directory })
+    );
 
     expect(result.mode).toBe("gate");
     expect(result.source.headSha).toBe(SHA);
@@ -91,6 +104,8 @@ describe("Canary Replay bundle", () => {
   });
 
   it("rejects unknown bundle versions instead of silently replaying them", () => {
-    expect(() => parseReplayBundle(JSON.stringify({ ...bundle(), version: 2 }))).toThrow();
+    expect(() =>
+      parseReplayBundle(JSON.stringify({ ...bundle(), version: 2 }))
+    ).toThrow();
   });
 });
