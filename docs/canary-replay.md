@@ -1,21 +1,17 @@
 # Canary Replay
 
 Canary Replay lets a developer validate a stored plan against the production gates
-without starting a browser session, resolving a preview, deploying, or publishing
-a GitHub status/comment.
+without repeating the PR → preview deployment → Chromium campaign loop.
 
 ## Capture a replay bundle
 
-Set `QA_REPLAY_BUNDLE=true` in the environment used for a normal PR QA run. After
-planning and the production settlement step, Canary writes:
-
-```
-<QA_DATA_DIR>/<run-id>/replay-bundle.json
-```
+Set `QA_REPLAY_BUNDLE=true` in the environment used for a normal PR QA run. Canary
+writes `replay-bundle.json` under the run directory in `QA_DATA_DIR`.
 
 The bundle pins the PR URL, head/base SHAs, source context, diff, trusted policy and
-catalog, exact planner payload, raw generated plan, settled plan, and the initial
-ARIA observation. Capture is opt-in because source files and page text may contain
+catalog, planner input payload, raw generated plan, settled plan, initial ARIA
+observation, and (after execution) the outcome and assertion results for each
+scenario. Capture is opt-in because source files and page text may contain
 sensitive information. Keep the run directory private; do not commit bundles or
 publish them as CI artifacts without reviewing their contents.
 
@@ -31,16 +27,15 @@ pnpm --filter @usecanary/pr-qa dev -- replay ./qa-data/<run-id>/replay-bundle.js
 - **`gate`** reads the bundle and runs the shared production plan-refusal,
   coverage, provenance and page-evidence checks. It makes no model request and
   does not use Chromium, a preview, GitHub, deployment, or tracing exporters.
-- **`plan`** sends the stored planner payload to the configured model with the
-  current planner prompt/schema, then applies those same gates. It calls the model
-  endpoint only; it does not rediscover the page or execute scenarios.
+- **`plan`** sends the stored planner input to the configured model with the
+  current planner prompt/schema, then applies the same planner-time gates and
+  production correction path. It calls the model endpoint only; it does not
+  rediscover the page or execute scenarios.
 
 A non-zero exit code means the resulting plan has one or more refusals.
 Inconclusive evidence is reported separately and is not silently treated as proof.
-
-The bundle stores both the raw generated plan and the settled plan. Gate mode
-validates the settled plan, matching the final production validation path; the raw
-plan is preserved for analysis.
+The stored runtime outcomes make it possible to compare a regenerated plan with
+the scenario failures from the original run without rerunning Chromium.
 
 ## Regression workflow
 
