@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { startBrowserService } from "./browser-service.js";
+import { campaignCommand } from "./campaign.js";
 import { type Config, loadConfig } from "./config.js";
 import { type Diagnostic, diagnose } from "./diagnostics.js";
 import { doctor, supportSummary } from "./doctor.js";
@@ -27,7 +28,7 @@ interface CliValues {
 }
 
 const USAGE =
-  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
+  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa campaign --pr URL --preview URL --head SHA --reference-sha SHA --reference-worktree PATH --candidate-sha SHA --candidate-worktree PATH --data DIR [--confirm-paid-runs]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -43,6 +44,13 @@ async function main() {
       "skip-browser": { type: "boolean" },
       mode: { type: "string" },
       pr: { type: "string" },
+      head: { type: "string" },
+      data: { type: "string" },
+      "reference-sha": { type: "string" },
+      "reference-worktree": { type: "string" },
+      "candidate-sha": { type: "string" },
+      "candidate-worktree": { type: "string" },
+      "confirm-paid-runs": { type: "boolean" },
     },
   });
   const command = positionals[0];
@@ -52,6 +60,9 @@ async function main() {
   }
   const config = loadConfig();
   if (await replayCommand(command, positionals, values.mode, config)) {
+    return;
+  }
+  if (await campaignCommand(command, values, config)) {
     return;
   }
   const stopTracing = initializeTracing();

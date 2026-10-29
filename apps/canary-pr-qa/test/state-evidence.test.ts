@@ -153,6 +153,10 @@ describe("une assertion d'état déjà satisfaite avant l'étape ne prouve pas l
       baseline: BANNER,
       passed: false,
       preMatched: true,
+      // Instrumentation de mesure : le type de vérification et la preuve
+      // produite pendant l'exécution sont enregistrés avec le résultat.
+      verification: "state",
+      changed: false,
     });
     expect(result.diagnostic?.code).toBe("STATE_ALREADY_SATISFIED");
     expect(result.error).toBe(result.diagnostic?.message);
@@ -198,7 +202,11 @@ describe("les formes légitimes d'une assertion déjà satisfaite restent vertes
     });
 
     expect(result.outcome, result.error ?? "").toBe("passed");
-    expect(result.assertions[0]).toMatchObject({ passed: true });
+    expect(result.assertions[0]).toMatchObject({
+      passed: true,
+      changed: true,
+      verification: "state",
+    });
     expect(result.assertions[0]).not.toHaveProperty("preMatched");
   });
 
@@ -213,6 +221,8 @@ describe("les formes légitimes d'une assertion déjà satisfaite restent vertes
     // Sans mesure, la pré-satisfaction reste inconnue — jamais « pas héritée ».
     expect(result.assertions[0]).not.toHaveProperty("preMatched");
     expect(result.assertions[0]?.baseline).toBeUndefined();
+    // Et la preuve d'exécution reste inconnue : jamais « rien n'a changé ».
+    expect(result.assertions[0]).not.toHaveProperty("changed");
   });
 
   it("passe quand l'assertion est ancrée sur la navigation, sans valeur d'avant", async () => {

@@ -190,6 +190,10 @@ it("passes a transition whose value changed to the expected one", async () => {
     actual: BANNER,
     baseline: "Aperçu de PR",
     passed: true,
+    // Instrumentation : le type et la preuve d'exécution sont publiés pour
+    // toutes les vérifications, pas seulement pour `state`.
+    verification: "transition",
+    changed: true,
   });
   expect(result.diagnostic).toBeUndefined();
   expect(result.error).toBeUndefined();
