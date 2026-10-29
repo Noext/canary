@@ -157,6 +157,44 @@ jobs:
             docker container rm --force --volumes "$POSTGRES_CONTAINER"
           fi
 
+  # The Chromium suite used to be the last step of `check`, so it waited behind
+  # the 58 s PostgreSQL block and the 60 s of `pnpm check` while the other two
+  # `canary-ci` instances sat idle. It needs nothing from that job: its own
+  # `pnpm build` produces the `dist/` the embedded runtime installs from.
+  # Measured on `main` before the split: `check` 153 s for 60 s + 60 s of tests
+  # run one after the other, with load average 5.6 on 16 cores.
+  chromium:
+    name: PR QA E2E (real Chromium, fixture GitHub and AI APIs)
+    runs-on: [self-hosted, linux, x64, canary-ci]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: ${{ runner.environment != 'self-hosted' && 'pnpm' || '' }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers (for daemon + canary tests)
+        run: |
+          if sudo -n true 2>/dev/null; then
+            pnpm --filter @usecanary/daemon exec playwright install --with-deps chromium
+          else
+            pnpm --filter @usecanary/daemon exec playwright install chromium
+          fi
+
+      # `pnpm check` used to be what produced `dist/`, through the build task
+      # its tests depend on. This job does not run that task, so the build is
+      # explicit and the runtime install below keeps its supplier.
+      - name: Build workspaces
+        run: pnpm build
+
       - name: Install embedded Canary runtime
         run: node apps/canary/dist/cli.js install
 
