@@ -1372,6 +1372,20 @@ async function replanWithObservations(
     }
   );
   settlePlan(revised, input.context, input.config, input.result.id);
+  // Le plan révisé passe le même contrôle de provenance que le plan initial :
+  // une réécriture ne peut pas introduire une assertion sans preuve, ni un
+  // objectif introuvable, et être adoptée malgré tout.
+  const revisionRefusals = provenanceRefusals(revised);
+  if (revisionRefusals.length > 0) {
+    logger.info(
+      {
+        runId: input.result.id,
+        refusals: revisionRefusals.map((item) => item.error.message),
+      },
+      "Rewritten plan refused: keeping the executed plan"
+    );
+    return;
+  }
   input.result.plan = revised;
   const replanned = replannedScenarios(revised, [...observations, ...targets]);
   input.result.replannedScenarioIds = replanned.map((scenario) => scenario.id);
@@ -1392,13 +1406,17 @@ async function replanWithObservations(
       input.material,
       input.model
     );
+    // Un scénario réexécuté passe la preuve d'objectif comme les autres : la
+    // réécriture ne doit pas être un chemin par lequel un vert sans preuve
+    // rentre dans le rapport.
+    const proven = enforceObjectiveProof(executed, input.config);
     const index = input.result.scenarios.findIndex(
       (item) => item.scenario.id === scenario.id
     );
     if (index >= 0) {
-      input.result.scenarios[index] = executed;
+      input.result.scenarios[index] = proven;
     } else {
-      input.result.scenarios.push(executed);
+      input.result.scenarios.push(proven);
     }
   }
   input.result.outcome = aggregate(input.result.scenarios);

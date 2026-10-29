@@ -1,883 +1,4875 @@
 {
-  "note": "Rejeu des 79 plans stockés : ce que le moteur refuse selon la provenance déclarée.",
+  "note": "Rejeu des 79 plans stockés : verdicts historiques et verdict de porte aujourd'hui.",
   "totals": {
     "plans": 79,
     "scenarios": 681,
+    "reviewedScenarios": 636,
     "assertions": 3738,
     "assertionsWithoutJustifyingRequirement": 3164,
     "refusalsUndeclared": 0,
     "refusalsIndexZero": 393,
-    "refusalsValueGuided": 11
+    "refusalsValueGuided": 11,
+    "historicalGreensRefusedToday": 67,
+    "families": {
+      "TARGET_NOT_FOUND": [
+        {
+          "run": "51644ed9-bb66-4984-a5c3-86a6796aa61f",
+          "scenario": "missing-justify-then-close"
+        },
+        {
+          "run": "ca37803e-bff2-4e82-aeb9-7653750c8ccf",
+          "scenario": "manque-40-justifie"
+        },
+        {
+          "run": "eb8a7336-8094-4480-85f0-868fbc2993c9",
+          "scenario": "exact-count-closes"
+        }
+      ],
+      "PLAN_STATE_TARGET_READ_AS_TEXT": [
+        {
+          "run": "ca37803e-bff2-4e82-aeb9-7653750c8ccf",
+          "scenario": "montant-attendu-illisible"
+        }
+      ],
+      "MARKER_ORDER_UNREACHABLE": [
+        {
+          "run": "eb8a7336-8094-4480-85f0-868fbc2993c9",
+          "scenario": "comment-boundary-280-281"
+        },
+        {
+          "run": "ee3bf230-b305-44ef-9c5e-0e471d524aa7",
+          "scenario": "cash-comment-boundary"
+        },
+        {
+          "run": "839cee08-d757-46f1-9b1b-f816ea597fb3",
+          "scenario": "cash-comment-boundary-281-vs-280"
+        }
+      ],
+      "sans-diagnostic": [
+        {
+          "run": "979044da-063d-47c7-be1d-d7ad41defc68",
+          "scenario": "invalid-expected-amount"
+        },
+        {
+          "run": "839cee08-d757-46f1-9b1b-f816ea597fb3",
+          "scenario": "cash-negative-variance-justification-then-close"
+        },
+        {
+          "run": "9a7b18e7-ad19-4c5f-be75-9cf827e55858",
+          "scenario": "comment-boundary-281-280"
+        }
+      ],
+      "QA_ERROR": [
+        {
+          "run": "839cee08-d757-46f1-9b1b-f816ea597fb3",
+          "scenario": "cash-state-per-pharmacy-and-view-switch"
+        },
+        {
+          "run": "1b8d8d87-ca65-42e7-874a-ca6e5a80c7a0",
+          "scenario": "commentaire-hors-borne-refuse-puis-accepte"
+        }
+      ],
+      "TRANSITION_NOT_OBSERVED": [
+        {
+          "run": "8fc389ff-a881-43bb-b3eb-0ad8c4763f6f",
+          "scenario": "cash-commentaire-borne-281-280"
+        },
+        {
+          "run": "0b8ddefe-28a4-4762-b28c-8de4cb875ede",
+          "scenario": "cash-justification-max-length-boundary"
+        },
+        {
+          "run": "60c44866-56a6-4a6b-a607-bded2968f917",
+          "scenario": "caisse-commentaire-borne-281-280"
+        }
+      ],
+      "TRANSITION_ON_INVARIANT": [
+        {
+          "run": "e29f3f7a-96b7-446c-9800-8104f2a95627",
+          "scenario": "justification-guidee-cloture"
+        },
+        {
+          "run": "e90c9e75-dc13-4d09-8fe3-7fdc6bdb212e",
+          "scenario": "q3-manque-40-justification-guidee"
+        }
+      ],
+      "REQUIREMENT_UNGROUNDED": [
+        {
+          "run": "a2e88c67-6e53-4ea8-b530-298b8526acce",
+          "scenario": "cash-justification-puis-cloture"
+        },
+        {
+          "run": "a2e88c67-6e53-4ea8-b530-298b8526acce",
+          "scenario": "cash-reouverture-reblocage"
+        }
+      ],
+      "PLAN_SELECTOR_UNSTABLE": [
+        {
+          "run": "739e7bdb-715f-4345-b26b-0ed6ea3664af",
+          "scenario": "long-comment-history-archived"
+        }
+      ]
+    }
   },
   "rows": [
     {
       "batch": "BA",
       "run": "0ce50724-7dbb-43dd-b14b-cacebbfb1851",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 42,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 0,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-cloture-refusee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-bloque-comme-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-guidee-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reouverture-rebloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "f83f0762-a58e-4839-9699-a7656c93341c",
       "outcome": "failed",
-      "scenarios": 8,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 32,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 12,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-state",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-40-justifie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-borne-280",
+          "outcome": "failed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "0675aba9-a69a-4b86-a71f-eefb366c6a07",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 44,
       "assertionsWithoutJustifyingRequirement": 43,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-negatif-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-guidee-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-positif-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "afcc9846-ec93-4cde-8ecf-77c01d433c82",
       "outcome": "blocked",
-      "scenarios": 12,
       "assertions": 62,
       "assertionsWithoutJustifyingRequirement": 55,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-close-refused",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-close-accepted",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-40-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-50-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-negative-quantity",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-expected-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-guided",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-history-and-reopen",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reblock-after-clear",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-state-across-views-and-pharmacies",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-too-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "24db19b8-fc22-4cfb-9b6c-44caaedcc3fb",
       "outcome": "failed",
-      "scenarios": 12,
       "assertions": 56,
       "assertionsWithoutJustifyingRequirement": 40,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 9,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-ecart-124000",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-sans-motif",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-un-centime",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-281-280",
+          "outcome": "failed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reblocage-apres-retrait",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-changement-vue",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "d830e035-3a85-4cbb-86f7-989c3362c228",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 58,
       "assertionsWithoutJustifyingRequirement": 42,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 16,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-quantite-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-hors-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-par-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "ec6445c9-b8a1-4c78-853a-0c98c46fe4d5",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 40,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-manque-justifie-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloque-comme-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-par-vue-et-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "94673c0a-baff-466f-9d33-4cfd71348313",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 41,
       "assertionsWithoutJustifyingRequirement": 36,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-refus-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-puis-cloture-archive",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-trop-long-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-puis-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloquant-comme-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-historique-deux-clotures",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-entre-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "8bc0711c-1d9f-4dc6-9d5f-f8da0bf1c58c",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 40,
       "assertionsWithoutJustifyingRequirement": 29,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-40-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-ecart-positif-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-debloque-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-borne-280-281",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "BA",
       "run": "dc7e9356-10e8-490e-a0e1-b1ee82948286",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 37,
       "assertionsWithoutJustifyingRequirement": 28,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 14,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-archive-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-entre-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloisonnement-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "7db8c556-7dad-4e71-91a3-516ffed7d9c2",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 51,
       "assertionsWithoutJustifyingRequirement": 38,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 9,
-      "refusalsValueGuided": 1
+      "refusalsValueGuided": 1,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-exact-count-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-negative-variance-justification-guided",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-negative-variance-close-archive-reopen",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-positive-variance-blocks",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-invalid-quantity-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-invalid-expected-amount-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-comment-length-boundary",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "cb1a3dab-1c06-42dd-8516-be8f4240385d",
       "outcome": "blocked",
-      "scenarios": 6,
       "assertions": 45,
       "assertionsWithoutJustifyingRequirement": 22,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 18,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": []
     },
     {
       "batch": "CC",
       "run": "ddd8a0a0-d246-41ba-8bce-68eed555f3b5",
       "outcome": "blocked",
-      "scenarios": 9,
       "assertions": 45,
       "assertionsWithoutJustifyingRequirement": 45,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-ecart-negatif",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-justification-obligatoire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reouverture-puis-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "450099db-a721-4282-9edb-6812387eb395",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 43,
       "assertionsWithoutJustifyingRequirement": 37,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refus-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-cloture-archive",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-hors-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "50dae25e-5f7d-48e4-bfd5-c735f8f9c93f",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 56,
       "assertionsWithoutJustifyingRequirement": 44,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 6,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-et-histoire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-negatif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-debloque-et-archive",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-jamais-zero",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-trop-long-puis-court",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reouverture-conserve-histoire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "1193dcf5-e685-4104-b858-da310dd8f9a2",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 32,
       "assertionsWithoutJustifyingRequirement": 16,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 6,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-negatif-justifie-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-borne-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-par-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "c1d77bba-ab71-4d70-a425-4e1474b847ac",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 47,
       "assertionsWithoutJustifyingRequirement": 36,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justification-guided",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-blocked-like-missing",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-count-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-illegible-expected",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-too-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-close-reopen-history-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-view-persistence-pharmacy",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-one-cent-excess-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "56ae5df7-57a1-4bb8-8fe4-e05514c503da",
       "outcome": "blocked",
-      "scenarios": 8,
       "assertions": 49,
       "assertionsWithoutJustifyingRequirement": 47,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": []
     },
     {
       "batch": "CC",
       "run": "0637d181-5a87-4981-85a8-4e599a801c8f",
       "outcome": "passed",
-      "scenarios": 6,
       "assertions": 32,
       "assertionsWithoutJustifyingRequirement": 30,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocks-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-variance-justified-and-closed",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-restores-justified-state",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-positive-overage-blocks",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-count-unavailable-not-zero",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "CC",
       "run": "500a02a9-f4ac-45b1-af9c-db04342303e0",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 74,
       "assertionsWithoutJustifyingRequirement": 55,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 11,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-negative-variance-justified-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-positive-variance-justified",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-unreadable-expected-amount",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-over-limit",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-reblocks",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-state-per-pharmacy",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "b8818582-62e3-4064-a5d7-bbefa9d2a7ca",
       "outcome": "blocked",
-      "scenarios": 9,
       "assertions": 43,
       "assertionsWithoutJustifyingRequirement": 32,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 4,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-ecart-negatif-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-ecart-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-cloisonnement-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-tiroir-vide-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "0b71b8a3-5f6a-42b3-b957-793dcae25938",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 46,
       "assertionsWithoutJustifyingRequirement": 35,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 4,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-trop-long-puis-accepte",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "f5ecbaac-babb-451c-824e-f296bf0c0969",
       "outcome": "failed",
-      "scenarios": 8,
       "assertions": 54,
       "assertionsWithoutJustifyingRequirement": 50,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-close-reopen-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-40-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-50-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity-unavailable",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-expected-unreadable",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-boundary-281-280",
+          "outcome": "failed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-state-per-pharmacy-and-view",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "bed1253d-78c9-412c-b58b-b8fa56ca43e2",
       "outcome": "blocked",
-      "scenarios": 10,
       "assertions": 54,
       "assertionsWithoutJustifyingRequirement": 48,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 1
+      "refusalsValueGuided": 1,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-manque-justification-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-cloture-reouverture-histoire",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-reblocage-apres-retrait-justification",
+          "outcome": "blocked",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-persistance-vue",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-tiroir-vide-et-docs",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "b5711fb7-dc32-4307-8eac-c607f4778208",
       "outcome": "blocked",
-      "scenarios": 9,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 42,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 9,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-missing-40-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-50-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-expected-amount",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-guided-justification-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-boundary-281-280",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-reblock-history",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-state-per-pharmacy",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "bc0e083e-5573-41f7-b229-ad61311781b3",
       "outcome": "blocked",
-      "scenarios": 10,
       "assertions": 61,
       "assertionsWithoutJustifyingRequirement": 57,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": []
     },
     {
       "batch": "DD",
       "run": "3f60a8d1-b7d1-47dc-bf19-e0219e60942f",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 35,
       "assertionsWithoutJustifyingRequirement": 31,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-40-justification-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-cloture-historique-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "fe361a8b-f390-4a85-bbea-e067919d3254",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 53,
       "assertionsWithoutJustifyingRequirement": 43,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 1
+      "refusalsValueGuided": 1,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocks-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-balanced-close-with-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-missing-justified-close-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-excess-blocks-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-invalid-count-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-unreadable-expected-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-comment-too-long-blocks",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-reopen-and-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-state-survives-view-and-pharmacy",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "b498e8f1-0930-42d5-9417-9375fca2e412",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 40,
       "assertionsWithoutJustifyingRequirement": 35,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 6,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-expected",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-per-pharmacy-isolation",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "DD",
       "run": "a30c3d72-2c3d-485b-ac2d-a988f1dcc7b6",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 49,
       "assertionsWithoutJustifyingRequirement": 29,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 12,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-closes-and-archives",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justification-guides-then-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-blocks-like-missing",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-unreadable-expected-amount",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-too-long-then-reduced",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-close-then-reopen",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-session-per-pharmacy-and-view",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "28525781-e499-4ca7-a9f9-19152e973ed0",
       "outcome": "blocked",
-      "scenarios": 8,
       "assertions": 56,
       "assertionsWithoutJustifyingRequirement": 52,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-40-justification-et-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-50-bloque-comme-un-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-sans-ecart-fabrique",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-au-dela-de-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-deux-clotures-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "74fb516d-db15-4b9a-9ea7-1100429770fb",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 46,
       "assertionsWithoutJustifyingRequirement": 45,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-negative",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justify-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-close-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-expected-unreadable",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-length-boundary",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-close-reopen-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-one-cent-excess",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "8a16f402-7316-446d-9387-08974707e9d2",
       "outcome": "blocked",
-      "scenarios": 8,
       "assertions": 47,
       "assertionsWithoutJustifyingRequirement": 33,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 8,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-negatif-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-negatif-cloture-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-positif-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "borne-commentaire-280-281",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "isolation-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "d07c4ed4-8c34-4f0e-94c1-fb7d04f30c94",
       "outcome": "blocked",
-      "scenarios": 11,
       "assertions": 58,
       "assertionsWithoutJustifyingRequirement": 54,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "tiroir-vide-ecart-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "compte-juste-cloture-et-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "historique-et-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "re-blocage-motif-manquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "borne-commentaire-281-280",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "aller-retour-vue-et-cloisonnement-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-un-centime-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "f031c109-f38d-4c8a-bf46-824023c7feb0",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 47,
       "assertionsWithoutJustifyingRequirement": 43,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refuse-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-guidee-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-espaces-insuffisant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-conserve-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-retrait-justification-rebloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-aller-retour-vue",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "c7136c7b-b4d8-44c9-be0a-6be09553efde",
       "outcome": "passed",
-      "scenarios": 6,
       "assertions": 38,
       "assertionsWithoutJustifyingRequirement": 25,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-compte-juste-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-ecart-negatif-justification-bloquante",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-ecart-positif-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-etat-conserve-par-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "273dc450-6029-4674-8472-e352149a4f06",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 40,
       "assertionsWithoutJustifyingRequirement": 35,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "ecart-manque-40-bloque-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-excedent-60-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-guidee-et-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reouverture-et-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "vue-aller-retour-conserve-comptage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "cd62137e-5d8f-4176-9061-1ff5ed23ab97",
       "outcome": "blocked",
-      "scenarios": 10,
       "assertions": 51,
       "assertionsWithoutJustifyingRequirement": 42,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 5,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-blocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-sans-motif",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-negatif-justifie-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-historique-justification-et-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-281-280",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-persistance-vue-et-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-un-centime",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "4bde1657-5d68-4097-93de-30c6c31a7233",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 38,
       "assertionsWithoutJustifyingRequirement": 31,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 8,
-      "refusalsValueGuided": 1
+      "refusalsValueGuided": 1,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-et-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-manque-justification-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-etat-conserve-entre-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-cloisonnement-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "EE",
       "run": "f7c2778e-04b3-4469-aaaf-9ce5f1971a08",
       "outcome": "passed",
-      "scenarios": 11,
       "assertions": 57,
       "assertionsWithoutJustifyingRequirement": 48,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 6,
-      "refusalsValueGuided": 1
+      "refusalsValueGuided": 1,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refus-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-manque-40-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-retrait-justification-rebloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-persistance-vue-et-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-sans-motif",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "403d43d2-3510-4d2b-98a1-e7041f260661",
       "outcome": "passed",
-      "scenarios": 5,
       "assertions": 32,
       "assertionsWithoutJustifyingRequirement": 30,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-ecart-negatif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-commentaire-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "441bfc0e-0ec3-40dd-b60b-c645cb743b24",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 56,
       "assertionsWithoutJustifyingRequirement": 47,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 4,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-refusal",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justify-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-history-reopen",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-no-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-justify",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-count-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-expected-unreadable",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-boundary",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-pharmacy-isolation",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-clear-comment-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "34f76fd9-72ba-4df5-85f2-5c4c59936cee",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 27,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refus-sans-motif",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-justification-debloque-et-archive",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque-comme-un-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-trop-long-refuse",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture-reblocage-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "cd6d22f6-939d-4565-b997-018537c48789",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 46,
       "assertionsWithoutJustifyingRequirement": 42,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-exact-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justified-closure",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-count",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-expected-invalid",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-boundary",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "6dd36613-4ff9-464c-b882-8b6ac4c04197",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 52,
       "assertionsWithoutJustifyingRequirement": 36,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 11,
-      "refusalsValueGuided": 3
+      "refusalsValueGuided": 3,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-manque-40-refus-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-excedent-50-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-justification-guidee-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-etat-conserve-et-pharmacies",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "caisse-ecart-un-centime",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "7900e46d-cd65-4034-a4b4-486c5a52507b",
       "outcome": "blocked",
-      "scenarios": 10,
       "assertions": 55,
       "assertionsWithoutJustifyingRequirement": 53,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 1
+      "refusalsValueGuided": 1,
+      "scenarios": [
+        {
+          "id": "empty-drawer-blocks-closure",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "exact-count-closes-without-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "missing-40-guided-justification-close-reopen-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "reopen-keeps-history-and-blank-comment-reblocks",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "positive-variance-50-blocks-closure",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "invalid-quantity-shows-unavailable-variance",
+          "outcome": "blocked",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "invalid-expected-amount-shows-attente-montant",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "justification-comment-length-boundary-281-280",
+          "outcome": "blocked",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "pharmacy-switch-isolates-cash-session",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "one-cent-variance-blocks-closure",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "896d4967-e806-4615-b133-fd33cfc79cbe",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 54,
       "assertionsWithoutJustifyingRequirement": 45,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 4,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-cloture-refusee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-guidee-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-historique-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "bfc43f8e-92dc-472d-8d26-1a7feab4fc8f",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 31,
       "assertionsWithoutJustifyingRequirement": 27,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-negatif-bloque-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-positif-bloque-comme-un-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-motif-puis-commentaire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-hors-borne-refuse",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cloture-reouverture-et-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "FF",
       "run": "510b96f2-4f30-48c7-9e2c-f9780c0a4d29",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 54,
       "assertionsWithoutJustifyingRequirement": 36,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 11,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-blocage-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-cloture-archive",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-hors-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-un-centime",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "ca55513b-ec2c-4407-8def-9554378e02fe",
       "outcome": "blocked",
-      "scenarios": 8,
       "assertions": 39,
       "assertionsWithoutJustifyingRequirement": 35,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 4,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-justifie-histoire",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-borne-commentaire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "e3f3ad2b-c5e4-4222-b1f9-36a12434dda9",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 41,
       "assertionsWithoutJustifyingRequirement": 38,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-refus-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-puis-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-puis-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "160792a9-c627-4e3d-a511-822d06ded918",
       "outcome": "failed",
-      "scenarios": 9,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 46,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 0,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-manque-40-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-justifie-cloture",
+          "outcome": "failed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-quantite",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-priorite",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-par-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "74f1cfea-58a5-47a0-98fd-6f2abbf4ca48",
       "outcome": "blocked",
-      "scenarios": 9,
       "assertions": 48,
       "assertionsWithoutJustifyingRequirement": 41,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 6,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": []
     },
     {
       "batch": "GG",
       "run": "bc46290b-a760-46ef-baac-ba9322de4122",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 65,
       "assertionsWithoutJustifyingRequirement": 56,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 8,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocks",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-negative-variance-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-positive-variance-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-guided-close",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-length-boundary",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-count-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-expected-amount",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-close-reopen-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-pharmacy-state-separation",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "6832a9e4-ad59-4963-ac9e-edb194179912",
       "outcome": "blocked",
-      "scenarios": 10,
       "assertions": 49,
       "assertionsWithoutJustifyingRequirement": 47,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-missing-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justified-closure-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-positive-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-quantity",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-expected",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-boundary",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-view-switch",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "d8b73758-2b1a-4b19-a19b-01a566261d6d",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 45,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "tiroir-vide-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-guidee-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "borne-commentaire-280-281",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "persistance-vue-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "5afc804a-5d22-4867-a593-66a3d4df3da3",
       "outcome": "blocked",
-      "scenarios": 9,
       "assertions": 59,
       "assertionsWithoutJustifyingRequirement": 48,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 9,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-exact-count-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-shortfall-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excess-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-invalid-count-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-guides-and-closes",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comment-length-boundary",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-expected-amount-invalid",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reopen-and-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "c22a89f1-4161-4648-84de-147deddf516a",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 45,
       "assertionsWithoutJustifyingRequirement": 45,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-exact-count-close-history",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-justification-bloquante",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-archive-et-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-hors-borne-rebloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-session-conservee-par-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "GG",
       "run": "566ffe64-c4fb-41ed-9add-7c16cf04dfe2",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 34,
       "assertionsWithoutJustifyingRequirement": 34,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 0,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-negatif-bloque-justification-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-positif-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-3-5-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "borne-commentaire-281-refuse-280-accepte",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "quantite-negative-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "b6641dfb-bbd7-4d94-98e2-e6fcd964ee16",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 57,
       "assertionsWithoutJustifyingRequirement": 49,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 11,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-empty-drawer-blocked",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-40-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-50-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-justification-guidee-cloture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-borne-commentaire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-changement-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "6db4cf7e-bcf7-467c-bb96-a2b9c875433d",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 34,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refus-motif",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-justification-guidee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-archive-et-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-max",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-entre-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "13d0aaac-b9c1-4b89-8c1d-8ea1ad5f5522",
       "outcome": "passed",
-      "scenarios": 6,
       "assertions": 35,
       "assertionsWithoutJustifyingRequirement": 26,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 6,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-justifie-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "79f33027-917d-4725-ada2-59b6103b2a16",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 41,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-euros-cloture-refusee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-euros-justifie-puis-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-sans-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-trop-long-bloque-puis-justifie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reblocage-apres-retrait-du-commentaire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "etat-conserve-entre-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-un-centime-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "4f684ac2-73ab-46ec-9724-399588916ed2",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 41,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-bloque-la-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-bloque-comme-un-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-guidee-cloture-historique-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-trop-long-reste-bloquant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-d-un-centime-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "9da45e20-46ab-422b-85ce-3c80206d491d",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 43,
       "assertionsWithoutJustifyingRequirement": 41,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 0,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-puis-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-hors-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-aller-retour-vue",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "7c0983ed-0ed9-4bf1-8d83-87a8c8afe9a1",
       "outcome": "passed",
-      "scenarios": 11,
       "assertions": 65,
       "assertionsWithoutJustifyingRequirement": 55,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 8,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-justifie-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-un-centime",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-trop-long",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reblocage-apres-retrait",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-entre-vues-et-pharmacies",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "43aae022-2f19-43a8-a9bb-239d61a6091b",
       "outcome": "passed",
-      "scenarios": 8,
       "assertions": 44,
       "assertionsWithoutJustifyingRequirement": 36,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "cash-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-manque-justification-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-attente-montant-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-excedent-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-commentaire-hors-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-histoire-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cash-conservation-aller-retour-vue",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "1b960768-26bc-4562-9763-1a8bdbfd8eca",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 40,
       "assertionsWithoutJustifyingRequirement": 39,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 0,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-bloque-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-puis-cloture-historique-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-sans-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-bloque-comme-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-hors-borne-refuse",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "HH",
       "run": "53133517-e829-419d-8626-0aa10b2aad2b",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 40,
       "assertionsWithoutJustifyingRequirement": 38,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "compte-juste-cloture-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-euros-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-euros-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "justification-guidee-puis-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "borne-commentaire-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-sans-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reouverture-conserve-justification-et-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "5deb7c69-edc0-46fc-9eb7-50aa07d1c373",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 42,
       "assertionsWithoutJustifyingRequirement": 42,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture-sans-motif",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-puis-cloture-et-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-hors-borne-rebloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-et-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-tiroir-vide-ecart-124000",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-conserve-entre-les-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "0da1a10e-a2ab-4d57-b458-4c3ac3413029",
       "outcome": "blocked",
-      "scenarios": 10,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 49,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": []
     },
     {
       "batch": "II",
       "run": "437ec805-86fe-4e4f-b563-8995edb823ad",
       "outcome": "blocked",
-      "scenarios": 8,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 27,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 21,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-justification-bloquante",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-borne",
+          "outcome": "blocked",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-persistance-vue-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "c61cb8dc-b926-42fc-b1ff-3f7d99aecfbf",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 51,
       "assertionsWithoutJustifyingRequirement": 49,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-1240",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-euros-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-euros-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-sans-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-puis-cloture-et-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-et-reblocage",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-un-centime-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-280",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "d9f65e49-c6db-4406-8046-e6ab6ca4fb13",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 58,
       "assertionsWithoutJustifyingRequirement": 57,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 1,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-compte-juste-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-borne-commentaire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reblocage-retrait-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-ecart-un-centime",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "6e3f63fa-9c76-487e-bd7d-331c3422296c",
       "outcome": "blocked",
-      "scenarios": 6,
       "assertions": 48,
       "assertionsWithoutJustifyingRequirement": 34,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 2
+      "refusalsValueGuided": 2,
+      "scenarios": [
+        {
+          "id": "cash-negative-variance-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-exact-count-closes-without-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-positive-variance-blocks-like-negative",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-invalid-count-no-variance",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-justification-comment-boundary",
+          "outcome": "blocked",
+          "code": null,
+          "today": "refused-when-declared"
+        },
+        {
+          "id": "cash-reopen-and-reblock",
+          "outcome": "passed",
+          "code": null,
+          "today": "refused-when-declared"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "bd230341-982c-4eba-96bc-26bb44a8415e",
       "outcome": "passed",
-      "scenarios": 7,
       "assertions": 45,
       "assertionsWithoutJustifyingRequirement": 41,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "comptage-invalide-sans-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-bloque-puis-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "ecart-positif-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "compte-juste-sans-justification",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-trop-long-bloque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "cloture-reouverture-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "72ce4151-9b0f-46ad-81cc-83bb27f1b6e7",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 33,
       "assertionsWithoutJustifyingRequirement": 29,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 0,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-refus",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-justification-borne",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-cloture-reouverture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reblocage-apres-retrait",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-doc-etat-ecran",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "e9752df0-3867-4dea-b0a4-b1e7ecaad85e",
       "outcome": "passed",
-      "scenarios": 10,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 45,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "prise-en-main-tiroir-vide-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "compte-juste-cloture-archivee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "manque-40-justification-guidee-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "excedent-50-bloque-comme-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "comptage-invalide-ecart-indisponible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "montant-attendu-illisible-attente-montant",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "commentaire-borne-280-caracteres",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "reouverture-controle-present-seulement-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "retrait-justification-rebloque-cloture",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "etat-conserve-entre-les-vues",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     },
     {
       "batch": "II",
       "run": "851b62d2-60fa-4067-bab5-7437786b1864",
       "outcome": "passed",
-      "scenarios": 9,
       "assertions": 50,
       "assertionsWithoutJustifyingRequirement": 46,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 3,
-      "refusalsValueGuided": 0
+      "refusalsValueGuided": 0,
+      "scenarios": [
+        {
+          "id": "caisse-tiroir-vide-ecart-et-cloture-refusee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-compte-juste-cloture-acceptee",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-manque-40-guidee-motif-puis-commentaire",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-excedent-50-bloque-comme-un-manque",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-comptage-invalide-sans-ecart",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-montant-attendu-illisible",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-commentaire-borne-et-historique",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-reouverture-session",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        },
+        {
+          "id": "caisse-etat-cloisonne-par-pharmacie",
+          "outcome": "passed",
+          "code": null,
+          "today": "accepted"
+        }
+      ]
     }
   ]
 }
