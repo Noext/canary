@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
@@ -80,6 +79,7 @@ import {
 import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import { reportMarkdown, saveReport } from "./report.js";
+import { attachReplayRuntimeResults, saveReplayBundle } from "./replay-bundle.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
   type Outcome,
@@ -1534,36 +1534,17 @@ async function executePlan(
   // change pas, seule la mention du fichier était fausse.
   settlePlan(result.plan, context, config, result.id);
   if (config.QA_REPLAY_BUNDLE) {
-    // Explicit opt-in: bundles contain source, diff, planner payload and page text.
-    // Keep them private and local; never publish them as PR artifacts by default.
-    await writeFile(
-      join(root, "replay-bundle.json"),
-      `${JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        source: {
-          prUrl: context.ref.url,
-          repo: context.ref.repo,
-          number: context.ref.number,
-          headSha: context.sha,
-          baseSha: context.baseSha,
-          model: config.OPENAI_MODEL,
-        },
-        validationConfig: {
-          QA_MAX_SCENARIOS: config.QA_MAX_SCENARIOS,
-          QA_MAX_STEPS: config.QA_MAX_STEPS,
-          QA_PER_SCENARIO_COVERAGE: config.QA_PER_SCENARIO_COVERAGE,
-        },
-        context,
-        policy,
-        catalog,
-        payload,
-        generatedPlan,
-        plan: result.plan,
-        evidence: { url: initialPage.url, aria: evidence },
-      }, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600, flag: "wx" }
-    );
+    await saveReplayBundle({
+      root,
+      config,
+      context,
+      policy,
+      catalog,
+      payload,
+      generatedPlan,
+      plan: result.plan,
+      evidence: { url: initialPage.url, aria: evidence },
+    });
   }
   publishUnverifiedPreconditions(result, context);
   const refined = config.QA_VIEW_PROBE
@@ -1750,26 +1731,7 @@ async function executePlan(
     }
   }
   if (config.QA_REPLAY_BUNDLE) {
-    const bundlePath = join(root, "replay-bundle.json");
-    const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as Record<string, unknown>;
-    await writeFile(
-      bundlePath,
-      `${JSON.stringify({
-        ...bundle,
-        runtime: {
-          outcome: result.outcome,
-          finalPlan: result.plan,
-          scenarios: result.scenarios.map((item) => ({
-            scenarioId: item.scenario.id,
-            outcome: item.outcome,
-            error: item.error,
-            diagnostic: item.diagnostic,
-            assertions: item.assertions,
-          })),
-        },
-      }, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 }
-    );
+    await attachReplayRuntimeResults(root, result);
   }
 }
 async function recheck(
