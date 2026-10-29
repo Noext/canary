@@ -46,37 +46,37 @@ const contextSchema = z.object({
 
 export const ReplayBundleSchema = z
   .object({
-  version: z.literal(1),
-  createdAt: z.string().datetime(),
-  source: z.object({
-    prUrl: z.string().url(),
-    repo: z.string(),
-    number: z.number().int().positive(),
-    headSha: z.string().regex(/^[0-9a-f]{40}$/),
-    baseSha: z.string().regex(/^[0-9a-f]{40}$/),
-    model: z.string(),
-  }),
-  validationConfig: z.object({
-    QA_MAX_SCENARIOS: z.number().int().positive(),
-    QA_MAX_STEPS: z.number().int().positive(),
-    QA_PER_SCENARIO_COVERAGE: z.boolean(),
-  }),
-  context: contextSchema,
-  policy: z.unknown(),
-  catalog: z.object({
-    fixtures: z.record(z.string(), z.string()),
-    roles: z.array(z.string()),
-    visuals: z.array(z.string()),
-  }),
-  payload: z.unknown(),
-  generatedPlan: z.unknown(),
-  plan: z.unknown(),
-  evidence: z.object({
-    url: z.string().url(),
-    aria: z.string(),
-  }),
-  runtime: z.unknown().optional(),
-  })
+    version: z.literal(1),
+    createdAt: z.string().datetime(),
+    source: z.object({
+      prUrl: z.string().url(),
+      repo: z.string(),
+      number: z.number().int().positive(),
+      headSha: z.string().regex(/^[0-9a-f]{40}$/),
+      baseSha: z.string().regex(/^[0-9a-f]{40}$/),
+      model: z.string(),
+    }),
+    validationConfig: z.object({
+      QA_MAX_SCENARIOS: z.number().int().positive(),
+      QA_MAX_STEPS: z.number().int().positive(),
+      QA_PER_SCENARIO_COVERAGE: z.boolean(),
+    }),
+    context: contextSchema,
+    policy: z.unknown(),
+    catalog: z.object({
+      fixtures: z.record(z.string(), z.string()),
+      roles: z.array(z.string()),
+      visuals: z.array(z.string()),
+    }),
+    payload: z.unknown(),
+    generatedPlan: z.unknown(),
+    plan: z.unknown(),
+    evidence: z.object({
+      url: z.string().url(),
+      aria: z.string(),
+    }),
+    runtime: z.unknown().optional(),
+    })
   .strict();
 
 export type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
