@@ -11,7 +11,7 @@ import {
   replayPlanValidation,
   replayPlannerCorrection,
 } from "./replay-validation.js";
-import { PlanSchema, plannerPlanSchema, type Plan } from "./schema.js";
+import { PlanSchema, type Plan, plannerPlanSchema } from "./schema.js";
 
 const fileSchema = z.object({
   filename: z.string(),
