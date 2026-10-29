@@ -152,6 +152,15 @@ function parseReplayBundle(raw: string): ReplayBundle {
 }
 
 /**
+ * Lit et valide un bundle depuis le disque. Exporté pour le rejeu navigateur
+ * ciblé, qui doit lire exactement le même format que le rejeu offline — un
+ * second analyseur serait une seconde vérité.
+ */
+export async function readReplayBundle(filePath: string) {
+  return parseReplayBundle(await readFile(resolve(filePath), "utf8"));
+}
+
+/**
  * Replays the stored complete plan against the current production gates.
  * Gate mode is strictly offline: it reads only the bundle and never constructs
  * a model client, browser session, preview URL, or GitHub client.
