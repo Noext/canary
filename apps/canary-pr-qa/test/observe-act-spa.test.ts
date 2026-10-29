@@ -122,6 +122,74 @@ describe("une cible réellement absente n'est jamais transformée en succès", (
   });
 });
 
+describe("une cible que l'instantané ne peut pas représenter n'est pas « absente »", () => {
+  it("ne bloque pas un sélecteur data-* : le relevé est muet sur lui", () => {
+    // Mesuré : `[data-cash-action="cloturer"]` existe dans le DOM mais jamais
+    // dans l'instantané d'accessibilité ; le déclarer absent bloquait 4 des 39
+    // scénarios historiques alors que le bouton était là.
+    const step = {
+      action: {
+        locator: { by: "css" as const, value: '[data-cash-action="cloturer"]' },
+        type: "click" as const,
+      },
+      description: "clôturer",
+      id: "close",
+    } as Scenario["steps"][number];
+    const result = resolution(step, CASH);
+    expect("blocked" in result).toBe(false);
+    expect("reanchoredTo" in result).toBe(false);
+  });
+
+  it("ne bloque pas un sélecteur testId pour la même raison", () => {
+    const step = {
+      action: {
+        locator: { by: "testId" as const, value: "cash-close" },
+        type: "click" as const,
+      },
+      description: "clôturer",
+      id: "close",
+    } as Scenario["steps"][number];
+    expect("blocked" in resolution(step, CASH)).toBe(false);
+  });
+
+  it("lit aussi un aria-label entre apostrophes", () => {
+    // Forme mesurée dans le run 510b96f2 : `select[aria-label='Motif de la
+    // justification']`, que la lecture à guillemets doubles ignorait.
+    const step = {
+      action: {
+        locator: {
+          by: "css" as const,
+          value: "select[aria-label='Quantité · Billet de 20 €']",
+        },
+        type: "select" as const,
+        value: "1",
+      },
+      description: "choisir",
+      id: "pick",
+    } as Scenario["steps"][number];
+    expect(resolveObservedName(observation(CASH), step)).toBe(
+      "Quantité · Billet de 20 €"
+    );
+  });
+
+  it("bloque toujours une cible nommable absente", () => {
+    // Contrôle : la porte reste active pour les formes que l'instantané juge.
+    const step = {
+      action: {
+        locator: {
+          by: "role" as const,
+          name: "Bouton inexistant",
+          value: "button",
+        },
+        type: "click" as const,
+      },
+      description: "cliquer",
+      id: "click",
+    } as Scenario["steps"][number];
+    expect("blocked" in resolution(step, CASH)).toBe(true);
+  });
+});
+
 describe("les correspondances ambiguës restent indéterminées", () => {
   it("refuse deux candidats de même score", () => {
     const ambiguous = `- main [ref=e1]:

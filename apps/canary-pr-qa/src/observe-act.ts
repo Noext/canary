@@ -14,14 +14,16 @@ import type { Scenario } from "./schema.js";
  * `aria`, `label`) : mesuré sur la forme dominante du corpus — 1066 des 3396
  * locators — la résolution échouait TOUJOURS, même quand la cible existait.
  */
-const ARIA_LABEL_CSS = /^\s*(?:[a-zA-Z][\w-]*)?\[aria-label="([^"]+)"\]\s*$/;
+const ARIA_LABEL_CSS =
+  /^\s*(?:[a-zA-Z][\w-]*)?\[aria-label=(?:"([^"]+)"|'([^']+)')\]\s*$/;
 
 function intendedName(step: Scenario["steps"][number]): string | undefined {
   const action = step.action;
   if (!("locator" in action) || action.locator === undefined) {
     return;
   }
-  const { name, role, value } = action.locator as {
+  const { by, name, role, value } = action.locator as {
+    by?: string;
     name?: string;
     role?: string;
     value?: string;
@@ -34,8 +36,23 @@ function intendedName(step: Scenario["steps"][number]): string | undefined {
   if (role && value) {
     return value;
   }
-  const label = ARIA_LABEL_CSS.exec(value ?? "")?.[1];
-  return label ?? value;
+  const ariaLabel = ARIA_LABEL_CSS.exec(value ?? "");
+  if (ariaLabel) {
+    return ariaLabel[1] ?? ariaLabel[2];
+  }
+  /**
+   * Une cible que l'instantané d'accessibilité ne peut pas REPRÉSENTER — un
+   * sélecteur `css` qui ne vise pas un `aria-label`, ou un `testId` — n'est pas
+   * une cible absente : le relevé est muet sur elle. La déclarer absente faisait
+   * bloquer le pas (`TARGET_NOT_FOUND`) alors que l'élément existe dans le DOM :
+   * mesuré sur `[data-cash-action="cloturer"]`, 4 scénarios sur 39. Rendre
+   * `undefined` dit « non jugeable », et le pas est joué comme sur le chemin
+   * figé — l'absence réelle se constate alors à l'exécution, avec son délai.
+   */
+  if (by === "testId") {
+    return;
+  }
+  return by === "css" ? undefined : value;
 }
 
 /** Le texte visible dans lequel une cible doit apparaître. */
