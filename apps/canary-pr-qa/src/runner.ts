@@ -1495,9 +1495,11 @@ export function replayPlanValidation(input: {
         ...pageEvidence.refusals.map((item) => JSON.stringify(item)),
       ]),
     ],
-    inconclusive: pageEvidence.inconclusive.map(
-      (item) => `${item.scenarioId}: ${item.reason}`
-    ),
+    inconclusive: pageEvidence.incomplete
+      ? [pageEvidence.incomplete]
+      : pageEvidence.inconclusive.map(
+          (item) => `${item.scenarioId}: ${item.reason}`
+        ),
   };
 }
 
@@ -1813,6 +1815,7 @@ async function executePlan(
         ...bundle,
         runtime: {
           outcome: result.outcome,
+          finalPlan: result.plan,
           scenarios: result.scenarios.map((item) => ({
             scenarioId: item.scenario.id,
             outcome: item.outcome,
