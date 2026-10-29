@@ -34,6 +34,11 @@ export interface ScenarioResult {
      */
     verification?: "state" | "transition" | "persisted";
     /**
+     * L'intention DÉCLARÉE par le plan, quand elle existe. Absente sur les plans
+     * antérieurs au champ : l'artefact dit alors « inconnue », jamais devinée.
+     */
+    assertionIntent?: "invariant" | "persistence";
+    /**
      * La preuve produite PENDANT l'exécution : la valeur après l'étape diffère de
      * celle mesurée avant. Absent quand aucune valeur d'avant n'a pu être mesurée
      * (sonde en échec) — inconnu, jamais « rien n'a changé ».

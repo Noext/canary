@@ -219,6 +219,21 @@ const assertionBase = {
   afterStep: text.optional(),
   verification: z.enum(["state", "transition", "persisted"]).default("state"),
   /**
+   * Ce que l'assertion cherche à PROUVER, distinct de la façon de le lire :
+   *
+   * - `invariant` : la condition doit tenir après l'étape (rien n'a bougé) ;
+   * - `persistence` : la condition doit avoir SURVÉCU à un rechargement ou à une
+   *   réentrée, donc `verification: "persisted"` est la seule lecture qui la
+   *   démontre — relire une valeur inchangée en `state` est satisfait par l'état
+   *   d'avant l'événement et ne prouve rien.
+   *
+   * Facultatif, et volontairement sans valeur par défaut : un plan antérieur ne
+   * porte pas ce champ, et son intention est alors INCONNUE. Le gate ne la devine
+   * jamais à partir du texte, d'un nom d'action ou d'un sélecteur — il refuse
+   * seulement une intention DÉCLARÉE que la vérification contredit.
+   */
+  assertionIntent: z.enum(["invariant", "persistence"]).optional(),
+  /**
    * L'indice de l'exigence qui justifie la valeur attendue. Une assertion sans
    * provenance ne peut pas être distinguée d'une valeur inventée : le gate
    * l'exige donc quand le chemin d'observation est actif, et l'exécution
