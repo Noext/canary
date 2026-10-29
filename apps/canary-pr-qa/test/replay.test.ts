@@ -5,15 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { Model } from "../src/model.js";
 import { parseReplayBundle, runReplay } from "../src/replay.js";
-import { BASE_SHA, plan, PR_URL, SHA } from "./fixture.js";
+import { BASE_SHA, PR_URL, plan, SHA } from "./fixture.js";
 
 const cleanup: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
-    cleanup.splice(0).map((path) =>
-      rm(path, { recursive: true, force: true })
-    )
+    cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   );
 });
 
@@ -39,7 +37,11 @@ function bundle() {
       body: "",
       context: [
         { path: "src/form.ts", ref: SHA, content: "show('Welcome '+name)" },
-        { path: "src/form.ts", ref: BASE_SHA, content: "show('Welcome '+name)" },
+        {
+          path: "src/form.ts",
+          ref: BASE_SHA,
+          content: "show('Welcome '+name)",
+        },
       ],
       contextWarnings: [],
       files: [
@@ -85,9 +87,9 @@ describe("Canary Replay bundle", () => {
       encoding: "utf8",
       mode: 0o600,
     });
-    const modelCall = vi.spyOn(Model.prototype, "json").mockRejectedValue(
-      new Error("gate replay must not call the model")
-    );
+    const modelCall = vi
+      .spyOn(Model.prototype, "json")
+      .mockRejectedValue(new Error("gate replay must not call the model"));
 
     const result = await runReplay(
       path,
