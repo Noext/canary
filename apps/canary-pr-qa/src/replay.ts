@@ -2,14 +2,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { Config } from "./config.js";
-import { Model, PLANNER_PROMPT } from "./model.js";
+import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
+import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
-import { PolicySchema, type Policy } from "./policy.js";
-import { sourceLineMaterial } from "./policy.js";
+import { PolicySchema, sourceLineMaterial, type Policy } from "./policy.js";
 import { replayPlanValidation } from "./runner.js";
 import { PlanSchema, plannerPlanSchema, type Plan } from "./schema.js";
-import type { TrustedCatalog } from "./fixtures.js";
 
 const fileSchema = z.object({
   filename: z.string(),
