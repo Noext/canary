@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
 import {
+  classifyScenarioResult,
   observedNames,
   resolveObservedName,
   resolveStepFromObservation,
@@ -93,6 +94,39 @@ describe("boucle observe→act, derrière le drapeau", () => {
     // n'existe que sur le nouveau chemin.
     expect(scenario.classification).not.toBe("indeterminate");
   }, 60_000);
+});
+
+describe("le classement final nomme un défaut de plan", () => {
+  it("classe STATE_ALREADY_SATISFIED comme défaut de test, pas indéterminé", () => {
+    // Le code accuse le plan : l'application affiche ce que l'assertion demande,
+    // c'est la preuve qui manque. Absent de cette taxonomie, le scénario sortait
+    // `indeterminate` — et `enforceObjectiveProof` ne s'applique pas à un
+    // scénario indéterminé.
+    const result: {
+      classification?: "proven" | "failed" | "test-defect" | "indeterminate";
+      diagnostic?: { code: string };
+      outcome: string;
+    } = {
+      diagnostic: { code: "STATE_ALREADY_SATISFIED" },
+      outcome: "blocked",
+    };
+    classifyScenarioResult(result);
+    expect(result.classification).toBe("test-defect");
+  });
+
+  it("ne reclasse pas un scénario dont le classement est déjà posé", () => {
+    const result: {
+      classification?: "proven" | "failed" | "test-defect" | "indeterminate";
+      diagnostic?: { code: string };
+      outcome: string;
+    } = {
+      classification: "indeterminate",
+      diagnostic: { code: "STATE_ALREADY_SATISFIED" },
+      outcome: "blocked",
+    };
+    classifyScenarioResult(result);
+    expect(result.classification).toBe("indeterminate");
+  });
 });
 
 describe("résolution de la cible dans l'observation", () => {

@@ -21,6 +21,12 @@ describe("la classe d'un échec est une règle, pas une appréciation", () => {
     expect(classifyFailure({ code: "REQUIREMENT_UNGROUNDED" })).toBe(
       "plan-defective"
     );
+    // Une assertion d'état déjà satisfaite avant l'étape accuse le plan, pas
+    // l'application : la valeur attendue est affichée, c'est la preuve qui
+    // manque. Le code doit être classé ici, et pas seulement exister.
+    expect(classifyFailure({ code: "STATE_ALREADY_SATISFIED" })).toBe(
+      "plan-defective"
+    );
   });
 
   it("sépare l'infrastructure du produit", () => {
