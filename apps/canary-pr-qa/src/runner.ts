@@ -748,7 +748,7 @@ function refusalDiagnostic(
  * message. Le détail par entrée et les refus par scénario suivent, ceux-là
  * bloquant leur scénario seul.
  */
-function planRefusals(
+export function planRefusals(
   candidate: Plan,
   policy: Policy,
   context: PrContext,
@@ -1428,7 +1428,7 @@ async function replanWithObservations(
  * Les refus qui n'empêchent pas le run : ordre des marqueurs, et — quand le
  * drapeau est posé — les défauts de contrat propres à un scénario.
  */
-function preExecutionFindings(
+export function preExecutionFindings(
   plan: Plan,
   context: PrContext,
   policy: Policy,
@@ -1444,63 +1444,6 @@ function preExecutionFindings(
     ...findings.coverageRefusals,
     ...provenanceRefusals(plan),
   ];
-}
-
-/** Same repair-time gate used by the production planner callback. */
-export function replayPlannerRefusals(input: {
-  catalog: TrustedCatalog;
-  config: Config;
-  context: PrContext;
-  evidence: { aria: string; url: string };
-  plan: Plan;
-  policy: Policy;
-}): string[] {
-  return planRefusals(
-    input.plan,
-    input.policy,
-    input.context,
-    input.config,
-    input.catalog,
-    amputationScans(),
-    input.evidence
-  );
-}
-
-/** Offline replay through the same deterministic gates used by production. */
-export function replayPlanValidation(input: {
-  catalog: TrustedCatalog;
-  config: Config;
-  context: PrContext;
-  evidence: { aria: string; url: string };
-  plan: Plan;
-  policy: Policy;
-}): { refusals: string[]; inconclusive: string[] } {
-  const { catalog, config, context, evidence, plan, policy } = input;
-  const sourceRefusal = requirementSourceRefusal(plan, context);
-  const refusals = [
-    ...replayPlannerRefusals(input),
-    ...(sourceRefusal ? [`${sourceRefusal.message}. ${sourceRefusal.hint}`] : []),
-    ...preExecutionFindings(plan, context, policy, config).map(
-      (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
-    ),
-    ...provenanceRefusals(plan).map(
-      (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
-    ),
-  ];
-  const pageEvidence = validatePlanEvidence(plan, evidence);
-  return {
-    refusals: [
-      ...new Set([
-        ...refusals,
-        ...pageEvidence.refusals.map((item) => JSON.stringify(item)),
-      ]),
-    ],
-    inconclusive: pageEvidence.incomplete
-      ? [pageEvidence.incomplete]
-      : pageEvidence.inconclusive.map(
-          (item) => `${item.scenarioId}: ${item.reason}`
-        ),
-  };
 }
 
 async function executePlan(
