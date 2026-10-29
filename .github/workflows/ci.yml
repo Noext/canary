@@ -67,8 +67,9 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level high
 
-      - name: Lint and format check (ultracite/biome)
-        run: pnpm lint
+      # No separate lint step: `pnpm check` below runs `ultracite check`, the
+      # exact command `pnpm lint` resolves to, so the same gate ran twice in
+      # every run.
 
       # `pnpm check` runs apps/canary-pr-qa/test/native-postgres.test.ts, which
       # skips itself when `QA_TEST_DATABASE_URL` is unset: that step is the only

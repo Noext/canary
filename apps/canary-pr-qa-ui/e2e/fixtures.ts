@@ -6,7 +6,7 @@ import { type HarnessState, readHarnessState } from "./state";
 export const copy = {
   createAccount: "Créer mon compte administrateur",
   firstRunTitle: "Créez votre compte administrateur",
-  // Legacy copy and apps/canary-pr-qa/test/e2e.test.ts:929 assert this exact title.
+  // Legacy copy and apps/canary-pr-qa/test/e2e/ assert this exact title.
   loginTitle: "Connectez-vous",
   repoMessage: "Dépôts enregistrés",
 } as const;
