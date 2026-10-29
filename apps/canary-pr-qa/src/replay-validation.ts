@@ -37,7 +37,9 @@ export function replayPlannerRefusals(input: ReplayValidationInput): string[] {
   );
 }
 
-/** Uses the same correction path as the live planner, including quote-pick repair. */
+/**
+ * Uses the same correction path as the live planner, including quote-pick repair.
+ */
 export function replayPlannerCorrection(
   input: ReplayValidationInput
 ) {
