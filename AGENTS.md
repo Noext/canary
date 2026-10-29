@@ -179,7 +179,7 @@ problèmes de sécurité exploitables.
   (`apps/canary-pr-qa/src/dashboard/contracts.ts` et
   `apps/canary-pr-qa-ui/src/api/contracts.ts`).
 - Conserver les `id` et les libellés français assertés par l'e2e Chromium
-  (`apps/canary-pr-qa/test/e2e.test.ts`) et `test/sql.test.ts`.
+  (`apps/canary-pr-qa/test/e2e/`) et `test/sql.test.ts`.
 - Garder la CSP sans `unsafe-inline` : pas de `<style>` ni d'attribut `style=`
   en ligne, pas de script inline, et pas de dépendance ajoutée pour contourner
   un défaut de structure.

@@ -13,10 +13,10 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "compile": "tsc --noEmit",
-    "test": "vitest run --exclude test/e2e.test.ts --exclude test/container.test.ts",
+    "test": "vitest run --exclude 'test/e2e/**' --exclude 'test/container/**'",
     "test:replay": "vitest run test/historical.test.ts test/replay.test.ts",
-    "test:e2e": "vitest run test/e2e.test.ts",
-    "test:container": "vitest run test/container.test.ts",
+    "test:e2e": "vitest run test/e2e",
+    "test:container": "vitest run test/container",
     "dev": "node scripts/dev.mjs",
     "clean": "rm -rf dist coverage .turbo"
   },
