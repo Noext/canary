@@ -1963,6 +1963,76 @@ export async function changedFileTexts(
  * `collectContext`), donc il était déjà là, déjà payé, déjà dépensé.
  */
 const SOURCE_LINES_RESERVE_CHARS = 30_000;
+
+/**
+ * Caractères par token retenus pour convertir un plafond de TOKENS en budget de
+ * caractères. Volontairement pessimiste : un JSON français de planification
+ * tourne autour de 3,5 à 4 caractères par token, donc 2,5 surestime le nombre de
+ * tokens et sous-estime le budget. Sans tokenizer disponible côté fournisseur
+ * (`/v1/models` ne publie ni fenêtre ni compteur), c'est la seule conversion
+ * fail-closed ; l'incertitude restante est absorbée par la marge ci-dessous.
+ */
+const PLANNER_CHARS_PER_TOKEN = 2.5;
+/** Marge de sécurité appliquée au budget d'entrée. */
+const PLANNER_SAFETY_FACTOR = 0.9;
+/**
+ * Réserve pour les instructions du planificateur (message système). Elle doit
+ * rester supérieure à la longueur réelle de `PLANNER_PROMPT` — un test le
+ * vérifie, sinon la réserve deviendrait une sous-estimation silencieuse.
+ */
+const PLANNER_PROMPT_RESERVE_CHARS = 32_000;
+
+/** Les hypothèses de conversion du budget, publiées pour être testées. */
+export const PLANNER_BUDGET_ASSUMPTIONS = {
+  charsPerToken: PLANNER_CHARS_PER_TOKEN,
+  promptReserveChars: PLANNER_PROMPT_RESERVE_CHARS,
+  safetyFactor: PLANNER_SAFETY_FACTOR,
+} as const;
+
+/**
+ * Le budget d'entrée du planificateur, en caractères, dérivé de la fenêtre de
+ * TOKENS du modèle configuré :
+ *
+ *   tokens disponibles = fenêtre − sortie maximale − réserve de correction
+ *   caractères         = tokens × PLANNER_CHARS_PER_TOKEN × marge
+ *   budget du payload  = caractères − réserve des instructions
+ *
+ * La correction contrainte renvoie le plan produit avec les refus : elle coûte
+ * au plus une sortie supplémentaire, donc `QA_PLAN_MAX_TOKENS` la couvre.
+ *
+ * Cette borne ne dépend PAS de la taille du payload : elle ne peut donc pas
+ * s'étirer pour accepter ce qu'elle mesure.
+ */
+export function plannerInputBudget(config: Config): {
+  availableInputChars: number;
+  correctionReserveChars: number;
+  limit: number;
+  outputReserveChars: number;
+} {
+  const availableInputTokens =
+    config.QA_MODEL_CONTEXT_TOKENS - config.QA_PLAN_MAX_TOKENS * 2;
+  if (availableInputTokens <= 0) {
+    return {
+      availableInputChars: 0,
+      correctionReserveChars: 0,
+      limit: 0,
+      outputReserveChars: 0,
+    };
+  }
+  const availableInputChars = Math.floor(
+    availableInputTokens * PLANNER_CHARS_PER_TOKEN * PLANNER_SAFETY_FACTOR
+  );
+  return {
+    availableInputChars,
+    correctionReserveChars: Math.floor(
+      config.QA_PLAN_MAX_TOKENS * PLANNER_CHARS_PER_TOKEN
+    ),
+    limit: Math.max(0, availableInputChars - PLANNER_PROMPT_RESERVE_CHARS),
+    outputReserveChars: Math.floor(
+      config.QA_PLAN_MAX_TOKENS * PLANNER_CHARS_PER_TOKEN
+    ),
+  };
+}
 /**
  * Ce que le message du planificateur a le droit de peser : la borne du contexte
  * de dépendances (`QA_CONTEXT_CHARS`, appliquée par `collectContext`), le diff
@@ -1975,13 +2045,8 @@ const SOURCE_LINES_RESERVE_CHARS = 30_000;
  * annoncée par `QA_CONTEXT_CHARS + 30_000` était donc déjà consommée par ce qui
  * était dans le message depuis le début.
  */
-function plannerPayloadLimit(context: PrContext, config: Config): number {
-  return (
-    config.QA_CONTEXT_CHARS +
-    config.QA_PLAN_FILE_CHARS +
-    JSON.stringify(context.files).length +
-    SOURCE_LINES_RESERVE_CHARS
-  );
+function plannerPayloadLimit(config: Config): number {
+  return plannerInputBudget(config).limit;
 }
 /**
  * Le message du planificateur : le contexte figé de la PR, la page de
@@ -2127,7 +2192,7 @@ export function planPayload(
     preview,
     sourceLines: [] as SourceLineMaterial[],
   };
-  const limit = plannerPayloadLimit(context, config);
+  const limit = plannerPayloadLimit(config);
   payload.sourceLines = numberedSourceLines(
     context,
     Math.max(
@@ -2138,9 +2203,11 @@ export function planPayload(
       )
     )
   );
-  if (JSON.stringify(payload).length > limit) {
+  const total = JSON.stringify(payload).length;
+  if (total > limit) {
+    // Rien n'est tronqué : le refus nomme le dépassement et ce qui le desserre.
     throw new Error(
-      "PR context exceeds model budget; refusing partial diff analysis"
+      `PR context exceeds model budget: ${total} characters for a payload limit of ${limit} (shortfall ${total - limit}), computed from QA_MODEL_CONTEXT_TOKENS=${config.QA_MODEL_CONTEXT_TOKENS} and QA_PLAN_MAX_TOKENS=${config.QA_PLAN_MAX_TOKENS}. Nothing was truncated: the diff, its source lines and the discovery snapshot are all required evidence. Raise QA_MODEL_CONTEXT_TOKENS to a window the configured model really serves, or plan a PR whose diff is smaller.`
     );
   }
   return payload;

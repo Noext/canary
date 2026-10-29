@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
 import { PLANNER_PROMPT } from "../src/model.js";
-import { planPayload } from "../src/plan-evidence.js";
+import { plannerInputBudget, planPayload } from "../src/plan-evidence.js";
 import {
   absentRequirementRemedy,
   amputatedQuote,
@@ -4499,23 +4499,14 @@ const MATERIAL_RESERVE_CHARS = 30_000;
  */
 const CASH_LINE_71 = " * « 3,5 » : une demi-coupure n'existe pas.";
 /**
- * La borne du message du planificateur, telle que `planPayload` la calcule : le
- * contexte de dépendances (`QA_CONTEXT_CHARS`), le diff — que cette borne ne
- * compte pas — puis la réserve du matériel. Les deux chiffres sont relus ici,
- * jamais recopiés de l'implémentation.
+ * La borne du message du planificateur, telle que `planPayload` la calcule : elle
+ * dérive de la FENÊTRE DE TOKENS du modèle (`QA_MODEL_CONTEXT_TOKENS`), moins la
+ * sortie maximale, moins la réserve de correction, moins les instructions — et
+ * non de la taille du contexte ou du payload. Le test la relit depuis
+ * `plannerInputBudget`, jamais recopiée de l'implémentation.
  */
-function plannerPayloadBound(
-  files: PrContext["files"],
-  contextChars: number = config.QA_CONTEXT_CHARS
-): number {
-  // L'enveloppe porte aussi les fichiers modifiés en entier : leur budget est
-  // une part de la borne, pas une marge en plus (voir `plannerPayloadLimit`).
-  return (
-    contextChars +
-    config.QA_PLAN_FILE_CHARS +
-    JSON.stringify(files).length +
-    MATERIAL_RESERVE_CHARS
-  );
+function plannerPayloadBound(): number {
+  return plannerInputBudget(config).limit;
 }
 
 /**
@@ -4613,20 +4604,20 @@ it("keeps the planner message inside the context budget with its numbered materi
     config
   );
   expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(
-    plannerPayloadBound(bounded.pr.files)
+    plannerPayloadBound()
   );
   expect(bounded.sourceLines[0]?.lines.length).toBeGreaterThan(0);
-  // La borne reste celle d'avant l'ajout du matériel : un contexte plus lourd
-  // que la borne est refusé, matériel numéroté ou non.
+  // Le budget dérive maintenant de la FENÊTRE DE TOKENS, pas de la taille du
+  // contexte : un payload qui le dépasse réellement est refusé, et rien n'est
+  // tronqué pour le faire tenir.
+  const budget = plannerInputBudget(config).limit;
   expect(() =>
     planPayload(
       {
         ...saturated,
         context: [
           {
-            content: "z".repeat(
-              config.QA_CONTEXT_CHARS + config.QA_PLAN_FILE_CHARS + 40_000
-            ),
+            content: "z".repeat(budget),
             path: "src/big.ts",
             ref: context.sha,
           },
@@ -4637,7 +4628,7 @@ it("keeps the planner message inside the context budget with its numbered materi
       PLAN_FIXTURES,
       config
     )
-  ).toThrow();
+  ).toThrow(/exceeds model budget/);
 });
 
 /**
@@ -4702,7 +4693,7 @@ it("gives the numbered material its reserve even when the diff fills the budget"
   // Le message tient dans la borne, qui compte maintenant séparément le
   // contexte, le diff et la réserve du matériel.
   expect(JSON.stringify(payload).length).toBeLessThanOrEqual(
-    plannerPayloadBound(saturatedContext.files)
+    plannerPayloadBound()
   );
   // Le compte d'AVANT ne laissait presque rien : les patches étaient déjà là,
   // donc `QA_CONTEXT_CHARS + 30_000` était presque tout dépensé avant le premier

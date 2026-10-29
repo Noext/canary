@@ -3036,7 +3036,11 @@ describe("runner false-green regressions", () => {
     // est rélevée pour que ces deux envois tiennent — un plafond par appel ne
     // sert que sous une enveloppe qui couvre l'entrée plus ce plafond.
     const wide = await setup({
-      env: { QA_PLAN_MAX_TOKENS: "400000", QA_RUN_MAX_TOKENS: "1000000" },
+      env: {
+        QA_MODEL_CONTEXT_TOKENS: "1000000",
+        QA_PLAN_MAX_TOKENS: "400000",
+        QA_RUN_MAX_TOKENS: "1000000",
+      },
     });
     fakeBrowser();
     const capped = await runQa(
@@ -3049,6 +3053,7 @@ describe("runner false-green regressions", () => {
 
     const tighter = await setup({
       env: {
+        QA_MODEL_CONTEXT_TOKENS: "1000000",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "1000000",
         QA_CALL_MAX_TOKENS: "16384",
@@ -3167,6 +3172,9 @@ describe("runner false-green regressions", () => {
     // réponse a livré : la reprise part, même sans plafond par appel serré.
     const burnedEnv = {
       OPENAI_STREAM: "false" as const,
+      // Une borne de plan de 393 216 tokens de sortie n'existe que sous une
+      // fenêtre cohérente : la borne d'entrée en dérive.
+      QA_MODEL_CONTEXT_TOKENS: "1000000",
       QA_PLAN_MAX_TOKENS: "393216",
       QA_RUN_MAX_TOKENS: "700000",
     };
@@ -3428,6 +3436,7 @@ describe("runner false-green regressions", () => {
       env: {
         ...WIDE_CALL,
         QA_MODEL_RETRIES: "1",
+        QA_MODEL_CONTEXT_TOKENS: "1000000",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "500000",
       },
@@ -3481,6 +3490,7 @@ describe("runner false-green regressions", () => {
       env: {
         ...WIDE_CALL,
         QA_MODEL_RETRIES: "1",
+        QA_MODEL_CONTEXT_TOKENS: "1000000",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "1000000",
       },
@@ -3518,6 +3528,7 @@ describe("runner false-green regressions", () => {
       env: {
         ...WIDE_CALL,
         QA_MODEL_RETRIES: "1",
+        QA_MODEL_CONTEXT_TOKENS: "1000000",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "700000",
       },
@@ -3553,6 +3564,7 @@ describe("runner false-green regressions", () => {
     const f = await setup({
       env: {
         ...WIDE_CALL,
+        QA_MODEL_CONTEXT_TOKENS: "1000000",
         QA_PLAN_MAX_TOKENS: "400000",
         QA_RUN_MAX_TOKENS: "100000",
       },

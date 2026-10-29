@@ -237,6 +237,20 @@ const envSchema = z.object({
     .default(false)
     .transform((value) => value === true || value === "true"),
   QA_PLAN_FILE_CHARS: z.coerce.number().int().min(0).max(1_000_000).default(0),
+  /**
+   * Fenêtre de contexte du modèle configuré, en TOKENS. Le fournisseur ne
+   * l'expose pas (`/v1/models` ne rend que id/object/owned_by), donc elle est
+   * déclarée ici : c'est elle qui borne l'entrée du planificateur, et non la
+   * taille du payload (une borne qui s'étire avec ce qu'elle mesure ne garantit
+   * rien). La valeur par défaut est prudente ; la porter à la fenêtre réelle du
+   * modèle est un choix d'exploitation explicite.
+   */
+  QA_MODEL_CONTEXT_TOKENS: z.coerce
+    .number()
+    .int()
+    .min(8192)
+    .max(4_000_000)
+    .default(131_072),
   QA_CONTEXT_CHARS: z.coerce
     .number()
     .int()
