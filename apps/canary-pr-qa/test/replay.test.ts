@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { Model } from "../src/model.js";
-import { parseReplayBundle, runReplay } from "../src/replay.js";
+import { runReplay } from "../src/replay.js";
 import { BASE_SHA, PR_URL, plan, SHA } from "./fixture.js";
 
 const cleanup: string[] = [];
@@ -14,6 +14,20 @@ afterEach(async () => {
     cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   );
 });
+
+async function writeBundle(value: unknown) {
+  const directory = await mkdtemp(join(tmpdir(), "canary-replay-test-"));
+  cleanup.push(directory);
+  const path = join(directory, "bundle.json");
+  await writeFile(path, JSON.stringify(value), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  return {
+    path,
+    config: loadConfig({ QA_DATA_DIR: directory }),
+  };
+}
 
 function bundle() {
   return {
@@ -72,14 +86,15 @@ function bundle() {
 }
 
 describe("Canary Replay bundle", () => {
-  it("validates the bundle contract and pins both PR revisions", () => {
-    const parsed = parseReplayBundle(JSON.stringify(bundle()));
+  it("validates the bundle contract and pins both PR revisions", async () => {
+    const { path, config } = await writeBundle(bundle());
+    const parsed = await runReplay(path, "gate", config);
     expect(parsed.source.headSha).toBe(SHA);
     expect(parsed.source.baseSha).toBe(BASE_SHA);
-    expect(parsed.version).toBe(1);
+    expect(parsed.mode).toBe("gate");
   });
 
-  it("rejects a bundle whose source SHA differs from its captured context", () => {
+  it("rejects a bundle whose source SHA differs from its captured context", async () => {
     const original = bundle();
     const invalid = {
       ...original,
@@ -88,26 +103,17 @@ describe("Canary Replay bundle", () => {
         sha: BASE_SHA,
       },
     };
-    expect(() => parseReplayBundle(JSON.stringify(invalid))).toThrow();
+    const { path, config } = await writeBundle(invalid);
+    await expect(runReplay(path, "gate", config)).rejects.toThrow();
   });
 
   it("runs gate replay without calling the model", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "canary-replay-test-"));
-    cleanup.push(directory);
-    const path = join(directory, "bundle.json");
-    await writeFile(path, JSON.stringify(bundle()), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    const { path, config } = await writeBundle(bundle());
     const modelCall = vi
       .spyOn(Model.prototype, "json")
       .mockRejectedValue(new Error("gate replay must not call the model"));
 
-    const result = await runReplay(
-      path,
-      "gate",
-      loadConfig({ QA_DATA_DIR: directory })
-    );
+    const result = await runReplay(path, "gate", config);
 
     expect(result.mode).toBe("gate");
     expect(result.source.headSha).toBe(SHA);
@@ -117,9 +123,12 @@ describe("Canary Replay bundle", () => {
     expect(Array.isArray(result.inconclusive)).toBe(true);
   });
 
-  it("rejects unknown bundle versions instead of silently replaying them", () => {
-    expect(() =>
-      parseReplayBundle(JSON.stringify({ ...bundle(), version: 2 }))
-    ).toThrow();
+  it("rejects unknown bundle versions instead of silently replaying them", async () => {
+    const { path, config } = await writeBundle({
+      ...bundle(),
+      version: 2,
+    });
+    await expect(runReplay(path, "gate", config)).rejects.toThrow();
+  });
   });
 });
