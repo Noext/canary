@@ -15,7 +15,7 @@ import {
 } from "./runner.js";
 import type { Plan } from "./schema.js";
 
-export interface ReplayValidationInput {
+interface ReplayValidationInput {
   catalog: TrustedCatalog;
   config: Config;
   context: PrContext;
@@ -25,7 +25,7 @@ export interface ReplayValidationInput {
 }
 
 /** Same repair-time gate used by the production planner callback. */
-export function replayPlannerRefusals(input: ReplayValidationInput): string[] {
+function replayPlannerRefusals(input: ReplayValidationInput): string[] {
   return planRefusals(
     input.plan,
     input.policy,
