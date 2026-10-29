@@ -7,7 +7,7 @@ import type { PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import { PolicySchema, sourceLineMaterial, type Policy } from "./policy.js";
-import { replayPlanValidation } from "./runner.js";
+import { quotePickCorrection, replayPlanValidation, replayPlannerRefusals } from "./runner.js";
 import { PlanSchema, plannerPlanSchema, type Plan } from "./schema.js";
 
 const fileSchema = z.object({
@@ -109,7 +109,7 @@ export async function runReplay(
       plannerPlanSchema(sourceLineMaterial(context)),
       config.QA_PLAN_MAX_TOKENS,
       (candidate) => {
-        const result = replayPlanValidation({
+        const refusals = replayPlannerRefusals({
           catalog,
           config: replayConfig,
           context,
@@ -117,9 +117,21 @@ export async function runReplay(
           plan: candidate,
           policy,
         });
-        return result.refusals.length === 0
-          ? undefined
-          : `Plan rejected: ${result.refusals.join(" ")} Return the complete corrected plan.`;
+        if (refusals.length === 0) {
+          return undefined;
+        }
+        return (
+          quotePickCorrection(
+            candidate,
+            policy,
+            context,
+            replayConfig,
+            undefined,
+            undefined,
+            catalog
+          ) ??
+          `Plan rejected: ${refusals.join(" ")} Return the complete corrected plan.`
+        );
       },
     );
   }
