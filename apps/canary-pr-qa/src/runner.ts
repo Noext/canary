@@ -1458,7 +1458,15 @@ export function replayPlanValidation(input: {
   const { catalog, config, context, evidence, plan, policy } = input;
   const sourceRefusal = requirementSourceRefusal(plan, context);
   const refusals = [
-    ...planRefusals(plan, policy, context, config, catalog, amputationScans(), evidence),
+    ...planRefusals(
+      plan,
+      policy,
+      context,
+      config,
+      catalog,
+      amputationScans(),
+      evidence
+    ),
     ...(sourceRefusal ? [`${sourceRefusal.message}. ${sourceRefusal.hint}`] : []),
     ...preExecutionFindings(plan, context, policy, config).map(
       (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
@@ -1469,10 +1477,12 @@ export function replayPlanValidation(input: {
   ];
   const pageEvidence = validatePlanEvidence(plan, evidence);
   return {
-    refusals: [...new Set([
-      ...refusals,
-      ...pageEvidence.refusals.map((item) => JSON.stringify(item)),
-    ])],
+    refusals: [
+      ...new Set([
+        ...refusals,
+        ...pageEvidence.refusals.map((item) => JSON.stringify(item)),
+      ]),
+    ],
     inconclusive: pageEvidence.inconclusive.map(
       (item) => `${item.scenarioId}: ${item.reason}`
     ),
