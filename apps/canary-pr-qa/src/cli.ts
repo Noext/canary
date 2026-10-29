@@ -1,16 +1,33 @@
 import { parseArgs } from "node:util";
 import { startBrowserService } from "./browser-service.js";
 import { type Config, loadConfig } from "./config.js";
-import { diagnose } from "./diagnostics.js";
+import { type Diagnostic, diagnose } from "./diagnostics.js";
 import { doctor, supportSummary } from "./doctor.js";
 import { startEgressProxy } from "./egress-proxy.js";
 import { LocalAuth } from "./local-auth.js";
 import { startProductionServer } from "./production-server.js";
 import { Queue } from "./queue.js";
+import { runReplay } from "./replay.js";
 import { runQa } from "./runner.js";
 import { startServer } from "./server.js";
 import { initializeTracing } from "./telemetry.js";
 import { startWorker } from "./worker.js";
+
+interface CliValues {
+  help?: boolean;
+  json?: boolean;
+  mode?: string;
+  model?: string;
+  "no-publish"?: boolean;
+  offline?: boolean;
+  origin?: string;
+  pr?: string;
+  preview?: string;
+  "skip-browser"?: boolean;
+}
+
+const USAGE =
+  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -24,71 +41,28 @@ async function main() {
       json: { type: "boolean" },
       offline: { type: "boolean" },
       "skip-browser": { type: "boolean" },
+      mode: { type: "string" },
       pr: { type: "string" },
     },
   });
   const command = positionals[0];
   if (values.help || !command) {
-    process.stdout.write(
-      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
-    );
+    process.stdout.write(USAGE);
     return;
   }
   const config = loadConfig();
+  if (await replayCommand(command, positionals, values.mode, config)) {
+    return;
+  }
   const stopTracing = initializeTracing();
   process.once("beforeExit", () => void stopTracing?.());
   if (
     (await accountCommand(command, positionals, values.origin, config)) ||
-    (await serviceCommand(command, config))
+    (await serviceCommand(command, config)) ||
+    (await doctorCommand(command, positionals, values, config)) ||
+    (await diagnoseCommand(command, positionals, config)) ||
+    (await serveCommand(command, positionals, config))
   ) {
-    return;
-  }
-  if (command === "doctor" && positionals.length === 1) {
-    const result = await doctor(config, {
-      offline: values.offline,
-      skipBrowser: values["skip-browser"],
-      prUrl: values.pr,
-      previewUrl: values.preview,
-    });
-    process.stdout.write(
-      values.json
-        ? `${JSON.stringify(result, null, 2)}\n`
-        : `${result.checks
-            .map(
-              (c) =>
-                `${c.status.toUpperCase()} ${c.name} (${c.durationMs}ms): ${c.message}${c.diagnostic ? `\n  ${c.diagnostic.code}: ${c.diagnostic.hint}` : ""}`
-            )
-            .join("\n")}\n`
-    );
-    process.exitCode = result.healthy ? 0 : 2;
-    return;
-  }
-  if (command === "diagnose" && positionals.length === 2 && positionals[1]) {
-    process.stdout.write(
-      `${JSON.stringify(await supportSummary(positionals[1], config), null, 2)}\n`
-    );
-    return;
-  }
-  if (command === "serve" && positionals.length === 1) {
-    const server = config.DATABASE_URL
-      ? await startProductionServer(config)
-      : await startServer(config);
-    let stopping = false;
-    const shutdown = () => {
-      if (stopping) {
-        return;
-      }
-      stopping = true;
-      void server
-        .shutdown()
-        .then(() => process.exit(0))
-        .catch((error) => {
-          process.stderr.write(`${diagnose(error, config).message}\n`);
-          process.exit(2);
-        });
-    };
-    process.once("SIGTERM", shutdown);
-    process.once("SIGINT", shutdown);
     return;
   }
   if (command !== "run" || positionals.length !== 2 || !positionals[1]) {
@@ -113,6 +87,110 @@ main().catch((error) => {
   );
   process.exitCode = 2;
 });
+
+async function replayCommand(
+  command: string | undefined,
+  args: string[],
+  requestedMode: string | undefined,
+  config: Config
+) {
+  if (command !== "replay" || args.length !== 2 || !args[1]) {
+    return false;
+  }
+  const mode = requestedMode ?? "gate";
+  if (mode !== "gate" && mode !== "plan") {
+    throw new Error("Replay mode must be gate or plan");
+  }
+  const result = await runReplay(args[1], mode, config);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exitCode = result.refusals.length === 0 ? 0 : 1;
+  return true;
+}
+
+function checkLines(
+  checks: readonly {
+    diagnostic?: Diagnostic;
+    durationMs: number;
+    message: string;
+    name: string;
+    status: string;
+  }[]
+) {
+  return checks
+    .map(
+      (check) =>
+        `${check.status.toUpperCase()} ${check.name} (${check.durationMs}ms): ${check.message}${check.diagnostic ? `\n  ${check.diagnostic.code}: ${check.diagnostic.hint}` : ""}`
+    )
+    .join("\n");
+}
+
+async function doctorCommand(
+  command: string | undefined,
+  args: string[],
+  values: CliValues,
+  config: Config
+) {
+  if (command !== "doctor" || args.length !== 1) {
+    return false;
+  }
+  const result = await doctor(config, {
+    offline: values.offline,
+    skipBrowser: values["skip-browser"],
+    prUrl: values.pr,
+    previewUrl: values.preview,
+  });
+  process.stdout.write(
+    values.json
+      ? `${JSON.stringify(result, null, 2)}\n`
+      : `${checkLines(result.checks)}\n`
+  );
+  process.exitCode = result.healthy ? 0 : 2;
+  return true;
+}
+
+async function diagnoseCommand(
+  command: string | undefined,
+  args: string[],
+  config: Config
+) {
+  if (command !== "diagnose" || args.length !== 2 || !args[1]) {
+    return false;
+  }
+  process.stdout.write(
+    `${JSON.stringify(await supportSummary(args[1], config), null, 2)}\n`
+  );
+  return true;
+}
+
+async function serveCommand(
+  command: string | undefined,
+  args: string[],
+  config: Config
+) {
+  if (command !== "serve" || args.length !== 1) {
+    return false;
+  }
+  const server = config.DATABASE_URL
+    ? await startProductionServer(config)
+    : await startServer(config);
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    void server
+      .shutdown()
+      .then(() => process.exit(0))
+      .catch((error) => {
+        process.stderr.write(`${diagnose(error, config).message}\n`);
+        process.exit(2);
+      });
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+  return true;
+}
 
 async function serviceCommand(command: string | undefined, config: Config) {
   if (command === "egress-proxy") {
