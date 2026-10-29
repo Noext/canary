@@ -44,7 +44,7 @@ const contextSchema = z.object({
   title: z.string(),
 });
 
-export const ReplayBundleSchema = z
+const ReplayBundleSchema = z
   .object({
     version: z.literal(1),
     createdAt: z.string().datetime(),
@@ -102,9 +102,9 @@ export const ReplayBundleSchema = z
     }
   });
 
-export type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
+type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
 
-export function parseReplayBundle(raw: string): ReplayBundle {
+function parseReplayBundle(raw: string): ReplayBundle {
   return ReplayBundleSchema.parse(JSON.parse(raw));
 }
 
