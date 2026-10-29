@@ -168,6 +168,9 @@ describe("les bornes du payload", () => {
     // Le refus dit quoi desserrer, et rien n'est présenté comme analysé.
     expect(thrown?.message).toMatch(/QA_MODEL_CONTEXT_TOKENS/);
     expect(thrown?.message).toMatch(/Nothing was truncated/);
+    // Le message nomme TOUS les leviers, allowance de fichiers comprise.
+    expect(thrown?.message).toMatch(/QA_PLAN_FILE_CHARS=\d+/);
+    expect(thrown?.message).toMatch(/lower QA_PLAN_FILE_CHARS/);
   });
 
   it("compte un gros instantané de découverte", () => {
