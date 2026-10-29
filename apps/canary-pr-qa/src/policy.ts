@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
-
 import type { GitHub, PrContext } from "./github.js";
+import { persistenceIntentRefusals } from "./persistence-intent.js";
 import {
   normalizeQuoteText,
   type Plan,
@@ -3724,7 +3724,10 @@ export function planFindings(
             coverage.policy,
             coverage.config
           ),
-    refusals: markerOrderScenarioRefusals(plan, material),
+    refusals: [
+      ...markerOrderScenarioRefusals(plan, material),
+      ...persistenceIntentRefusals(plan),
+    ],
     unverified: unverifiedPreconditions(plan, material),
   };
 }
