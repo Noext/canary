@@ -423,9 +423,15 @@ it("states the three verification semantics to the planner", () => {
   expect(prompt).toMatch(
     /persisted means the value must survive the reload and differ from the baseline/i
   );
-  expect(prompt).toMatch(
+  // Cette ligne figeait la consigne contradictoire : le prompt recommandait
+  // `state` + `afterStep` pour un invariant après interaction, que l'exécuteur
+  // refuse (STATE_ALREADY_SATISFIED) sauf si l'étape `ifPresent` a été sautée.
+  // Le contrat est maintenant celui des motifs réellement supportés.
+  expect(prompt).not.toMatch(
     /use state with afterStep set to the interaction step/i
   );
+  expect(prompt).toMatch(/afterStep only anchors WHERE an assertion is read/i);
+  expect(prompt).toMatch(/STATE_ALREADY_SATISFIED/);
 });
 
 it("teaches that a text assertion never reads an attribute value", () => {

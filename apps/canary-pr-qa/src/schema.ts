@@ -217,6 +217,23 @@ const assertionBase = {
   description: text,
   target: locator.optional(),
   afterStep: text.optional(),
+  /**
+   * Comment l'assertion est LUE — jamais ce qu'elle cherche à prouver, qui est
+   * `assertionIntent` :
+   *
+   * - `state` : la valeur lue à l'étape correspond à l'attendu. Ne dit RIEN de
+   *   ce qui l'a produite : une valeur déjà satisfaite avant l'étape d'ancrage
+   *   et laissée identique est refusée à l'exécution (STATE_ALREADY_SATISFIED),
+   *   sauf si cette étape est un `ifPresent` effectivement sauté.
+   * - `transition` : la valeur doit différer de celle sondée avant l'étape, et
+   *   une valeur inchangée qui satisfait déjà l'attendu est reclassée
+   *   (TRANSITION_ON_INVARIANT).
+   * - `persisted` : la valeur doit survivre au rechargement et différer de la
+   *   référence — la seule lecture qui démontre une persistance.
+   *
+   * `afterStep` n'ancre que la LECTURE : la valeur est sondée avant l'étape et
+   * relue après, ce qui n'établit aucune causalité.
+   */
   verification: z.enum(["state", "transition", "persisted"]).default("state"),
   /**
    * Ce que l'assertion cherche à PROUVER, distinct de la façon de le lire :
