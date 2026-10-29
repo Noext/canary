@@ -77,7 +77,30 @@ export const ReplayBundleSchema = z
     }),
     runtime: z.unknown().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((bundle, ctx) => {
+    if (bundle.source.headSha !== bundle.context.sha) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["source", "headSha"],
+        message: "Bundle source head SHA must match the captured PR context.",
+      });
+    }
+    if (bundle.source.baseSha !== bundle.context.baseSha) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["source", "baseSha"],
+        message: "Bundle source base SHA must match the captured PR context.",
+      });
+    }
+    if (bundle.source.prUrl !== bundle.context.ref.url) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["source", "prUrl"],
+        message: "Bundle PR URL must match the captured PR context.",
+      });
+    }
+  });
 
 export type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
 
@@ -97,6 +120,7 @@ export async function runReplay(
 ) {
   const bundle = parseReplayBundle(await readFile(resolve(filePath), "utf8"));
   const context = bundle.context as PrContext;
+  const generatedPlan = PlanSchema.parse(bundle.generatedPlan);
   const policy: Policy = PolicySchema.parse(bundle.policy);
   const catalog = bundle.catalog as TrustedCatalog;
   const replayConfig: Config = {
@@ -143,6 +167,6 @@ export async function runReplay(
     refusals: validation.refusals,
     inconclusive: validation.inconclusive,
     plan,
-    generatedPlan: PlanSchema.parse(bundle.generatedPlan),
+    generatedPlan,
   };
 }
