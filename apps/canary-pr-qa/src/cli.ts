@@ -8,6 +8,7 @@ import { LocalAuth } from "./local-auth.js";
 import { startProductionServer } from "./production-server.js";
 import { Queue } from "./queue.js";
 import { runQa } from "./runner.js";
+import { runReplay } from "./replay.js";
 import { startServer } from "./server.js";
 import { initializeTracing } from "./telemetry.js";
 import { startWorker } from "./worker.js";
@@ -24,19 +25,30 @@ async function main() {
       json: { type: "boolean" },
       offline: { type: "boolean" },
       "skip-browser": { type: "boolean" },
+      mode: { type: "string" },
       pr: { type: "string" },
     },
   });
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write(
-      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
+      "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n"
     );
     return;
   }
   const config = loadConfig();
   const stopTracing = initializeTracing();
   process.once("beforeExit", () => void stopTracing?.());
+  if (command === "replay" && positionals.length === 2 && positionals[1]) {
+    const mode = values.mode ?? "gate";
+    if (mode !== "gate" && mode !== "plan") {
+      throw new Error("Replay mode must be gate or plan");
+    }
+    const result = await runReplay(positionals[1], mode, config);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.refusals.length === 0 ? 0 : 1;
+    return;
+  }
   if (
     (await accountCommand(command, positionals, values.origin, config)) ||
     (await serviceCommand(command, config))
