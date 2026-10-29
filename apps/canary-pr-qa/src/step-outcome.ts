@@ -244,6 +244,13 @@ function interactionStep(
  */
 export function stateAlreadySatisfied(input: {
   afterStep?: string;
+  /**
+   * L'intention DÉCLARÉE par le plan. Une invariance déclarée est une preuve
+   * recevable : l'étape a réellement été jouée, et la valeur qui n'a pas bougé
+   * est exactement ce que l'invariant affirme. Sans déclaration, l'intention
+   * reste inconnue et la règle s'applique — aucun plan ancien n'est converti.
+   */
+  assertionIntent?: "invariant" | "persistence";
   /** La valeur d'avant a été mesurée (une sonde en échec laisse ceci faux). */
   baselineMeasured: boolean;
   /** La valeur d'avant satisfaisait déjà l'attendu de l'assertion. */
@@ -258,6 +265,11 @@ export function stateAlreadySatisfied(input: {
     input.verification !== "state" ||
     !(input.baselineMeasured && input.unchanged && input.baselineMatches)
   ) {
+    return false;
+  }
+  // Une invariance déclarée n'est pas un faux vert : le plan a dit ce qu'il
+  // prouve, et l'étape d'ancrage a bien été jouée.
+  if (input.assertionIntent === "invariant") {
     return false;
   }
   // Une étape `ifPresent` sautée a déclaré son no-op : l'assertion d'état qui la
@@ -290,7 +302,7 @@ export function recordUnprovenAssertion(
       new QaError(
         "STATE_ALREADY_SATISFIED",
         `Assertion ${assertion.id}: the value after step ${step} is identical to the baseline probed before it, and that baseline already satisfied the expected one, so the step produced nothing this assertion can be credited with — the state is proven, the interaction is not`,
-        "Attach the assertion to the step that produces the value it checks, or verify a value the step really moves. To assert an invariance, or to establish a state the page may already hold, declare the step ifPresent: the plan then says the step may be a no-op, and the state assertion stays legitimate. An unchanged value cannot demonstrate a step that claims to have acted on its own."
+        'Attach the assertion to the step that produces the value it checks, or verify a value the step really moves. To assert that a value STAYS unchanged after an interaction, declare assertionIntent: "invariant" on the state assertion: the plan then states what it proves, and the unchanged value is its proof. To establish a state the page may already hold, declare the step ifPresent: the plan then says the step may be a no-op. An unchanged value cannot demonstrate a step that claims to have acted on its own, and an undeclared intent is never guessed.'
       ),
       config
     );
@@ -303,7 +315,7 @@ export function recordUnprovenAssertion(
       new QaError(
         "TRANSITION_ON_INVARIANT",
         `Assertion ${assertion.id}: the plan requires a change on a value that does not change — the value after step ${step} is identical to the baseline probed before it, and that unchanged value already satisfies the expected one, so the application shows what the assertion asks for and the verification is what is wrong`,
-        `Verify this value with "state" and afterStep set to the interaction: an invariant cannot demonstrate a transition. Move the "transition" to the output the step really moves, or drop the interaction if nothing is meant to change.`
+        `To verify that a value stays unchanged after an interaction, keep verification "state" with afterStep on that step AND declare assertionIntent: "invariant" — an invariant cannot demonstrate a transition, and an undeclared state assertion on an already-satisfied value is refused as a false green. Note that "persisted" does NOT fit here: it requires the value to differ from the baseline after the reload, so it cannot express a value that survived unchanged.`
       ),
       config
     );
@@ -319,7 +331,7 @@ export function recordUnprovenAssertion(
       new QaError(
         "TRANSITION_NOT_OBSERVED",
         `Assertion ${assertion.id}: no change observed — the value after step ${step} is identical to the baseline probed before it, so the required ${verification} is not demonstrated`,
-        `Require a change only from a value that must change. For an invariance after an interaction, use verification "state" with afterStep set to the interaction step (the element is still there after clicking X).`
+        `Require a change only from a value that must change. For a value that must CHANGE and then survive a reload, use verification "persisted" with assertionIntent: "persistence": it reads the value again after a reload and requires it to differ from the baseline. For a value that must stay unchanged after an interaction, use verification "state" with afterStep on that step and declare assertionIntent: "invariant": the value that did not move is then the proof, and nothing is converted in silence.`
       ),
       config
     );

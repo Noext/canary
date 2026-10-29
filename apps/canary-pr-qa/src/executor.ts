@@ -173,6 +173,7 @@ async function evaluateAssertion(
     measured && isDeepStrictEqual(baseline, observation.actual);
   const alreadySatisfied = stateAlreadySatisfied({
     afterStep: assertion.afterStep,
+    assertionIntent: assertion.assertionIntent,
     baselineMatches: preMatched,
     baselineMeasured: measured,
     steps: result.steps,
