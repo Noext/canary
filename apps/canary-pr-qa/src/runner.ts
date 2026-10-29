@@ -1446,6 +1446,26 @@ function preExecutionFindings(
   ];
 }
 
+/** Same repair-time gate used by the production planner callback. */
+export function replayPlannerRefusals(input: {
+  catalog: TrustedCatalog;
+  config: Config;
+  context: PrContext;
+  evidence: { aria: string; url: string };
+  plan: Plan;
+  policy: Policy;
+}): string[] {
+  return planRefusals(
+    input.plan,
+    input.policy,
+    input.context,
+    input.config,
+    input.catalog,
+    amputationScans(),
+    input.evidence
+  );
+}
+
 /** Offline replay through the same deterministic gates used by production. */
 export function replayPlanValidation(input: {
   catalog: TrustedCatalog;
@@ -1458,15 +1478,7 @@ export function replayPlanValidation(input: {
   const { catalog, config, context, evidence, plan, policy } = input;
   const sourceRefusal = requirementSourceRefusal(plan, context);
   const refusals = [
-    ...planRefusals(
-      plan,
-      policy,
-      context,
-      config,
-      catalog,
-      amputationScans(),
-      evidence
-    ),
+    ...replayPlannerRefusals(input),
     ...(sourceRefusal ? [`${sourceRefusal.message}. ${sourceRefusal.hint}`] : []),
     ...preExecutionFindings(plan, context, policy, config).map(
       (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
