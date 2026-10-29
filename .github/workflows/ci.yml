@@ -56,6 +56,13 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 9.15.0
+          # Every instance on the runner executes as the same `gh-runner` user,
+          # so the action's default `~/setup-pnpm` is one directory shared by
+          # three concurrent jobs: it rmdir's it before installing and loses the
+          # race (`ENOTEMPTY: directory not empty, rmdir
+          # '/home/gh-runner/setup-pnpm'`, observed on 40919147205). One
+          # directory per instance removes the shared state entirely.
+          dest: ~/setup-pnpm-${{ runner.name }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -173,6 +180,13 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 9.15.0
+          # Every instance on the runner executes as the same `gh-runner` user,
+          # so the action's default `~/setup-pnpm` is one directory shared by
+          # three concurrent jobs: it rmdir's it before installing and loses the
+          # race (`ENOTEMPTY: directory not empty, rmdir
+          # '/home/gh-runner/setup-pnpm'`, observed on 40919147205). One
+          # directory per instance removes the shared state entirely.
+          dest: ~/setup-pnpm-${{ runner.name }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -218,6 +232,13 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 9.15.0
+          # Every instance on the runner executes as the same `gh-runner` user,
+          # so the action's default `~/setup-pnpm` is one directory shared by
+          # three concurrent jobs: it rmdir's it before installing and loses the
+          # race (`ENOTEMPTY: directory not empty, rmdir
+          # '/home/gh-runner/setup-pnpm'`, observed on 40919147205). One
+          # directory per instance removes the shared state entirely.
+          dest: ~/setup-pnpm-${{ runner.name }}
 
       # Node is not needed to build the image, but `test:container` below runs
       # vitest from this workspace.
