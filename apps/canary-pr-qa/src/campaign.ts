@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
+import { statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   armMetrics,
@@ -320,20 +321,69 @@ export async function campaignPreflight(
   for (const arm of plan.arms) {
     blockers.push(...(await armBlockers(arm)));
   }
-  const inside = relative(process.cwd(), resolve(plan.dataDir));
-  if (!(inside.startsWith("..") || isAbsolute(inside))) {
-    blockers.push({
-      code: "DATA_DIR_INSIDE_REPO",
-      detail: `${plan.dataDir} est dans le dépôt : les runs seraient versionnables.`,
-      fix: "Donner un dossier hors du dépôt (ou ajouté au .gitignore) pour --data.",
-    });
-  }
+  blockers.push(...(await dataDirBlockers(plan.dataDir)));
   return {
     blockers,
     ...(preview.previewSha === undefined
       ? {}
       : { previewSha: preview.previewSha }),
   };
+}
+
+/**
+ * Les runs ne doivent jamais être versionnables. Le test porte sur le dépôt qui
+ * CONTIENT le dossier, jamais sur le répertoire courant : un dossier sous
+ * `/tmp` lancé depuis `/tmp` était signalé « dans le dépôt » alors qu'il n'y en
+ * a aucun — mesuré en lançant le préflight. Hors de tout dépôt, ou ignoré par
+ * git, le dossier convient.
+ */
+async function dataDirBlockers(dataDir: string): Promise<Blocker[]> {
+  const resolved = resolve(dataDir);
+  let toplevel: string;
+  try {
+    const { stdout } = await run("git", [
+      "-C",
+      nearestExisting(resolved),
+      "rev-parse",
+      "--show-toplevel",
+    ]);
+    toplevel = stdout.trim();
+  } catch {
+    return [];
+  }
+  const inside = relative(toplevel, resolved);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
+    return [];
+  }
+  try {
+    await run("git", ["-C", toplevel, "check-ignore", "-q", resolved]);
+    return [];
+  } catch {
+    return [
+      {
+        code: "DATA_DIR_INSIDE_REPO",
+        detail: `${resolved} est suivi par git : les runs seraient versionnables.`,
+        fix: "Donner un dossier hors du dépôt (ou ajouté au .gitignore) pour --data.",
+      },
+    ];
+  }
+}
+
+/** Le plus proche ancêtre qui existe, pour interroger git sur un dossier à créer. */
+function nearestExisting(path: string): string {
+  let current = path;
+  for (;;) {
+    try {
+      statSync(current);
+      return current;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        return current;
+      }
+      current = parent;
+    }
+  }
 }
 
 /** La preview doit prouver le SHA complet du head, ou le préflight le dit. */
