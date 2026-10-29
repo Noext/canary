@@ -64,6 +64,7 @@ export const ReplayBundleSchema = z.object({
     visuals: z.array(z.string()),
   }),
   payload: z.unknown(),
+  generatedPlan: z.unknown(),
   plan: z.unknown(),
   evidence: z.object({
     url: z.string().url(),
@@ -138,5 +139,6 @@ export async function runReplay(
     refusals: validation.refusals,
     inconclusive: validation.inconclusive,
     plan,
+    generatedPlan: PlanSchema.parse(bundle.generatedPlan),
   };
 }
