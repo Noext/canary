@@ -104,6 +104,49 @@ const ReplayBundleSchema = z
 
 type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
 
+/**
+ * Ce que le rejeu a réellement prouvé, et non « aucun refus ». Une porte qui n'a
+ * pas pu juger ne refuse rien : rendre ce cas `accepted` ferait passer « rien de
+ * prouvé » pour « tout est prouvé », exactement ce que le contrat du rejeu
+ * interdit. Les trois états sont donc explicites.
+ */
+export type ReplayVerdict = "accepted" | "refused" | "unproven";
+
+/** Seul `accepted` vaut un succès pour un appelant qui ne lit que le code de sortie. */
+export function replayExitCode(verdict: ReplayVerdict): number {
+  return verdict === "accepted" ? 0 : 1;
+}
+
+/**
+ * Le verdict est calculé, jamais déduit de l'absence de refus : un instantané de
+ * découverte absent ou coupé au plafond rend la porte muette, et `unproven` est
+ * la seule réponse honnête. `refused` reste prioritaire — un refus est une
+ * conclusion, même si la preuve de page manquait par ailleurs.
+ */
+export function replayVerdict(input: {
+  evidenceComplete: boolean;
+  refusals: readonly string[];
+}): ReplayVerdict {
+  if (input.refusals.length > 0) {
+    return "refused";
+  }
+  return input.evidenceComplete ? "accepted" : "unproven";
+}
+
+/**
+ * Issue d'exécution enregistrée dans le bundle, quand il en porte une. Elle est
+ * rendue à côté du verdict pour qu'un rapport lu par une machine ne confonde pas
+ * « la porte n'a rien refusé » avec « le run était vert » : le rejeu ne rejoue
+ * aucune exécution, il ne peut donc pas la prononcer.
+ */
+function recordedOutcome(runtime: unknown): string | undefined {
+  if (typeof runtime !== "object" || runtime === null) {
+    return;
+  }
+  const outcome = (runtime as { outcome?: unknown }).outcome;
+  return typeof outcome === "string" ? outcome : undefined;
+}
+
 function parseReplayBundle(raw: string): ReplayBundle {
   return ReplayBundleSchema.parse(JSON.parse(raw));
 }
@@ -163,6 +206,11 @@ export async function runReplay(
   return {
     mode,
     source: bundle.source,
+    verdict: replayVerdict({
+      evidenceComplete: validation.evidenceComplete,
+      refusals: validation.refusals,
+    }),
+    recordedOutcome: recordedOutcome(bundle.runtime),
     refusals: validation.refusals,
     inconclusive: validation.inconclusive,
     plan,

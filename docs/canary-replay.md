@@ -32,10 +32,22 @@ pnpm --filter @usecanary/pr-qa dev -- replay ./qa-data/<run-id>/replay-bundle.js
   production correction path. It calls the model endpoint only; it does not
   rediscover the page or execute scenarios.
 
-A non-zero exit code means the resulting plan has one or more refusals.
-Inconclusive evidence is reported separately and is not silently treated as proof.
-The stored runtime outcomes make it possible to compare a regenerated plan with
-the scenario failures from the original run without rerunning Chromium.
+The result carries a `verdict`, and the exit code follows it:
+
+| `verdict` | Meaning | Exit |
+| --- | --- | --- |
+| `refused` | The plan has one or more refusals. | 1 |
+| `accepted` | No refusal, and the page evidence was usable. | 0 |
+| `unproven` | No refusal, but the page evidence could not judge the plan (no discovery snapshot, or a snapshot cut at its ceiling). | 1 |
+
+`unproven` is not an error and not a refusal: it says the replay proved nothing, so it
+must not be reported as a success. A replay of that kind proves only that the checks it
+could run found nothing to object to.
+
+Exit 0 therefore means *this plan is not refused*, never *the original run passed*.
+`recordedOutcome` echoes the outcome stored in the bundle (when the run had finished), so a
+reader never confuses the two: offline replay re-executes no scenario and cannot pronounce an
+execution verdict.
 
 ## Regression workflow
 

@@ -7,7 +7,7 @@ import { startEgressProxy } from "./egress-proxy.js";
 import { LocalAuth } from "./local-auth.js";
 import { startProductionServer } from "./production-server.js";
 import { Queue } from "./queue.js";
-import { runReplay } from "./replay.js";
+import { replayExitCode, runReplay } from "./replay.js";
 import { runQa } from "./runner.js";
 import { startServer } from "./server.js";
 import { initializeTracing } from "./telemetry.js";
@@ -103,7 +103,10 @@ async function replayCommand(
   }
   const result = await runReplay(args[1], mode, config);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  process.exitCode = result.refusals.length === 0 ? 0 : 1;
+  // Le code de sortie suit le verdict, pas la liste des refus : `unproven`
+  // (preuve de page absente ou coupée) n'a rien refusé et n'a pourtant rien
+  // prouvé, donc il ne peut pas sortir en succès.
+  process.exitCode = replayExitCode(result.verdict);
   return true;
 }
 
