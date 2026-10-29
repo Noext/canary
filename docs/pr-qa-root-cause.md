@@ -15,15 +15,15 @@ Le planificateur reçoit **une fois** la découverte de la page et le diff, puis
 joue ce script dans l'ordre **sans consulter le modèle** et sans choisir la suite à partir de ce
 qu'il observe.
 
-- `src/runner.ts:1461` — un appel `model.json(PLANNER_PROMPT, payload, …)` produit le plan entier ;
+- `src/runner.ts:1467` — un appel `model.json(PLANNER_PROMPT, payload, …)` produit le plan entier ;
   le seul retour du modèle après cela est une **correction de validation**, avant exécution.
 - `src/canary.ts:776` — `discoverPreview` collecte l'instantané **une fois**, à l'ouverture de la
   preview ; rien ne le rafraîchit ensuite (`PLAN_EVIDENCE_SNAPSHOT_CHARS`, `src/canary.ts:26`).
-- `src/executor.ts:387-390` — le commentaire du code dit la décision architecturale :
+- `src/executor.ts:324-326` — le commentaire du code dit la décision architecturale :
   « Le plan est un contrat figé : l'hôte joue chaque étape dans l'ordre, sans consulter le
-  modèle. » Chaque scénario ouvre bien sa propre session (`src/executor.ts:469`), donc
+  modèle. » Chaque scénario ouvre bien sa propre session (`src/executor.ts:437`), donc
   l'isolation **navigateur** existe ; c'est l'isolation **logique** des hypothèses qui manque.
-- `src/runner.ts:1307` et `:1635` — `replanObservedInvariants` n'intervient qu'**après** qu'une
+- `src/runner.ts:1309` et `src/runner.ts:1644` — `replanObservedInvariants` n'intervient qu'**après** qu'une
   exécution a contredit le plan : la boucle d'observation existe, mais en réparation, pas en
   décision.
 
@@ -47,8 +47,8 @@ exécution (donc évitables au plan) et **51** portent un code d'hypothèse cont
 
 | Famille | Mécanisme unique | Preuve (code) | Preuve (artefact) |
 | --- | --- | --- | --- |
-| `TARGET_NOT_FOUND` (27 runs) | la cible du plan n'existe pas dans l'état observé au moment de l'étape | `src/executor.ts:390` (script figé) | `e90c9e75` : `getByLabel('Quantité · Pièce de 20 €', { exact: true })` |
-| `TRANSITION_NOT_OBSERVED` (9) | le plan affirme un changement que la page n'effectue pas dans cette séquence | `src/runner.ts:1307` (réparation après coup) | `32d79c30`, `f6a6a890` : `no change observed — the value after step … is identical to the baseline probed before it` |
+| `TARGET_NOT_FOUND` (27 runs) | la cible du plan n'existe pas dans l'état observé au moment de l'étape | `src/executor.ts:324` (contrat figé) | `e90c9e75` : `getByLabel('Quantité · Pièce de 20 €', { exact: true })` |
+| `TRANSITION_NOT_OBSERVED` (9) | le plan affirme un changement que la page n'effectue pas dans cette séquence | `src/runner.ts:1309` (réparation après coup) | `32d79c30`, `f6a6a890` : `no change observed — the value after step … is identical to the baseline probed before it` |
 | `MARKER_ORDER_UNREACHABLE` (23) | le plan écrit un marqueur dont l'état antérieur n'a pas été établi par une étape jouée avant | `src/policy.ts` (`unwitnessedPlanRefusals` → correction) | `277dee09`, `c98274a3` |
 | `TRANSITION_ON_INVARIANT` (5) | transition demandée sur une valeur invariante par construction | `src/policy.ts` (`transition` sur valeur statique) | `e90c9e75`, `24db19b8` |
 | `PLAN_*` / `COVERAGE_*` | cible, sélecteur, exigence ou couverture supposés au lieu d'être constatés | `src/plan-selector.ts`, `src/policy.ts` | `01dc01ab`, `b5711fb7` |
@@ -62,7 +62,7 @@ Le brief demande de distinguer six natures d'information. Voici ce que les artef
 
 **Information jamais collectée.** L'état de la page **après chaque étape** n'est jamais mis à la
 disposition du planificateur : il n'existe qu'au moment de l'exécution, et seulement en cas
-d'échec (sonde de valeur d'avant, `captureBaselines`, `src/executor.ts:393`). C'est la lacune
+d'échec (sonde de valeur d'avant, `captureBaselines`, `src/executor.ts:345`). C'est la lacune
 structurelle. Les **durées** ne sont collectées que pour une partie des runs (79 lots BA→II) —
 absence de collecte, écrite telle quelle.
 

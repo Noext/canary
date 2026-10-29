@@ -1423,7 +1423,7 @@ function preExecutionFindings(
   return [
     ...findings.refusals,
     ...findings.coverageRefusals,
-    ...provenanceRefusals(plan, config.QA_OBSERVE_ACT),
+    ...provenanceRefusals(plan),
   ];
 }
 

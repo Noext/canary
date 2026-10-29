@@ -8,7 +8,7 @@ import {
 import { runQa } from "../src/runner.js";
 import type { Plan, ScenarioResult } from "../src/schema.js";
 import { repairStepTarget } from "../src/target-repair.js";
-import { fixture, PR_URL } from "./fixture.js";
+import { fixture, plan as fixturePlan, PR_URL } from "./fixture.js";
 
 /**
  * Les quatre invariants que le moteur doit garantir, dans les deux directions :
@@ -37,7 +37,7 @@ const plan: Plan = {
       requirements: [
         {
           behavior: "the greeting is rendered",
-          line: 1,
+          quote: "show('Welcome '+name)",
           sourceFile: "src/form.ts",
         },
       ],
@@ -61,6 +61,15 @@ const plan: Plan = {
   summary: "one scenario",
 } as unknown as Plan;
 
+/** Le plan du fixture, complété pour satisfaire l'invariant de provenance. */
+const withProvenance = (base: Plan): Plan => {
+  const clone = structuredClone(base);
+  clone.scenarios[0]!.objective = "saved";
+  (clone.scenarios[0]!.assertions[0] as { requirement?: number }).requirement =
+    0;
+  return clone;
+};
+
 const scenarioResult = (overrides: Partial<ScenarioResult> = {}) =>
   ({
     artifacts: [],
@@ -75,7 +84,7 @@ describe("I1 — isolation : chaque scénario part d'une session neuve", () => {
   it("ouvre une session par scénario et navigue avant la première action", async () => {
     // Le plan du fixture passe la porte : ce test porte sur l'isolation des
     // sessions, pas sur la validité d'un plan écrit à la main.
-    const f = await fixture();
+    const f = await fixture({ plans: [withProvenance(fixturePlan)] });
     const starts: string[] = [];
     const acts: { label: string; session: string }[] = [];
     vi.spyOn(Canary.prototype, "start").mockImplementation(async (label) => {
@@ -118,35 +127,34 @@ describe("I1 — isolation : chaque scénario part d'une session neuve", () => {
 });
 
 describe("I2 — provenance : pas d'assertion sans exigence qui la justifie", () => {
-  it("refuse une assertion sans indice d'exigence quand le chemin l'exige", () => {
+  it("n'invente pas de refus quand rien n'est déclaré : l'absence est mesurée", () => {
     const withoutRequirement = structuredClone(plan);
     Reflect.deleteProperty(
       withoutRequirement.scenarios[0]!.assertions[0]!,
       "requirement"
     );
-    const refusals = provenanceRefusals(withoutRequirement, true);
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0]?.error.code).toBe("PLAN_SCHEMA_INVALID");
-    expect(refusals[0]?.error.message).toContain("cites no requirement");
-    expect(refusals[0]?.scenarioId).toBe("greeting");
+    expect(provenanceRefusals(withoutRequirement)).toEqual([]);
   });
 
   it("refuse un indice hors des exigences du scénario, en nommant la borne", () => {
     const outOfRange = JSON.parse(JSON.stringify(plan)) as Plan;
     outOfRange.scenarios[0]!.assertions[0]!.requirement = 4;
-    const refusals = provenanceRefusals(outOfRange, true);
+    const refusals = provenanceRefusals(outOfRange);
     expect(refusals[0]?.error.message).toContain("requirement 4");
     expect(refusals[0]?.error.hint).toContain("between 0 and 0");
   });
 
-  it("ne dit rien d'un plan complet, ni quand le chemin figé est actif", () => {
-    expect(provenanceRefusals(plan, true)).toEqual([]);
-    const withoutRequirement = structuredClone(plan);
-    Reflect.deleteProperty(
-      withoutRequirement.scenarios[0]!.assertions[0]!,
-      "requirement"
-    );
-    expect(provenanceRefusals(withoutRequirement, false)).toEqual([]);
+  it("accepte un plan dont chaque attendu est justifié par son exigence", () => {
+    expect(provenanceRefusals(plan)).toEqual([]);
+  });
+
+  it("refuse un attendu que l'exigence citée ne justifie pas", () => {
+    const invented = structuredClone(plan);
+    (invented.scenarios[0]!.assertions[0] as { expected: string }).expected =
+      "quarante-deux palettes";
+    const refusals = provenanceRefusals(invented);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.error.message).toContain("does not justify");
   });
 
   it("le prompt du planificateur demande les deux champs", () => {
@@ -186,14 +194,14 @@ describe("I3 — preuve d'objectif : pas de vert sans objectif démontré", () =
     expect(result.diagnostic?.message).toContain("never executed");
   });
 
-  it("ne touche pas au verdict quand le chemin figé est actif, mais publie la mesure", () => {
+  it("bloque l'objectif non prouvé même quand la porte d'observation est coupée", () => {
     const failed = scenarioResult({
       assertions: [{ id: "title", passed: false, actual: "Bye" }],
     });
     const result = enforceObjectiveProof(failed, {
       QA_OBSERVE_ACT: false,
     } as never);
-    expect(result.outcome).toBe("passed");
+    expect(result.outcome).toBe("blocked");
     expect(result.objectiveProven).toBe(false);
   });
 });

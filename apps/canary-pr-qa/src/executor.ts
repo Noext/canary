@@ -12,7 +12,10 @@ import { diagnose } from "./diagnostics.js";
 import { prepareScenario } from "./fixtures.js";
 import { explainMissingTarget } from "./missing-target.js";
 import type { Model } from "./model.js";
-import { classifyScenarioResult, gateUnobservedStep } from "./observe-act.js";
+import {
+  classifyScenarioResult,
+  resolveStepFromObservation,
+} from "./observe-act.js";
 import type { ProgressEvent } from "./progress.js";
 import type {
   Assertion,
@@ -323,18 +326,26 @@ async function driveScenario(
   // et aucun jeton d'exécution n'est dépensé pour recopier le plan.
   for (const [offset, step] of result.scenario.steps.entries()) {
     const index = offset + 1;
-    // Chemin observe→act : une cible absente de l'observation courante n'est pas
-    // jouée ; la porte consigne l'étape et classe le scénario `indeterminate`.
-    if (
-      gateUnobservedStep({ config, index, observation: current, result, step })
-    ) {
+    // Chemin observe→act : la cible est choisie dans l'observation courante,
+    // jamais dans le plan seul. Une cible absente qui ne peut pas être ré-ancrée
+    // sur un contrôle observé n'est jamais jouée : le pas est consigné et le
+    // scénario se classe `indeterminate`.
+    const resolution = resolveStepFromObservation({
+      config,
+      index,
+      observation: current,
+      result,
+      step,
+    });
+    if ("blocked" in resolution) {
       return;
     }
+    const effective = resolution.step;
     const started = Date.now();
     await captureBaselines(
       sessionId,
       result.scenario,
-      step.action.type === "observe" ? undefined : step.id,
+      effective.action.type === "observe" ? undefined : effective.id,
       baselines,
       preview,
       canary
@@ -343,7 +354,7 @@ async function driveScenario(
       phase: "execution",
       scenarioId: result.scenario.id,
       step: index,
-      action: step.action.type,
+      action: effective.action.type,
     });
     const played = await playStepWithRepair({
       baselines,
@@ -356,14 +367,28 @@ async function driveScenario(
       repo,
       result,
       sessionId,
-      step,
+      step: effective,
     });
     current = played.observation ?? current;
     const { failure, repairedTo } = played;
     if (failure === undefined) {
-      await recordStepPlayed(result, step, index, repairedTo, record, started);
+      await recordStepPlayed(
+        result,
+        effective,
+        index,
+        repairedTo ?? resolution.reanchoredTo,
+        record,
+        started
+      );
     } else {
-      await reportStepFailure(failure, step, index, result, baselines, record);
+      await reportStepFailure(
+        failure,
+        effective,
+        index,
+        result,
+        baselines,
+        record
+      );
     }
     // Un verdict déjà posé arrête le scénario : `finish()` exigerait toutes les
     // assertions vertes et remplacerait le diagnostic par son message. Le

@@ -43,6 +43,9 @@ describe("document de décision d'architecture", () => {
     expect(doc).toContain("0,23 σ");
     expect(doc).toContain("50 / 44");
     expect(doc).toContain("15");
+    expect(doc).toContain("319 / 343 (93,0 %)");
+    expect(doc).toContain("Faux refus");
+    expect(doc).toContain("5");
   });
 
   it("conclut sans ambiguïté, et refuse la bascule", () => {
@@ -55,6 +58,7 @@ describe("document de décision d'architecture", () => {
 
   it("dit ce qui reste à faire, sans le maquiller", () => {
     expect(doc).toContain("ne produit pas la provenance de façon fiable");
+    expect(doc).toContain("pas été mesurée séparément");
     expect(doc).toContain("HTTP_422");
     expect(doc).toContain("2 × 50 runs ne permet pas");
   });

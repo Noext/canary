@@ -88,7 +88,9 @@ tâche 7.
   attendue, ni l'orientation d'une assertion ; un refus reste un refus, un échec reste un échec.
 
 Ces quatre invariants sont implémentés dans la PR 1 (moteur), derrière aucune condition : ils
-valent pour les deux chemins.
+valent pour les deux chemins. Ils portent sur ce que le plan **déclare** : déclarer un objectif ou
+un indice d'exigence engage le contrôle ; ne rien déclarer n'est pas bloqué, c'est publié comme
+non prouvé — un plan qui n'affirme rien ne peut pas prétendre avoir démontré quelque chose.
 
 ## 4. Hypothèse réfutable et seuils, écrits avant la campagne
 

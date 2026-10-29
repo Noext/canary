@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
+import {
+  observedNames,
+  resolveObservedName,
+  resolveStepFromObservation,
+} from "../src/observe-act.js";
 import { runQa } from "../src/runner.js";
 import { fixture, plan as fixturePlan, PR_URL } from "./fixture.js";
 
@@ -88,4 +93,107 @@ describe("boucle observe→act, derrière le drapeau", () => {
     // n'existe que sur le nouveau chemin.
     expect(scenario.classification).not.toBe("indeterminate");
   }, 60_000);
+});
+
+describe("résolution de la cible dans l'observation", () => {
+  const observation = {
+    snapshot:
+      'textbox "Nom du client" [ref=e1]\nbutton "Enregistrer la fiche" [ref=e2]',
+    url: "http://fixture/",
+  } as never;
+
+  it("liste les noms accessibles réellement présents", () => {
+    expect(observedNames(observation)).toEqual([
+      "Nom du client",
+      "Enregistrer la fiche",
+    ]);
+  });
+
+  it("ré-ancre une intention proche sur le contrôle observé", () => {
+    const resolved = resolveObservedName(observation, {
+      id: "s",
+      description: "save",
+      action: {
+        type: "click",
+        locator: {
+          by: "role",
+          value: "button",
+          name: "Enregistrer la fiche client",
+        },
+      },
+    } as never);
+    expect(resolved).toBe("Enregistrer la fiche");
+  });
+
+  it("ne choisit rien quand deux contrôles se valent", () => {
+    const ambiguous = {
+      snapshot:
+        'button "Enregistrer la fiche"\nbutton "Enregistrer le dossier"',
+      url: "",
+    } as never;
+    expect(
+      resolveObservedName(ambiguous, {
+        id: "s",
+        description: "save",
+        action: {
+          type: "click",
+          locator: { by: "role", value: "button", name: "Enregistrer" },
+        },
+      } as never)
+    ).toBeUndefined();
+  });
+
+  it("rend le pas ré-ancré, et bloque quand rien ne correspond", () => {
+    const config = { QA_OBSERVE_ACT: true };
+    const result = {
+      classification: undefined,
+      diagnostic: undefined,
+      error: undefined,
+      outcome: "passed",
+      scenario: { id: "s" },
+      steps: [] as unknown[],
+    };
+    const reanchored = resolveStepFromObservation({
+      config,
+      index: 1,
+      observation,
+      result: result as never,
+      step: {
+        id: "s",
+        description: "save",
+        action: {
+          type: "click",
+          locator: {
+            by: "role",
+            value: "button",
+            name: "Enregistrer la fiche client",
+          },
+        },
+      } as never,
+    });
+    expect("blocked" in reanchored).toBe(false);
+    expect("blocked" in reanchored ? undefined : reanchored.reanchoredTo).toBe(
+      "Enregistrer la fiche"
+    );
+
+    const blocked = resolveStepFromObservation({
+      config,
+      index: 2,
+      observation,
+      result: result as never,
+      step: {
+        id: "s2",
+        description: "delete",
+        action: {
+          type: "click",
+          locator: {
+            by: "role",
+            value: "button",
+            name: "Supprimer le dossier",
+          },
+        },
+      } as never,
+    });
+    expect("blocked" in blocked).toBe(true);
+  });
 });
