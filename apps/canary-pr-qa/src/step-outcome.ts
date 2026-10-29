@@ -183,6 +183,18 @@ export async function captureBaselines(
         );
         baselines.set(assertion.id, observation.actual);
       } catch (error) {
+        /**
+         * Une cible ABSENTE avant l'étape n'est pas une preuve manquante :
+         * c'est l'état d'avant. Le noter (`null`) permet à une `transition`
+         * d'être satisfaite par l'APPARITION de la cible avec la valeur
+         * attendue — mesuré sur `afcc9846` : le texte attendu est observé après
+         * l'étape, l'élément n'existait pas avant, et le verdict était `failed`
+         * parce qu'aucune valeur d'avant n'avait pu être comparée. Toute autre
+         * panne de sonde reste une preuve inconnue : rien n'est enregistré.
+         */
+        if (diagnose(error).code === "TARGET_NOT_FOUND") {
+          baselines.set(assertion.id, null);
+        }
         logger.info(
           {
             assertion: assertion.id,

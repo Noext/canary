@@ -9,6 +9,7 @@ import { LocalAuth } from "./local-auth.js";
 import { startProductionServer } from "./production-server.js";
 import { Queue } from "./queue.js";
 import { replayExitCode, runReplay } from "./replay.js";
+import { replayScenario } from "./replay-scenario.js";
 import { runQa } from "./runner.js";
 import { startServer } from "./server.js";
 import { initializeTracing } from "./telemetry.js";
@@ -28,7 +29,7 @@ interface CliValues {
 }
 
 const USAGE =
-  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa campaign --pr URL --preview URL --head SHA --reference-sha SHA --reference-worktree PATH --candidate-sha SHA --candidate-worktree PATH --data DIR [--confirm-paid-runs]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
+  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa replay-scenario <bundle.json> --scenario ID\ncanary-pr-qa campaign --pr URL --preview URL --head SHA --reference-sha SHA --reference-worktree PATH --candidate-sha SHA --candidate-worktree PATH --data DIR [--confirm-paid-runs]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -51,6 +52,7 @@ async function main() {
       "candidate-sha": { type: "string" },
       "candidate-worktree": { type: "string" },
       "confirm-paid-runs": { type: "boolean" },
+      scenario: { type: "string" },
     },
   });
   const command = positionals[0];
@@ -63,6 +65,11 @@ async function main() {
     return;
   }
   if (await campaignCommand(command, values, config)) {
+    return;
+  }
+  if (
+    await replayScenarioCommand(command, positionals, values.scenario, config)
+  ) {
     return;
   }
   const stopTracing = initializeTracing();
@@ -118,6 +125,54 @@ async function replayCommand(
   // (preuve de page absente ou coupée) n'a rien refusé et n'a pourtant rien
   // prouvé, donc il ne peut pas sortir en succès.
   process.exitCode = replayExitCode(result.verdict);
+  return true;
+}
+
+/**
+ * Le rejeu navigateur ciblé, sur le même format de bundle que le rejeu offline.
+ * Il exige `--scenario` : sans identifiant, il n'y a pas de scénario à jouer, et
+ * jouer tout le plan serait un run complet déguisé.
+ */
+async function replayScenarioCommand(
+  command: string | undefined,
+  args: string[],
+  scenarioId: string | undefined,
+  config: Config
+) {
+  if (command !== "replay-scenario" || args.length !== 2 || !args[1]) {
+    return false;
+  }
+  if (!scenarioId) {
+    throw new Error("replay-scenario requires --scenario ID");
+  }
+  const outcome = await replayScenario({
+    bundlePath: args[1],
+    config,
+    scenarioId,
+  });
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        assertions: outcome.result.assertions,
+        diagnostic: outcome.result.diagnostic,
+        error: outcome.result.error,
+        outcome: outcome.result.outcome,
+        planScenarios: outcome.planScenarios,
+        preview: outcome.preview,
+        scenarioId: outcome.scenarioId,
+        sha: outcome.sha,
+        steps: outcome.result.steps.map((step) => ({
+          action: step.action.type,
+          ok: step.ok,
+          skipped: step.skipped === true,
+          stepId: step.stepId,
+        })),
+      },
+      null,
+      2
+    )}\n`
+  );
+  process.exitCode = outcome.result.outcome === "passed" ? 0 : 1;
   return true;
 }
 
