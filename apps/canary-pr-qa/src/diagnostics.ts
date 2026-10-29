@@ -178,7 +178,7 @@ const PLAN_CODES = new Set([
 ]);
 
 /** Les codes qui disent que le service n'a pas pu travailler. */
-const INFRASTRUCTURE_CODES = new Set([
+export const INFRASTRUCTURE_CODES = new Set([
   "MODEL_OUTPUT_INCOMPLETE",
   "MODEL_JSON_INVALID",
   "QA_ERROR",

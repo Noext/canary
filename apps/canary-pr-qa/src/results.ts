@@ -26,6 +26,19 @@ export interface ScenarioResult {
      */
     preMatched?: boolean;
     persisted?: unknown;
+    /**
+     * Le type de vérification de l'assertion, tel que le plan l'a demandé. Sans
+     * lui, un artefact ne permet pas de ventiler les assertions pré-satisfaites
+     * par `state` / `transition` / `persisted` : la campagne ne pouvait donc
+     * mesurer qu'un compteur global, jamais la règle qui produit le faux vert.
+     */
+    verification?: "state" | "transition" | "persisted";
+    /**
+     * La preuve produite PENDANT l'exécution : la valeur après l'étape diffère de
+     * celle mesurée avant. Absent quand aucune valeur d'avant n'a pu être mesurée
+     * (sonde en échec) — inconnu, jamais « rien n'a changé ».
+     */
+    changed?: boolean;
     /** L'indice de l'exigence qui justifie l'attendu : la preuve, dans le rapport. */
     requirement?: number;
   }[];

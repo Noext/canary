@@ -200,6 +200,8 @@ async function evaluateAssertion(
     baseline,
     persisted,
     ...(preMatched ? { preMatched } : {}),
+    verification: verification as "state" | "transition" | "persisted",
+    ...(measured ? { changed: !unchangedSinceBaseline } : {}),
     ...(assertion.requirement === undefined
       ? {}
       : { requirement: assertion.requirement }),

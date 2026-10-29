@@ -70,7 +70,16 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
     expect(result.sha).toBe(SHA);
     const scenario = result.scenarios[0]!;
     expect(scenario.assertions).toEqual([
-      { id: "saved", passed: true, actual: "Welcome Ada", baseline: "" },
+      {
+        id: "saved",
+        passed: true,
+        actual: "Welcome Ada",
+        baseline: "",
+        // Instrumentation de mesure : le type et la preuve d'exécution sont
+        // publiés dans l'artefact, pas seulement le résultat.
+        verification: "transition",
+        changed: true,
+      },
     ]);
     expect(scenario.steps.map((step) => step.action.type)).toEqual([
       "fill",
@@ -112,7 +121,14 @@ describe("real Canary Chromium with GitHub/AI REST fixtures", () => {
       "failed"
     );
     expect(result.scenarios[0]?.assertions).toEqual([
-      { id: "saved", passed: false, actual: "Wrong output", baseline: "" },
+      {
+        id: "saved",
+        passed: false,
+        actual: "Wrong output",
+        baseline: "",
+        verification: "transition",
+        changed: true,
+      },
     ]);
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
