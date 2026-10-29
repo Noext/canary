@@ -6,8 +6,11 @@ import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
 import { Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
-import { PolicySchema, sourceLineMaterial, type Policy } from "./policy.js";
-import { replayPlanValidation, replayPlannerCorrection } from "./replay-validation.js";
+import { PolicySchema, type Policy, sourceLineMaterial } from "./policy.js";
+import {
+  replayPlanValidation,
+  replayPlannerCorrection,
+} from "./replay-validation.js";
 import { PlanSchema, plannerPlanSchema, type Plan } from "./schema.js";
 
 const fileSchema = z.object({
@@ -22,11 +25,13 @@ const fileSchema = z.object({
 const contextSchema = z.object({
   baseSha: z.string().regex(/^[0-9a-f]{40}$/),
   body: z.string(),
-  context: z.array(z.object({
-    path: z.string(),
-    ref: z.string(),
-    content: z.string(),
-  })),
+  context: z.array(
+    z.object({
+      path: z.string(),
+      ref: z.string(),
+      content: z.string(),
+    })
+  ),
   contextWarnings: z.array(z.string()),
   files: z.array(fileSchema),
   headRepo: z.string(),
@@ -39,7 +44,8 @@ const contextSchema = z.object({
   title: z.string(),
 });
 
-export const ReplayBundleSchema = z.object({
+export const ReplayBundleSchema = z
+  .object({
   version: z.literal(1),
   createdAt: z.string().datetime(),
   source: z.object({
@@ -70,7 +76,8 @@ export const ReplayBundleSchema = z.object({
     aria: z.string(),
   }),
   runtime: z.unknown().optional(),
-}).strict();
+  })
+  .strict();
 
 export type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
 
@@ -118,7 +125,7 @@ export async function runReplay(
           plan: candidate,
           policy,
         });
-      },
+      }
     );
   }
 
