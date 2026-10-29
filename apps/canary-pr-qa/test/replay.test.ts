@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +54,7 @@ function bundle() {
     policy: { version: 1 },
     catalog: { fixtures: {}, roles: [], visuals: [] },
     payload: { fixed: true },
+    generatedPlan: plan,
     plan,
     evidence: {
       url: "https://preview.example.test/",
