@@ -1,6 +1,7 @@
 import type { Config } from "./config.js";
 import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
+import { validatePlanEvidence } from "./plan-evidence.js";
 import {
   amputationScans,
   type Policy,
@@ -12,7 +13,6 @@ import {
   preExecutionFindings,
   quotePickCorrection,
 } from "./runner.js";
-import { validatePlanEvidence } from "./plan-evidence.js";
 import type { Plan } from "./schema.js";
 
 export interface ReplayValidationInput {
@@ -68,11 +68,13 @@ export function replayPlannerCorrection(
 export function replayPlanValidation(
   input: ReplayValidationInput
 ): { refusals: string[]; inconclusive: string[] } {
-  const { catalog, config, context, evidence, plan, policy } = input;
+  const { config, context, evidence, plan, policy } = input;
   const sourceRefusal = requirementSourceRefusal(plan, context);
   const refusals = [
     ...replayPlannerRefusals(input),
-    ...(sourceRefusal ? [`${sourceRefusal.message}. ${sourceRefusal.hint}`] : []),
+    ...(sourceRefusal
+      ? [`${sourceRefusal.message}. ${sourceRefusal.hint}`]
+      : []),
     ...preExecutionFindings(plan, context, policy, config).map(
       (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
     ),
