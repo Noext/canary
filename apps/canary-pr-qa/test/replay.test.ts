@@ -65,7 +65,7 @@ function bundle() {
           additions: 1,
           deletions: 1,
           changes: 2,
-          patch: "@@ -1 +1 @@\\n-show('Hello '+name)\\n+show('Welcome '+name)",
+          patch: "@@ -1 +1 @@\n-show('Hello '+name)\n+show('Welcome '+name)",
         },
       ],
       headRepo: "fixture/app",
@@ -129,6 +129,5 @@ describe("Canary Replay bundle", () => {
       version: 2,
     });
     await expect(runReplay(path, "gate", config)).rejects.toThrow();
-  });
   });
 });
