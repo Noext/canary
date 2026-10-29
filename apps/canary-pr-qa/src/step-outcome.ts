@@ -214,6 +214,47 @@ function interactionStep(
  * L'invariant I3 : un scénario n'est vert que si l'assertion qui prouve son
  */
 
+/**
+ * Vrai quand une assertion `state` constate l'état initial au lieu de l'effet de
+ * l'étape : la valeur mesurée avant l'étape satisfaisait déjà l'attendu, l'étape
+ * l'a laissée identique, et l'étape n'a pas déclaré son no-op (`ifPresent`
+ * sautée).
+ *
+ * C'est la cause racine du faux vert mesuré (73/465 assertions de la campagne
+ * entrelacée, 15,7 %) : le scénario était vert alors que l'interaction n'avait
+ * rien produit, la valeur venant de la page telle qu'elle s'ouvre. La règle vit
+ * ici, avec les autres lectures d'un relevé, et ne touche que la coïncidence des
+ * deux états. Restent hors d'elle, par construction : une assertion ancrée sur
+ * une navigation (aucune valeur d'avant relevée), une sonde d'avant en échec
+ * (pré-satisfaction inconnue, jamais « pas héritée »), une valeur que l'étape a
+ * déplacée (la preuve vient de l'exécution), et une valeur identique qui
+ * n'atteint pas l'attendu (échec produit, pas défaut de plan).
+ */
+export function stateAlreadySatisfied(input: {
+  afterStep?: string;
+  /** La valeur d'avant a été mesurée (une sonde en échec laisse ceci faux). */
+  baselineMeasured: boolean;
+  /** La valeur d'avant satisfaisait déjà l'attendu de l'assertion. */
+  baselineMatches: boolean;
+  /** Les étapes déjà jouées : l'ancre sautée est ce qui légitime le no-op. */
+  steps: readonly { skipped?: boolean; stepId?: string }[];
+  /** La valeur d'après est identique à celle d'avant. */
+  unchanged: boolean;
+  verification: string;
+}): boolean {
+  if (
+    input.verification !== "state" ||
+    !(input.baselineMeasured && input.unchanged && input.baselineMatches)
+  ) {
+    return false;
+  }
+  // Une étape `ifPresent` sautée a déclaré son no-op : l'assertion d'état qui la
+  // suit constate l'état voulu sans prétendre qu'un clic l'a produit.
+  return !input.steps.some(
+    (played) => played.stepId === input.afterStep && played.skipped === true
+  );
+}
+
 export function recordUnprovenAssertion(
   result: ScenarioResult,
   assertion: Assertion,

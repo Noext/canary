@@ -30,6 +30,7 @@ import {
   recordStepPlayed,
   recordUnprovenAssertion,
   reportStepFailure,
+  stateAlreadySatisfied,
 } from "./step-outcome.js";
 import { describeTarget, repairStepTarget } from "./target-repair.js";
 import { compareVisual } from "./visual.js";
@@ -170,39 +171,14 @@ async function evaluateAssertion(
     assertionMatches(assertion, baseline);
   const unchangedSinceBaseline =
     measured && isDeepStrictEqual(baseline, observation.actual);
-  /**
-   * L'étape d'établissement `ifPresent` dont la cible était absente n'a rien
-   * fait *parce que* l'état qu'elle établit était déjà là : le plan a déclaré que
-   * l'étape pouvait être un no-op, et l'assertion d'état qui la suit constate
-   * l'état voulu sans prétendre qu'un clic l'a produit. C'est le cas légitime que
-   * la règle ci-dessous ne doit jamais convertir en faux rouge.
-   */
-  const anchorSkipped =
-    assertion.afterStep !== undefined &&
-    result.steps.some(
-      (played) =>
-        played.stepId === assertion.afterStep && played.skipped === true
-    );
-  /**
-   * Le faux vert mesuré (15,7 % des assertions de la campagne entrelacée) : une
-   * assertion `state` ancrée sur une interaction dont la valeur satisfaisait déjà
-   * l'attendu AVANT l'étape, et que l'étape laisse identique, ne prouve rien sur
-   * l'étape — elle constate l'état initial, pas l'effet produit. Le scénario
-   * pouvait être vert alors que l'interaction n'avait rien fait.
-   *
-   * Les formes légitimes restent hors de ce cas, et c'est ce qui rend la règle
-   * sûre : une assertion ancrée sur une navigation ne relève aucune valeur d'avant
-   * (`captureBaselines`), une sonde qui échoue laisse la valeur inconnue plutôt
-   * que « pas héritée », une étape `ifPresent` sautée a déclaré son no-op, une
-   * valeur que l'étape a réellement déplacée reste une preuve d'exécution, et une
-   * valeur identique qui n'atteint pas l'attendu reste un échec produit, pas un
-   * défaut de plan.
-   */
-  const alreadySatisfied =
-    verification === "state" &&
-    unchangedSinceBaseline &&
-    preMatched &&
-    !anchorSkipped;
+  const alreadySatisfied = stateAlreadySatisfied({
+    afterStep: assertion.afterStep,
+    baselineMatches: preMatched,
+    baselineMeasured: measured,
+    steps: result.steps,
+    unchanged: unchangedSinceBaseline,
+    verification,
+  });
   const passed =
     matched &&
     !alreadySatisfied &&
