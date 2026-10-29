@@ -31,10 +31,10 @@ Quatre invariants, tenus **par le moteur** et pas par la discipline du modèle :
 
 | Invariant | Mécanisme livré |
 | --- | --- |
-| **I1 — Isolation** | une session par scénario, navigation initiale avant la première action ; test qui vérifie les deux |
+| **I1 — Isolation** | une session par scénario, navigation initiale avant la première action ; test à **deux scénarios** : trois sessions ouvertes, et la première action de chaque session de scénario est la navigation — aucun n'hérite de l'état du précédent |
 | **I2 — Provenance** | ce qui est déclaré est contrôlé : un indice d'exigence hors borne est refusé, et la valeur attendue doit partager un mot réel avec la ligne citée (`provenanceRefusals`), sur **tous** les chemins. Ce qui n'est pas déclaré est exécuté et **publié** comme non prouvé (`objectiveProven`, comptage des clés) au lieu d'être bloqué |
 | **I3 — Preuve d'objectif** | si le scénario désigne l'assertion qui prouve son objectif (`objective`), `enforceObjectiveProof` bloque le scénario quand elle n'a pas passé — **sur tous** les chemins, le drapeau ne l'éteint plus ; s'il n'en désigne aucune, la mesure est publiée (`objectiveProven` faux) et la campagne compte ces scénarios |
-| **I4 — Réparation non permissive** | la reprise ne reçoit qu'une étape et ne rend qu'une étape ; test qui prouve que les assertions et l'identité de l'étape sont intactes |
+| **I4 — Réparation non permissive** | la reprise ne reçoit qu'une étape et ne rend qu'une étape ; test avec un **modèle simulé qui choisit une cible** : la cible change, l'identifiant et la description du pas sont conservés, et les assertions du scénario sont identiques avant/après |
 
 Chemin **observe→act** (`QA_OBSERVE_ACT`, désactivé par défaut) : la cible de chaque action est
 résolue **dans l'observation courante**. Si le nom écrit par le plan n'y est pas, l'exécution
@@ -73,14 +73,17 @@ fonctionnellement par la résolution à l'exécution.
 | Campagne 2 × 50 entrelacée | `test/historical/architecture-campaign.json` | `architecture-campaign` |
 | Critères figés | `docs/pr-qa-campaign-criteria.md` | `campaign-criteria` |
 
-Rejeu (`test/replay-new-path.test.ts`) : sur les 79 plans stockés — 681 scénarios, 3 738
-assertions —, le moteur **ne refuse rien** tant que rien n'est déclaré (0 refus) : l'absence de
-provenance est instrumentée, pas bloquée. Dès qu'on déclare un indice, le contrôle mord : citer
-l'exigence 0 laisse **393** refus, parce que la valeur attendue n'est pas justifiée par la ligne
-citée. Et lorsqu'on cherche l'exigence qui porte réellement la valeur, **3 164 assertions** n'en
-ont aucune — aucun scénario ne contient de ligne partageant un mot avec l'attendu —, ce qui laisse
-encore **11** refus sur les quasi-ressemblances. C'est la cause racine, chiffrée sur des plans
-réels : les attendus de ces plans ne sont pas dérivés de leurs propres exigences.
+Rejeu (`test/replay-new-path.test.ts`) : sur les 79 plans stockés — **681 scénarios de plan**,
+**636 scénarios décrits dans les rapports**, 3 738 assertions —, le moteur **ne refuse rien** tant
+que rien n'est déclaré (0 refus) : l'absence de provenance est instrumentée, pas bloquée. Dès
+qu'on déclare un indice, le contrôle mord : citer l'exigence 0 laisse **393** refus, parce que la
+valeur attendue n'est pas justifiée par la ligne citée. En cherchant l'exigence qui porte
+réellement la valeur, **3 164 assertions** n'en ont aucune, ce qui laisse encore **11** refus sur
+les quasi-ressemblances. Le rejeu publie aussi la comparaison **verdict historique contre verdict
+de porte, scénario par scénario**, et un **échantillon d'échecs par famille** (9 familles, 3
+identifiants chacune, tirés des rapports conservés) : **67 scénarios verts historiques** seraient
+refusés par la porte si la provenance était déclarée. C'est le coût de l'invariant, mesuré sur
+des plans réels.
 
 ## 5. Résultats comparatifs complets
 
@@ -129,9 +132,10 @@ parce que les scénarios sans preuve ne sont plus exécutés — pas parce que l
 
 Incidents d'infrastructure documentés, jamais comptés comme produit : (a) la publication des
 statuts GitHub répond `HTTP_422` avec le jeton du service alors que le même appel réussit avec le
-jeton de l'opérateur — 9 runs perdus avant toute exécution, campagne relancée avec
-`publish=false` (la publication est orthogonale à la fiabilité mesurée) ; (b) 5 runs de la
-référence bloqués par `HTTP_429` du fournisseur.
+jeton de l'opérateur — 10 runs perdus avant toute exécution, campagne relancée avec
+`publish=false` (la publication est orthogonale à la fiabilité mesurée) ; (b) 6 runs bloqués par
+`HTTP_429` du fournisseur — 5 côté référence (dont le lot R4) et 1 côté candidat —, comptés et
+exclus du seul calcul évaluable.
 
 ## 6. Limites résiduelles
 

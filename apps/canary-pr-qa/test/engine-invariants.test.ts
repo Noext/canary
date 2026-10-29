@@ -6,7 +6,7 @@ import {
   provenanceRefusals,
 } from "../src/plan-evidence.js";
 import { runQa } from "../src/runner.js";
-import type { Plan, ScenarioResult } from "../src/schema.js";
+import type { Plan, Scenario, ScenarioResult } from "../src/schema.js";
 import { repairStepTarget } from "../src/target-repair.js";
 import { fixture, plan as fixturePlan, PR_URL } from "./fixture.js";
 
@@ -82,9 +82,14 @@ const scenarioResult = (overrides: Partial<ScenarioResult> = {}) =>
 
 describe("I1 — isolation : chaque scénario part d'une session neuve", () => {
   it("ouvre une session par scénario et navigue avant la première action", async () => {
-    // Le plan du fixture passe la porte : ce test porte sur l'isolation des
-    // sessions, pas sur la validité d'un plan écrit à la main.
-    const f = await fixture({ plans: [withProvenance(fixturePlan)] });
+    // Deux scénarios, pas un : c'est la seule façon de prouver qu'aucun n'hérite
+    // de l'état laissé par le précédent.
+    const twoScenarios = structuredClone(withProvenance(fixturePlan));
+    const second = structuredClone(twoScenarios.scenarios[0]!);
+    second.id = "welcome-bis";
+    second.title = "Submitting the name again saves a welcome message";
+    twoScenarios.scenarios.push(second);
+    const f = await fixture({ plans: [twoScenarios] });
     const starts: string[] = [];
     const acts: { label: string; session: string }[] = [];
     vi.spyOn(Canary.prototype, "start").mockImplementation(async (label) => {
@@ -98,7 +103,7 @@ describe("I1 — isolation : chaque scénario part d'une session neuve", () => {
         return {
           url: "http://fixture/",
           snapshot: "textbox Name, button Save",
-          ...(label.endsWith("assert") ? { actual: "Welcome" } : {}),
+          ...(label.endsWith("assert") ? { actual: "Welcome Ada" } : {}),
         } as never;
       }
     );
@@ -108,18 +113,21 @@ describe("I1 — isolation : chaque scénario part d'une session neuve", () => {
         { prUrl: PR_URL, previewUrl: f.baseUrl },
         f.config
       );
-      // Une session de découverte + une par scénario : rien n'est partagé.
-      expect(starts.length).toBeGreaterThanOrEqual(2);
-      expect(starts[0]).toContain("discovery");
-      const scenarioSession = acts.find((act) => act.label === "open-preview");
-      expect(scenarioSession).toBeDefined();
-      // La première action de la session de scénario est la navigation, pas une
-      // étape héritée d'un autre scénario.
-      const ofSession = acts.filter(
-        (act) => act.session === scenarioSession?.session
-      );
-      expect(ofSession[0]?.label).toBe("open-preview");
-      expect(result.scenarios).toHaveLength(1);
+      expect(result.scenarios).toHaveLength(2);
+      // Découverte + une session par scénario.
+      expect(starts).toHaveLength(3);
+      const scenarioSessions = [
+        ...new Set(
+          acts
+            .filter((act) => act.label === "open-preview")
+            .map((a) => a.session)
+        ),
+      ];
+      expect(scenarioSessions).toHaveLength(2);
+      for (const session of scenarioSessions) {
+        const first = acts.find((act) => act.session === session);
+        expect(first?.label, session).toBe("open-preview");
+      }
     } finally {
       await f.close();
     }
@@ -207,32 +215,37 @@ describe("I3 — preuve d'objectif : pas de vert sans objectif démontré", () =
 });
 
 describe("I4 — réparation non permissive : elle ne touche qu'à l'action", () => {
-  it("ré-ancre une action et laisse les assertions intactes", async () => {
-    const scenario = plan.scenarios[0]!;
-    const before = JSON.parse(JSON.stringify(scenario.assertions));
-    const repaired = await repairStepTarget({
-      model: undefined,
-      preview: "http://fixture/",
-      scenario: scenario.id,
-      step: scenario.steps[0]!,
-      targets: [{ by: "css", value: "h1", text: "Welcome" } as never],
-    });
-    // Le modèle est absent : aucune reprise n'est inventée hors observation.
-    expect(repaired).toBeUndefined();
-    expect(JSON.parse(JSON.stringify(scenario.assertions))).toEqual(before);
-  });
+  const scenario = (): Plan => structuredClone(plan);
 
-  it("ne rend jamais un pas qui change son identité", async () => {
-    const scenario = plan.scenarios[0]!;
-    const step = scenario.steps[1]!;
+  it("ré-ancre une action, garde l'identité du pas et les assertions intactes", async () => {
+    const subject = scenario();
+    const scenarioBody = subject.scenarios[0]!;
+    const before = structuredClone(scenarioBody.assertions);
+    const step = {
+      id: "save",
+      description: "save the form",
+      action: {
+        type: "click",
+        locator: { by: "role", value: "button", name: "Enregistrer" },
+      },
+    } as Scenario["steps"][number];
+    const stub = {
+      json: async () => ({ index: 0 }),
+    } as never;
     const repaired = await repairStepTarget({
-      model: undefined,
+      model: stub,
       preview: "http://fixture/",
-      scenario: scenario.id,
+      scenario: scenarioBody.id,
       step,
-      targets: [],
+      targets: [{ by: "role", value: "button", name: "Save" } as never],
     });
-    expect(repaired).toBeUndefined();
-    expect(step.id).toBe("assert-title");
+    expect(repaired).toBeDefined();
+    // La cible a changé, rien d'autre.
+    expect(repaired!.step.id).toBe(step.id);
+    expect(repaired!.step.description).toBe(step.description);
+    expect(repaired!.target.name).toBe("Save");
+    // Les assertions du scénario n'ont pas bougé : la reprise ne peut pas
+    // relâcher un attendu pour faire passer le test.
+    expect(scenarioBody.assertions).toEqual(before);
   });
 });
