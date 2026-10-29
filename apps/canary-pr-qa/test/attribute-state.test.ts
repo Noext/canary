@@ -1487,13 +1487,15 @@ describe("état de la caisse hérité d'un run antérieur", () => {
     }
   });
 
-  it("accepte verification state sur une caisse déjà ouverte, là où transition bloque le plan", async () => {
-    // L'étape d'établissement ne déplace la valeur que si l'état était
-    // l'autre. Vérifiée en `transition`, elle n'a aucun changement à montrer
-    // quand la caisse est déjà ouverte : vérifiée en `state`, elle passe dans
-    // les deux configurations ; vérifiée en `transition`, elle est reclassée en
-    // `blocked` — la valeur attendue est déjà celle qui est affichée, donc c'est
-    // le plan qui exigeait un changement sur un invariant.
+  it("reclasse en blocked une assertion d'état déjà satisfaite avant l'étape, comme transition", async () => {
+    // L'étape d'établissement ne déplace la valeur que si l'état était l'autre.
+    // Sur une caisse déjà ouverte, un clic nu sur « Réouvrir le comptage » ne
+    // produit rien : l'assertion `state` constatait l'état initial, et le run
+    // était vert sans avoir démontré l'établissement — le faux vert mesuré. Les
+    // deux vérifications sont donc reclassées en `blocked`, jamais en `passed`,
+    // avec un code distinct par vérification. La forme tolérante reste
+    // exprimable et verte : `click(ifPresent)` dont l'étape sautée déclare le
+    // no-op (voir « établissement d'état tolérant : click(ifPresent) »).
     const open = await setup();
     cashPage("ouvert");
     scriptPlan(PlanSchema.parse(establishesOpenPlan()));
@@ -1501,7 +1503,11 @@ describe("état de la caisse hérité d'un run antérieur", () => {
       { prUrl: PR_URL, previewUrl: open.baseUrl },
       open.config
     );
-    expect(openRun.outcome, openRun.scenarios[0]?.error ?? "").toBe("passed");
+    expect(openRun.outcome).toBe("blocked");
+    expect(openRun.scenarios[0]?.outcome).toBe("blocked");
+    expect(openRun.scenarios[0]?.diagnostic?.code).toBe(
+      "STATE_ALREADY_SATISFIED"
+    );
 
     vi.restoreAllMocks();
     const asTransition = establishesOpenPlan();

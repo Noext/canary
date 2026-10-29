@@ -220,9 +220,30 @@ export function recordUnprovenAssertion(
   verification: string,
   matched: boolean,
   unchanged: boolean,
-  config: Config
+  config: Config,
+  alreadySatisfied = false
 ) {
   const step = assertion.afterStep ?? "the interaction";
+  /**
+   * Une assertion d'état dont la valeur était déjà celle de l'attendu avant
+   * l'étape, et que l'étape laisse identique, ne démontre pas l'interaction qu'elle
+   * accompagne : elle constate l'état initial. Le verdict reste non vert — jamais
+   * `passed` — et le blâme revient au plan, comme pour `TRANSITION_ON_INVARIANT`,
+   * parce que l'application montre exactement ce que l'assertion réclame.
+   */
+  if (alreadySatisfied) {
+    result.outcome = "blocked";
+    result.diagnostic = diagnose(
+      new QaError(
+        "STATE_ALREADY_SATISFIED",
+        `Assertion ${assertion.id}: the value after step ${step} is identical to the baseline probed before it, and that baseline already satisfied the expected one, so the step produced nothing this assertion can be credited with — the state is proven, the interaction is not`,
+        "Attach the assertion to the step that produces the value it checks, or verify a value the step really moves. To assert an invariance, or to establish a state the page may already hold, declare the step ifPresent: the plan then says the step may be a no-op, and the state assertion stays legitimate. An unchanged value cannot demonstrate a step that claims to have acted on its own."
+      ),
+      config
+    );
+    result.error = result.diagnostic.message;
+    return;
+  }
   if (unchanged && verification === "transition" && matched) {
     result.outcome = "blocked";
     result.diagnostic = diagnose(

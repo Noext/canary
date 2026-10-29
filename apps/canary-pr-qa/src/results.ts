@@ -18,8 +18,11 @@ export interface ScenarioResult {
     /**
      * Vrai quand la valeur observée APRÈS l'étape satisfaisait déjà l'attendu
      * AVANT elle. L'assertion ne prouve alors pas que l'étape a produit l'état :
-     * il peut venir d'un scénario précédent ou d'un état persisté. Publié, jamais
-     * requalifié — un verdict ne devient ni vert ni rouge à cause de ce champ.
+     * il peut venir d'un scénario précédent ou d'un état persisté. Sur une
+     * assertion `state` dont la valeur n'a pas bougé, ce champ est ce qui
+     * distingue l'état initial de la preuve produite pendant l'exécution, et le
+     * verdict n'est plus vert (`STATE_ALREADY_SATISFIED`) ; une étape `ifPresent`
+     * sautée, elle, reste légitime parce qu'elle a déclaré son no-op.
      */
     preMatched?: boolean;
     persisted?: unknown;

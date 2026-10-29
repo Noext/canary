@@ -49,8 +49,9 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
       )
   );
   // Une assertion dont la valeur satisfaisait déjà l'attendu avant l'étape ne
-  // prouve rien sur cette étape : le rapport le dit, sans nommer la cible, et
-  // sans changer le verdict.
+  // prouve rien sur cette étape : le rapport le dit, sans nommer la cible. Une
+  // valeur laissée identique par l'étape ne passe plus (`STATE_ALREADY_SATISFIED`) ;
+  // celles que l'étape a réellement déplacées restent des preuves d'exécution.
   const inherited = result.scenarios.flatMap((item) =>
     item.assertions.filter((assertion) => assertion.preMatched)
   );
