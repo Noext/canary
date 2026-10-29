@@ -104,6 +104,8 @@ const envSchema = z.object({
   QA_OIDC_JWKS_URL: z.string().default(""),
   QA_ALLOWED_PROVIDER_HOSTS: z.string().default(""),
   QA_RAW_EVIDENCE: z.enum(["true", "false"]).default("false"),
+  // Local replay bundles include source and page text; disabled unless explicitly enabled.
+  QA_REPLAY_BUNDLE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   GITHUB_TOKEN: z.string().default(""),
   GITHUB_API_URL: z.string().url().default("https://api.github.com"),
   GITHUB_ALLOWED_REPOS: z.string().default(""),
