@@ -60,7 +60,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
-          cache: pnpm
+          # The self-hosted runner keeps the pnpm store on disk and warm:
+          # `pnpm install --frozen-lockfile` takes 4 s right after this step. On
+          # that runner the cache restore only re-downloads and re-extracts a
+          # 303 MB archive over a store it already has — 10.4 s of download and
+          # 6.8 s of `tar -xf`, measured on d609dd4. GitHub-hosted runners
+          # persist nothing between runs, so they keep the cache.
+          cache: ${{ runner.environment != 'self-hosted' && 'pnpm' || '' }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -180,7 +186,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ runner.environment != 'self-hosted' && 'pnpm' || '' }}
 
       - run: pnpm install --frozen-lockfile
 
