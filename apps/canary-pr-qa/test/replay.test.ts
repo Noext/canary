@@ -2,9 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PLAN_EVIDENCE_SNAPSHOT_CHARS } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { Model } from "../src/model.js";
-import { runReplay } from "../src/replay.js";
+import { replayExitCode, runReplay } from "../src/replay.js";
 import { BASE_SHA, PR_URL, plan, SHA } from "./fixture.js";
 
 const cleanup: string[] = [];
@@ -129,5 +130,67 @@ describe("Canary Replay bundle", () => {
       version: 2,
     });
     await expect(runReplay(path, "gate", config)).rejects.toThrow();
+  });
+});
+
+/**
+ * Régression mesurée : un instantané de découverte absent rendait la porte
+ * muette — zéro refus — et le CLI sortait en 0, donc « aucun refus » se lisait
+ * « plan prouvé » alors que rien n'avait été jugé. Le contrat de `docs/canary-replay.md`
+ * interdit exactement cela : une preuve non concluante ne doit pas valoir preuve.
+ */
+describe("Canary Replay verdicts", () => {
+  it("ne prononce pas un succès quand aucune preuve de page n'a été capturée", async () => {
+    const { path, config } = await writeBundle({
+      ...bundle(),
+      evidence: { url: "https://preview.example.test/", aria: "" },
+    });
+
+    const result = await runReplay(path, "gate", config);
+
+    expect(result.refusals).toEqual([]);
+    expect(result.inconclusive.length).toBeGreaterThan(0);
+    expect(result.verdict).toBe("unproven");
+    expect(replayExitCode(result.verdict)).toBe(1);
+  });
+
+  it("ne prononce pas un succès quand l'instantané est coupé au plafond", async () => {
+    const { path, config } = await writeBundle({
+      ...bundle(),
+      evidence: {
+        url: "https://preview.example.test/",
+        aria: "x".repeat(PLAN_EVIDENCE_SNAPSHOT_CHARS),
+      },
+    });
+
+    const result = await runReplay(path, "gate", config);
+
+    expect(result.refusals).toEqual([]);
+    expect(result.verdict).toBe("unproven");
+    expect(replayExitCode(result.verdict)).toBe(1);
+  });
+
+  it("accepte un bundle dont la preuve de page est utilisable", async () => {
+    const { path, config } = await writeBundle(bundle());
+
+    const result = await runReplay(path, "gate", config);
+
+    expect(result.verdict).toBe("accepted");
+    expect(replayExitCode(result.verdict)).toBe(0);
+  });
+
+  it("rend l'issue d'exécution enregistrée au lieu de la fondre dans le verdict", async () => {
+    const { path, config } = await writeBundle({
+      ...bundle(),
+      runtime: {
+        outcome: "failed",
+        scenarios: [{ scenarioId: "welcome", outcome: "failed" }],
+      },
+    });
+
+    const result = await runReplay(path, "gate", config);
+
+    expect(result.recordedOutcome).toBe("failed");
+    expect(result.verdict).toBe("accepted");
   });
 });

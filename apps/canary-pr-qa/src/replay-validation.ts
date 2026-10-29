@@ -63,8 +63,14 @@ export function replayPlannerCorrection(input: ReplayValidationInput) {
  * Scenario-level refusals are reported here too so CI can fail fast without
  * opening Chromium. Evidence gaps remain inconclusive rather than being treated
  * as proof of a defect.
+ *
+ * `evidenceComplete` dit si la page a pu être jugée du tout : un instantané
+ * absent ou coupé au plafond ne produit aucun refus, donc l'absence de refus ne
+ * suffit pas à conclure. C'est cette information, et non la longueur de
+ * `inconclusive`, qui distingue « porte sans reproche » de « porte sans preuve ».
  */
 export function replayPlanValidation(input: ReplayValidationInput): {
+  evidenceComplete: boolean;
   refusals: string[];
   inconclusive: string[];
 } {
@@ -84,6 +90,7 @@ export function replayPlanValidation(input: ReplayValidationInput): {
   ];
   const pageEvidence = validatePlanEvidence(plan, evidence);
   return {
+    evidenceComplete: pageEvidence.incomplete === undefined,
     refusals: [
       ...new Set([
         ...refusals,
