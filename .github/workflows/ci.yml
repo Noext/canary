@@ -157,6 +157,44 @@ jobs:
       - name: Autonomous PR QA E2E (real Chromium, fixture GitHub and AI APIs)
         run: pnpm --filter @usecanary/pr-qa test:e2e
 
+  # The image build and the Compose first-install suite are the only steps that
+  # need a Docker daemon, and they do not consume what the `check` job builds:
+  # `Dockerfile.pr-qa` is multi-stage and copies the sources to build its own
+  # `dist/` inside the image. Giving them their own job lets them use the second
+  # `canary-ci` runner at the same time as the test chain instead of waiting
+  # behind the 58 s PostgreSQL block, the 58 s of `pnpm check` and the 58 s of
+  # the Chromium suite. Measured before the split: 276 s of one serial job.
+  docker:
+    name: Docker image and Compose first install
+    runs-on: [self-hosted, linux, x64, canary-ci]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 9.15.0
+
+      # Node is not needed to build the image, but `test:container` below runs
+      # vitest from this workspace.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Cheap here (1 s measured, the runner image already carries the
+      # browsers) and it keeps the Vitest module graph identical to the job the
+      # Compose suite used to run in.
+      - name: Install Playwright browsers (for daemon + canary tests)
+        run: |
+          if sudo -n true 2>/dev/null; then
+            pnpm --filter @usecanary/daemon exec playwright install --with-deps chromium
+          else
+            pnpm --filter @usecanary/daemon exec playwright install chromium
+          fi
+
       # The runner is not ephemeral and its Docker daemon is shared with every
       # other job. A job killed mid-step (run 38362415208, 2026-10-13) was killed
       # by ENOSPC and never ran a cleanup, so its dangling image and its build
@@ -170,7 +208,7 @@ jobs:
           # be testing is never a candidate.
           docker image prune -f
           # A cache record untouched for over an hour cannot belong to a build
-          # still running here (`check` is capped at 30 minutes), while a sibling
+          # still running here (this job is capped at 30 minutes), while a sibling
           # job keeps the warm cache it just produced. Records older than that are
           # what accumulated to 24.6 GB / 157 entries before this step existed.
           docker builder prune -f --filter until=1h
@@ -198,7 +236,10 @@ jobs:
           docker image prune -f
           # Unfiltered on purpose: this run is over, so its own build cache has no
           # reader left, and a build in progress elsewhere keeps its own records.
-          docker builder prune -f
+          # Bounded like the pre-build reclaim: an unfiltered prune threw
+          # away the cache this very build produced, so the next run rebuilt
+          # from scratch (68 s measured) instead of reusing it (21 s).
+          docker builder prune -f --filter until=1h
           docker system df
 
       - name: Preserve container diagnostics
