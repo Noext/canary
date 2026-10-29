@@ -5,6 +5,17 @@ import type { Scenario } from "./schema.js";
 /**
  * Le cœur du chemin observe→act : une action ne se joue que sur une cible
  */
+/**
+ * Un sélecteur `css` de forme `[aria-label="X"]` (ou `input[aria-label="X"]`)
+ * vise un NOM ACCESSIBLE : c'est ce nom que l'observation expose, pas la
+ * syntaxe du sélecteur. Sans cette lecture, `intendedName` rendait le sélecteur
+ * entier, `presentInObservation` ne le trouvait jamais dans l'instantané, et le
+ * score de `resolveObservedName` était dilué par les mots de syntaxe (`input`,
+ * `aria`, `label`) : mesuré sur la forme dominante du corpus — 1066 des 3396
+ * locators — la résolution échouait TOUJOURS, même quand la cible existait.
+ */
+const ARIA_LABEL_CSS = /^\s*(?:[a-zA-Z][\w-]*)?\[aria-label="([^"]+)"\]\s*$/;
+
 function intendedName(step: Scenario["steps"][number]): string | undefined {
   const action = step.action;
   if (!("locator" in action) || action.locator === undefined) {
@@ -23,7 +34,8 @@ function intendedName(step: Scenario["steps"][number]): string | undefined {
   if (role && value) {
     return value;
   }
-  return value;
+  const label = ARIA_LABEL_CSS.exec(value ?? "")?.[1];
+  return label ?? value;
 }
 
 /** Le texte visible dans lequel une cible doit apparaître. */
@@ -115,6 +127,43 @@ export function observedNames(observation: Observation): string[] {
   return [...names];
 }
 
+/**
+ * Les nombres écrits dans un nom. `words()` jette tout ce qui fait moins de trois
+ * caractères, donc `5` et `2` n'y figurent pas : sans cette garde, extraire le
+ * libellé d'un sélecteur faisait résoudre « Quantité · Pièce de 5 € » vers
+ * « Quantité · Pièce de 2 € » — une autre coupure, donc un autre contrôle, et un
+ * clic sur le mauvais élément. Un candidat doit porter EXACTEMENT les nombres de
+ * la cible : c'est la preuve disponible la moins ambiguë.
+ */
+const numbers = (text: string) =>
+  [
+    ...new Set(
+      (text.match(/\d+(?:[.,]\d+)?/g) ?? []).map((value) =>
+        value.replace(",", ".")
+      )
+    ),
+  ].sort();
+
+function sameNumbers(wanted: string[], candidate: string[]): boolean {
+  return (
+    wanted.length === candidate.length &&
+    wanted.every((value, index) => value === candidate[index])
+  );
+}
+
+/** Un nom observé doit désigner UN élément : deux occurrences rendent le pas ambigu. */
+function occurrences(observation: Observation, name: string): number {
+  return (observation.snapshot ?? "").split(`"${name}"`).length - 1;
+}
+
+/** Remplace le libellé d'un `[aria-label="…"]` en gardant son préfixe d'élément. */
+function relabel(selector: string, observed: string): string {
+  return selector.replace(
+    /(\[aria-label=")[^"]*("\])/,
+    (_match, open: string, close: string) => `${open}${observed}${close}`
+  );
+}
+
 const words = (text: string) =>
   new Set(
     foldTypography(text)
@@ -144,7 +193,10 @@ export function resolveObservedName(
   if (target.size === 0) {
     return;
   }
+  const wanted = numbers(intended);
   const scored = observedNames(observation)
+    .filter((name) => sameNumbers(wanted, numbers(name)))
+    .filter((name) => occurrences(observation, name) === 1)
     .map((name) => {
       const source = words(name);
       const shared = [...target].filter((word) => source.has(word)).length;
@@ -238,7 +290,22 @@ export function resolveStepFromObservation(input: {
     "locator" in step.action &&
     step.action.locator
   ) {
-    const locator = { ...step.action.locator, name: observed };
+    /**
+     * Un locator `css` ne porte pas de `name` : `compileAction` compile
+     * `page.locator(value)` et ignore tout champ ajouté. Ré-ancrer en posant un
+     * `name` sur un `css` produisait donc un pas qui rejouait l'ANCIEN sélecteur —
+     * mesuré : les deux scénarios `TARGET_NOT_FOUND` restaient en timeout de
+     * 10 s alors que la résolution avait trouvé « Quantité · Pièce de 5 c ».
+     * Le sélecteur est donc réécrit sur le libellé observé, en gardant son
+     * préfixe d'élément.
+     */
+    const locator =
+      step.action.locator.by === "css"
+        ? {
+            ...step.action.locator,
+            value: relabel(step.action.locator.value, observed),
+          }
+        : { ...step.action.locator, name: observed };
     return {
       reanchoredTo: observed,
       step: {
