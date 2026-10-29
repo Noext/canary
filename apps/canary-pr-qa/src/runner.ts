@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
@@ -1445,6 +1446,39 @@ function preExecutionFindings(
   ];
 }
 
+/** Offline replay through the same deterministic gates used by production. */
+export function replayPlanValidation(input: {
+  catalog: TrustedCatalog;
+  config: Config;
+  context: PrContext;
+  evidence: { aria: string; url: string };
+  plan: Plan;
+  policy: Policy;
+}): { refusals: string[]; inconclusive: string[] } {
+  const { catalog, config, context, evidence, plan, policy } = input;
+  const sourceRefusal = requirementSourceRefusal(plan, context);
+  const refusals = [
+    ...planRefusals(plan, policy, context, config, catalog, amputationScans(), evidence),
+    ...(sourceRefusal ? [`${sourceRefusal.message}. ${sourceRefusal.hint}`] : []),
+    ...preExecutionFindings(plan, context, policy, config).map(
+      (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
+    ),
+    ...provenanceRefusals(plan).map(
+      (item) => `${item.scenarioId}: ${item.error.message}. ${item.error.hint}`
+    ),
+  ];
+  const pageEvidence = validatePlanEvidence(plan, evidence);
+  return {
+    refusals: [...new Set([
+      ...refusals,
+      ...pageEvidence.refusals.map((item) => JSON.stringify(item)),
+    ])],
+    inconclusive: pageEvidence.inconclusive.map(
+      (item) => `${item.scenarioId}: ${item.reason}`
+    ),
+  };
+}
+
 async function executePlan(
   result: RunResult,
   context: PrContext,
@@ -1530,6 +1564,37 @@ async function executePlan(
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
   settlePlan(result.plan, context, config, result.id);
+  if (config.QA_REPLAY_BUNDLE) {
+    // Explicit opt-in: bundles contain source, diff, planner payload and page text.
+    // Keep them private and local; never publish them as PR artifacts by default.
+    await writeFile(
+      join(root, "replay-bundle.json"),
+      `${JSON.stringify({
+        version: 1,
+        createdAt: new Date().toISOString(),
+        source: {
+          prUrl: context.ref.url,
+          repo: context.ref.repo,
+          number: context.ref.number,
+          headSha: context.sha,
+          baseSha: context.baseSha,
+          model: config.OPENAI_MODEL,
+        },
+        validationConfig: {
+          QA_MAX_SCENARIOS: config.QA_MAX_SCENARIOS,
+          QA_MAX_STEPS: config.QA_MAX_STEPS,
+          QA_PER_SCENARIO_COVERAGE: config.QA_PER_SCENARIO_COVERAGE,
+        },
+        context,
+        policy,
+        catalog,
+        payload,
+        plan: result.plan,
+        evidence: { url: initialPage.url, aria: evidence },
+      }, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600, flag: "wx" }
+    );
+  }
   publishUnverifiedPreconditions(result, context);
   const refined = config.QA_VIEW_PROBE
     ? await probeAndReplan({
