@@ -1561,6 +1561,8 @@ async function executePlan(
       );
     }
   );
+  // Preserve the raw planner output separately from the settled production plan.
+  const generatedPlan = structuredClone(result.plan);
   // Une citation réelle attribuée au mauvais fichier se répare : la preuve ne
   // change pas, seule la mention du fichier était fausse.
   settlePlan(result.plan, context, config, result.id);
@@ -1589,6 +1591,7 @@ async function executePlan(
         policy,
         catalog,
         payload,
+        generatedPlan,
         plan: result.plan,
         evidence: { url: initialPage.url, aria: evidence },
       }, null, 2)}\n`,
