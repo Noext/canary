@@ -15,13 +15,18 @@ import { describe, expect, it } from "vitest";
  */
 interface Run {
   assertions: number;
+  calls: number;
   codes: string[];
+  costUsd: number;
   greenScenarios: number;
   infrastructure?: boolean;
+  objectivesDeclared: number;
+  objectivesProven: number;
   outcome: string;
   preMatchedAssertions: number;
   preMatchedKeyed: number;
   productFailures: number;
+  refusedButAllScenariosPassed: boolean;
   run: string;
   scenarioCount: number;
   scenarioRefusals: number;
@@ -68,6 +73,17 @@ const summary = (runs: Run[]) => {
       0
     ),
     refusals: runs.reduce((sum, run) => sum + run.scenarioRefusals, 0),
+    calls:
+      Math.round(
+        (evaluable.reduce((sum, run) => sum + run.calls, 0) /
+          evaluable.length) *
+          10
+      ) / 10,
+    cost: evaluable.reduce((sum, run) => sum + run.costUsd, 0),
+    objectives: evaluable.reduce((sum, run) => sum + run.objectivesDeclared, 0),
+    proven: evaluable.reduce((sum, run) => sum + run.objectivesProven, 0),
+    falseRefusals: evaluable.filter((run) => run.refusedButAllScenariosPassed)
+      .length,
     infrastructure: runs.filter((run) => run.infrastructure).length,
   };
 };
@@ -120,6 +136,10 @@ describe("campagne d'architecture 2 × 50 runs", () => {
       assertions: 1604,
       preMatched: 252,
       refusals: 33,
+      calls: 2.2,
+      objectives: 343,
+      proven: 319,
+      falseRefusals: 5,
       infrastructure: 6,
     });
     expect(baseline).toMatchObject({
@@ -132,8 +152,19 @@ describe("campagne d'architecture 2 × 50 runs", () => {
       assertions: 1916,
       preMatched: 0,
       refusals: 0,
+      calls: 2,
+      objectives: 0,
+      proven: 0,
+      falseRefusals: 0,
       infrastructure: 6,
     });
+  });
+
+  it("publie le garde-fou franchi : cinq faux refus côté candidat", () => {
+    expect(candidate.falseRefusals).toBe(5);
+    expect(baseline.falseRefusals).toBe(0);
+    // La couverture des objectifs déclarés est mesurée, pas supposée.
+    expect(candidate.proven / candidate.objectives).toBeCloseTo(0.93, 2);
   });
 
   it("l'effet est nul : 65,9 % contre 68,2 %, soit 0,23 σ", () => {

@@ -95,6 +95,70 @@ export function classifyScenarioResult(result: {
  */
 
 /**
+ * Les noms accessibles réellement présents dans l'instantané.
+ *
+ * L'instantané de la session liste les contrôles sous la forme `rôle "nom"` :
+ * ces noms sont la seule liste dans laquelle une action peut choisir sa cible.
+ */
+export function observedNames(observation: Observation): string[] {
+  const names = new Set<string>();
+  for (const match of (observation.snapshot ?? "").matchAll(
+    /"([^"]{1,200})"/g
+  )) {
+    const name = match[1];
+    if (name !== undefined) {
+      names.add(name);
+    }
+  }
+  return [...names];
+}
+
+const words = (text: string) =>
+  new Set(
+    foldTypography(text)
+      .toLowerCase()
+      .split(/[^a-z0-9\u00e0-\u00ff]+/)
+      .filter((word) => word.length >= 3)
+  );
+
+/**
+ * Choisit, dans l'observation, le contrôle qui réalise l'intention du pas.
+ *
+ * Ce n'est plus une simple présence : si le nom écrit par le plan n'existe pas,
+ * l'exécution cherche le nom observé qui partage le plus de mots avec lui, et ne
+ * le retient que s'il est unique et suffisamment proche. L'action est alors
+ * rejouée avec la cible observée ; sinon le pas est indéterminé. Aucun modèle
+ * n'est appelé : la résolution est déterministe et bornée.
+ */
+export function resolveObservedName(
+  observation: Observation,
+  step: Scenario["steps"][number]
+): string | undefined {
+  const intended = intendedName(step);
+  if (intended === undefined) {
+    return;
+  }
+  const target = words(intended);
+  if (target.size === 0) {
+    return;
+  }
+  const scored = observedNames(observation)
+    .map((name) => {
+      const source = words(name);
+      const shared = [...target].filter((word) => source.has(word)).length;
+      return { name, score: shared / target.size };
+    })
+    .filter((candidate) => candidate.score >= 0.5)
+    .sort((left, right) => right.score - left.score);
+  const best = scored[0];
+  if (!best) {
+    return;
+  }
+  const tied = scored.filter((candidate) => candidate.score === best.score);
+  return tied.length === 1 ? best.name : undefined;
+}
+
+/**
  * La porte du chemin observe→act, en une appel : si la cible du pas n'est pas
  * dans l'observation courante, l'étape est consignée, le scénario est classé
  * `indeterminate` avec un code nommé, et rien n'est joué. Rend `true` quand elle
@@ -146,4 +210,42 @@ export function gateUnobservedStep(input: {
   );
   result.error = result.diagnostic.message;
   return true;
+}
+
+/**
+ * La résolution complète du pas, dans l'ordre de la décision d'architecture :
+ * on regarde l'observation, on choisit une cible observée, et sinon le pas est
+ * indéterminé — sans jamais jouer une cible que la page n'expose pas.
+ */
+export function resolveStepFromObservation(input: {
+  config: { QA_OBSERVE_ACT: boolean };
+  index: number;
+  observation: Observation;
+  result: Parameters<typeof gateUnobservedStep>[0]["result"];
+  step: Scenario["steps"][number];
+}):
+  | { step: Scenario["steps"][number]; reanchoredTo?: string }
+  | { blocked: true } {
+  const { config, index, observation, result, step } = input;
+  if (!config.QA_OBSERVE_ACT || presentInObservation(observation, step)) {
+    return { step };
+  }
+  const observed = resolveObservedName(observation, step);
+  if (
+    observed !== undefined &&
+    "locator" in step.action &&
+    step.action.locator
+  ) {
+    const locator = { ...step.action.locator, name: observed };
+    return {
+      reanchoredTo: observed,
+      step: {
+        ...step,
+        action: { ...step.action, locator },
+      } as Scenario["steps"][number],
+    };
+  }
+  return gateUnobservedStep({ config, index, observation, result, step })
+    ? { blocked: true }
+    : { step };
 }

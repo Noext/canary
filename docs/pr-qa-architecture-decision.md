@@ -32,14 +32,18 @@ Quatre invariants, tenus **par le moteur** et pas par la discipline du modèle :
 | Invariant | Mécanisme livré |
 | --- | --- |
 | **I1 — Isolation** | une session par scénario, navigation initiale avant la première action ; test qui vérifie les deux |
-| **I2 — Provenance** | chaque assertion cite l'indice de l'exigence qui justifie son attendu (`requirement`) ; refus nommé sinon (`provenanceRefusals`) |
-| **I3 — Preuve d'objectif** | le scénario désigne l'assertion qui prouve son objectif (`objective`) ; `enforceObjectiveProof` bloque un scénario dont l'objectif n'a pas passé |
+| **I2 — Provenance** | ce qui est déclaré est contrôlé : un indice d'exigence hors borne est refusé, et la valeur attendue doit partager un mot réel avec la ligne citée (`provenanceRefusals`), sur **tous** les chemins. Ce qui n'est pas déclaré est exécuté et **publié** comme non prouvé (`objectiveProven`, comptage des clés) au lieu d'être bloqué |
+| **I3 — Preuve d'objectif** | si le scénario désigne l'assertion qui prouve son objectif (`objective`), `enforceObjectiveProof` bloque le scénario quand elle n'a pas passé — **sur tous** les chemins, le drapeau ne l'éteint plus ; s'il n'en désigne aucune, la mesure est publiée (`objectiveProven` faux) et la campagne compte ces scénarios |
 | **I4 — Réparation non permissive** | la reprise ne reçoit qu'une étape et ne rend qu'une étape ; test qui prouve que les assertions et l'identité de l'étape sont intactes |
 
-Chemin **observe→act** (`QA_OBSERVE_ACT`, désactivé par défaut) : une cible absente de
-l'instantané courant n'est **jamais jouée** ; le pas est consigné, le scénario est classé
-`indeterminate` avec `TARGET_NOT_FOUND`, et aucun appel navigateur n'est fait. Un seul relevé
-d'observation par pas joué, aucun appel au modèle : le coût de la boucle est borné.
+Chemin **observe→act** (`QA_OBSERVE_ACT`, désactivé par défaut) : la cible de chaque action est
+résolue **dans l'observation courante**. Si le nom écrit par le plan n'y est pas, l'exécution
+cherche le contrôle observé qui partage le plus de mots avec l'intention et le retient s'il est
+unique et suffisamment proche ; l'action est rejouée sur cette cible observée. Si rien ne
+correspond, le pas n'est **jamais joué**, il est consigné, et le scénario se classe
+`indeterminate` avec `TARGET_NOT_FOUND`. Un seul relevé d'observation par pas joué, aucun appel
+au modèle : la résolution est déterministe et bornée. L'assistance par modèle en impasse prévue
+par la décision n'est pas implémentée (voir limites).
 
 Classification explicite de chaque scénario : `proven`, `failed`, `test-defect`, `indeterminate`.
 
@@ -63,16 +67,20 @@ fonctionnellement par la résolution à l'exécution.
 | Champs `objective` (scénario) et `requirement` (assertion) | `src/schema.ts` | `engine-invariants` (I2, I3) |
 | Refus de provenance nommés | `src/plan-evidence.ts` | `engine-invariants` (4 cas, deux directions) |
 | Preuve d'objectif au verdict | `src/plan-evidence.ts`, `src/runner.ts` | `engine-invariants` (vert, objectif échoué, objectif non exécuté, drapeau coupé) |
-| Porte d'observation et classement explicite | `src/observe-act.ts`, `src/executor.ts` | `observe-act` (cible absente, cible présente, un relevé par pas) |
+| Résolution de cible dans l'observation, porte et classement explicite | `src/observe-act.ts`, `src/executor.ts` | `observe-act` (7 tests : résolution, ambiguïté, ré-ancrage, blocage, un relevé par pas) |
 | Prompt : objectif et provenance demandés | `src/model.ts` | `engine-invariants` (présence dans le prompt) |
 | Rejeu des plans historiques | `test/historical/replay-new-path.json` | `replay-new-path` |
 | Campagne 2 × 50 entrelacée | `test/historical/architecture-campaign.json` | `architecture-campaign` |
 | Critères figés | `docs/pr-qa-campaign-criteria.md` | `campaign-criteria` |
 
-Rejeu (`test/replay-new-path.test.ts`) : les 79 plans stockés portent 681 scénarios et
-**4 419 refus de provenance** — ils précèdent les deux champs, donc aucun n'est rejouable tel
-quel. Le contrôle qui compte : en remplissant ces champs, les refus tombent à **0**, ce qui
-prouve que la provenance est un ajout isolé et n'emporte aucun autre verdict.
+Rejeu (`test/replay-new-path.test.ts`) : sur les 79 plans stockés — 681 scénarios, 3 738
+assertions —, le moteur **ne refuse rien** tant que rien n'est déclaré (0 refus) : l'absence de
+provenance est instrumentée, pas bloquée. Dès qu'on déclare un indice, le contrôle mord : citer
+l'exigence 0 laisse **393** refus, parce que la valeur attendue n'est pas justifiée par la ligne
+citée. Et lorsqu'on cherche l'exigence qui porte réellement la valeur, **3 164 assertions** n'en
+ont aucune — aucun scénario ne contient de ligne partageant un mot avec l'attendu —, ce qui laisse
+encore **11** refus sur les quasi-ressemblances. C'est la cause racine, chiffrée sur des plans
+réels : les attendus de ces plans ne sont pas dérivés de leurs propres exigences.
 
 ## 5. Résultats comparatifs complets
 
@@ -92,10 +100,19 @@ Chaque bloc porte son déploiement Coolify et le commit servi ; `preMatchedKeyed
 | Indéterminés (`TARGET_NOT_FOUND` par la porte) | 2 | 2 |
 | Tokens par run | 289 102 | 267 280 (+8,2 % côté candidat) |
 | Durée | collectée par run dans l'artefact | collectée par run dans l'artefact |
+| Faux refus (run bloqué dont tous les scénarios exécutés passent) | **5** | 0 |
+| Couverture des objectifs (`objectivesProven` / déclarés) | **319 / 343 (93,0 %)** | non instrumentée |
+| Appels au modèle par run | 2,2 | 2,0 |
+| Coût par run | non calculé (tarifs non configurés : `pricingConfigured=false`) | idem |
 | Pannes d'infrastructure (nommées) | 6 | 6 |
 
 **Effet mesuré : −2,3 points, erreur-type 10,0 points, 0,23 σ.** Aucune amélioration n'est
 démontrée ; le résultat est un effet nul, compatible avec zéro dans les deux sens.
+
+**Un garde-fou des critères est franchi, et il est publié comme tel** : les critères exigeaient
+« aucun faux refus ». Le bras candidat en compte **5** — des runs bloqués par un refus de lecture
+alors que tous leurs scénarios exécutés passent. Ce seul franchissement interdisait de toute
+façon de déclarer un succès ; il est cohérent avec la conclusion et il est compté, pas tu.
 
 Ventilation par famille (runs concernés) : côté candidat — `PLAN_SCHEMA_INVALID` 6 (provenance
 absente du plan produit par le modèle), `CONTRACT_INCOMPLETE` 5 (objectif non prouvé),
@@ -126,8 +143,15 @@ référence bloqués par `HTTP_429` du fournisseur.
    des runs tant que le planificateur ne la respecte pas. C'est la première cause de non-vert du
    bras candidat.
 3. **L'assistance modèle de la boucle n'est pas implémentée.** La résolution est déterministe
-   (instantané courant), ce qui évite tout coût caché ; la décision d'architecture prévoyait un
-   appel borné en impasse, il reste à faire.
+   (instantané courant, appariement par mots), ce qui évite tout coût caché ; la décision
+   d'architecture prévoyait un appel borné en impasse, il reste à faire.
+7. **Le défaut livré n'est pas exactement le bras mesuré.** I2 et I3 sont désormais des
+   invariants moteur : ils s'appliquent aux champs déclarés, sur le chemin figé comme sur le
+   chemin observe→act, alors que la campagne a mesuré le bras candidat avec la porte
+   d'observation en plus (le modèle, lui, déclarait les deux champs : 343 objectifs sur 44 runs
+   évaluables). Cette configuration par défaut (contrôle des champs déclarés, sans portillon
+   d'observation) n'a pas été mesurée séparément ; son effet sur le taux de verts est inconnu à
+   ce jour, et les plans qui n'y déclarent rien ne sont pas bloqués.
 4. **La publication GitHub du service est cassée** (`HTTP_422`), sans lien avec la fiabilité
    mesurée ; elle doit être réparée côté credentials avant de réactiver `publish`.
 5. **Les rapports de run ne couvrent que 104 des 200 runs** du corpus ; les comptes de scénarios
@@ -143,12 +167,15 @@ invariants restent livrés, et le chemin figé reste le défaut.
 Ce qui est démontré et livré :
 
 - la cause racine est établie par le code et par 64 des 80 runs non verts ;
-- les quatre invariants sont implémentés et testés dans les deux directions — isolation,
-  provenance, preuve d'objectif, réparation non permissive ;
+- les quatre invariants sont implémentés **dans le moteur** et testés dans les deux directions —
+  isolation, provenance (indice *et* justification de la valeur), preuve d'objectif, réparation
+  non permissive ; ils valent sur les deux chemins, le drapeau ne commande plus que la porte
+  d'observation ;
 - le moteur ne peut plus déclarer vert un scénario sans que l'assertion désignée comme son
   objectif ait passé ;
-- la boucle observe→act existe, bornée, testée hors ligne, derrière un drapeau, et elle empêche
-  structurellement de jouer une cible absente de l'observation.
+- la boucle observe→act existe, bornée, testée hors ligne, derrière un drapeau : elle **résout**
+  la cible dans l'observation (ré-ancrage sur le contrôle observé le plus proche) et empêche
+  structurellement de jouer une cible que la page n'expose pas ;
 
 Ce qui reste, et qui appartient à une décision explicite : le modèle imposé ne produit pas
 systématiquement la provenance, et c'est cette limite — et non une porte manquante — qui explique

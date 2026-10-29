@@ -2302,8 +2302,9 @@ export function replannedScenarios(
  * valeur dérivée du diff d'une valeur inventée, et un scénario peut être vert
  * sans avoir rien démontré — c'est exactement ce que l'invariant I3 interdit.
  *
- * Drapeau coupé : aucun refus. Le chemin figé reste le bras de comparaison, et
- * l'absence de preuve y est mesurée (`objectiveProven`), pas tolérée en silence.
+ * Ce qui n'est pas déclaré n'est pas bloqué : un scénario sans `objective` est
+ * exécuté et publié comme non prouvé (`objectiveProven` faux). Ce qui est
+ * déclaré est imposé, sur tous les chemins.
  */
 
 export function enforceObjectiveProof(
@@ -2315,7 +2316,10 @@ export function enforceObjectiveProof(
     ? result.assertions.find((item) => item.id === objective)
     : undefined;
   result.objectiveProven = proof?.passed === true;
-  if (result.classification === "indeterminate" || !config.QA_OBSERVE_ACT) {
+  // Rien de déclaré : rien à imposer. L'absence est publiée (`objectiveProven`
+  // faux) et comptée ; c'est le plan qui n'a pas désigné sa preuve, pas le
+  // moteur qui l'aurait oubliée.
+  if (objective === undefined || result.classification === "indeterminate") {
     return result;
   }
   if (result.objectiveProven) {
@@ -2339,13 +2343,24 @@ export function enforceObjectiveProof(
   return result;
 }
 
-export function provenanceRefusals(
-  plan: Plan,
-  enabled: boolean
-): { error: QaError; scenarioId: string }[] {
-  if (!enabled) {
-    return [];
-  }
+/**
+ * La provenance déclarée par le plan, contrôlée par le moteur.
+ *
+ * Deux choses sont vérifiées, et elles valent sur tous les chemins : l'indice
+ * d'exigence cité doit exister dans le scénario, et la valeur attendue doit être
+ * justifiée par la ligne citée — un attendu qui ne partage aucun mot réel avec
+ * elle est une valeur inventée, pas une déduction.
+ *
+ * Ce qui n'est pas déclaré n'est pas refusé : un plan sans `objective` ni
+ * `requirement` est exécuté, et son absence de preuve est publiée
+ * (`objectiveProven`, comptage des clés) au lieu d'être bloquée. Le modèle est
+ * instruit de fournir les deux champs ; ce qu'il fournit est contrôlé, ce qu'il
+ * omet est mesuré.
+ */
+export function provenanceRefusals(plan: Plan): {
+  error: QaError;
+  scenarioId: string;
+}[] {
   const refusals: { error: QaError; scenarioId: string }[] = [];
   const refuse = (scenarioId: string, message: string, hint: string) =>
     refusals.push({
@@ -2355,13 +2370,7 @@ export function provenanceRefusals(
   for (const scenario of plan.scenarios) {
     const ids = scenario.assertions.map((assertion) => assertion.id);
     const objective = scenario.objective;
-    if (!objective) {
-      refuse(
-        scenario.id,
-        `Scenario ${scenario.id} declares no objective`,
-        "Set objective to the id of the assertion that proves what this scenario exists to demonstrate; a scenario without that proof cannot be green."
-      );
-    } else if (!ids.includes(objective)) {
+    if (objective !== undefined && !ids.includes(objective)) {
       refuse(
         scenario.id,
         `Scenario ${scenario.id} names objective ${JSON.stringify(objective)}, which is not one of its assertions`,
@@ -2371,19 +2380,62 @@ export function provenanceRefusals(
     for (const assertion of scenario.assertions) {
       const index = assertion.requirement;
       if (index === undefined) {
-        refuse(
-          scenario.id,
-          `Assertion ${assertion.id} of scenario ${scenario.id} cites no requirement`,
-          "Set requirement to the index of the requirement whose line or quote justifies the expected value; a value no requirement justifies is indistinguishable from an invented one."
-        );
-      } else if (index >= scenario.requirements.length) {
+        continue;
+      }
+      if (index >= scenario.requirements.length) {
         refuse(
           scenario.id,
           `Assertion ${assertion.id} of scenario ${scenario.id} cites requirement ${index}, but the scenario declares ${scenario.requirements.length}`,
           `Use an index between 0 and ${scenario.requirements.length - 1}.`
         );
+        continue;
+      }
+      const cited = scenario.requirements[index];
+      const literal =
+        (assertion.kind === "text" || assertion.kind === "value") &&
+        typeof assertion.expected === "string" &&
+        assertion.expected.trim().length > 0;
+      if (
+        literal &&
+        cited !== undefined &&
+        typeof assertion.expected === "string" &&
+        !justifiedByExpectedValue(assertion.expected, cited)
+      ) {
+        refuse(
+          scenario.id,
+          `Assertion ${assertion.id} of scenario ${scenario.id} expects ${JSON.stringify(assertion.expected)}, a value that the cited requirement does not justify`,
+          `Cite the requirement whose quote or behavior carries that value, or change the expected value to one the cited line justifies. The cited requirement says: ${JSON.stringify((cited.quote ?? cited.behavior ?? "").slice(0, 160))}`
+        );
       }
     }
   }
   return refusals;
+}
+
+/**
+ * La valeur attendue est-elle justifiée par l'exigence citée ?
+ *
+ * Tolérante à dessein — une valeur calculée n'apparaît jamais telle quelle dans
+ * le code qui la produit — mais elle exige un mot réel commun : un attendu qui
+ * ne partage rien avec la ligne citée est une valeur inventée.
+ */
+function justifiedByExpectedValue(
+  expected: string,
+  requirement: { behavior?: string; quote?: string }
+): boolean {
+  const words = (text: string) =>
+    new Set(
+      foldTypography(text)
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((word) => word.length >= 4)
+    );
+  const source = words(
+    `${requirement.quote ?? ""} ${requirement.behavior ?? ""}`
+  );
+  const target = words(expected);
+  if (source.size === 0 || target.size === 0) {
+    return true;
+  }
+  return [...target].some((word) => source.has(word));
 }

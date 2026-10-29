@@ -95,6 +95,39 @@ describe("cause racine : un plan figé sur un instantané unique", () => {
     expect(doc).toContain("**51** portent un code");
   });
 
+  it("chaque ancrage fichier:ligne du document désigne la ligne réelle", () => {
+    // La source de vérité est le code : on retrouve la ligne par son contenu, puis
+    // on vérifie que le document cite exactement ce numéro. Si le code bouge, le
+    // test échoue et nomme le couple attendu — le document ne peut pas dériver.
+    const anchors: [string, string][] = [
+      ["src/runner.ts", "result.plan = await model.json("],
+      ["src/canary.ts", "PLAN_EVIDENCE_SNAPSHOT_CHARS ="],
+      ["src/canary.ts", "export async function discoverPreview"],
+      ["src/executor.ts", "Le plan est un contrat figé"],
+      ["src/executor.ts", "canary.start(scenario.title"],
+      ["src/executor.ts", "await captureBaselines("],
+      ["src/runner.ts", "async function replanObservedInvariants"],
+      ["src/runner.ts", "await replanObservedInvariants({"],
+    ];
+    const expected: [string, number][] = anchors.map(([file, needle]) => {
+      const index = read(...file.split("/"))
+        .split("\n")
+        .findIndex((line) => line.includes(needle));
+      expect(index, `${file} ${needle}`).toBeGreaterThanOrEqual(0);
+      return [file, index + 1];
+    });
+    for (const [file, line] of expected) {
+      expect(doc, `${file}:${line}`).toContain(`${file}:${line}`);
+    }
+    // Et aucun autre couple fichier:ligne ne traîne dans le document.
+    for (const [, file, line] of doc.matchAll(/(src\/[a-z-]+\.ts):(\d+)/g)) {
+      const found = expected.some(
+        ([path, number]) => path === file && String(number) === line
+      );
+      expect(found, `inattendu ${file}:${line}`).toBe(true);
+    }
+  });
+
   it("les ancrages de code cités existent encore", () => {
     const executor = read("src", "executor.ts");
     const runner = read("src", "runner.ts");
