@@ -214,15 +214,77 @@ function interactionStep(
  * L'invariant I3 : un scénario n'est vert que si l'assertion qui prouve son
  */
 
+/**
+ * Vrai quand une assertion `state` constate l'état initial au lieu de l'effet de
+ * l'étape : la valeur mesurée avant l'étape satisfaisait déjà l'attendu, l'étape
+ * l'a laissée identique, et l'étape n'a pas déclaré son no-op (`ifPresent`
+ * sautée).
+ *
+ * C'est la cause racine du faux vert mesuré (73/465 assertions de la campagne
+ * entrelacée, 15,7 %) : le scénario était vert alors que l'interaction n'avait
+ * rien produit, la valeur venant de la page telle qu'elle s'ouvre. La règle vit
+ * ici, avec les autres lectures d'un relevé, et ne touche que la coïncidence des
+ * deux états. Restent hors d'elle, par construction : une assertion ancrée sur
+ * une navigation (aucune valeur d'avant relevée), une sonde d'avant en échec
+ * (pré-satisfaction inconnue, jamais « pas héritée »), une valeur que l'étape a
+ * déplacée (la preuve vient de l'exécution), et une valeur identique qui
+ * n'atteint pas l'attendu (échec produit, pas défaut de plan).
+ */
+export function stateAlreadySatisfied(input: {
+  afterStep?: string;
+  /** La valeur d'avant a été mesurée (une sonde en échec laisse ceci faux). */
+  baselineMeasured: boolean;
+  /** La valeur d'avant satisfaisait déjà l'attendu de l'assertion. */
+  baselineMatches: boolean;
+  /** Les étapes déjà jouées : l'ancre sautée est ce qui légitime le no-op. */
+  steps: readonly { skipped?: boolean; stepId?: string }[];
+  /** La valeur d'après est identique à celle d'avant. */
+  unchanged: boolean;
+  verification: string;
+}): boolean {
+  if (
+    input.verification !== "state" ||
+    !(input.baselineMeasured && input.unchanged && input.baselineMatches)
+  ) {
+    return false;
+  }
+  // Une étape `ifPresent` sautée a déclaré son no-op : l'assertion d'état qui la
+  // suit constate l'état voulu sans prétendre qu'un clic l'a produit.
+  return !input.steps.some(
+    (played) => played.stepId === input.afterStep && played.skipped === true
+  );
+}
+
 export function recordUnprovenAssertion(
   result: ScenarioResult,
   assertion: Assertion,
   verification: string,
   matched: boolean,
   unchanged: boolean,
-  config: Config
+  config: Config,
+  alreadySatisfied = false
 ) {
   const step = assertion.afterStep ?? "the interaction";
+  /**
+   * Une assertion d'état dont la valeur était déjà celle de l'attendu avant
+   * l'étape, et que l'étape laisse identique, ne démontre pas l'interaction qu'elle
+   * accompagne : elle constate l'état initial. Le verdict reste non vert — jamais
+   * `passed` — et le blâme revient au plan, comme pour `TRANSITION_ON_INVARIANT`,
+   * parce que l'application montre exactement ce que l'assertion réclame.
+   */
+  if (alreadySatisfied) {
+    result.outcome = "blocked";
+    result.diagnostic = diagnose(
+      new QaError(
+        "STATE_ALREADY_SATISFIED",
+        `Assertion ${assertion.id}: the value after step ${step} is identical to the baseline probed before it, and that baseline already satisfied the expected one, so the step produced nothing this assertion can be credited with — the state is proven, the interaction is not`,
+        "Attach the assertion to the step that produces the value it checks, or verify a value the step really moves. To assert an invariance, or to establish a state the page may already hold, declare the step ifPresent: the plan then says the step may be a no-op, and the state assertion stays legitimate. An unchanged value cannot demonstrate a step that claims to have acted on its own."
+      ),
+      config
+    );
+    result.error = result.diagnostic.message;
+    return;
+  }
   if (unchanged && verification === "transition" && matched) {
     result.outcome = "blocked";
     result.diagnostic = diagnose(

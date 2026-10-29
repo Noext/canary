@@ -30,6 +30,7 @@ import {
   recordStepPlayed,
   recordUnprovenAssertion,
   reportStepFailure,
+  stateAlreadySatisfied,
 } from "./step-outcome.js";
 import { describeTarget, repairStepTarget } from "./target-repair.js";
 import { compareVisual } from "./visual.js";
@@ -163,22 +164,32 @@ async function evaluateAssertion(
     assertion.kind === "visual"
       ? (actual as { passed: boolean }).passed
       : assertionMatches(assertion, actual);
+  const measured = baselines.has(assertion.id);
   const preMatched =
-    baselines.has(assertion.id) &&
+    measured &&
     assertion.kind !== "visual" &&
     assertionMatches(assertion, baseline);
+  const unchangedSinceBaseline =
+    measured && isDeepStrictEqual(baseline, observation.actual);
+  const alreadySatisfied = stateAlreadySatisfied({
+    afterStep: assertion.afterStep,
+    baselineMatches: preMatched,
+    baselineMeasured: measured,
+    steps: result.steps,
+    unchanged: unchangedSinceBaseline,
+    verification,
+  });
   const passed =
     matched &&
+    !alreadySatisfied &&
     (!["transition", "persisted"].includes(verification) ||
-      (baselines.has(assertion.id) &&
-        !isDeepStrictEqual(baseline, observation.actual))) &&
+      (measured && !unchangedSinceBaseline)) &&
     (verification !== "persisted" || assertionMatches(assertion, persisted));
   // A transition whose value did not change proves nothing: the element may be
   // broken or invariant, and the identical baseline cannot tell the two apart.
   const unchanged =
     ["transition", "persisted"].includes(verification) &&
-    baselines.has(assertion.id) &&
-    isDeepStrictEqual(baseline, observation.actual);
+    unchangedSinceBaseline;
   if (assertion.kind === "visual") {
     observation.actual = actual;
   }
@@ -200,7 +211,8 @@ async function evaluateAssertion(
       verification,
       matched,
       unchanged,
-      config
+      config,
+      alreadySatisfied
     );
   }
 }
