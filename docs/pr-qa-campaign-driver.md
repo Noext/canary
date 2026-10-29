@@ -48,15 +48,24 @@ run réel est payant et n'est jamais déclenché par accident.
 
 Le préflight nomme **tous** les blocages à la fois, chacun avec sa correction :
 
-| Code | Cause |
-| --- | --- |
-| `CONFIG_INVALID` | la validation de configuration du service échoue (endpoint, modèle, hôtes) |
-| `MODEL_CREDENTIALS_MISSING` | `OPENAI_API_KEY` / `OPENAI_MODEL` absents |
-| `GITHUB_CREDENTIALS_MISSING` | ni jeton ni App GitHub : la PR est illisible |
-| `PREVIEW_UNVERIFIED` / `PREVIEW_SHA_MISMATCH` | la preview ne prouve pas le SHA complet du head |
-| `ARM_COMMIT_INVALID` / `ARM_SHA_MISMATCH` / `ARM_WORKTREE_MISSING` | le dépôt de travail d'un bras n'est pas sur le commit attendu |
-| `ARM_CLI_MISSING` | le bras n'a pas de `dist/cli.js` construit |
-| `DATA_DIR_INSIDE_REPO` | les runs seraient versionnables |
+| Code | Cause | Vérifié par |
+| --- | --- | --- |
+| `CONFIG_INVALID` | la validation de configuration du service échoue (endpoint, modèle, hôtes) | `validateConfiguration` |
+| `GITHUB_CREDENTIALS_MISSING` | ni jeton ni App GitHub configurés | config |
+| `PR_UNREADABLE` | la PR n'est pas lisible **avec les credentials de Canary** (404/401/403) | `GitHub.context`, le chemin de production |
+| `PR_HEAD_MISMATCH` | le head de la PR n'est pas le SHA que la campagne testerait | `GitHub.context` vs `--head` |
+| `MODEL_CREDENTIALS_MISSING` | `OPENAI_API_KEY` / `OPENAI_MODEL` absents | config |
+| `MODEL_UNAUTHORIZED` | la clé est refusée (401/403) sur `GET /models` | `ModelCatalog.list`, **aucun appel de génération** |
+| `MODEL_ENDPOINT_UNREACHABLE` | endpoint injoignable, mauvais chemin, hôte refusé | `ModelCatalog.list` |
+| `MODEL_CATALOG_EMPTY` / `MODEL_NOT_ALLOWED` | catalogue vide ou modèle hors `QA_ALLOWED_MODELS` | `ModelCatalog.list` / `runModelConfig` |
+| `PRICING_MISSING` | `QA_INPUT_COST_PER_MILLION` ou `QA_OUTPUT_COST_PER_MILLION` absent ou nul | config |
+| `PREVIEW_UNVERIFIED` / `PREVIEW_SHA_MISMATCH` | la preview ne prouve pas le SHA complet du head de la PR | `verifyPreviewUrl` |
+| `ARM_COMMIT_INVALID` / `ARM_SHA_MISMATCH` / `ARM_WORKTREE_MISSING` | le dépôt de travail d'un bras n'est pas sur le commit attendu | `git rev-parse HEAD` |
+| `ARM_CLI_MISSING` | le bras n'a pas de `dist/cli.js` construit | lecture du fichier |
+| `DATA_DIR_INSIDE_REPO` | les runs seraient suivis par git | `git rev-parse --show-toplevel` + `git check-ignore` |
+
+Aucun de ces contrôles ne s'appelle avec un cas particulier : il n'existe pas
+d'option pour obtenir `ready: true` sans les satisfaire tous.
 
 Les deux bras ne diffèrent **que** par leur commit. Aucun drapeau n'est injecté par le driver :
 une variable d'environnement qui changerait le comportement doit être posée identiquement pour les
@@ -82,6 +91,22 @@ compté comme un succès.
 Le dossier `--data` doit être hors du dépôt ; `qa-data/` est déjà ignoré par git. Les bundles de
 replay restent désactivés par le driver (`QA_REPLAY_BUNDLE=false`) : un bundle porte du texte de
 page et ne se committe pas.
+
+## 3 bis. Coût maximal, calculé avant la dépense
+
+Le rapport de préflight porte `maxCost` dès que les deux tarifs sont renseignés :
+
+```
+maxCost = 100 runs × QA_RUN_MAX_TOKENS × max(QA_INPUT_COST_PER_MILLION, QA_OUTPUT_COST_PER_MILLION) / 1e6
+```
+
+Aucun run ne peut dépasser `QA_RUN_MAX_TOKENS` (plafond du moteur) et aucun token
+ne coûte plus que le plus cher des deux tarifs : c'est une **borne**, pas une
+prévision. Avec les valeurs par défaut (`QA_RUN_MAX_TOKENS = 100 000`) et un tarif
+d'entrée de 1 $/M et de sortie de 4 $/M, la borne vaut **40 $** pour les 100 runs.
+
+Sans tarifs, `PRICING_MISSING` bloque et `maxCost` est **absent** : pas de zéro
+trompeur, pas de budget réservable.
 
 ## 4. Métriques
 

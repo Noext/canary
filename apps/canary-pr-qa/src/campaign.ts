@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { promisify } from "node:util";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   armMetrics,
   type CampaignVerdict,
@@ -10,15 +7,13 @@ import {
   compareArms,
   type RecordedRun,
 } from "./campaign-metrics.js";
+import { type CampaignPlan, campaignPreflight } from "./campaign-preflight.js";
 import {
   appendRunRecord,
   type CampaignExecutor,
   runArm,
 } from "./campaign-run.js";
-import { type Config, validateConfiguration } from "./config.js";
-import { verifyPreviewUrl } from "./preview.js";
-
-const run = promisify(execFile);
+import type { Config } from "./config.js";
 
 /**
  * Le protocole figé par `docs/pr-qa-campaign-criteria.md` : deux bras, des lots
@@ -160,6 +155,8 @@ export async function campaignCommand(
       previewUrl: plan.previewUrl,
       runsPerBlock: CAMPAIGN_RUNS_PER_BLOCK,
     },
+    maxCost: preflight.maxCost,
+    prSha: preflight.prSha,
     previewSha: preflight.previewSha,
     ready: preflight.blockers.length === 0,
   };
@@ -192,234 +189,4 @@ export async function campaignCommand(
   );
   process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
   return true;
-}
-
-export interface CampaignArm {
-  /** Le commit attendu, 40 hexadécimaux : vérifié avant chaque run. */
-  commit: string;
-  /** Variables ajoutées pour ce bras (le drapeau qui le distingue). */
-  env?: Record<string, string>;
-  name: "reference" | "candidate";
-  /** Dépôt de travail où ce commit est extrait et construit. */
-  worktree: string;
-}
-
-export interface CampaignPlan {
-  arms: readonly [CampaignArm, CampaignArm];
-  /** Dossier local des runs. Jamais versionné : le driver refuse un dossier suivi. */
-  dataDir: string;
-  /** Commit du head de la PR : la preview doit le prouver. */
-  headSha: string;
-  previewUrl: string;
-  prUrl: string;
-}
-
-export interface Blocker {
-  code: string;
-  detail: string;
-  fix: string;
-}
-
-function credentialBlockers(config: Config): Blocker[] {
-  const blockers: Blocker[] = [];
-  if (!(config.OPENAI_API_KEY && config.OPENAI_MODEL)) {
-    blockers.push({
-      code: "MODEL_CREDENTIALS_MISSING",
-      detail:
-        "OPENAI_API_KEY ou OPENAI_MODEL absent : aucun run ne peut planifier.",
-      fix: "Fournir la clé de l'endpoint IA de l'opérateur ; le driver ne consomme jamais d'API sans elle.",
-    });
-  }
-  if (!(config.GITHUB_TOKEN || config.GITHUB_APP_ID)) {
-    blockers.push({
-      code: "GITHUB_CREDENTIALS_MISSING",
-      detail:
-        "Ni GITHUB_TOKEN ni App GitHub configurés : la PR ne peut pas être lue.",
-      fix: "Configurer un jeton de lecture ou une App installée sur le dépôt de la PR.",
-    });
-  }
-  return blockers;
-}
-
-/** Un bras est utilisable quand son commit, son HEAD réel et son CLI concordent. */
-async function armBlockers(arm: CampaignArm): Promise<Blocker[]> {
-  if (!/^[0-9a-f]{40}$/.test(arm.commit)) {
-    return [
-      {
-        code: "ARM_COMMIT_INVALID",
-        detail: `Le bras ${arm.name} attend un SHA complet, reçu « ${arm.commit} ».`,
-        fix: "Donner les 40 caractères du commit de chaque bras.",
-      },
-    ];
-  }
-  if (!isAbsolute(arm.worktree)) {
-    return [
-      {
-        code: "ARM_WORKTREE_INVALID",
-        detail: `Le dépôt de travail du bras ${arm.name} doit être un chemin absolu.`,
-        fix: "Extraire le commit du bras (git worktree add) et donner son chemin.",
-      },
-    ];
-  }
-  const blockers: Blocker[] = [];
-  try {
-    const { stdout } = await run("git", [
-      "-C",
-      arm.worktree,
-      "rev-parse",
-      "HEAD",
-    ]);
-    const head = stdout.trim();
-    if (head !== arm.commit) {
-      blockers.push({
-        code: "ARM_SHA_MISMATCH",
-        detail: `Le bras ${arm.name} est sur ${head}, attendu ${arm.commit}.`,
-        fix: `git -C ${arm.worktree} checkout ${arm.commit}, puis reconstruire.`,
-      });
-    }
-  } catch {
-    blockers.push({
-      code: "ARM_WORKTREE_MISSING",
-      detail: `Aucun dépôt git lisible en ${arm.worktree}.`,
-      fix: "Extraire le commit du bras dans ce chemin.",
-    });
-  }
-  try {
-    await readFile(join(arm.worktree, "apps/canary-pr-qa/dist/cli.js"));
-  } catch {
-    blockers.push({
-      code: "ARM_CLI_MISSING",
-      detail: `Le bras ${arm.name} n'a pas de CLI construit (${arm.worktree}).`,
-      fix: "Lancer pnpm install && pnpm build dans le dépôt de travail du bras.",
-    });
-  }
-  return blockers;
-}
-
-/**
- * Ce qui empêche la campagne de démarrer. Tous les blocages sont rendus, pas le
- * premier : un opérateur doit voir en une fois ce qui manque, et le driver ne
- * simule jamais un run pour « voir si ça marche » — un run réel est payant.
- */
-export async function campaignPreflight(
-  plan: CampaignPlan,
-  config: Config
-): Promise<{ blockers: Blocker[]; previewSha?: string }> {
-  const blockers: Blocker[] = [];
-  try {
-    validateConfiguration(config);
-  } catch (error) {
-    blockers.push({
-      code: "CONFIG_INVALID",
-      detail: error instanceof Error ? error.message : "configuration invalide",
-      fix: "Corriger .env (voir .env.example) puis relancer le préflight.",
-    });
-  }
-  blockers.push(...credentialBlockers(config));
-  const preview = await previewBlocker(plan, config);
-  blockers.push(...preview.blockers);
-  for (const arm of plan.arms) {
-    blockers.push(...(await armBlockers(arm)));
-  }
-  blockers.push(...(await dataDirBlockers(plan.dataDir)));
-  return {
-    blockers,
-    ...(preview.previewSha === undefined
-      ? {}
-      : { previewSha: preview.previewSha }),
-  };
-}
-
-/**
- * Les runs ne doivent jamais être versionnables. Le test porte sur le dépôt qui
- * CONTIENT le dossier, jamais sur le répertoire courant : un dossier sous
- * `/tmp` lancé depuis `/tmp` était signalé « dans le dépôt » alors qu'il n'y en
- * a aucun — mesuré en lançant le préflight. Hors de tout dépôt, ou ignoré par
- * git, le dossier convient.
- */
-async function dataDirBlockers(dataDir: string): Promise<Blocker[]> {
-  const resolved = resolve(dataDir);
-  let toplevel: string;
-  try {
-    const { stdout } = await run("git", [
-      "-C",
-      nearestExisting(resolved),
-      "rev-parse",
-      "--show-toplevel",
-    ]);
-    toplevel = stdout.trim();
-  } catch {
-    return [];
-  }
-  const inside = relative(toplevel, resolved);
-  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
-    return [];
-  }
-  try {
-    await run("git", ["-C", toplevel, "check-ignore", "-q", resolved]);
-    return [];
-  } catch {
-    return [
-      {
-        code: "DATA_DIR_INSIDE_REPO",
-        detail: `${resolved} est suivi par git : les runs seraient versionnables.`,
-        fix: "Donner un dossier hors du dépôt (ou ajouté au .gitignore) pour --data.",
-      },
-    ];
-  }
-}
-
-/** Le plus proche ancêtre qui existe, pour interroger git sur un dossier à créer. */
-function nearestExisting(path: string): string {
-  let current = path;
-  for (;;) {
-    try {
-      statSync(current);
-      return current;
-    } catch {
-      const parent = dirname(current);
-      if (parent === current) {
-        return current;
-      }
-      current = parent;
-    }
-  }
-}
-
-/** La preview doit prouver le SHA complet du head, ou le préflight le dit. */
-async function previewBlocker(
-  plan: CampaignPlan,
-  config: Config
-): Promise<{ blockers: Blocker[]; previewSha?: string }> {
-  try {
-    const preview = await verifyPreviewUrl(
-      plan.previewUrl,
-      plan.headSha,
-      config
-    );
-    if (preview.sha === plan.headSha) {
-      return { blockers: [], previewSha: preview.sha };
-    }
-    return {
-      blockers: [
-        {
-          code: "PREVIEW_SHA_MISMATCH",
-          detail: `La preview annonce ${preview.sha}, la campagne attend ${plan.headSha}.`,
-          fix: "Attendre le déploiement du SHA complet du head, ou corriger --head.",
-        },
-      ],
-      previewSha: preview.sha,
-    };
-  } catch (error) {
-    return {
-      blockers: [
-        {
-          code: "PREVIEW_UNVERIFIED",
-          detail:
-            error instanceof Error ? error.message : "preview non vérifiable",
-          fix: "Exposer x-commit-sha (ou PREVIEW_SHA_PATH) sur la preview, et autoriser son hôte dans PREVIEW_ALLOWED_HOSTS.",
-        },
-      ],
-    };
-  }
 }
