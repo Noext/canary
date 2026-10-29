@@ -79,6 +79,14 @@ describe("Canary Replay bundle", () => {
     expect(parsed.version).toBe(1);
   });
 
+  it("rejects a bundle whose source SHA differs from its captured context", () => {
+    const invalid = {
+      ...bundle(),
+      context: { ...bundle().context, sha: BASE_SHA },
+    };
+    expect(() => parseReplayBundle(JSON.stringify(invalid))).toThrow();
+  });
+
   it("runs gate replay without calling the model", async () => {
     const directory = await mkdtemp(join(tmpdir(), "canary-replay-test-"));
     cleanup.push(directory);
