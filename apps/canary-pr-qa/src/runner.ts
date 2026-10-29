@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
 import { z } from "zod";
@@ -1803,6 +1803,27 @@ async function executePlan(
     if (activeScope) {
       activeScope.previewSha = context.sha;
     }
+  }
+  if (config.QA_REPLAY_BUNDLE) {
+    const bundlePath = join(root, "replay-bundle.json");
+    const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as Record<string, unknown>;
+    await writeFile(
+      bundlePath,
+      `${JSON.stringify({
+        ...bundle,
+        runtime: {
+          outcome: result.outcome,
+          scenarios: result.scenarios.map((item) => ({
+            scenarioId: item.scenario.id,
+            outcome: item.outcome,
+            error: item.error,
+            diagnostic: item.diagnostic,
+            assertions: item.assertions,
+          })),
+        },
+      }, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 }
+    );
   }
 }
 async function recheck(
