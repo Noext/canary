@@ -1,10 +1,30 @@
 name: CI
 
 on:
+  # `feat/autonomous-pr-qa` used to be listed here and no longer exists (the
+  # remote only has `main`, `baseline-8143ac9` and short-lived topic branches).
+  # Recreating it would have produced a second full `check` for every push of a
+  # branch whose PR already triggers one.
   push:
-    branches: [main, feat/autonomous-pr-qa]
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A push that supersedes another one on the same ref must not keep an obsolete
+# run on the `canary-ci` runners: they are shared, non-ephemeral LXC containers
+# and there are only two of them, so a stale run delays the one the PR is
+# actually waiting for. Measured before this block existed: 45 minutes of
+# cumulative queue across 60 runs, 24 of them waiting 38-218 s behind a
+# superseded sibling (`feat/canary-replay` alone produced 34 runs, 33 of them
+# replaced by the next push).
+#
+# `cancel-in-progress` is restricted to pull requests on purpose: a push to
+# `main` is a merge commit and its CI result is the record of that merge, so a
+# later push must never cancel it. `pull_request` events share the group
+# `refs/pull/<n>/merge`, which is exactly the "same PR" scope we want.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
