@@ -213,7 +213,23 @@ jobs:
         run: node apps/canary/dist/cli.js install
 
       - name: Autonomous PR QA E2E (real Chromium, fixture GitHub and AI APIs)
-        run: pnpm --filter @usecanary/pr-qa test:e2e
+        # `exec` instead of passing `--` to the script, and RUNNER_TEMP instead
+        # of /tmp: the runner is shared by every job, so a fixed /tmp path was
+        # read back from a sibling run and produced a stale report.
+        run: pnpm --filter @usecanary/pr-qa exec vitest run test/e2e --reporter=json --outputFile="$RUNNER_TEMP/e2e-ci.json"
+
+      # The default reporter only prints the file that is slow, not all of
+      # them, so the per-file and per-test wall of this suite was never visible
+      # from CI — only from a developer machine with different cores. This
+      # artifact is what tells whether splitting a file further can move this
+      # step at all.
+      - name: Upload per-file durations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-per-file-durations
+          path: ${{ runner.temp }}/e2e-ci.json
+          if-no-files-found: ignore
 
   # The image build and the Compose first-install suite are the only steps that
   # need a Docker daemon, and they do not consume what the `check` job builds:
