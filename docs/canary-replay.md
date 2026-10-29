@@ -1,41 +1,57 @@
-# Canary Replay: deterministic historical gate replay
+# Canary Replay
 
-## Run it locally
+Canary Replay lets a developer validate a stored plan against the production gates
+without starting a browser session, resolving a preview, deploying, or publishing
+a GitHub status/comment.
+
+## Capture a replay bundle
+
+Set `QA_REPLAY_BUNDLE=true` in the environment used for a normal PR QA run. After
+planning and the production settlement step, Canary writes:
+
+```
+<QA_DATA_DIR>/<run-id>/replay-bundle.json
+```
+
+The bundle pins the PR URL, head/base SHAs, source context, diff, trusted policy and
+catalog, exact planner payload, raw generated plan, settled plan, and the initial
+ARIA observation. Capture is opt-in because source files and page text may contain
+sensitive information. Keep the run directory private; do not commit bundles or
+publish them as CI artifacts without reviewing their contents.
+
+## Replay a bundle
 
 From the repository root:
 
 ```bash
-pnpm --filter @usecanary/pr-qa test:replay
+pnpm --filter @usecanary/pr-qa dev -- replay ./qa-data/<run-id>/replay-bundle.json --mode gate
+pnpm --filter @usecanary/pr-qa dev -- replay ./qa-data/<run-id>/replay-bundle.json --mode plan
 ```
 
-This runs `test/historical.test.ts` against the frozen PR #20 diff snapshot and
-seven real historical plans. It does **not** call the planner model, open a browser,
-resolve a preview, deploy code, or publish a GitHub status/comment. It is intended
-as a fast regression check while changing deterministic plan gates.
+- **`gate`** reads the bundle and runs the shared production plan-refusal,
+  coverage, provenance and page-evidence checks. It makes no model request and
+  does not use Chromium, a preview, GitHub, deployment, or tracing exporters.
+- **`plan`** sends the stored planner payload to the configured model with the
+  current planner prompt/schema, then applies those same gates. It calls the model
+  endpoint only; it does not rediscover the page or execute scenarios.
 
-The corpus currently checks attribution repair and selected source-witness /
-length refusals, and records two defects that static evidence cannot prove:
-an invariant transition and a target missing after navigation. Those two cases
-must not be described as fully validated offline; they require runtime evidence.
+A non-zero exit code means the resulting plan has one or more refusals.
+Inconclusive evidence is reported separately and is not silently treated as proof.
 
-## What this first increment does not do
+The bundle stores both the raw generated plan and the settled plan. Gate mode
+validates the settled plan, matching the final production validation path; the raw
+plan is preserved for analysis.
 
-This is the entry point for the deterministic replay workflow, not yet the full
-three-mode replay system. In particular, the corpus is a fixed set of seven
-plans, not a general `--bundle` interface; it does not replay every production
-gate or regenerate plans with the model. The next increments should:
+## Regression workflow
 
-1. Persist immutable run bundles containing the exact planner payload, model
-   snapshot, source/diff context, original full plan, refusals/repairs, and
-   available runtime observations, with credentials and session material excluded.
-2. Extract the production plan-validation pipeline into a shared function so
-   production and replay call the **same** gates, rather than maintaining a
-   second validator.
-3. Add a bundle-driven `gate` mode with no network, model, browser, or publication.
-4. Add an opt-in `plan` mode that calls the configured model against frozen input
-   only, then applies the same validation/repair path without discovering a preview.
-5. Keep browser replay targeted to cases whose correctness depends on runtime
-   state or DOM availability.
+1. Change the implementation locally.
+2. Run compile, unit tests, and `pnpm --filter @usecanary/pr-qa test:replay`.
+3. For a validator change, gate-replay relevant stored bundles.
+4. For a planner/prompt change, run `--mode plan` against a small relevant subset.
+5. Use browser replay only when the question depends on runtime state, navigation,
+   or an element appearing after an interaction.
 
-The full plan must be validated even when a report focuses on one previously
-failing scenario: global coverage requirements depend on the other scenarios.
+The historical corpus still contains cases that cannot be proven statically:
+a transition on an invariant value and a target missing only after navigation.
+Those require runtime evidence; offline replay must leave them inconclusive rather
+than inventing a browser verdict.
