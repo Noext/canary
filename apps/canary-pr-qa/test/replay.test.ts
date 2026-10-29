@@ -80,9 +80,13 @@ describe("Canary Replay bundle", () => {
   });
 
   it("rejects a bundle whose source SHA differs from its captured context", () => {
+    const original = bundle();
     const invalid = {
-      ...bundle(),
-      context: { ...bundle().context, sha: BASE_SHA },
+      ...original,
+      context: {
+        ...original.context,
+        sha: BASE_SHA,
+      },
     };
     expect(() => parseReplayBundle(JSON.stringify(invalid))).toThrow();
   });
