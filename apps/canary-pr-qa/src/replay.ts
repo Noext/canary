@@ -69,6 +69,7 @@ export const ReplayBundleSchema = z.object({
     url: z.string().url(),
     aria: z.string(),
   }),
+  runtime: z.unknown().optional(),
 }).strict();
 
 export type ReplayBundle = z.infer<typeof ReplayBundleSchema>;
