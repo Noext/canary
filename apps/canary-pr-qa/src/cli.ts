@@ -37,8 +37,6 @@ async function main() {
     return;
   }
   const config = loadConfig();
-  const stopTracing = initializeTracing();
-  process.once("beforeExit", () => void stopTracing?.());
   if (command === "replay" && positionals.length === 2 && positionals[1]) {
     const mode = values.mode ?? "gate";
     if (mode !== "gate" && mode !== "plan") {
@@ -49,6 +47,8 @@ async function main() {
     process.exitCode = result.refusals.length === 0 ? 0 : 1;
     return;
   }
+  const stopTracing = initializeTracing();
+  process.once("beforeExit", () => void stopTracing?.());
   if (
     (await accountCommand(command, positionals, values.origin, config)) ||
     (await serviceCommand(command, config))
