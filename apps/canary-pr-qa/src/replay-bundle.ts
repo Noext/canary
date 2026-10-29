@@ -71,7 +71,9 @@ export async function saveReplayBundle(
   );
 }
 
-/** Adds the original browser outcomes after the run, without exposing them publicly. */
+/**
+ * Adds the original browser outcomes after the run, without exposing them publicly.
+ */
 export async function attachReplayRuntimeResults(
   root: string,
   result: RunResult
