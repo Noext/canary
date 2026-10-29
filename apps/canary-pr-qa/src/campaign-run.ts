@@ -3,12 +3,12 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createLogger } from "@usecanary/logger";
-import type { CampaignArm, CampaignPlan } from "./campaign.js";
 import type {
   RecordedAssertion,
   RecordedRun,
   RecordedScenario,
 } from "./campaign-metrics.js";
+import type { CampaignArm, CampaignPlan } from "./campaign-preflight.js";
 import type { Config } from "./config.js";
 
 const logger = createLogger({ name: "pr-qa-campaign-run" });

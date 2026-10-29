@@ -2,15 +2,17 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CAMPAIGN_BLOCKS,
   CAMPAIGN_RUNS_PER_BLOCK,
-  type CampaignPlan,
-  campaignPreflight,
   runCampaign,
 } from "../src/campaign.js";
 import type { RecordedRun } from "../src/campaign-metrics.js";
+import {
+  type CampaignPlan,
+  campaignPreflight,
+} from "../src/campaign-preflight.js";
 import {
   appendRunRecord,
   readRunRecords,
@@ -21,6 +23,7 @@ import { loadConfig } from "../src/config.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
@@ -42,6 +45,8 @@ function config() {
     PREVIEW_ALLOWED_HOSTS: "preview.fixture.test",
     QA_API_TOKEN: "fixture-api-token-123456789012345",
     QA_DATA_DIR: "/tmp/canary-campaign-data",
+    QA_INPUT_COST_PER_MILLION: "1",
+    QA_OUTPUT_COST_PER_MILLION: "4",
   });
 }
 
