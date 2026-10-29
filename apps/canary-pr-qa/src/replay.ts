@@ -168,5 +168,6 @@ export async function runReplay(
     inconclusive: validation.inconclusive,
     plan,
     generatedPlan,
+    runtime: bundle.runtime,
   };
 }
