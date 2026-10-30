@@ -67,6 +67,23 @@ describe("production configuration and useful diagnostics", () => {
       )
     ).not.toContain(f.config.GITHUB_TOKEN);
   });
+  it("redacts *_TOKEN environment secrets but never the *_TOKENS budget counts", () => {
+    vi.stubEnv("QA_PLAN_MAX_TOKENS", "98304");
+    vi.stubEnv("QA_RUN_MAX_TOKENS", "400000");
+    vi.stubEnv("SOME_SERVICE_TOKEN", "svc-secret-value");
+    const text = JSON.stringify({
+      QA_PLAN_MAX_TOKENS: 98_304,
+      QA_RUN_MAX_TOKENS: 400_000,
+      service: "svc-secret-value",
+    });
+    const safe = redact(text);
+    expect(JSON.parse(safe)).toEqual({
+      QA_PLAN_MAX_TOKENS: 98_304,
+      QA_RUN_MAX_TOKENS: 400_000,
+      service: "[REDACTED]",
+    });
+    vi.unstubAllEnvs();
+  });
   it("explains network causes and filesystem failures instead of an opaque fetch failed", () => {
     expect(
       diagnose(
