@@ -202,6 +202,46 @@ describe("I3 — preuve d'objectif : pas de vert sans objectif démontré", () =
     expect(result.diagnostic?.message).toContain("never executed");
   });
 
+  it("garde le verdict failed d'une régression produit survenue avant l'objectif", () => {
+    // Le scénario s'arrête sur une assertion produit en échec : l'objectif n'est
+    // jamais atteint. Le requalifier en blocked CONTRACT_INCOMPLETE masquait la
+    // régression — aggregate rend `failed` seulement si un scénario l'est.
+    const regression = scenarioResult({
+      assertions: [{ id: "other", passed: false, actual: "Bye" }],
+      outcome: "failed",
+      classification: "failed",
+      diagnostic: {
+        code: "TRANSITION_NOT_OBSERVED",
+        message: "other never changed",
+        hint: "",
+      },
+    });
+    const result = enforceObjectiveProof(regression, config);
+    expect(result.outcome).toBe("failed");
+    expect(result.diagnostic?.code).toBe("TRANSITION_NOT_OBSERVED");
+    expect(result.objectiveProven).toBe(false);
+  });
+
+  it("garde la cause d'un scénario déjà bloqué au lieu de la remplacer", () => {
+    // Premier plan réel de la PR #20 : le scénario s'arrêtait sur une
+    // transition impossible, et le rapport disait seulement « objective never
+    // executed » au lieu de nommer l'assertion fautive.
+    const blocked = scenarioResult({
+      assertions: [{ id: "other", passed: false, actual: "1" }],
+      outcome: "blocked",
+      classification: "test-defect",
+      diagnostic: {
+        code: "TRANSITION_ON_INVARIANT",
+        message: "other was already satisfied",
+        hint: "",
+      },
+    });
+    const result = enforceObjectiveProof(blocked, config);
+    expect(result.outcome).toBe("blocked");
+    expect(result.diagnostic?.code).toBe("TRANSITION_ON_INVARIANT");
+    expect(result.objectiveProven).toBe(false);
+  });
+
   it("bloque l'objectif non prouvé même quand la porte d'observation est coupée", () => {
     const failed = scenarioResult({
       assertions: [{ id: "title", passed: false, actual: "Bye" }],
