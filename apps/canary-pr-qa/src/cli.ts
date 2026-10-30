@@ -8,6 +8,7 @@ import { startEgressProxy } from "./egress-proxy.js";
 import { LocalAuth } from "./local-auth.js";
 import { startProductionServer } from "./production-server.js";
 import { Queue } from "./queue.js";
+import { rejudge } from "./rejudge.js";
 import { replayExitCode, runReplay } from "./replay.js";
 import { replayScenario } from "./replay-scenario.js";
 import { runQa } from "./runner.js";
@@ -25,11 +26,12 @@ interface CliValues {
   origin?: string;
   pr?: string;
   preview?: string;
+  response?: string;
   "skip-browser"?: boolean;
 }
 
 const USAGE =
-  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa replay-scenario <bundle.json> --scenario ID\ncanary-pr-qa campaign --pr URL --preview URL --head SHA --reference-sha SHA --reference-worktree PATH --candidate-sha SHA --candidate-worktree PATH --data DIR [--confirm-paid-runs]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
+  "canary-pr-qa run <https://github.com/owner/repo/pull/number> [--preview URL] [--model ID] [--no-publish]\ncanary-pr-qa replay <bundle.json> [--mode gate|plan]\ncanary-pr-qa replay-scenario <bundle.json> --scenario ID\ncanary-pr-qa rejudge <run-dir> [--response N]\ncanary-pr-qa campaign --pr URL --preview URL --head SHA --reference-sha SHA --reference-worktree PATH --candidate-sha SHA --candidate-worktree PATH --data DIR [--confirm-paid-runs]\ncanary-pr-qa serve\ncanary-pr-qa doctor [--offline] [--skip-browser] [--pr PR_URL] [--preview URL] [--json]\ncanary-pr-qa diagnose RUN_ID\ncanary-pr-qa setup-admin [--origin https://qa.example.com]\ncanary-pr-qa reset-password USERNAME (password from stdin)\nConfiguration: .env.example at the repository root (Node --env-file=.env)\n";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -53,6 +55,7 @@ async function main() {
       "candidate-worktree": { type: "string" },
       "confirm-paid-runs": { type: "boolean" },
       scenario: { type: "string" },
+      response: { type: "string" },
     },
   });
   const command = positionals[0];
@@ -61,7 +64,10 @@ async function main() {
     return;
   }
   const config = loadConfig();
-  if (await replayCommand(command, positionals, values.mode, config)) {
+  if (
+    (await replayCommand(command, positionals, values.mode, config)) ||
+    (await rejudgeCommand(command, positionals, values.response, config))
+  ) {
     return;
   }
   if (await campaignCommand(command, values, config)) {
@@ -125,6 +131,32 @@ async function replayCommand(
   // (preuve de page absente ou coupée) n'a rien refusé et n'a pourtant rien
   // prouvé, donc il ne peut pas sortir en succès.
   process.exitCode = replayExitCode(result.verdict);
+  return true;
+}
+
+/**
+ * Rejuge hors ligne les réponses payées d'un run (`_planner/`), avec le même
+ * jugement que le run : aucun modèle, aucun navigateur, aucun réseau.
+ */
+async function rejudgeCommand(
+  command: string | undefined,
+  args: string[],
+  response: string | undefined,
+  config: Config
+) {
+  if (command !== "rejudge" || args.length !== 2 || !args[1]) {
+    return false;
+  }
+  if (response !== undefined && !/^[1-9]\d{0,3}$/.test(response)) {
+    throw new Error("--response must be a positive response number");
+  }
+  const result = await rejudge(
+    args[1],
+    response === undefined ? undefined : Number(response),
+    config
+  );
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exitCode = result.accepted ? 0 : 1;
   return true;
 }
 

@@ -150,7 +150,10 @@ export async function serveArtifact(
       ".log",
       ".png",
     ].includes(extname(path)) ||
-    path.endsWith("job.json")
+    path.endsWith("job.json") ||
+    // Les entrées et réponses brutes du planificateur (`planner-record.ts`) :
+    // matière de diagnostic hors ligne, jamais servie, même signée ou publique.
+    relative(root, path).split("/")[0] === "_planner"
   ) {
     throw new Error("Artifact path is not allowed");
   }

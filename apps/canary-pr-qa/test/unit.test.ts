@@ -24,7 +24,8 @@ import {
 } from "../src/config.js";
 import { diagnose, QaError } from "../src/diagnostics.js";
 import { GitHub, type PrContext, parsePrUrl } from "../src/github.js";
-import { mayRetry, PLANNER_PROMPT, transportCode } from "../src/model.js";
+import { transportCode } from "../src/http.js";
+import { mayRetry, PLANNER_PROMPT } from "../src/model.js";
 import { planPayload } from "../src/plan-evidence.js";
 import {
   PolicySchema,
@@ -3368,7 +3369,18 @@ describe("runner false-green regressions", () => {
       tight.config
     );
     expect(refused.outcome).toBe("blocked");
-    expect(refused.diagnostic?.code).toBe("RUN_BUDGET_EXCEEDED");
+    // La reprise reste refusée avant l'envoi, mais l'échec qui remonte est
+    // celui du contenu payé — JSON illisible, extrait et validation compris —,
+    // avec la réservation refusée face à ce qui restait : un
+    // `RUN_BUDGET_EXCEEDED` nu effaçait la cause (runs 7 et 8).
+    expect(refused.diagnostic?.code).toBe("MODEL_JSON_INVALID");
+    expect(refused.diagnostic?.message).toContain("Next model call not sent");
+    expect(refused.diagnostic?.message).toMatch(
+      /reservation \d+ tokens .* for -?\d+ tokens .* remaining/
+    );
+    expect(refused.diagnostic?.hint).toContain(
+      "Response content is not valid JSON"
+    );
     expect(tight.modelRequests).toHaveLength(2);
   }, 60_000);
   it("keeps the correction cycle after an incomplete replay", async () => {

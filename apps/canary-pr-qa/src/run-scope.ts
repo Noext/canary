@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { QaError } from "./diagnostics.js";
+import type { ModelResponseHook } from "./model-capture.js";
 export interface RunScope {
   calls: number;
   costUsd: number;
@@ -16,6 +17,13 @@ export interface RunScope {
    * prompt envoyé — ne décide jamais deux admissions.
    */
   observedInputTokens?: number;
+  /**
+   * Remis à chaque réponse payée du modèle, dès que son usage est compté et
+   * avant tout contrôle de budget, puis avec son verdict (`model-capture.ts`).
+   * Le runner l'écrit sous `_planner/` : sans lui, une réponse refusée puis
+   * suivie d'un budget épuisé n'était conservée nulle part.
+   */
+  onModelResponse?: ModelResponseHook;
   /** Signalé avant chaque attente de reprise, pour que le run reste lisible. */
   onRetry?: (info: { attempt: number; max: number; code: string }) => void;
   previewSha?: string;
@@ -76,6 +84,23 @@ export function checkBudget(reserveTokens = 0, reserveCostUsd = 0) {
       "Inspect usage in result.json; adjust limits only after reviewing model pricing and scenarios."
     );
   }
+}
+/**
+ * Ce qu'une réservation refusée demandait, face à ce qui restait : le chiffre
+ * qu'un `RUN_BUDGET_EXCEEDED` nu ne dit pas, et sans lequel un opérateur ne
+ * peut pas distinguer une enveloppe trop serrée d'une réponse trop lourde.
+ */
+export function budgetShortfall(
+  reserveTokens: number,
+  reserveCostUsd: number
+): string {
+  const scope = runScope.getStore();
+  if (!scope) {
+    return `reservation ${reserveTokens} tokens / $${reserveCostUsd.toFixed(4)}`;
+  }
+  const leftTokens = scope.maxTokens - scope.tokens - scope.reservedTokens;
+  const leftCost = scope.maxCostUsd - scope.costUsd - scope.reservedCostUsd;
+  return `reservation ${reserveTokens} tokens / $${reserveCostUsd.toFixed(4)} for ${leftTokens} tokens / $${leftCost.toFixed(4)} remaining (used ${scope.tokens} tokens / $${scope.costUsd.toFixed(4)}, lost-attempt reserve ${scope.reservedTokens} tokens / $${scope.reservedCostUsd.toFixed(4)}, envelope ${scope.maxTokens} tokens / $${scope.maxCostUsd})`;
 }
 export function requestSignal(timeout: number): AbortSignal {
   const signal = runScope.getStore()?.signal;

@@ -1,11 +1,49 @@
-import { z } from "zod";
+import type { z } from "zod";
 import type { Config } from "./config.js";
 import { QaError, redact } from "./diagnostics.js";
-import { fetchSse, fetchText } from "./http.js";
+import {
+  fetchSse,
+  fetchText,
+  RETRYABLE_HTTP_CODES,
+  transportCode,
+} from "./http.js";
+import { gateVerdict, invalidVerdict, ResponseLog } from "./model-capture.js";
 import { assertProvider, runModelConfig } from "./model-catalog.js";
-import { checkBudget, runScope } from "./run-scope.js";
+import {
+  type ConstrainedAnswer,
+  exceededOutputBound,
+  type InvalidContent,
+  invalidContentError,
+  measuredCount,
+  readModelContent,
+  unusableOutputMessage,
+  usableResponse,
+} from "./model-content.js";
+import { budgetShortfall, checkBudget, runScope } from "./run-scope.js";
 import { type ChatUsage, emptyChatStream, reduceChatStream } from "./sse.js";
 import { modelCalls, modelLatency, modelTokens, traced } from "./telemetry.js";
+
+/**
+ * Correction d'un plan refusé, telle que le modèle la reçoit au tour suivant.
+ *
+ * Une phrase libre (`string`) demande le plan complet corrigé : le modèle
+ * réécrit donc ses citations caractère par caractère, et c'est exactement ce
+ * qui échoue quand la copie est dense (run 9add286d : `:""` inséré après les
+ * 56 premiers caractères de la copie, et l'appel de correction payé s'achève sur
+ * cette copie altérée, alors que la ligne exacte était dans le matériel).
+ *
+ * Une correction contrainte (`ConstrainedCorrection`) ne demande plus de texte :
+ * le gate énumère les candidats réels, le modèle répond par un INDICE validé
+ * par `answer`, et `resolve` écrit lui-même le texte dans la valeur. La boucle
+ * de correction ne peut donc plus reproduire l'altération qu'elle corrige, et
+ * c'est la valeur résolue — un texte réel, jamais un indice — qui est rendue à
+ * l'appelant.
+ */
+export interface ConstrainedCorrection<T> extends ConstrainedAnswer<T> {
+  /** Ce que le modèle lit : la question contrainte, jamais le plan refusé. */
+  message: string;
+}
+export type Correction<T> = string | ConstrainedCorrection<T>;
 
 /** Compteurs d'usage déclarés par l'endpoint, dans l'une ou l'autre forme de transport. */
 interface ReportedUsage {
@@ -27,6 +65,8 @@ interface ModelResponse {
    * `deliveredOutputTokens` quand le provider ne compte pas sa sortie.
    */
   deliveredChars?: number;
+  /** Caractères de raisonnement reçus : comptés, jamais conservés. */
+  reasoningChars?: number;
   usage?: ReportedUsage;
 }
 
@@ -41,36 +81,6 @@ interface DeliveredTrial {
   reasoningChars: number;
   usage?: ChatUsage;
 }
-
-/**
- * Codes de transport rejouables : la connexion meurt avant tout contenu utile,
- * donc la reprise est sans effet de bord et sans double facturation. Les deux
- * derniers sont nos normalisations de transport — `TIMEOUT` (délai du client
- * modèle, issu d'un `AbortSignal.timeout`) et `MODEL_STREAM_TRUNCATED` (flux
- * fermé proprement avant `[DONE]`). Restent définitifs un refus de plan (preuve,
- * schéma, couverture) et une erreur rapportée par l'endpoint
- * (`MODEL_STREAM_ERROR`) : ils ne s'améliorent pas en rejouant la même requête.
- * Les deux codes d'une réponse reçue mais inexploitable ont leur propre reprise,
- * unique (`CONTENT_RETRY_CODES`).
- */
-const TRANSPORT_CODES = new Set([
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "EPIPE",
-  "UND_ERR_SOCKET",
-  "TIMEOUT",
-  "MODEL_STREAM_TRUNCATED",
-]);
-
-/**
- * Statuts HTTP rejouables : l'endpoint était momentanément indisponible (503,
- * celui qu'un gateway renvoie quand son amont refuse la requête) ou appliquait
- * sa fenêtre de débit (429). La requête est partie sans produire de contenu utile
- * — la même situation qu'une connexion coupée —, donc la reprise est sans effet
- * de bord. Tout autre statut reste définitif : un 4xx de requête (400, 401, 403,
- * 404) ne s'améliore pas au second essai.
- */
-const RETRYABLE_HTTP_CODES = new Set(["HTTP_429", "HTTP_503"]);
 
 /**
  * Codes d'un contenu inexploitable, rejoués une fois : l'endpoint a répondu,
@@ -177,57 +187,6 @@ function retriedFailure(error: QaError, retries: number): QaError {
       );
 }
 
-/** Classe une erreur : code rejouable, ou `undefined` (échec définitif). */
-export function transportCode(error: unknown): string | undefined {
-  for (const candidate of [
-    error,
-    (error as { cause?: { code?: string } } | undefined)?.cause,
-  ]) {
-    const code = (candidate as { code?: unknown } | undefined)?.code;
-    if (
-      typeof code === "string" &&
-      (TRANSPORT_CODES.has(code) || RETRYABLE_HTTP_CODES.has(code))
-    ) {
-      return code;
-    }
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  // Node signale une socket détruite en plein échange par « terminated » ou
-  // « socket hang up », parfois sans code : c'est la même classe rejouable.
-  return /terminated|socket hang up/i.test(message)
-    ? "UND_ERR_SOCKET"
-    : undefined;
-}
-
-/**
- * Un compteur d'usage n'est une mesure que s'il est strictement positif. Un zéro
- * explicite n'est pas une mesure nulle mais une absence de mesure : un endpoint
- * qui zéro-remplit son `usage` ne peut donc ni créditer une tentative perdue
- * d'une réserve nulle, ni faire déclarer zéro pour un prompt réellement envoyé.
- */
-function measuredCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? value
-    : undefined;
-}
-
-/**
- * Sortie que l'endpoint a lui-même chiffrée au-delà de la borne transmise : le
- * champ de limite a été ignoré, donc la réponse est exactement ce que la borne
- * refusait de payer. Elle est traitée comme inutilisable
- * (`MODEL_OUTPUT_INCOMPLETE`, reprise unique comprise) au lieu d'être acceptée.
- * Un endpoint qui n'annonce pas de `completion_tokens` échappe à cette mesure —
- * son `finish_reason: "length"` et la borne transmise restent ce qui juge la
- * réponse, jamais ce qui la comptabilise (voir `deliveredOutputTokens`).
- */
-function exceededOutputBound(
-  response: ModelResponse,
-  maxTokens: number
-): number | undefined {
-  const reported = measuredCount(response.usage?.completion_tokens);
-  return reported !== undefined && reported > maxTokens ? reported : undefined;
-}
-
 /**
  * Caractères par token pour la sortie qu'un endpoint ne compte pas : la même
  * mesure que la réserve crédible d'une tentative perdue
@@ -257,100 +216,58 @@ function deliveredOutputTokens(
 }
 
 /**
- * Caractères de la réponse fautive conservés dans le diagnostic. Borné, sans le
- * prompt et passé par `redact` : l'extrait sert à distinguer une troncature
- * d'une dérive, jamais à recopier une réponse entière dans un rapport.
+ * L'état d'une tentative de plan, partagé par la boucle de `Model.json` et le
+ * sort d'un contenu refusé (`correctRefusedContent`).
  */
-const OUTPUT_EXCERPT_CHARS = 500;
-
-/**
- * Extrait borné de la réponse fautive, avec sa position d'arrêt : le nombre de
- * caractères reçus et le `finish_reason` de l'endpoint. Une accolade non fermée à
- * la fin de l'extrait trahit une génération coupée, un JSON complet — ou du texte
- * qui n'en est pas — porte une dérive du modèle que le schéma refuse.
- */
-function responseExcerpt(
-  content: string,
-  finishReason: string | undefined,
-  config: Config
-): string {
-  const safe = redact(content, config);
-  const excerpt = safe.slice(0, OUTPUT_EXCERPT_CHARS);
-  return ` Response excerpt (${safe.length} characters, finish_reason=${finishReason ?? "none"}): ${JSON.stringify(excerpt)}${safe.length > excerpt.length ? " [truncated]" : ""}`;
+interface PlanAttempt<T> {
+  /**
+   * L'erreur que porte le dernier contenu refusé (`PLAN_SCHEMA_INVALID`,
+   * `MODEL_JSON_INVALID`) : c'est elle, chiffres de réservation compris, qui
+   * remonte quand sa correction ne peut pas être financée — jamais un
+   * `RUN_BUDGET_EXCEEDED` nu qui efface le motif du refus (runs 7 et 8).
+   */
+  candidate?: QaError;
+  /** Reprises d'un contenu inexploitable déjà consommées : une au plus. */
+  contentRetries: number;
+  /**
+   * Corrections déjà déposées dans la conversation. Elles bornent le cycle de
+   * correction à `PLAN_ATTEMPT_CALLS` appels — la génération, puis la sienne —
+   * sans compter la reprise d'un contenu inexploitable : cette reprise ne
+   * produit aucun candidat, donc elle ne doit pas manger le créneau de
+   * correction d'un refus renvoyé ensuite. Compter les itérations de la boucle
+   * reviendrait à confondre les deux.
+   */
+  corrections: number;
+  /**
+   * Correction contrainte déposée dans la conversation : la réponse qui suit
+   * est une réponse à CETTE question — des indices — et non au schéma de
+   * l'appelant. Elle est validée par son propre schéma, puis résolue ici.
+   */
+  pending?: ConstrainedCorrection<T>;
+  /**
+   * Vrai quand la reprise d'un contenu inexploitable a déjà déposé la
+   * réservation de l'appel qu'elle autorise : l'itération suivante ne réserve
+   * pas ce même appel une seconde fois.
+   */
+  prepaid: boolean;
+  /** Le plan structurellement valide que la porte de l'appelant a refusé. */
+  refused?: T;
 }
 
 /**
- * Message d'une génération inutilisable : la coupure observée (`finishReason`,
- * nombre de caractères) et, quand l'endpoint a ignoré la borne, la sortie qu'il a
- * lui-même annoncée — de quoi distinguer un provider qui coupe d'un provider qui
- * ignore le champ de limite.
+ * Ce qui ne change pas d'un appel à l'autre d'une tentative de plan : la
+ * conversation, sa borne, le schéma et la porte de l'appelant, le journal des
+ * réponses et l'annulation du run.
  */
-function unusableOutputMessage(
-  content: string,
-  finishReason: string | undefined,
-  overBound: number | undefined,
-  maxTokens: number,
-  config: Config
-): string {
-  const ignored = ` The endpoint reported ${overBound} output tokens for a ${maxTokens}-token bound.`;
-  return `AI returned an empty or truncated response.${overBound === undefined ? "" : ignored}${responseExcerpt(content, finishReason, config)}`;
-}
-
-/**
- * Correction d'un plan refusé, telle que le modèle la reçoit au tour suivant.
- *
- * Une phrase libre (`string`) demande le plan complet corrigé : le modèle
- * réécrit donc ses citations caractère par caractère, et c'est exactement ce
- * qui échoue quand la copie est dense (run 9add286d : `:""` inséré après les
- * 56 premiers caractères de la copie, et l'appel de correction payé s'achève sur
- * cette copie altérée, alors que la ligne exacte était dans le matériel).
- *
- * Une correction contrainte (`ConstrainedCorrection`) ne demande plus de texte :
- * le gate énumère les candidats réels, le modèle répond par un INDICE validé
- * par `answer`, et `resolve` écrit lui-même le texte dans la valeur. La boucle
- * de correction ne peut donc plus reproduire l'altération qu'elle corrige, et
- * c'est la valeur résolue — un texte réel, jamais un indice — qui est rendue à
- * l'appelant.
- */
-export interface ConstrainedCorrection<T> {
-  /** Schéma de la réponse attendue ; une réponse qui ne le respecte pas ne résout rien. */
-  answer: z.ZodType<unknown, unknown>;
-  /** Ce que le modèle lit : la question contrainte, jamais le plan refusé. */
-  message: string;
-  /** Valeur résolue, ou `undefined` quand la réponse ne permet pas de la construire. */
-  resolve: (answer: unknown) => T | undefined;
-}
-export type Correction<T> = string | ConstrainedCorrection<T>;
-
-/**
- * Ce qu'une réponse refusée dit d'elle-même, et que le diagnostic doit
- * distinguer : son JSON n'a pas pu être lu (`unreadable`), ou son JSON se lit
- * parfaitement et c'est le PLAN qui viole le contrat (`schema`). Les deux
- * causes n'ont ni le même code, ni le même remède : la première est une panne
- * de forme côté modèle, la seconde un plan fautif que le modèle peut réparer si
- * on lui dit quelle règle, quel scénario et quelle étape sont en cause. Mesure
- * du lot AK : deux runs bloqués en `MODEL_JSON_INVALID` sur 199, tous deux des
- * plans parfaitement lisibles, et l'opérateur envoyé chercher une panne de
- * transport inexistante.
- */
-type InvalidContent =
-  | { kind: "unreadable"; detail: string }
-  | { kind: "schema"; detail: string };
-
-/**
- * Vrai quand la réponse ne peut pas porter un plan : pas de contenu, coupée par
- * sa propre borne, ou annonçant plus de sortie que demandé. Sortie de
- * `Model.json()` pour que sa complexité reste sous le plafond du lint : la
- * règle n'est pas assouplie, la responsabilité est déplacée.
- */
-function usableResponse(
-  content: string | undefined,
-  finishReason: string | undefined,
-  overBound: unknown
-): content is string {
-  return (
-    Boolean(content) && finishReason !== "length" && overBound === undefined
-  );
+interface PlanCall<T> {
+  log: ResponseLog;
+  messages: { content: string; role: string }[];
+  outputBound: number;
+  repair?: (
+    value: T
+  ) => Correction<T> | undefined | Promise<Correction<T> | undefined>;
+  schema: z.ZodType<T, unknown>;
+  signal?: AbortSignal;
 }
 
 export class Model {
@@ -369,182 +286,259 @@ export class Model {
   ): Promise<T> {
     assertProvider(this.config);
     runModelConfig(this.config);
-    /**
-     * Borne de sortie de chaque envoi : la borne de l'appelant, ramenée au
-     * plafond d'un seul appel (`QA_CALL_MAX_TOKENS`). C'est ce chiffre qui part
-     * au fournisseur, qui réserve l'enveloppe du run et qui juge la réponse —
-     * un appel ne peut donc pas engager une part du budget total que le run ne
-     * pourrait pas rejouer. Ce n'est en revanche jamais le débit compté d'une
-     * réponse : ce qui est consommé se lit dans l'usage rapporté, et à défaut
-     * dans ce que le transport a livré (`deliveredOutputTokens`).
-     */
-    const outputBound = Math.min(maxTokens, this.config.QA_CALL_MAX_TOKENS);
-    const messages = [
-      {
-        role: "system",
-        content: `${system}\nReturn a valid JSON object only.`,
-      },
-      { role: "user", content: redact(JSON.stringify(payload), this.config) },
-    ];
-    let refused: T | undefined;
-    /**
-     * Correction contrainte déposée dans la conversation : la réponse qui suit
-     * est une réponse à CETTE question — des indices — et non au schéma de
-     * l'appelant. Elle est validée par son propre schéma, puis résolue ici.
-     */
-    let pending: ConstrainedCorrection<T> | undefined;
-    /** Reprises d'un contenu inexploitable déjà consommées : une au plus. */
-    let contentRetries = 0;
-    /**
-     * Corrections déjà déposées dans la conversation. Elles bornent le cycle de
-     * correction à `PLAN_ATTEMPT_CALLS` appels — la génération, puis la sienne —
-     * sans compter la reprise d'un contenu inexploitable : cette reprise ne
-     * produit aucun candidat, donc elle ne doit pas manger le créneau de
-     * correction d'un refus renvoyé ensuite. Compter les itérations de la boucle
-     * reviendrait à confondre les deux.
-     */
-    let corrections = 0;
-    /**
-     * Vrai quand la reprise d'un contenu inexploitable a déjà déposé la
-     * réservation de l'appel qu'elle autorise : l'itération suivante ne réserve
-     * pas ce même appel une seconde fois.
-     */
-    let prepaid = false;
+    const call: PlanCall<T> = {
+      log: new ResponseLog(
+        runScope.getStore()?.onModelResponse,
+        this.config,
+        system
+      ),
+      messages: [
+        {
+          role: "system",
+          content: `${system}\nReturn a valid JSON object only.`,
+        },
+        {
+          role: "user",
+          content: redact(JSON.stringify(payload), this.config),
+        },
+      ],
+      /**
+       * Borne de sortie de chaque envoi : la borne de l'appelant, ramenée au
+       * plafond d'un seul appel (`QA_CALL_MAX_TOKENS`). C'est ce chiffre qui
+       * part au fournisseur, qui réserve l'enveloppe du run et qui juge la
+       * réponse — un appel ne peut donc pas engager une part du budget total
+       * que le run ne pourrait pas rejouer. Ce n'est en revanche jamais le débit
+       * compté d'une réponse : ce qui est consommé se lit dans l'usage rapporté,
+       * et à défaut dans ce que le transport a livré (`deliveredOutputTokens`).
+       */
+      outputBound: Math.min(maxTokens, this.config.QA_CALL_MAX_TOKENS),
+      repair,
+      schema,
+      signal: runScope.getStore()?.signal,
+    };
+    const state: PlanAttempt<T> = {
+      contentRetries: 0,
+      corrections: 0,
+      prepaid: false,
+    };
     for (;;) {
-      if (prepaid) {
-        prepaid = false;
+      if (state.prepaid) {
+        state.prepaid = false;
       } else {
-        const kept = this.claimOrKeepRefused(messages, outputBound, refused);
+        const kept = this.claimOrKeepRefused(
+          call.messages,
+          call.outputBound,
+          state.refused,
+          state.candidate
+        );
         if (kept !== undefined) {
           return kept;
         }
       }
       const started = Date.now();
-      const response = await traced(
-        "model.json",
-        {
-          model: this.config.OPENAI_MODEL,
-          runId: runScope.getStore()?.id ?? "doctor",
-        },
-        () => this.completionWithRetries(messages, outputBound)
-      );
-      modelLatency.observe(
-        { model: this.config.OPENAI_MODEL },
-        (Date.now() - started) / 1000
-      );
-      const reportedInput = measuredCount(response.usage?.prompt_tokens);
-      const reportedOutput = measuredCount(response.usage?.completion_tokens);
-      const choice = response.choices?.[0];
-      const content = choice?.message?.content;
-      const finishReason = choice?.finish_reason;
-      // Sans mesure positive, nos bornes chiffrent ce qui est vérifiable : la
-      // borne de l'entrée pour ce qui a été envoyé, et la mesure de ce que le
-      // transport a livré en sortie. Le plafond de l'appel, lui, n'est jamais un
-      // débit : c'est ce qui a été autorisé, pas ce qui a été dépensé.
-      const inputTokens = reportedInput ?? this.inputTokenBound(messages);
-      const outputTokens =
-        reportedOutput ?? deliveredOutputTokens(response, content);
-      // Un total annoncé chiffre l'appel à sa hauteur, même quand l'endpoint
-      // n'expose aucune des deux parts : un endpoint qui annonce 900 000 tokens
-      // ne peut pas être compté comme s'il en avait consommé 745.
-      const counted = this.countedUsage(
-        inputTokens,
-        inputTokens + outputTokens,
-        measuredCount(response.usage?.total_tokens)
-      );
-      this.observeInput(this.declaredInputFloor(response.usage));
-      const scope = runScope.getStore();
-      if (scope) {
-        scope.estimated ||=
-          reportedInput === undefined || reportedOutput === undefined;
-        scope.tokens += counted.tokens;
-        scope.calls++;
-        scope.costUsd += counted.costUsd;
+      let response: ModelResponse;
+      try {
+        response = await traced(
+          "model.json",
+          {
+            model: this.config.OPENAI_MODEL,
+            runId: runScope.getStore()?.id ?? "doctor",
+          },
+          () => this.completionWithRetries(call.messages, call.outputBound)
+        );
+      } catch (error) {
+        // Une correction perdue en transport (HTTP 400, coupure, délai) ne
+        // détruit pas le plan refusé déjà payé : il repart vers ses portes.
+        return call.log.keepRefused(state.refused, error, call.signal);
       }
-      modelTokens.inc(
-        { model: this.config.OPENAI_MODEL, direction: "input" },
-        inputTokens
+      const settled = await this.judgeResponse(call, state, response, started);
+      if (settled) {
+        return settled.value;
+      }
+    }
+  }
+
+  /**
+   * Le sort d'une réponse reçue : comptée, conservée, puis jugée — inutilisable,
+   * illisible, hors contrat, refusée par la porte de l'appelant, ou acceptée.
+   * Rend la valeur à remettre à l'appelant, ou `undefined` quand la tentative
+   * continue par un nouvel appel.
+   */
+  private async judgeResponse<T>(
+    call: PlanCall<T>,
+    state: PlanAttempt<T>,
+    response: ModelResponse,
+    started: number
+  ): Promise<{ value: T } | undefined> {
+    const { log, messages, outputBound } = call;
+    modelLatency.observe(
+      { model: this.config.OPENAI_MODEL },
+      (Date.now() - started) / 1000
+    );
+    const choice = response.choices?.[0];
+    const content = choice?.message?.content;
+    const finishReason = choice?.finish_reason;
+    this.countResponse(response, messages, content);
+    // La réponse est conservée AVANT tout contrôle de budget : un
+    // `RUN_BUDGET_EXCEEDED` levé ensuite ne peut plus effacer ce qui est payé.
+    log.response({
+      call: runScope.getStore()?.calls ?? 0,
+      constrained: state.pending !== undefined,
+      content,
+      durationMs: Date.now() - started,
+      finishReason,
+      maxTokens: outputBound,
+      reasoningChars: response.reasoningChars,
+      usage: response.usage,
+    });
+    checkBudget();
+    const overBound = exceededOutputBound(response.usage, outputBound);
+    if (!usableResponse(content, finishReason, overBound)) {
+      const unusable = new QaError(
+        "MODEL_OUTPUT_INCOMPLETE",
+        unusableOutputMessage(
+          content ?? "",
+          finishReason,
+          overBound,
+          outputBound,
+          this.config
+        ),
+        "Check model compatibility and QA_CALL_MAX_TOKENS / QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
       );
-      modelTokens.inc(
-        { model: this.config.OPENAI_MODEL, direction: "output" },
-        counted.outputTokens
-      );
-      modelCalls.inc({ model: this.config.OPENAI_MODEL, outcome: "response" });
-      checkBudget();
-      const overBound = exceededOutputBound(response, outputBound);
-      if (!usableResponse(content, finishReason, overBound)) {
-        // Une réponse contrainte coupée ne résout rien : son plan refusé repart
-        // tel quel, avec le message fatal d'aujourd'hui, plutôt que d'être
-        // requalifiée en « réponse illisible ».
-        if (pending) {
-          return refused as T;
-        }
-        // Une génération coupée par sa propre borne n'offre rien à corriger :
-        // la reprise repose le même prompt, une seule fois, et l'échec remonte
-        // tel quel quand elle n'est plus permise. Une réponse qui annonce plus
-        // de tokens de sortie que la borne demandée est traitée de même : c'est
-        // ce que la borne refusait de payer, pas un plan à accepter.
+      log.verdict({ kind: "unusable", reason: unusable.message });
+      // Une réponse contrainte coupée ne résout rien : son plan refusé repart
+      // tel quel, avec le message fatal d'aujourd'hui, plutôt que d'être
+      // requalifiée en « réponse illisible ».
+      if (state.pending) {
+        return { value: state.refused as T };
+      }
+      // Une génération coupée par sa propre borne n'offre rien à corriger :
+      // la reprise repose le même prompt, une seule fois, et l'échec remonte
+      // tel quel quand elle n'est plus permise. Une réponse qui annonce plus
+      // de tokens de sortie que la borne demandée est traitée de même : c'est
+      // ce que la borne refusait de payer, pas un plan à accepter.
+      return await this.rescued(call, state, async () => {
         await this.replayUnusableContent(
-          new QaError(
-            "MODEL_OUTPUT_INCOMPLETE",
-            unusableOutputMessage(
-              content ?? "",
-              finishReason,
-              overBound,
-              outputBound,
-              this.config
-            ),
-            "Check model compatibility and QA_CALL_MAX_TOKENS / QA_PLAN_MAX_TOKENS / QA_DOCTOR_MAX_TOKENS. Reasoning models may consume output budget before emitting JSON; use the token parameter supported by your endpoint and OPENAI_REASONING_EFFORT on endpoints that accept one."
-          ),
+          unusable,
           messages,
           outputBound,
-          contentRetries
+          state.contentRetries
         );
-        contentRetries += 1;
-        prepaid = true;
-        continue;
-      }
-      const read = this.readContent(content, schema, pending);
-      pending = undefined;
-      if ("discarded" in read) {
-        // Rien de résolu : le plan refusé repart tel quel, donc le message fatal
-        // reste exactement celui d'aujourd'hui. Une réponse contrainte illisible
-        // n'est pas un contenu illisible — la relancer coûterait un appel sans
-        // changer la question —, elle met simplement fin au tour de correction.
-        return refused as T;
-      }
-      if ("invalid" in read) {
-        const refusal = await this.correctRefusedContent(
+        state.contentRetries += 1;
+        state.prepaid = true;
+      });
+    }
+    const read = readModelContent(
+      content,
+      call.schema,
+      state.pending,
+      this.config
+    );
+    state.pending = undefined;
+    if ("discarded" in read) {
+      log.verdict({ kind: "discarded" });
+      // Rien de résolu : le plan refusé repart tel quel, donc le message fatal
+      // reste exactement celui d'aujourd'hui. Une réponse contrainte illisible
+      // n'est pas un contenu illisible — la relancer coûterait un appel sans
+      // changer la question —, elle met simplement fin au tour de correction.
+      return { value: state.refused as T };
+    }
+    if ("invalid" in read) {
+      log.verdict(invalidVerdict(read.invalid));
+      return await this.rescued(call, state, () =>
+        this.correctRefusedContent(
           read.invalid,
           content,
           finishReason,
           messages,
           outputBound,
-          corrections + 1,
-          contentRetries
-        );
-        corrections += 1;
-        contentRetries = refusal.contentRetries;
-        prepaid = refusal.prepaid;
-        continue;
-      }
-      const value = read.value;
-      // Un échec du contrôle appelé — navigateur, provenance, sonde de cibles —
-      // n'est pas un contenu invalide : il remonte tel quel au lieu d'être
-      // requalifié en « réponse illisible » et de payer un appel de plus.
-      const rejection = await repair?.(value);
-      if (rejection === undefined) {
-        return value;
-      }
-      // One repair attempt for a structurally valid value the caller refuses:
-      // the caller decides what to do with a value the model never fixed.
-      refused = value;
-      pending = this.depositCorrection(messages, content, rejection);
-      corrections += 1;
-      if (corrections >= PLAN_ATTEMPT_CALLS) {
-        return refused;
-      }
+          state
+        )
+      );
     }
+    state.candidate = undefined;
+    // Un échec du contrôle appelé — navigateur, provenance, sonde de cibles —
+    // n'est pas un contenu invalide : il remonte tel quel au lieu d'être
+    // requalifié en « réponse illisible » et de payer un appel de plus.
+    const rejection = await call.repair?.(read.value);
+    log.verdict(gateVerdict(rejection, this.config));
+    if (rejection === undefined) {
+      return { value: read.value };
+    }
+    // One repair attempt for a structurally valid value the caller refuses:
+    // the caller decides what to do with a value the model never fixed.
+    state.refused = read.value;
+    state.pending = this.depositCorrection(messages, content, rejection);
+    state.corrections += 1;
+    return state.corrections >= PLAN_ATTEMPT_CALLS
+      ? { value: state.refused }
+      : undefined;
+  }
+
+  /**
+   * Une étape de la tentative dont l'échec ne doit pas détruire le plan déjà
+   * refusé : la reprise d'un contenu inexploitable, ou le sort d'un contenu
+   * refusé après une correction. Sans plan refusé, l'échec remonte tel quel.
+   */
+  private async rescued<T>(
+    call: PlanCall<T>,
+    state: PlanAttempt<T>,
+    step: () => Promise<void>
+  ): Promise<{ value: T } | undefined> {
+    try {
+      await step();
+      return;
+    } catch (error) {
+      return {
+        value: call.log.keepRefused(state.refused, error, call.signal),
+      };
+    }
+  }
+
+  /**
+   * Compte l'usage d'une réponse reçue : le run, les métriques, et le plancher
+   * d'entrée des admissions suivantes.
+   */
+  private countResponse(
+    response: ModelResponse,
+    messages: { content: string; role: string }[],
+    content: string | undefined
+  ): void {
+    const reportedInput = measuredCount(response.usage?.prompt_tokens);
+    const reportedOutput = measuredCount(response.usage?.completion_tokens);
+    // Sans mesure positive, nos bornes chiffrent ce qui est vérifiable : la
+    // borne de l'entrée pour ce qui a été envoyé, et la mesure de ce que le
+    // transport a livré en sortie. Le plafond de l'appel, lui, n'est jamais un
+    // débit : c'est ce qui a été autorisé, pas ce qui a été dépensé.
+    const inputTokens = reportedInput ?? this.inputTokenBound(messages);
+    const outputTokens =
+      reportedOutput ?? deliveredOutputTokens(response, content);
+    // Un total annoncé chiffre l'appel à sa hauteur, même quand l'endpoint
+    // n'expose aucune des deux parts : un endpoint qui annonce 900 000 tokens
+    // ne peut pas être compté comme s'il en avait consommé 745.
+    const counted = this.countedUsage(
+      inputTokens,
+      inputTokens + outputTokens,
+      measuredCount(response.usage?.total_tokens)
+    );
+    this.observeInput(this.declaredInputFloor(response.usage));
+    const scope = runScope.getStore();
+    if (scope) {
+      scope.estimated ||=
+        reportedInput === undefined || reportedOutput === undefined;
+      scope.tokens += counted.tokens;
+      scope.calls++;
+      scope.costUsd += counted.costUsd;
+    }
+    modelTokens.inc(
+      { model: this.config.OPENAI_MODEL, direction: "input" },
+      inputTokens
+    );
+    modelTokens.inc(
+      { model: this.config.OPENAI_MODEL, direction: "output" },
+      counted.outputTokens
+    );
+    modelCalls.inc({ model: this.config.OPENAI_MODEL, outcome: "response" });
   }
 
   /**
@@ -559,19 +553,20 @@ export class Model {
    * après ses deux manches de correction meurt en `PLAN_SCHEMA_INVALID`, parce
    * que rejouer la même conversation n'apprend rien de plus au modèle.
    *
-   * `corrections` est le compte APRÈS cette correction : l'appelant vient
-   * d'incrémenter le sien. Rend ce que la boucle reprend, la reprise de contenu
-   * déjà consommée et la réservation déjà déposée pour l'appel suivant.
+   * Met à jour la tentative : corrections déposées, reprise de contenu
+   * consommée, réservation déjà déposée pour l'appel suivant, et l'erreur que
+   * ce contenu porterait si la correction ne pouvait pas être financée.
    */
-  private async correctRefusedContent(
+  private async correctRefusedContent<T>(
     invalid: InvalidContent,
     content: string,
     finishReason: string | undefined,
     messages: { content: string; role: string }[],
     outputBound: number,
-    corrections: number,
-    contentRetries: number
-  ): Promise<{ contentRetries: number; prepaid: boolean }> {
+    state: PlanAttempt<T>
+  ): Promise<void> {
+    state.corrections += 1;
+    const { corrections } = state;
     const { detail, kind } = invalid;
     messages.push({ role: "assistant", content });
     messages.push({
@@ -581,30 +576,31 @@ export class Model {
           ? `The response is not readable JSON: ${detail}. Return only a JSON object matching the exact schema in the system message, with the original product requirements and assertion targets.`
           : `The JSON is readable but the plan violates the contract: ${detail}. Return the complete plan with each violation fixed, keeping every other scenario, step, assertion and expected value unchanged. Never weaken an assertion, drop a scenario or rename an id to satisfy the contract.${corrections + 1 >= PLAN_CORRECTION_CALLS ? " This is the last correction round: a plan that still violates the contract is refused and no scenario runs." : ""}`,
     });
+    const fail = (lead: string) =>
+      invalidContentError(invalid, lead, content, finishReason, this.config);
     if (kind === "schema" && corrections >= PLAN_CORRECTION_CALLS) {
-      throw new QaError(
-        "PLAN_SCHEMA_INVALID",
-        `AI returned a readable plan that violates the contract; ${corrections - 1} corrective rounds did not fix it.${responseExcerpt(content, finishReason, this.config)}`,
-        `Validation: ${detail}. The plan was refused before any scenario ran: the contract is enforced, not relaxed. Fix the named scenario, step and rule; never weaken an assertion or drop a scenario to obtain a pass.`
+      throw fail(
+        `AI returned a readable plan that violates the contract; ${corrections - 1} corrective rounds did not fix it.`
       );
     }
+    state.candidate = fail(
+      kind === "schema"
+        ? "AI returned a readable plan that violates the contract; its correction call could not be funded."
+        : "AI returned invalid structured output; its correction call could not be funded."
+    );
     if (kind === "unreadable" && corrections >= PLAN_ATTEMPT_CALLS) {
       // Après la correction, il ne reste qu'un appel dans la tentative : c'est
       // le seul moment où la reprise d'un contenu inexploitable peut encore
       // sauver le run.
       await this.replayUnusableContent(
-        new QaError(
-          "MODEL_JSON_INVALID",
-          `AI returned invalid structured output twice.${responseExcerpt(content, finishReason, this.config)}`,
-          `Validation: ${detail}. Check OPENAI_JSON_MODE and the run plan; never weaken assertions to obtain a pass.`
-        ),
+        fail("AI returned invalid structured output twice."),
         messages,
         outputBound,
-        contentRetries
+        state.contentRetries
       );
-      return { contentRetries: contentRetries + 1, prepaid: true };
+      state.contentRetries += 1;
+      state.prepaid = true;
     }
-    return { contentRetries, prepaid: false };
   }
 
   /**
@@ -627,60 +623,6 @@ export class Model {
       content: redact(message, this.config).slice(0, 2000),
     });
     return typeof correction === "string" ? undefined : correction;
-  }
-
-  /**
-   * La valeur que porte une réponse : le schéma de l'appelant, ou la résolution
-   * de la correction contrainte quand une question à indices est en attente. Une
-   * réponse contrainte qui ne respecte pas son schéma ou qui ne résout rien est
-   * `discarded` — le tour de correction s'arrête sans payer d'appel —, et un
-   * contenu refusé rend la validation que le canal de correction transmet.
-   */
-  private readContent<T>(
-    content: string,
-    schema: z.ZodType<T, unknown>,
-    constrained: ConstrainedCorrection<T> | undefined
-  ): { value: T } | { discarded: true } | { invalid: InvalidContent } {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      if (constrained) {
-        return { discarded: true };
-      }
-      return {
-        invalid: {
-          kind: "unreadable",
-          detail: "Response content is not valid JSON",
-        },
-      };
-    }
-    if (constrained) {
-      const answer = constrained.answer.safeParse(parsed);
-      const value = answer.success
-        ? constrained.resolve(answer.data)
-        : undefined;
-      return value === undefined ? { discarded: true } : { value };
-    }
-    try {
-      return { value: schema.parse(parsed) };
-    } catch (error) {
-      const validation =
-        error instanceof z.ZodError
-          ? error.issues
-              .slice(0, 12)
-              .map(
-                (issue) => `${issue.path.join(".") || "$"}: ${issue.message}`
-              )
-              .join("; ")
-          : "Response content is not valid JSON";
-      return {
-        invalid: {
-          kind: error instanceof z.ZodError ? "schema" : "unreadable",
-          detail: redact(validation, this.config).slice(0, 2000),
-        },
-      };
-    }
   }
 
   /**
@@ -800,10 +742,29 @@ export class Model {
    */
   private claim(
     messages: { content: string; role: string }[],
-    maxTokens: number
+    maxTokens: number,
+    unfunded?: QaError
   ): { costUsd: number; tokens: number } {
     const reservation = this.reservation(messages, maxTokens);
-    checkBudget(reservation.tokens, reservation.costUsd);
+    try {
+      checkBudget(reservation.tokens, reservation.costUsd);
+    } catch (error) {
+      // Un appel que l'enveloppe ne finance plus laisse remonter la cause qui
+      // le demandait — le contenu refusé et sa validation —, avec ce que la
+      // réservation demandait face à ce qui restait.
+      if (
+        unfunded &&
+        error instanceof QaError &&
+        error.code === "RUN_BUDGET_EXCEEDED"
+      ) {
+        throw new QaError(
+          unfunded.code,
+          `${unfunded.message} Next model call not sent: ${budgetShortfall(reservation.tokens, reservation.costUsd)}.`,
+          unfunded.hint
+        );
+      }
+      throw error;
+    }
     return reservation;
   }
 
@@ -1017,7 +978,7 @@ export class Model {
     ) {
       throw retriedFailure(error, retries);
     }
-    this.claim(messages, maxTokens);
+    this.claim(messages, maxTokens, error);
     if (scope) {
       scope.retries = (scope.retries ?? 0) + 1;
       scope.onRetry?.({ attempt: 1, max, code: error.code });
@@ -1055,14 +1016,19 @@ export class Model {
    * `refused` est le seul témoin fiable : `depositCorrection` rend `undefined`
    * pour une correction en CHAÎNE, donc `pending` ne signale pas ce cas, qui est
    * le plus courant. Le plan rendu n'est jamais déclaré valide pour autant.
+   *
+   * Sans plan refusé, c'est le contenu refusé lui-même (`candidate`) qui
+   * remonte avec sa validation et les chiffres de la réservation : runs 7 et 8,
+   * ~40 000 tokens payés puis un `RUN_BUDGET_EXCEEDED` nu, motif perdu.
    */
   private claimOrKeepRefused<T>(
     messages: { content: string; role: string }[],
     outputBound: number,
-    refused: T | undefined
+    refused: T | undefined,
+    candidate: QaError | undefined
   ): T | undefined {
     try {
-      this.claim(messages, outputBound);
+      this.claim(messages, outputBound, candidate);
       return;
     } catch (error) {
       if (refused !== undefined) {
@@ -1131,6 +1097,7 @@ export class Model {
         deliveredChars:
           (response.choices?.[0]?.message?.content?.length ?? 0) +
           (reasoning?.length ?? 0),
+        reasoningChars: reasoning?.length ?? 0,
       };
     }
     let state = emptyChatStream;
@@ -1182,6 +1149,7 @@ export class Model {
         },
       ],
       deliveredChars: state.content.length + state.reasoningChars,
+      reasoningChars: state.reasoningChars,
       usage: state.usage,
     };
   }
