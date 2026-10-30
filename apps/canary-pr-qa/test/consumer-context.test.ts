@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../src/config.js";
-import { consumerContext } from "../src/consumer-context.js";
+import { type Config, loadConfig } from "../src/config.js";
+import { consumerContext } from "../src/consumer-search.js";
 import { GitHub } from "../src/github.js";
 import { contextSchema } from "../src/replay.js";
 
@@ -14,8 +14,8 @@ import { contextSchema } from "../src/replay.js";
  * seul écran qui l'affiche n'est pas dans le diff. Le planificateur doit
  * recevoir l'écran (libellé, formatage, contrôles) et le test qui fixe le signe.
  *
- * Tout passe par `consumerContext`, le seul point d'entrée du module, avec un
- * lecteur en mémoire à la place de l'API GitHub.
+ * Tout passe par `consumerContext` (consumer-search.ts), le seul point d'entrée
+ * de la recherche, avec un lecteur en mémoire à la place de l'API GitHub.
  */
 const MODULE = [
   "export interface Diff { readonly delta: number }", // 1
@@ -194,11 +194,22 @@ describe("consommateurs d'un symbole touché", () => {
   });
 
   it("nomme ce que le budget a coupé au lieu de le taire", async () => {
-    const { consumers, warnings } = await search(repository(), CHANGED, 220);
-    const spent = consumers
-      .flatMap((item) => item.excerpts)
-      .reduce((sum, excerpt) => sum + excerpt.text.length, 0);
-    expect(spent).toBeLessThanOrEqual(220);
+    // Un écran plus long que le budget (le plus petit budget utile, 1000) : sa
+    // déclaration porte quarante lignes de rendu.
+    const longScreen = SCREEN.replace(
+      "    <p>Delta, measured minus planned</p>",
+      [
+        "    <p>Delta, measured minus planned</p>",
+        ...Array.from({ length: 40 }, (_v, i) => `    <p>row ${i}</p>`),
+      ].join("\n")
+    );
+    const { consumers, warnings } = await search(
+      repository({ "ui/app/page.tsx": longScreen }),
+      CHANGED,
+      1000
+    );
+    // Compté tel que le planificateur le reçoit : en JSON, champs compris.
+    expect(JSON.stringify(consumers).length).toBeLessThanOrEqual(1000);
     // L'écran (plus long) ne tient pas ; le test, examiné ensuite, tient.
     expect(consumers.map((item) => item.path)).toEqual([
       "packages/core/src/__tests__/core.spec.ts",
@@ -234,6 +245,127 @@ describe("consommateurs d'un symbole touché", () => {
     expect(consumers.map((item) => item.path)).not.toContain(
       "ui/app/imports-only.tsx"
     );
+  });
+
+  it("un budget trop petit pour une excerpt ne lit rien, et le dit", async () => {
+    const memory = reader(repository());
+    const found = await consumerContext({
+      budget: 999,
+      files: CHANGED,
+      maxFiles: 400,
+      read: memory.read,
+      ref: "head",
+    });
+    expect(found).toEqual({
+      consumers: [],
+      warnings: [
+        "Consumer search skipped: 999 characters left for consumer context, below the 1000 a useful excerpt needs",
+      ],
+    });
+    expect(memory.reads).toEqual([]);
+  });
+
+  it("un dépôt de tête lu anonymement n'est pas parcouru, et le dit", async () => {
+    const memory = reader(repository());
+    const found = await consumerContext({
+      anonymous: true,
+      budget: 20_000,
+      files: CHANGED,
+      maxFiles: 400,
+      read: memory.read,
+      ref: "head",
+    });
+    expect(found.consumers).toEqual([]);
+    expect(found.warnings).toEqual([
+      "Consumer search skipped: the head repository is not installed and is read anonymously, whose hourly quota the search would exhaust",
+    ]);
+    expect(memory.reads).toEqual([]);
+  });
+
+  it("une lecture qui échoue hors 404 est nommée, jamais confondue avec une absence", async () => {
+    const memory = reader(repository());
+    const failing = {
+      tree: memory.read.tree,
+      file: (path: string) =>
+        path.endsWith("package.json")
+          ? Promise.reject(new Error("HTTP 502 Bad Gateway"))
+          : Promise.reject(new Error("HTTP 403 API rate limit exceeded")),
+    };
+    const found = await consumerContext({
+      budget: 20_000,
+      files: CHANGED,
+      maxFiles: 400,
+      read: failing,
+      ref: "head",
+    });
+    expect(found.consumers).toEqual([]);
+    expect(found.warnings).toEqual([
+      "Consumer search: 1 manifest(s) unreadable (first error: HTTP 502 Bad Gateway); workspace and path-alias resolution may miss consumers",
+      "Consumer search: 5 source file(s) unreadable (first error: HTTP 403 API rate limit exceeded)",
+      "Consumer search: packages/core/src/core.ts not analysed (over 200000 bytes, beyond the scan limit, or unreadable)",
+    ]);
+  });
+
+  it("un manifeste illisible perd le consommateur atteint par le nom de paquet, et le dit", async () => {
+    const memory = reader(repository());
+    const found = await consumerContext({
+      budget: 20_000,
+      files: CHANGED,
+      maxFiles: 400,
+      read: {
+        tree: memory.read.tree,
+        file: (path: string) =>
+          path.endsWith("package.json")
+            ? Promise.reject(new Error("HTTP 502 Bad Gateway"))
+            : memory.read.file(path),
+      },
+      ref: "head",
+    });
+    expect(found.consumers.map((item) => item.path)).toEqual([
+      "packages/core/src/__tests__/core.spec.ts",
+    ]);
+    expect(found.warnings).toEqual([
+      "Consumer search: 1 manifest(s) unreadable (first error: HTTP 502 Bad Gateway); workspace and path-alias resolution may miss consumers",
+    ]);
+  });
+
+  it("les manifestes lus sont plafonnés, les moins profonds d'abord, et le plafond est nommé", async () => {
+    const examples = Object.fromEntries(
+      Array.from({ length: 1000 }, (_v, i) => [
+        `examples/group/e${i}/package.json`,
+        JSON.stringify({ name: `example-${i}` }),
+      ])
+    );
+    const memory = reader(repository(examples));
+    const found = await consumerContext({
+      budget: 20_000,
+      files: CHANGED,
+      maxFiles: 2,
+      read: memory.read,
+      ref: "head",
+    });
+    // Un arbre, 100 manifestes, 2 sources : la borne ne dépend plus du dépôt.
+    expect(memory.reads).toHaveLength(1 + 100 + 2);
+    expect(memory.reads).toContain("packages/core/package.json");
+    expect(found.warnings).toContain(
+      "Consumer manifest limit (100) reached: 901 package.json/tsconfig.json not read; workspace and path-alias resolution may miss consumers"
+    );
+  });
+
+  it("un module modifié supprimé est nommé : ses anciens importeurs ne sont pas cherchés", async () => {
+    const files = repository();
+    files.delete("packages/core/src/core.ts");
+    const found = await consumerContext({
+      budget: 20_000,
+      files: [{ ...CHANGED[0], status: "removed" } as (typeof CHANGED)[number]],
+      maxFiles: 400,
+      read: reader(files).read,
+      ref: "head",
+    });
+    expect(found.consumers).toEqual([]);
+    expect(found.warnings).toEqual([
+      "Consumer search: packages/core/src/core.ts is removed; its former importers are not searched",
+    ]);
   });
 
   it("un budget nul ne lit rien, pas même l'arbre", async () => {
@@ -356,6 +488,51 @@ describe("GitHub.context : la recherche ne prend que le budget laissé", () => {
     ).toBe(10_000);
     expect(paths.some((path) => path.includes("/git/trees/"))).toBe(false);
     expect("consumers" in context).toBe(false);
+  });
+
+  it("dépôt de tête non installé (lu anonymement) : aucun arbre lu, et un avertissement", async () => {
+    const config: Config = {
+      ...loadConfig({ QA_DATA_DIR: tmpdir() }),
+      allowedRepos: ["acme/shop"],
+      githubInstallations: { "acme/base": "1" },
+    };
+    const github = new GitHub(config);
+    const paths = stub(github);
+    const context = await github.context(PR);
+    expect(paths.some((path) => path.includes("/git/trees/"))).toBe(false);
+    expect("consumers" in context).toBe(false);
+    expect(context.contextWarnings).toContain(
+      "Consumer search skipped: the head repository is not installed and is read anonymously, whose hourly quota the search would exhaust"
+    );
+  });
+
+  it("lectures refusées (403) après l'arbre : l'échec est nommé dans les avertissements", async () => {
+    const github = new GitHub(loadConfig({ QA_DATA_DIR: tmpdir() }));
+    const paths = stub(github);
+    const served = vi.mocked(github.request).getMockImplementation();
+    let treeRead = false;
+    vi.spyOn(github, "request").mockImplementation((path: string) => {
+      if (path.includes("/git/trees/")) {
+        treeRead = true;
+      } else if (treeRead && path.includes("/contents/")) {
+        return Promise.reject(new Error("HTTP 403 API rate limit exceeded"));
+      }
+      return served?.(path) ?? Promise.reject(new Error("no stub"));
+    });
+    const context = await github.context(PR);
+    expect(paths.some((path) => path.includes("/git/trees/"))).toBe(true);
+    expect("consumers" in context).toBe(false);
+    expect(
+      context.contextWarnings.filter((warning) =>
+        warning.startsWith("Consumer search:")
+      )
+    ).toEqual([
+      "Consumer search: 5 manifest(s) unreadable (first error: HTTP 403 API rate limit exceeded); workspace and path-alias resolution may miss consumers",
+      expect.stringMatching(
+        /^Consumer search: \d+ source file\(s\) unreadable \(first error: HTTP 403 API rate limit exceeded\)$/
+      ),
+      "Consumer search: packages/domain/src/cash.ts not analysed (over 200000 bytes, beyond the scan limit, or unreadable)",
+    ]);
   });
 
   it("budget disponible : l'arbre est lu une fois et les deux consommateurs arrivent", async () => {

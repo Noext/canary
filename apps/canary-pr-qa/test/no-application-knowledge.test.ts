@@ -40,6 +40,7 @@ describe("aucune connaissance de l'application testée dans la règle", () => {
       "objective-witness.ts",
       "consumer-context.ts",
       "consumer-resolution.ts",
+      "consumer-search.ts",
     ]) {
       const text = source(name);
       for (const token of FORBIDDEN) {

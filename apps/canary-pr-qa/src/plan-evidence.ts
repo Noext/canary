@@ -2216,6 +2216,26 @@ export function planPayload(
     )
   );
   const total = JSON.stringify(payload).length;
+  if (total > limit && context.consumers) {
+    // Les consommateurs éclairent le plan, ils ne sont pas une preuve requise :
+    // ils cèdent leur place avant tout refus, et le planificateur le lit.
+    const { consumers: _omitted, ...rest } = context;
+    return planPayload(
+      {
+        ...rest,
+        contextWarnings: [
+          ...context.contextWarnings,
+          `Consumer context omitted: the planner payload exceeded its limit by ${total - limit} characters`,
+        ],
+      },
+      preview,
+      initialPage,
+      catalog,
+      config,
+      files,
+      views
+    );
+  }
   if (total > limit) {
     // Rien n'est tronqué : le refus nomme le dépassement et ce qui le desserre.
     throw new Error(

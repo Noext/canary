@@ -255,3 +255,44 @@ function envLargePatches(ctx: PrContext) {
     file.patch = `@@ -1 +1 @@\n-${"x".repeat(4000)}\n+${"y".repeat(4000)}`;
   }
 }
+
+describe("les consommateurs cèdent leur place avant tout refus", () => {
+  const pinned = config({
+    QA_MODEL_CONTEXT_TOKENS: "131072",
+    QA_PLAN_MAX_TOKENS: "8000",
+  });
+  const pinnedLimit = plannerInputBudget(pinned).limit;
+  /** Un contexte qui tient seul, et des consommateurs qui le font déborder. */
+  function withConsumers(excerptChars: number): PrContext {
+    const ctx = context(2, pinnedLimit - 60_000);
+    ctx.consumers = [
+      {
+        excerpts: [
+          { endLine: 2, startLine: 1, text: "c".repeat(excerptChars) },
+        ],
+        imports: "src/file-0.ts",
+        path: "src/screen.tsx",
+        ref: "a".repeat(40),
+        symbols: ["value"],
+      },
+    ];
+    return ctx;
+  }
+
+  it("un payload que les consommateurs font déborder est envoyé sans eux, et le dit", () => {
+    const payload = build(withConsumers(80_000), pinned);
+    expect(JSON.stringify(payload).length).toBeLessThanOrEqual(pinnedLimit);
+    expect("consumers" in payload.pr).toBe(false);
+    expect(payload.pr.contextWarnings.at(-1)).toMatch(
+      /^Consumer context omitted: the planner payload exceeded its limit by \d+ characters$/
+    );
+    // La preuve requise est intacte.
+    expect(payload.pr.context[0]?.content).toHaveLength(pinnedLimit - 60_000);
+  });
+
+  it("des consommateurs qui tiennent sont envoyés tels quels", () => {
+    const payload = build(withConsumers(1000), pinned);
+    expect(payload.pr.consumers?.[0]?.path).toBe("src/screen.tsx");
+    expect(payload.pr.contextWarnings).toEqual([]);
+  });
+});

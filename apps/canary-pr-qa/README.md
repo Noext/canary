@@ -138,11 +138,15 @@ utilisent un symbole touché par le diff — l'écran qui rend la valeur, son
 formatage, les tests qui la fixent. `QA_CONSUMER_CONTEXT_CHARS` (défaut 24000,
 `0` désactive) borne leurs caractères, pris sur ce que `QA_CONTEXT_CHARS` laisse
 après le contexte de dépendances ; `QA_CONSUMER_SCAN_FILES` (défaut 400) borne
-les fichiers source lus. Tout plafond atteint est nommé dans les avertissements.
-Un objectif de présence ou d'adresse (`visible`, `hidden`, `count`, `url`) qui ne
-lit aucun mot que le diff ajoute ou retire dans ses fichiers, ni sa citation, est
-refusé (`OBJECTIVE_UNWITNESSED`) : il passerait identiquement avant le
-changement, et le scénario non corrigé est bloqué, jamais vert.
+les fichiers source lus (au plus 100 manifestes en plus). Un dépôt de tête non
+installé, lu anonymement, n'est pas parcouru. Tout plafond atteint, toute lecture
+en échec hors 404 et tout module modifié non analysé sont nommés dans les
+avertissements.
+Un objectif qui ne lit rien de ce que le diff ajoute ou retire dans ses fichiers,
+ni sa citation, est refusé (`OBJECTIVE_UNWITNESSED`) : il passerait identiquement
+avant le changement, et le scénario non corrigé est bloqué, jamais vert. Une
+absence (`hidden`, `count` à 0) ne lit que les cibles qu'une ligne retirée
+écrit ; une lecture de texte ou de valeur non citée suit la même règle de mots.
 
 `passed` nécessite la totalité du contrat et des preuves ; `failed` signale une
 assertion fausse ; `blocked` une précondition/limite/probe non satisfaite ; `stale`

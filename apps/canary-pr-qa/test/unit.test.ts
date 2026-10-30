@@ -1529,12 +1529,17 @@ describe("runner false-green regressions", () => {
   const STITCH_FRAGMENT_A = 'inputMode="decimal"';
   const STITCH_FRAGMENT_B = "aria-invalid={expected.ok?undefined:true}";
   const STITCHED_JSX_QUOTE = `${STITCH_FRAGMENT_A} ${STITCH_FRAGMENT_B}`;
-  /** Les deux lignes réelles du fichier, chacune plus longue que 120 caractères. */
+  /**
+   * Les deux lignes réelles du fichier, chacune plus longue que 120 caractères.
+   * La ligne `show('Welcome '+name)` est AJOUTÉE : en contexte, la lecture
+   * `#saved` = « Welcome Ada » du plan ne lirait rien que le diff change
+   * (OBJECTIVE_UNWITNESSED), un défaut hors citation que ces tests ne visent pas.
+   */
   const STITCH_FORM_PATCH = [
-    "@@ -1,1 +1,3 @@",
+    "@@ -0,0 +1,3 @@",
     `+ <input value={e=>onChange({expected:e.target.value})} disabled={closed} ${STITCH_FRAGMENT_A} aria-label="Montant d'espèces attendu" />`,
     `+ <input value={expected.input} inputMode="numeric" aria-label="Total attendu" ${STITCH_FRAGMENT_B} />`,
-    " show('Welcome '+name)",
+    "+ show('Welcome '+name)",
   ].join("\n");
   it("names the stitched fragments and the real lines to quote instead", async () => {
     const stitched = structuredClone(plan);

@@ -1,7 +1,8 @@
 import { posix } from "node:path";
 import { z } from "zod";
 import type { Config } from "./config.js";
-import { type ConsumerMaterial, consumerContext } from "./consumer-context.js";
+import type { ConsumerMaterial } from "./consumer-context.js";
+import { consumerContext, consumerLimits } from "./consumer-search.js";
 import { githubToken } from "./github-app.js";
 import { fetchText } from "./http.js";
 
@@ -216,13 +217,8 @@ export class GitHub {
     }
     // Pris sur ce que le contexte de dépendances laisse de QA_CONTEXT_CHARS.
     const consumers = await consumerContext({
-      budget: Math.min(
-        this.config.QA_CONSUMER_CONTEXT_CHARS,
-        this.config.QA_CONTEXT_CHARS -
-          context.reduce((sum, item) => sum + item.content.length, 0)
-      ),
+      ...consumerLimits(this.config, headRepo, context),
       files,
-      maxFiles: this.config.QA_CONSUMER_SCAN_FILES,
       read: {
         file: (path) => this.optionalFile(headRepo, path, data.head.sha),
         tree: () =>

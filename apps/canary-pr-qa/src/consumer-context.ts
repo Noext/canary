@@ -1,10 +1,8 @@
-import { z } from "zod";
 import {
   type ModuleReference,
   moduleReferences,
   resolveSpecifier,
   type WorkspaceResolution,
-  workspaceResolution,
 } from "./consumer-resolution.js";
 
 /**
@@ -24,7 +22,8 @@ import {
  * Ce que la règle ne voit pas : un consommateur atteint par un import dynamique
  * calculé, par un autre langage, par HTTP (une API qui sérialise la valeur pour
  * un client séparé), ou au-delà du plafond de fichiers parcourus — le plafond
- * est alors nommé dans les avertissements, jamais tu.
+ * est alors nommé dans les avertissements, jamais tu. Les lectures du dépôt et
+ * leurs plafonds vivent dans consumer-search.ts ; ce module ne fait aucune I/O.
  */
 
 interface ConsumerExcerpt {
@@ -58,11 +57,11 @@ const TEST_FILE =
 const MAX_EXCERPT_CHARS = 12_000;
 const WINDOW_LINES = 25;
 
-function isConsumerCandidate(path: string): boolean {
+export function isConsumerCandidate(path: string): boolean {
   return SOURCE_FILE.test(path) && !IGNORED_DIRECTORY.test(path);
 }
 
-function isTestPath(path: string): boolean {
+export function isTestPath(path: string): boolean {
   return TEST_FILE.test(path);
 }
 
@@ -301,11 +300,16 @@ function withinBudget(
   const warnings: string[] = [];
   let remaining = budget;
   for (const consumer of found) {
+    // Compté tel que le planificateur le reçoit : en JSON, champs du
+    // consommateur compris (chemin, symboles, import), une fois par fichier.
+    let overhead = JSON.stringify({ ...consumer, excerpts: [] }).length;
     const kept = consumer.excerpts.filter((excerpt) => {
-      if (excerpt.text.length > remaining) {
+      const cost = JSON.stringify(excerpt).length + 1 + overhead;
+      if (cost > remaining) {
         return false;
       }
-      remaining -= excerpt.text.length;
+      remaining -= cost;
+      overhead = 0;
       return true;
     });
     if (kept.length < consumer.excerpts.length) {
@@ -322,11 +326,11 @@ function withinBudget(
 
 /**
  * Les consommateurs NON modifiés des symboles touchés, dans la limite de
- * `budget` caractères d'excerpts : code applicatif d'abord (c'est lui qui rend
+ * `budget` caractères (JSON) d'excerpts : code applicatif d'abord (c'est lui qui rend
  * la valeur), tests ensuite (ils fixent le contrat). Ce qui ne tient pas est
  * nommé dans `warnings`.
  */
-function findConsumers(input: {
+export function findConsumers(input: {
   budget: number;
   changed: ChangedModule[];
   /** Fichiers source lus à la révision de tête, chemin → contenu. */
@@ -388,104 +392,4 @@ function findConsumers(input: {
       left.path.localeCompare(right.path)
   );
   return withinBudget(found, input.budget);
-}
-
-const treeSchema = z.object({
-  tree: z.array(
-    z.object({
-      path: z.string(),
-      size: z.number().optional(),
-      type: z.string(),
-    })
-  ),
-  truncated: z.boolean().optional(),
-});
-const MANIFEST = /(^|\/)(package|tsconfig)\.json$/;
-const MAX_SCANNED_BYTES = 200_000;
-
-/**
- * Remonte le graphe d'imports depuis les fichiers modifiés, à la révision de
- * tête : un arbre (une requête), puis les manifestes et au plus `maxFiles`
- * fichiers source, fichiers modifiés d'abord, tests en dernier. Un budget nul
- * (recherche désactivée, ou contexte déjà plein) ne lit rien. Tout plafond
- * atteint est nommé dans les avertissements, jamais tu. Les lectures passent
- * par `read`, qui porte l'accès au dépôt : ce module ne fait aucune I/O.
- */
-export async function consumerContext(input: {
-  budget: number;
-  files: readonly { filename: string; patch?: string }[];
-  maxFiles: number;
-  read: {
-    /** La réponse brute de `git/trees/{ref}?recursive=1`. */
-    tree: () => Promise<unknown>;
-    file: (path: string) => Promise<string | undefined>;
-  };
-  ref: string;
-}): Promise<{ consumers: ConsumerMaterial[]; warnings: string[] }> {
-  // Budget nul : la recherche est désactivée, ou le contexte de dépendances a
-  // tout pris. Aucune requête n'est faite.
-  if (input.budget <= 0) {
-    return { consumers: [], warnings: [] };
-  }
-  const warnings: string[] = [];
-  let listing: z.infer<typeof treeSchema>;
-  try {
-    listing = treeSchema.parse(await input.read.tree());
-  } catch {
-    return { consumers: [], warnings: ["Consumer search: tree unavailable"] };
-  }
-  if (listing.truncated) {
-    warnings.push("Consumer search: repository tree listing truncated");
-  }
-  const blobs = listing.tree
-    .filter(
-      (item) => item.type === "blob" && (item.size ?? 0) <= MAX_SCANNED_BYTES
-    )
-    .map((item) => item.path);
-  const read = async (path: string) =>
-    await input.read.file(path).catch(() => undefined);
-  const manifests = new Map<string, string>();
-  for (const path of blobs) {
-    if (MANIFEST.test(path) && !path.includes("node_modules/")) {
-      const text = await read(path);
-      if (text !== undefined) {
-        manifests.set(path, text);
-      }
-    }
-  }
-  const changed = new Set(input.files.map((file) => file.filename));
-  const candidates = blobs
-    .filter(isConsumerCandidate)
-    .sort(
-      (left, right) =>
-        Number(changed.has(right)) - Number(changed.has(left)) ||
-        Number(isTestPath(left)) - Number(isTestPath(right))
-    );
-  if (candidates.length > input.maxFiles) {
-    warnings.push(
-      `Consumer scan limit (${input.maxFiles}) reached: ${candidates.length - input.maxFiles} source files not searched`
-    );
-  }
-  const sources = new Map<string, string>();
-  for (const path of candidates.slice(0, input.maxFiles)) {
-    const text = await read(path);
-    if (text !== undefined) {
-      sources.set(path, text);
-    }
-  }
-  const found = findConsumers({
-    budget: input.budget,
-    changed: input.files.map((file) => ({
-      content: sources.get(file.filename) ?? "",
-      path: file.filename,
-      ...(file.patch ? { patch: file.patch } : {}),
-    })),
-    files: sources,
-    ref: input.ref,
-    workspace: workspaceResolution(manifests),
-  });
-  return {
-    consumers: found.consumers,
-    warnings: [...warnings, ...found.warnings],
-  };
 }

@@ -257,6 +257,90 @@ describe("variantes qui doivent rester refusées", () => {
   });
 });
 
+describe("faux verts de la revue : refusés", () => {
+  it("(f) racine de vue `[data-cash-state]` : `cash` n'est qu'un préfixe de `cashVarianceCents`", async () => {
+    // L'attribut existe avant comme après le changement ; il ne partage avec la
+    // ligne changée que le premier mot d'un identifiant composé.
+    const scenario = mutant((item) => {
+      Object.assign(objective(item), {
+        kind: "visible",
+        target: { by: "css", value: "[data-cash-state]" },
+      });
+    });
+    expect(witnessRefusals((await gate(scenario)).refusals)).toHaveLength(1);
+  });
+
+  it.each([
+    { kind: "hidden", target: { by: "testId", value: "variance-cents" } },
+    { kind: "hidden", target: { by: "css", value: "[data-variance-cents]" } },
+    {
+      kind: "hidden",
+      target: { by: "text", value: "expected counted variance" },
+    },
+    { kind: "hidden", target: { by: "label", value: "Variance" } },
+    {
+      expected: 0,
+      kind: "count",
+      target: { by: "css", value: "[data-variance-cents]" },
+    },
+  ])("(g) lecture négative d'une cible qu'aucune ligne retirée n'écrit : %o", async (read) => {
+    // Aucune de ces cibles n'existe : l'absence passe sur la base comme sur la
+    // tête, quel que soit le mot qu'elle emprunte au diff.
+    const scenario = mutant((item) => {
+      Object.assign(objective(item), read);
+    });
+    expect(witnessRefusals((await gate(scenario)).refusals)).toHaveLength(1);
+  });
+
+  /** Une lecture de texte non citée du bouton de navigation. */
+  const uncitedText = {
+    afterStep: "open-caisse",
+    description: "le bouton de navigation garde son libellé",
+    expected: "Caisse et Coffre",
+    id: "nav-label",
+    kind: "text",
+    target: { by: "role", name: "Caisse et Coffre", value: "button" },
+    verification: "transition",
+  } as Scenario["assertions"][number];
+  const verifyNav = {
+    action: { assertionId: uncitedText.id, type: "assert" },
+    description: "verify the navigation label",
+    id: "verify-nav",
+  } as Scenario["steps"][number];
+
+  it("(c2) objectif retiré, une lecture de texte non citée à côté : refusé", async () => {
+    const scenario = mutant((item) => {
+      item.objective = undefined;
+      item.assertions.push(uncitedText);
+      item.steps.push(verifyNav);
+    });
+    expect(witnessRefusals((await gate(scenario)).refusals)).toHaveLength(1);
+  });
+
+  it("(c3) objectif = lecture de texte non citée : refusé", async () => {
+    const scenario = mutant((item) => {
+      item.assertions.push(uncitedText);
+      item.steps.push(verifyNav);
+      item.objective = uncitedText.id;
+    });
+    expect(witnessRefusals((await gate(scenario)).refusals)).toHaveLength(1);
+  });
+
+  it("(c4) objectif = `value` vide non cité : refusé", async () => {
+    const scenario = mutant((item) => {
+      item.assertions = [
+        { ...uncitedText, expected: "", kind: "value" },
+      ] as Scenario["assertions"];
+      item.steps = [
+        ...item.steps.filter((step) => step.action.type !== "assert"),
+        verifyNav,
+      ];
+      item.objective = uncitedText.id;
+    });
+    expect(witnessRefusals((await gate(scenario)).refusals)).toHaveLength(1);
+  });
+});
+
 describe("contrôles qui doivent passer toutes les portes", () => {
   it("V2 : le message d'état lu en texte après la clôture (hors périmètre `text`)", async () => {
     const scenario = mutant((item) => {
@@ -398,6 +482,219 @@ describe("découpage en jetons", () => {
   });
 });
 
+/** Un scénario synthétique sur un diff donné, son unique assertion remplacée. */
+function synthetic(input: {
+  assertion: Record<string, unknown>;
+  files: { filename: string; patch: string; status?: string }[];
+  quote?: string;
+  sourceFiles?: string[];
+}) {
+  const scenario = mutant((item) => {
+    item.sourceFiles = input.sourceFiles ?? [input.files[0]?.filename ?? ""];
+    const requirement = item.requirements[0] as {
+      quote: string;
+      sourceFile: string;
+    };
+    requirement.quote = input.quote ?? "}";
+    requirement.sourceFile = item.sourceFiles[0] ?? "";
+    const assertion = objective(item) as Record<string, unknown>;
+    for (const key of ["expected", "requirement", "target"]) {
+      delete assertion[key];
+    }
+    Object.assign(
+      assertion,
+      input.quote === undefined ? {} : { requirement: 0 },
+      input.assertion
+    );
+  });
+  return objectiveWitnessRefusals(
+    { ...realPlan, scenarios: [scenario] },
+    { files: input.files.map((file) => ({ status: "modified", ...file })) }
+  );
+}
+const oneLine = (removed: string, added: string) => [
+  {
+    filename: "src/view.tsx",
+    patch: `@@ -1 +1 @@\n-${removed}\n+${added}`,
+  },
+];
+
+describe("libellés que le diff écrit en entier", () => {
+  it.each([
+    "CSV",
+    "PDF",
+    "TVA",
+    "OK",
+    "Add",
+    "Export",
+    "Import",
+    "New",
+    "Default",
+    "Type",
+    "Style",
+    "Return",
+    "Class",
+    "Data",
+    "Number",
+    "Case",
+    "Break",
+    "Async",
+  ])("« %s » : un mot court ou structurel, écrit comme texte du bouton ajouté", (label) => {
+    expect(
+      synthetic({
+        assertion: {
+          kind: "visible",
+          target: { by: "role", name: label, value: "button" },
+        },
+        files: oneLine("", `  <button onClick={go}>${label}</button>`),
+      })
+    ).toEqual([]);
+  });
+
+  it("un mot-clé du langage n'est pas un littéral", () => {
+    expect(
+      synthetic({
+        assertion: {
+          kind: "visible",
+          target: { by: "role", name: "Export", value: "button" },
+        },
+        files: oneLine("", "export const go = 1;"),
+      })
+    ).toHaveLength(1);
+  });
+
+  it("un rôle anonyme est lu par le `role=` que le diff écrit, et par lui seul", () => {
+    const files = oneLine("", '  {error && <p role="alert">{error}</p>}');
+    const read = (value: string) =>
+      synthetic({
+        assertion: { kind: "visible", target: { by: "role", name: "", value } },
+        files,
+      });
+    expect(read("alert")).toEqual([]);
+    expect(read("status")).toHaveLength(1);
+  });
+
+  it("une absence est témoin d'une cible que les lignes retirées écrivent", () => {
+    const hidden = (removed: string, added: string) =>
+      synthetic({
+        assertion: {
+          kind: "hidden",
+          target: { by: "text", value: "Maintenance prévue" },
+        },
+        files: oneLine(removed, added),
+      });
+    expect(hidden("  <Banner>Maintenance prévue</Banner>", "")).toEqual([]);
+    // Ajoutée seulement : la cible n'existait pas, l'absence passait déjà.
+    expect(hidden("", "  <Banner>Maintenance prévue</Banner>")).toHaveLength(1);
+  });
+});
+
+describe("adresses et nombres", () => {
+  const route = (status: string) =>
+    synthetic({
+      assertion: { expected: "/billing", kind: "url" },
+      files: [
+        {
+          filename: "app/billing/page.tsx",
+          patch: "@@ -0,0 +1 @@\n+export default function Page() {}",
+          status,
+        },
+      ],
+    });
+
+  it("une route par fichier AJOUTÉE est lue par son chemin", () => {
+    expect(route("added")).toEqual([]);
+    // Un fichier modifié existait avant : son chemin ne prouve rien.
+    expect(route("modified")).toHaveLength(1);
+  });
+
+  it("un `count` dont la citation écrit le nombre attendu", () => {
+    const count = (quote?: string) =>
+      synthetic({
+        assertion: {
+          expected: 20,
+          kind: "count",
+          target: { by: "css", value: "tbody tr" },
+        },
+        files: oneLine("const PAGE_SIZE = 10;", "const PAGE_SIZE = 20;"),
+        ...(quote === undefined ? {} : { quote }),
+      });
+    expect(count("const PAGE_SIZE = 20;")).toEqual([]);
+    // Non cité, le nombre n'est jamais une observation.
+    expect(count()).toHaveLength(1);
+  });
+});
+
+describe("refus connus et documentés : le mot observé n'est sur aucune ligne changée", () => {
+  // Le remède est une lecture de valeur qui cite son exigence (hint) ; ces cas
+  // restent refusés pour qu'un relâchement soit délibéré.
+  it.each([
+    {
+      assertion: {
+        kind: "visible",
+        target: { by: "text", value: "En retard" },
+      },
+      files: oneLine("const late = days > 30;", "const late = days > 60;"),
+      name: "condition changée, libellé dans un fichier inchangé",
+    },
+    {
+      assertion: {
+        kind: "visible",
+        target: { by: "role", name: "Factures en retard", value: "heading" },
+      },
+      files: oneLine("<h2>{title}</h2>", '<h2>{t("invoices.overdue")}</h2>'),
+      name: "clé de traduction",
+    },
+    {
+      assertion: {
+        kind: "visible",
+        target: { by: "text", value: "Factures" },
+      },
+      files: oneLine("<h2>{titre}</h2>", "<h2>{facture.titre}</h2>"),
+      name: "pluriel",
+    },
+    {
+      assertion: {
+        kind: "visible",
+        target: { by: "role", name: "Verrouillé", value: "img" },
+      },
+      files: oneLine("", "{isLocked && <LockIcon />}"),
+      name: "nom accessible porté par un composant inchangé",
+    },
+    {
+      assertion: { expected: "/items/42", kind: "url" },
+      files: oneLine("const id = 41;", "const id = 42;"),
+      name: "nombre de moins de trois chiffres",
+    },
+  ])("$name", ({ assertion, files }) => {
+    expect(synthetic({ assertion, files })).toHaveLength(1);
+  });
+});
+
+it("seules les lignes des `sourceFiles` du scénario sont des sources", () => {
+  const files = [
+    {
+      filename: "src/a.ts",
+      patch: "@@ -1 +1 @@\n-const a = 1;\n+const a = 2;",
+    },
+    {
+      filename: "src/b.tsx",
+      patch: '@@ -1 +1 @@\n-<p>old</p>\n+<p data-ledger-total="1">x</p>',
+    },
+  ];
+  const read = (sourceFiles: string[]) =>
+    synthetic({
+      assertion: {
+        kind: "visible",
+        target: { by: "css", value: "[data-ledger-total]" },
+      },
+      files,
+      sourceFiles,
+    });
+  expect(read(["src/a.ts"])).toHaveLength(1);
+  expect(read(["src/a.ts", "src/b.tsx"])).toEqual([]);
+});
+
 describe("le jeu de régression reste vert", () => {
   const pr20Context = { files: pr20.files };
   let declared = 0;
@@ -424,7 +721,7 @@ describe("le jeu de régression reste vert", () => {
     expect(declared).toBe(21);
   });
 
-  it("79 plans historiques : 0 lecture de présence sans témoin sur 2914, 0 scénario sur 681", () => {
+  it("79 plans historiques : 99 lectures de présence sans témoin sur 2914, 0 scénario sur 681", () => {
     expect(historicalPlans).toHaveLength(79);
     let scenarios = 0;
     let presence = 0;
@@ -452,11 +749,18 @@ describe("le jeu de régression reste vert", () => {
         }
       }
     }
+    // Contrefactuel : 98 lectures négatives (81 `count` à 0, 17 `hidden`) d'une
+    // cible que la PR 20 AJOUTE (`[data-cash-action="rouvrir"]`, « Rouvrir la
+    // session »…) : sur la base, cette cible n'existe pas, l'absence y passe
+    // donc aussi — elle ne prouve pas le changement si elle est prise pour
+    // objectif. Plus une présence dont les seules sources sont de la
+    // documentation. Aucune n'est l'unique preuve de son scénario : la règle de
+    // repli reste à 0 sur 681.
     expect({ fallback, presence, scenarios, unwitnessed }).toEqual({
       fallback: 0,
       presence: 2914,
       scenarios: 681,
-      unwitnessed: 0,
+      unwitnessed: 99,
     });
   });
 });
@@ -469,4 +773,7 @@ it("le prompt énonce le matériel des consommateurs et le refus de témoin", ()
     "is refused (OBJECTIVE_UNWITNESSED): a view title, a navigation control or a heading of the page you left exists with or without the change"
   );
   expect(PLANNER_PROMPT).toContain("never copied from an observed view");
+  expect(PLANNER_PROMPT).toContain(
+    "A hidden or zero-count objective proves the change only when the lines the diff removes write its target"
+  );
 });
