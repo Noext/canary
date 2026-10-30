@@ -43,7 +43,8 @@ function fakeBrowser() {
 
 /**
  * Un plan lisible qui viole le schéma du planificateur, assez lourd (~300 Ko)
- * pour que la réservation de sa correction dépasse l'enveloppe par défaut.
+ * pour que la réservation de sa correction dépasse l'enveloppe épinglée par
+ * `UNFUNDED_CORRECTION` ci-dessous.
  */
 function oversizedInvalidPlan(): Plan {
   const invalid = structuredClone(plan);
@@ -52,11 +53,26 @@ function oversizedInvalidPlan(): Plan {
   return invalid;
 }
 
+/**
+ * L'enveloppe et la borne de plan sous lesquelles la première proposition est
+ * financée mais pas sa correction : 100 000 tokens par run et 8 000 par plan,
+ * les anciens défauts contre lesquels ce scénario a été écrit. Les défauts
+ * actuels (1 000 000 et 98 304) financent la correction d'un plan de 300 Ko,
+ * ce qui ferait disparaître le cas que ce test garde.
+ */
+const UNFUNDED_CORRECTION = {
+  QA_PLAN_MAX_TOKENS: "8000",
+  QA_RUN_MAX_TOKENS: "100000",
+};
+
 const mode = async (path: string) => (await stat(path)).mode % 0o1000;
 
 describe("persistance du planificateur et rejugement hors ligne", () => {
   it("garde inputs.json et response-1.json, et rejudge reproduit les violations", async () => {
-    const f = await fixture({ plans: [oversizedInvalidPlan()] });
+    const f = await fixture({
+      plans: [oversizedInvalidPlan()],
+      env: UNFUNDED_CORRECTION,
+    });
     close.push(f.close);
     fakeBrowser();
     const result = await runQa(

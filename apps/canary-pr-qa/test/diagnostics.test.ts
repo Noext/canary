@@ -5,6 +5,7 @@ import { loadConfig, validateConfiguration } from "../src/config.js";
 import { diagnose, redact } from "../src/diagnostics.js";
 import { doctor, supportSummary } from "../src/doctor.js";
 import { fetchText } from "../src/http.js";
+import { Model } from "../src/model.js";
 import { Progress } from "../src/progress.js";
 import { fixture, PR_URL } from "./fixture.js";
 
@@ -138,6 +139,33 @@ describe("installation doctor and safe support summaries", () => {
     const json = JSON.stringify(result);
     expect(json).not.toContain(f.config.QA_API_TOKEN);
     expect(json).not.toContain(f.config.GITHUB_TOKEN);
+  });
+  it("bounds each connectivity attempt by the pre-raise timeout, not the plan timeout", async () => {
+    // Le délai d'un plan (600 s par défaut, relevé pour le raisonnement) ne
+    // s'applique pas au contrôle de connectivité, qui ne tourne dans aucune
+    // enveloppe de run : 4 essais × 600 s tiendraient le doctor ~40 minutes
+    // sur un endpoint muet. Un délai déjà plus court est gardé tel quel.
+    const f = await setup();
+    const seen: number[] = [];
+    vi.spyOn(Model.prototype, "json").mockImplementation(async function (
+      this: Model
+    ) {
+      seen.push(
+        (this as unknown as { config: { QA_MODEL_TIMEOUT_SECONDS: number } })
+          .config.QA_MODEL_TIMEOUT_SECONDS
+      );
+      return { ok: true };
+    } as unknown as Model["json"]);
+    for (const timeout of [600, 30]) {
+      const result = await doctor(
+        { ...f.config, QA_MODEL_TIMEOUT_SECONDS: timeout },
+        { skipBrowser: true }
+      );
+      expect(result.checks.find((c) => c.name === "model")?.status).toBe(
+        "passed"
+      );
+    }
+    expect(seen).toEqual([120, 30]);
   });
   it("marks skipped external checks explicitly and diagnoses a missing CLI", async () => {
     const f = await setup();

@@ -10,7 +10,11 @@ import {
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import { echoesEarlierInput } from "./echoed-input.js";
-import { declaredPreconditionNames, type TrustedCatalog } from "./fixtures.js";
+import {
+  declaredPreconditionNames,
+  preconditionRefusals,
+  type TrustedCatalog,
+} from "./fixtures.js";
 import type { PrContext } from "./github.js";
 import {
   bracketBlocks,
@@ -18,7 +22,13 @@ import {
   structuralSelectorReason,
   unstableSelectorReason,
 } from "./plan-selector.js";
-import { numberedSourceLines, sourceLineMaterial } from "./policy.js";
+import {
+  numberedSourceLines,
+  type Policy,
+  planFindings,
+  sourceLineMaterial,
+  writeEvidenceRefusals,
+} from "./policy.js";
 import {
   type EstablishingClickFault,
   establishingClickFault,
@@ -2515,4 +2525,92 @@ function justifiedByExpectedValue(
     return true;
   }
   return [...target].some((word) => source.has(word));
+}
+
+/**
+ * Les refus qui n'empêchent pas le run : ordre des marqueurs, et — quand le
+ * drapeau est posé — les défauts de contrat propres à un scénario.
+ */
+export function preExecutionFindings(
+  plan: Plan,
+  context: PrContext,
+  policy: Policy,
+  config: Config
+): { error: QaError; scenarioId: string }[] {
+  const findings = planFindings(plan, sourceLineMaterial(context), {
+    config,
+    context,
+    policy,
+  });
+  return [
+    ...findings.refusals,
+    ...findings.coverageRefusals,
+    ...provenanceRefusals(plan),
+  ];
+}
+
+/**
+ * La table des refus prononcés avant toute étape navigateur, par scénario. Le
+ * premier plan ET le plan réécrit après observation la repassent : une
+ * réécriture que le modèle n'a pas corrigée ne devient jamais un chemin vers
+ * Chromium.
+ */
+export function preExecutionRefusalTable(
+  plan: Plan,
+  gate: {
+    catalog: TrustedCatalog;
+    config: Config;
+    context: PrContext;
+    evidence: DiscoveryEvidence;
+    policy: Policy;
+  }
+): Map<string, QaError> {
+  return new Map([
+    ...(
+      [
+        ...preconditionRefusals(plan, gate.catalog, gate.context.ref.repo),
+        ...writeEvidenceRefusals(plan, gate.policy),
+        ...unstableSelectorRefusals(plan),
+        ...attributeValueRefusals(plan),
+        ...stateTargetReadRefusals(plan, gate.evidence),
+        ...missingExpectationRefusals(plan),
+        ...ifPresentRefusals(plan),
+      ] as const
+    ).map((item) => [item.scenario.id, item.error] as const),
+    // L'ordre des marqueurs coûte le scénario, jamais le run : un plan dont une
+    // assertion est impossible garde ses autres scénarios exécutables.
+    ...preExecutionFindings(plan, gate.context, gate.policy, gate.config).map(
+      (item) => [item.scenarioId, item.error] as const
+    ),
+  ]);
+}
+
+export function evidenceRefusalsByScenario(
+  report: PlanEvidenceReport
+): Map<string, PlanEvidenceRefusal[]> {
+  const refusals = new Map<string, PlanEvidenceRefusal[]>();
+  for (const refusal of report.refusals) {
+    const list = refusals.get(refusal.scenarioId) ?? [];
+    list.push(refusal);
+    refusals.set(refusal.scenarioId, list);
+  }
+  return refusals;
+}
+
+/**
+ * Les scénarios que la préversion de base ne joue pas : ceux refusés avant
+ * exécution et jamais réexécutés, plus ceux que le plan réécrit refuse encore.
+ * Un scénario corrigé par la réécriture puis réexécuté a sa base ; un scénario
+ * dont la réécriture reste refusée n'en a pas, comme au premier passage.
+ */
+export function baselineRefusals(
+  initial: Iterable<string>,
+  reexecuted: readonly string[],
+  revised: ReadonlySet<string> | undefined
+): ReadonlySet<string> {
+  const rerun = new Set(reexecuted);
+  return new Set([
+    ...[...initial].filter((id) => !rerun.has(id)),
+    ...(revised ?? []),
+  ]);
 }

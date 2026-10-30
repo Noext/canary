@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { classifyFailure } from "../src/diagnostics.js";
 import { classifyScenarioResult } from "../src/observe-act.js";
+import { preExecutionFindings } from "../src/plan-evidence.js";
 import { planFindings } from "../src/policy.js";
-import { preExecutionFindings } from "../src/runner.js";
 import { type Plan, PlanSchema, plannerPlanSchema } from "../src/schema.js";
 
 /**

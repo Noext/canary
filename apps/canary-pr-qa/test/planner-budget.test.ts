@@ -183,49 +183,69 @@ describe("les bornes du payload", () => {
   });
 
   it("compte de gros patches et métadonnées de PR", () => {
-    const light = build(context(12, 1000), config());
+    // La fenêtre que ce test raisonne est épinglée : 131 072 tokens et 8 000
+    // de sortie, une borne d'environ 227 000 caractères que 12 patches de
+    // 8 Ko tiennent et que 40 font déborder. Sous la fenêtre par défaut d'un
+    // million, aucun de ces payloads n'approcherait la borne.
+    const pinned = config({
+      QA_MODEL_CONTEXT_TOKENS: "131072",
+      QA_PLAN_MAX_TOKENS: "8000",
+    });
+    const pinnedLimit = plannerInputBudget(pinned).limit;
+    const light = build(context(12, 1000), pinned);
     const ctx = context(12, 1000);
     envLargePatches(ctx);
-    const heavy = build(ctx, config());
+    const heavy = build(ctx, pinned);
     // Les patches pèsent : le payload grossit de leur taille, et il est refusé
     // dès qu'ils font déborder la borne.
     expect(JSON.stringify(heavy).length).toBeGreaterThan(
       JSON.stringify(light).length + 80_000
     );
-    expect(JSON.stringify(heavy).length).toBeLessThanOrEqual(limit);
+    expect(JSON.stringify(heavy).length).toBeLessThanOrEqual(pinnedLimit);
     expect(heavy.pr.files).toHaveLength(12);
     const huge = context(40, 1000);
     envLargePatches(huge);
-    expect(() => build(huge, config())).toThrow(/exceeds model budget/);
+    expect(() => build(huge, pinned)).toThrow(/exceeds model budget/);
   });
 
   it("une fenêtre plus large accepte un payload que la fenêtre par défaut refuse", () => {
+    // Fenêtre par défaut : 1 000 000 tokens (le modèle par défaut), moins deux
+    // sorties de plan de 98 304, soit une borne d'environ 1,78 million de
+    // caractères. Un payload à cette borne plus son enveloppe la dépasse ; une
+    // fenêtre de 2 000 000 tokens, plus large que le défaut, l'accepte.
     const ctx = context(1, limit);
     expect(() => build(ctx, config())).toThrow(/exceeds model budget/);
-    const wide = config({ QA_MODEL_CONTEXT_TOKENS: "400000" });
+    const wide = config({ QA_MODEL_CONTEXT_TOKENS: "2000000" });
     expect(() => build(ctx, wide)).not.toThrow();
     expect(JSON.stringify(build(ctx, wide)).length).toBeGreaterThan(limit);
   });
 
   it("réserve la place de la correction, et refuse quand elle ne laisse rien", () => {
-    // Même fenêtre, même payload : seule la sortie réservée change.
+    // Même fenêtre, même payload : seule la sortie réservée change. La fenêtre
+    // est épinglée à 131 072 tokens, celle que ce calcul raisonne : 60 000 de
+    // sortie, réservés deux fois, n'y laissent que 11 072 tokens d'entrée.
+    const window = { QA_MODEL_CONTEXT_TOKENS: "131072" };
     const ctx = context(2, 40_000);
-    const generous = plannerInputBudget(config({ QA_PLAN_MAX_TOKENS: "2000" }));
+    const generous = plannerInputBudget(
+      config({ ...window, QA_PLAN_MAX_TOKENS: "2000" })
+    );
     const reserved = plannerInputBudget(
-      config({ QA_PLAN_MAX_TOKENS: "16000" })
+      config({ ...window, QA_PLAN_MAX_TOKENS: "16000" })
     );
     expect(reserved.limit).toBeLessThan(generous.limit);
     // Le matériel numéroté tient sous les deux budgets.
     expect(
-      build(ctx, config({ QA_PLAN_MAX_TOKENS: "2000" })).sourceLines.length
+      build(ctx, config({ ...window, QA_PLAN_MAX_TOKENS: "2000" })).sourceLines
+        .length
     ).toBeGreaterThan(0);
     expect(
-      build(ctx, config({ QA_PLAN_MAX_TOKENS: "16000" })).sourceLines.length
+      build(ctx, config({ ...window, QA_PLAN_MAX_TOKENS: "16000" })).sourceLines
+        .length
     ).toBeGreaterThan(0);
     // Une sortie qui ne laisse plus rien refuse au lieu de tronquer.
-    expect(() => build(ctx, config({ QA_PLAN_MAX_TOKENS: "60000" }))).toThrow(
-      /exceeds model budget/
-    );
+    expect(() =>
+      build(ctx, config({ ...window, QA_PLAN_MAX_TOKENS: "60000" }))
+    ).toThrow(/exceeds model budget/);
   });
 });
 

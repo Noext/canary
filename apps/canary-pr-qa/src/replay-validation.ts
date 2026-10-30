@@ -1,17 +1,17 @@
 import type { Config } from "./config.js";
 import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
-import { provenanceRefusals, validatePlanEvidence } from "./plan-evidence.js";
+import {
+  preExecutionFindings,
+  provenanceRefusals,
+  validatePlanEvidence,
+} from "./plan-evidence.js";
 import {
   amputationScans,
   type Policy,
   requirementSourceRefusal,
 } from "./policy.js";
-import {
-  planRefusals,
-  preExecutionFindings,
-  quotePickCorrection,
-} from "./runner.js";
+import { planRefusals, quotePickCorrection } from "./runner.js";
 import type { Plan } from "./schema.js";
 
 interface ReplayValidationInput {

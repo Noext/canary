@@ -51,7 +51,15 @@ describe("boucle observe→act, derrière le drapeau", () => {
     try {
       const result = await runQa(
         { prUrl: PR_URL, previewUrl: f.baseUrl },
-        { ...f.config, QA_OBSERVE_ACT: observeAct }
+        // La réécriture sur invariant est coupée : ces tests mesurent UNE
+        // exécution de la boucle observe→act. Active (défaut), elle réexécute
+        // le scénario TARGET_NOT_FOUND, ce qui ajoute un second relevé à un
+        // second passage — un autre mécanisme, couvert par replan.test.ts.
+        {
+          ...f.config,
+          QA_OBSERVE_ACT: observeAct,
+          QA_REPLAN_ON_INVARIANT: false,
+        }
       );
       return { acts, result };
     } finally {

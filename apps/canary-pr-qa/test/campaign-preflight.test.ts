@@ -238,8 +238,10 @@ describe("quand toutes les dépendances répondent, le préflight est vert", () 
     expect(blockers).toEqual([]);
     expect(prSha).toBe("d".repeat(40));
     expect(previewSha).toBe("d".repeat(40));
-    // 100 runs × plafond de 100 000 tokens × 4 $/M (le plus cher des deux tarifs).
-    expect(maxCost).toEqual({ costUsd: 40, runs: 100, tokens: 10_000_000 });
+    // 100 runs × plafond par défaut de 1 000 000 tokens (QA_RUN_MAX_TOKENS,
+    // relevé pour financer une planification réelle de la PR #20) × 4 $/M (le
+    // plus cher des deux tarifs). La borne annoncée suit ce défaut : 400 $.
+    expect(maxCost).toEqual({ costUsd: 400, runs: 100, tokens: 100_000_000 });
   });
 });
 
