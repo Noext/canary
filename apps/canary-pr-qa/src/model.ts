@@ -337,6 +337,22 @@ type InvalidContent =
   | { kind: "unreadable"; detail: string }
   | { kind: "schema"; detail: string };
 
+/**
+ * Vrai quand la réponse ne peut pas porter un plan : pas de contenu, coupée par
+ * sa propre borne, ou annonçant plus de sortie que demandé. Sortie de
+ * `Model.json()` pour que sa complexité reste sous le plafond du lint : la
+ * règle n'est pas assouplie, la responsabilité est déplacée.
+ */
+function usableResponse(
+  content: string | undefined,
+  finishReason: string | undefined,
+  overBound: unknown
+): content is string {
+  return (
+    Boolean(content) && finishReason !== "length" && overBound === undefined
+  );
+}
+
 export class Model {
   private readonly config: Config;
   constructor(config: Config) {
@@ -398,7 +414,10 @@ export class Model {
       if (prepaid) {
         prepaid = false;
       } else {
-        this.claim(messages, outputBound);
+        const kept = this.claimOrKeepRefused(messages, outputBound, refused);
+        if (kept !== undefined) {
+          return kept;
+        }
       }
       const started = Date.now();
       const response = await traced(
@@ -453,7 +472,7 @@ export class Model {
       modelCalls.inc({ model: this.config.OPENAI_MODEL, outcome: "response" });
       checkBudget();
       const overBound = exceededOutputBound(response, outputBound);
-      if (!content || finishReason === "length" || overBound !== undefined) {
+      if (!usableResponse(content, finishReason, overBound)) {
         // Une réponse contrainte coupée ne résout rien : son plan refusé repart
         // tel quel, avec le message fatal d'aujourd'hui, plutôt que d'être
         // requalifiée en « réponse illisible ».
@@ -1020,6 +1039,37 @@ export class Model {
         { once: true }
       );
     });
+  }
+
+  /**
+   * Réserve l'appel suivant, ou rend le plan DÉJÀ REFUSÉ quand la réservation
+   * échoue.
+   *
+   * Une correction impossible à financer ne détruit pas ce qui est déjà payé :
+   * le plan refusé repart tel quel, avec le refus déterministe qui l'a condamné,
+   * et l'appelant rejoue ses propres portes sur ce plan. Sans cela,
+   * `RUN_BUDGET_EXCEEDED` remplaçait le motif du refus et le plan candidat
+   * n'était jamais conservé — mesuré sur PR #20 : 0,0784 $ de génération, un
+   * JSON parsé, rien de récupérable.
+   *
+   * `refused` est le seul témoin fiable : `depositCorrection` rend `undefined`
+   * pour une correction en CHAÎNE, donc `pending` ne signale pas ce cas, qui est
+   * le plus courant. Le plan rendu n'est jamais déclaré valide pour autant.
+   */
+  private claimOrKeepRefused<T>(
+    messages: { content: string; role: string }[],
+    outputBound: number,
+    refused: T | undefined
+  ): T | undefined {
+    try {
+      this.claim(messages, outputBound);
+      return;
+    } catch (error) {
+      if (refused !== undefined) {
+        return refused;
+      }
+      throw error;
+    }
   }
 
   /**
