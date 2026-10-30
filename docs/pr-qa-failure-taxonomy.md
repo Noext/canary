@@ -80,5 +80,7 @@ préversion de base (`src/baseline-diff.ts`) et ne figurent dans aucun run du co
   passe aussi sur la base. Le scénario serait vert sans la PR ; il est bloqué,
   classé `test-defect`.
 - `BASELINE_REGRESSION` est une **régression produit** : une assertion qui passe
-  sur la base échoue sur la tête. Le scénario est `failed`, classé `failed` ; les
-  deux valeurs observées sont dans `baselineComparison.regressions`.
+  sur la base de fusion échoue sur la tête, à contrat joué identique (aucune
+  cible substituée) et, pour une transition, depuis le même point de départ. Le
+  scénario est `failed`, classé `failed` ; les deux valeurs observées sont dans
+  `baselineComparison.regressions`.

@@ -39,6 +39,8 @@ function scenario(
     code?: string;
     error?: string;
     hash?: string;
+    preconditions?: string[];
+    steps?: ScenarioResult["steps"];
   } = {}
 ): ScenarioResult {
   const outcome =
@@ -53,10 +55,11 @@ function scenario(
       title: id,
       objective: options.objective,
       assertions,
+      preconditions: options.preconditions ?? [],
       steps: [],
     } as unknown as ScenarioResult["scenario"],
     outcome,
-    steps: [],
+    steps: options.steps ?? [],
     assertions: recorded,
     artifacts: [],
     contract: {
@@ -373,26 +376,25 @@ describe("la matrice base/tête, par assertion", () => {
     }
   });
 
-  it("une tête qui montre déjà l'attendu ne devient pas une régression", () => {
+  it.each([
+    "STATE_ALREADY_SATISFIED",
+    "TRANSITION_ON_INVARIANT",
+  ])("une tête qui montre déjà l'attendu ne devient pas une régression (%s)", (code) => {
     const a = text("a", "Session clôturée");
     const result = run(
       [
         scenario("s", [a], [read(false, "Session clôturée")], {
           outcome: "blocked",
-          code: "STATE_ALREADY_SATISFIED",
+          code,
         }),
       ],
       [scenario("s", [a], [read(true, "Session clôturée")])]
     );
     compareWithBaseline(result, CONFIG);
     expect(result.scenarios[0]?.outcome).toBe("blocked");
-    expect(result.scenarios[0]?.diagnostic?.code).toBe(
-      "STATE_ALREADY_SATISFIED"
-    );
+    expect(result.scenarios[0]?.diagnostic?.code).toBe(code);
     expect(result.baselineComparison?.regressions).toEqual([]);
-    expect(result.baselineComparison?.inconclusive[0]?.reason).toContain(
-      "STATE_ALREADY_SATISFIED"
-    );
+    expect(result.baselineComparison?.inconclusive[0]?.reason).toContain(code);
   });
 
   it("une base indisponible est publiée, et le verdict reste celui de la tête", () => {
@@ -521,6 +523,258 @@ describe("PR 21 : l'inversion de signe devient visible", () => {
     expect(result.baselineComparison?.changes).toHaveLength(1);
     expect(reportMarkdown(result, undefined, true)).toContain(
       "main : « Écart de -40,00 € » (passe) → PR : « Écart de 40,00 € » (passe)"
+    );
+  });
+});
+
+describe("ce que la base ne peut pas trancher", () => {
+  const saved = text("a", "saved");
+
+  it.each([
+    "STATE_ALREADY_SATISFIED",
+    "TRANSITION_ON_INVARIANT",
+  ])("une base qui montrait déjà l'attendu n'est pas un comportement modifié (%s)", (code) => {
+    // La base est un environnement persistant que chaque run écrit : « déjà
+    // enregistré » avant le clic y est l'état normal, pas un changement de code.
+    const result = run(
+      [scenario("s", [saved], [read(true, "saved")], { objective: "a" })],
+      [
+        // Une autre valeur qui satisfait aussi l'attendu (inclusion) : seul le
+        // code dit que la base l'affichait déjà avant l'étape.
+        scenario("s", [saved], [read(false, "Already saved")], {
+          objective: "a",
+          outcome: "blocked",
+          code,
+        }),
+      ]
+    );
+    compareWithBaseline(result, CONFIG);
+    expect(result.baselineComparison?.changes).toEqual([]);
+    expect(result.baselineComparison?.notDiscriminating).toEqual([]);
+    expect(result.baselineComparison?.inconclusive[0]?.reason).toBe(
+      `the base value already satisfied the expectation; only its verification failed on the base (${code})`
+    );
+    // Jamais converti en vert ni en rouge : la tête garde son verdict, et le
+    // statut ne parle pas d'un changement entre deux valeurs identiques.
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(statusDescription(result)).not.toContain("behavior change");
+    expect(statusDescription(result)).toContain("1 inconclusive comparison");
+  });
+
+  it("une base qui échoue sur la même valeur que la tête est non concluante, pas un changement", () => {
+    // Même lecture des deux côtés : seule la vérification (point de départ,
+    // sonde d'avant) a échoué sur la base.
+    const result = run(
+      [scenario("s", [saved], [read(true, "saved")], { objective: "a" })],
+      [
+        scenario("s", [saved], [read(false, "saved  ")], {
+          objective: "a",
+          code: "TRANSITION_NOT_OBSERVED",
+        }),
+      ]
+    );
+    compareWithBaseline(result, CONFIG);
+    expect(result.baselineComparison?.changes).toEqual([]);
+    expect(result.baselineComparison?.inconclusive[0]?.reason).toBe(
+      "the base shows the same value as the head; only its verification failed on the base (TRANSITION_NOT_OBSERVED)"
+    );
+  });
+
+  it("une persistance que la base perd reste un comportement modifié, même valeur avant rechargement", () => {
+    const kept = {
+      ...text("a", "saved"),
+      verification: "persisted",
+    } as Assertion;
+    const result = run(
+      [
+        scenario(
+          "s",
+          [kept],
+          [{ id: "a", passed: true, actual: "saved", persisted: "saved" }],
+          { objective: "a" }
+        ),
+      ],
+      [
+        scenario(
+          "s",
+          [kept],
+          [{ id: "a", passed: false, actual: "saved", persisted: "draft" }],
+          { objective: "a" }
+        ),
+      ]
+    );
+    compareWithBaseline(result, CONFIG);
+    expect(result.baselineComparison?.changes).toHaveLength(1);
+    expect(result.baselineComparison?.inconclusive).toEqual([]);
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+  });
+
+  it("une valeur déjà en place avant l'étape, sans code, ne tranche pas non plus", () => {
+    const head = scenario(
+      "s",
+      [saved],
+      [{ id: "a", passed: false, actual: "saved", preMatched: true }],
+      { error: "Assertion a failed" }
+    );
+    const result = run([head], [scenario("s", [saved], [read(true, "saved")])]);
+    compareWithBaseline(result, CONFIG);
+    expect(result.baselineComparison?.regressions).toEqual([]);
+    expect(head.diagnostic).toBeUndefined();
+    expect(result.baselineComparison?.inconclusive[0]?.reason).toContain(
+      "value already satisfied before the step"
+    );
+  });
+
+  it("une cible substituée, d'un côté ou de l'autre, n'est pas le même contrat", () => {
+    // Le hash du contrat est celui du plan d'origine : il ne voit pas une
+    // reprise de cible. Une base qui a passé en cliquant autre chose ne peut
+    // pas rendre la tête rouge.
+    for (const repairedOn of ["base", "head"] as const) {
+      const repaired = [
+        {
+          action: {
+            type: "click",
+            locator: { by: "role", value: "button", name: "Save" },
+          },
+          index: 2,
+          ok: true,
+          reason: "",
+          observation: "",
+          stepId: "save",
+          repairedTarget: `button "${SENTINEL}"`,
+        },
+      ] as ScenarioResult["steps"];
+      const head = scenario("s", [saved], [read(false, "Total 9")], {
+        objective: "a",
+        ...(repairedOn === "head" ? { steps: repaired } : {}),
+      });
+      const result = run(
+        [head],
+        [
+          scenario("s", [saved], [read(true, "saved")], {
+            objective: "a",
+            ...(repairedOn === "base" ? { steps: repaired } : {}),
+          }),
+        ]
+      );
+      compareWithBaseline(result, CONFIG);
+      expect(head.outcome, repairedOn).toBe("failed");
+      expect(head.diagnostic, repairedOn).toBeUndefined();
+      expect(result.baselineComparison?.regressions, repairedOn).toEqual([]);
+      const reason = result.baselineComparison?.inconclusive[0]?.reason;
+      expect(reason, repairedOn).toBe(
+        `the ${repairedOn} played a substituted target at step save, not the planned one`
+      );
+      // La cible jouée vient de la page : elle ne gagne aucune surface publiée.
+      expect(reportMarkdown(result), repairedOn).not.toContain(SENTINEL);
+    }
+  });
+
+  it("des points de départ différents n'accusent pas la PR d'une régression", () => {
+    const step = (passed: boolean, actual: string, baseline: string) => ({
+      id: "a",
+      passed,
+      actual,
+      baseline,
+      changed: actual !== baseline,
+      verification: "transition" as const,
+    });
+    // Un état laissé sur la tête par un run antérieur : la bascule part de
+    // « saved » sur la tête et de « draft » sur la base.
+    const drifted = run(
+      [scenario("s", [saved], [step(false, "draft", "saved")])],
+      [scenario("s", [saved], [step(true, "saved", "draft")])]
+    );
+    compareWithBaseline(drifted, CONFIG);
+    expect(drifted.scenarios[0]?.diagnostic).toBeUndefined();
+    expect(drifted.baselineComparison?.regressions).toEqual([]);
+    expect(drifted.baselineComparison?.inconclusive[0]?.reason).toContain(
+      "different starting state"
+    );
+    // Même point de départ : la base prouve que la PR casse la bascule.
+    const same = run(
+      [scenario("s", [saved], [step(false, "error", "draft")])],
+      [scenario("s", [saved], [step(true, "saved", "draft")])]
+    );
+    compareWithBaseline(same, CONFIG);
+    expect(same.scenarios[0]?.diagnostic?.code).toBe("BASELINE_REGRESSION");
+  });
+
+  it("une tête arrêtée avant l'assertion que la base a passée le dit, et garde son verdict", () => {
+    const head = scenario("s", [saved], [], {
+      objective: "a",
+      outcome: "blocked",
+      code: "TARGET_NOT_FOUND",
+    });
+    head.classification = "test-defect";
+    const result = run(
+      [head],
+      [scenario("s", [saved], [read(true, "saved")], { objective: "a" })]
+    );
+    compareWithBaseline(result, CONFIG);
+    expect(head.outcome).toBe("blocked");
+    expect(head.classification).toBe("test-defect");
+    expect(head.diagnostic?.code).toBe("TARGET_NOT_FOUND");
+    expect(result.baselineComparison?.inconclusive).toEqual([
+      {
+        scenarioId: "s",
+        assertionId: "a",
+        objective: true,
+        expected: "saved",
+        base: { passed: true, actual: "saved" },
+        reason:
+          "the head stopped before this assertion (TARGET_NOT_FOUND) while the base played the same contract and passed it: the PR may have removed or renamed what the plan uses",
+      },
+    ]);
+    // Une base qui a échoué ailleurs ne dit rien de plus.
+    const both = run(
+      [scenario("s", [saved], [], { outcome: "blocked", code: "QA_ERROR" })],
+      [
+        scenario(
+          "s",
+          [saved, text("b", "x")],
+          [read(true, "saved"), read(false, "y", "b")]
+        ),
+      ]
+    );
+    (both.scenarios[0]!.scenario.assertions as Assertion[]).push(
+      text("b", "x")
+    );
+    compareWithBaseline(both, CONFIG);
+    expect(
+      both.baselineComparison?.inconclusive.map((item) => item.reason)
+    ).toContain("not executed on the head");
+  });
+
+  it("une régression rend rouge une tête qui était bloquée pour une autre cause", () => {
+    const head = scenario("s", [saved], [read(false, "draft")], {
+      outcome: "blocked",
+      code: "QA_ERROR",
+      error: "Evidence finalization: disk full",
+    });
+    head.classification = "indeterminate";
+    const result = run([head], [scenario("s", [saved], [read(true, "saved")])]);
+    compareWithBaseline(result, CONFIG);
+    expect(head.outcome).toBe("failed");
+    expect(head.classification).toBe("failed");
+    expect(head.diagnostic?.code).toBe("BASELINE_REGRESSION");
+    expect(head.error).toContain("head: Evidence finalization: disk full");
+  });
+
+  it("un scénario à fixtures n'est pas rejoué sur la base, et le dit", () => {
+    const result = run(
+      [
+        scenario("s", [saved], [read(true, "saved")], {
+          objective: "a",
+          preconditions: ["fixture:cash-session"],
+        }),
+      ],
+      []
+    );
+    compareWithBaseline(result, CONFIG);
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(result.baselineComparison?.inconclusive[0]?.reason).toBe(
+      "scenario not replayed on the base: its fixtures are seeded for the head environment only"
     );
   });
 });

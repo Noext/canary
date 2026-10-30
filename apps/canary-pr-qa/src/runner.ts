@@ -9,7 +9,11 @@ import {
   type ProbedView,
   probeAndReplan,
 } from "./canary.js";
-import { type Config, validateConfiguration } from "./config.js";
+import {
+  type Config,
+  validateConfiguration,
+  validatePreviewUrl,
+} from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import {
@@ -1723,8 +1727,8 @@ async function executePlan(
   await runBaseline(result, context, {
     canary,
     config,
+    github,
     material,
-    model,
     progress,
     refused: baselineRefusals(
       [...refusals.keys(), ...preExecutionRefusals.keys()],
@@ -1741,14 +1745,50 @@ async function executePlan(
     await attachReplayRuntimeResults(root, result);
   }
 }
+/** L'URL de la préversion de base pour un commit donné. */
+function baselineUrl(template: string, sha: string, context: PrContext) {
+  return template
+    .replaceAll("{sha}", sha)
+    .replaceAll("{pr}", String(context.ref.number));
+}
+/**
+ * La base de fusion de la PR : le commit d'où la tête est partie, donc celui
+ * dont le diff de la PR est exactement l'écart. `per_page=1` borne la liste des
+ * commits renvoyée avec la comparaison.
+ */
+async function mergeBase(github: GitHub, context: PrContext): Promise<string> {
+  const data = z
+    .object({
+      merge_base_commit: z.object({ sha: z.string().regex(/^[0-9a-f]{40}$/) }),
+    })
+    .parse(
+      await github.request(
+        `/repos/${context.ref.repo}/compare/${context.baseSha}...${context.sha}?per_page=1`
+      )
+    );
+  return data.merge_base_commit.sha;
+}
+/**
+ * Une base hors de la liste d'hôtes échoue fort, et avant toute dépense : une
+ * erreur de configuration n'est jamais une comparaison « indisponible »
+ * publiée à chaque PR.
+ */
+function checkBaselineHost(context: PrContext, config: Config) {
+  if (config.QA_BASELINE_URL_TEMPLATE) {
+    validatePreviewUrl(
+      baselineUrl(config.QA_BASELINE_URL_TEMPLATE, context.baseSha, context),
+      config
+    );
+  }
+}
 async function runBaseline(
   result: RunResult,
   context: PrContext,
   options: {
     canary: Canary;
     config: Config;
+    github: GitHub;
     material: SourceLineMaterial[];
-    model: Model;
     progress: Progress;
     refused: ReadonlySet<string>;
     root: string;
@@ -1759,21 +1799,35 @@ async function runBaseline(
   if (!(template && plan)) {
     return;
   }
-  const url = template
-    .replaceAll("{sha}", context.baseSha)
-    .replaceAll("{pr}", String(context.ref.number));
+  // L'oracle est le commit d'où la tête est partie (base de fusion), pas la
+  // pointe de la branche de base : un correctif fusionné sur main après la
+  // bifurcation passerait sur la base et échouerait sur une tête qui ne l'a
+  // jamais reçu, sans que la PR y soit pour rien.
+  const sha = await mergeBase(options.github, context).catch((error: unknown) =>
+    diagnose(error, options.config)
+  );
+  const url = baselineUrl(
+    template,
+    typeof sha === "string" ? sha : context.baseSha,
+    context
+  );
+  // Une base hors de la liste d'hôtes est une erreur de configuration : elle
+  // bloque le run, jamais une comparaison « indisponible » à chaque PR.
+  validatePreviewUrl(url, options.config);
   // La provenance de la base est prouvée comme celle de la tête, avant et après
   // le rejeu. Une base fausse ou injoignable rend la comparaison indisponible,
   // publiée comme telle : le verdict retombe sur la seule tête, jamais sur une
   // base non prouvée.
-  const verify = () =>
-    verifyPreviewUrl(url, context.baseSha, options.config).catch(
-      (error: unknown) => diagnose(error, options.config)
-    );
+  const verify = async () =>
+    typeof sha === "string"
+      ? await verifyPreviewUrl(url, sha, options.config).catch(
+          (error: unknown) => diagnose(error, options.config)
+        )
+      : sha;
   const basePreview = await verify();
   if ("code" in basePreview) {
     result.baseline = {
-      sha: context.baseSha,
+      sha: typeof sha === "string" ? sha : context.baseSha,
       url,
       scenarios: [],
       diagnostic: basePreview,
@@ -1781,21 +1835,30 @@ async function runBaseline(
     return;
   }
   const baseline: NonNullable<RunResult["baseline"]> = {
-    sha: context.baseSha,
+    sha: basePreview.sha,
     url: basePreview.url,
     scenarios: [],
   };
   result.baseline = baseline;
   const scope = runScope.getStore();
   if (scope) {
-    scope.previewSha = context.baseSha;
+    scope.previewSha = basePreview.sha;
   }
   try {
     for (const scenario of plan.scenarios) {
-      if (options.refused.has(scenario.id)) {
-        // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
+      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
+      // Un scénario à fixtures n'est pas rejoué : le catalogue sème
+      // l'environnement de tête, sous l'espace de noms et la clé d'idempotence
+      // de son exécution de tête.
+      if (
+        options.refused.has(scenario.id) ||
+        scenario.preconditions.some((item) => item.startsWith("fixture:"))
+      ) {
         continue;
       }
+      // Sans modèle : aucune reprise de cible sur la base. Elle joue le plan tel
+      // qu'il est écrit, sans dépense ni clic sur un élément que le plan ne
+      // nomme pas, sur un environnement réel.
       baseline.scenarios.push(
         await executeScenario(
           scenario,
@@ -1805,8 +1868,7 @@ async function runBaseline(
           options.canary,
           (event) => options.progress.record(event),
           context.ref.repo,
-          options.material,
-          options.model
+          options.material
         )
       );
     }
@@ -2021,6 +2083,7 @@ async function runUnscoped(
       config,
       options.previewUrl
     );
+    checkBaselineHost(context, config);
     await executePlan(
       result,
       context,

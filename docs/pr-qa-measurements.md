@@ -195,10 +195,14 @@ courante (`src/baseline-diff.ts`).
 - Fixture locale, Chromium réel (`test/e2e/baseline-oracle.test.ts`, deux
   origines) : base « Hello » → 1 comportement modifié, run vert ; tête cassée et
   base juste → `BASELINE_REGRESSION`, run rouge ; base identique à la tête →
-  `OBJECTIVE_NOT_DISCRIMINATING` ; base au mauvais SHA → comparaison indisponible,
-  verdict de tête seul.
+  `OBJECTIVE_NOT_DISCRIMINATING` ; base au mauvais SHA, ou qui n'est pas la base
+  de fusion de la PR → comparaison indisponible, verdict de tête seul ; bouton du
+  plan absent de la base → aucune reprise de cible ni appel modèle, non concluant ;
+  scénario à fixture → non rejoué sur la base ; hôte de base non autorisé → run
+  bloqué avant toute dépense.
 
 Limite : aucun run réel n'a encore rejoué une base. La valeur de tête de la PR 21
 est déduite du diff (inversion de signe), pas observée par un run ; seule la
 valeur de base est relevée sur le déploiement. Le premier run réel avec
-`QA_BASELINE_URL_TEMPLATE` doit confirmer ces verdicts.
+`QA_BASELINE_URL_TEMPLATE` doit confirmer ces verdicts, et que `7427180` est
+bien la base de fusion de la PR 21 : sinon la comparaison y est indisponible.
