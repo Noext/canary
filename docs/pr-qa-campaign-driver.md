@@ -102,8 +102,11 @@ maxCost = 100 runs × QA_RUN_MAX_TOKENS × max(QA_INPUT_COST_PER_MILLION, QA_OUT
 
 Aucun run ne peut dépasser `QA_RUN_MAX_TOKENS` (plafond du moteur) et aucun token
 ne coûte plus que le plus cher des deux tarifs : c'est une **borne**, pas une
-prévision. Avec les valeurs par défaut (`QA_RUN_MAX_TOKENS = 100 000`) et un tarif
-d'entrée de 1 $/M et de sortie de 4 $/M, la borne vaut **40 $** pour les 100 runs.
+prévision. Avec les valeurs par défaut (`QA_RUN_MAX_TOKENS = 1 000 000`, relevé
+parce qu'une seule planification de la PR #20 réserve déjà ~158 000 tokens
+d'entrée plus 98 304 de sortie) et un tarif d'entrée de 1 $/M et de sortie de
+4 $/M, la borne vaut **400 $** pour les 100 runs. La dépense réelle d'un run reste
+aussi plafonnée par `QA_RUN_MAX_COST_USD`.
 
 Sans tarifs, `PRICING_MISSING` bloque et `maxCost` est **absent** : pas de zéro
 trompeur, pas de budget réservable.

@@ -26,6 +26,26 @@ import {
 import { Queue, SCHEMA_VERSION } from "./queue.js";
 import type { RunResult } from "./schema.js";
 
+/**
+ * Plafond de l'attente d'UN essai du contrôle de connectivité, en secondes : le
+ * défaut d'avant le relèvement de QA_MODEL_TIMEOUT_SECONDS. Ce contrôle demande
+ * un objet {"ok":true} de QA_DOCTOR_MAX_TOKENS tokens et ne tourne dans aucune
+ * enveloppe de run : avec le délai d'un plan (600 s) et QA_MODEL_RETRIES=3, un
+ * endpoint muet le tiendrait environ 40 minutes au lieu de 8.
+ */
+const DOCTOR_MODEL_TIMEOUT_SECONDS = 120;
+
+/** La configuration du contrôle de connectivité : délai par essai plafonné. */
+function doctorModelConfig(config: Config): Config {
+  return {
+    ...config,
+    QA_MODEL_TIMEOUT_SECONDS: Math.min(
+      config.QA_MODEL_TIMEOUT_SECONDS,
+      DOCTOR_MODEL_TIMEOUT_SECONDS
+    ),
+  };
+}
+
 interface Check {
   diagnostic?: Diagnostic;
   durationMs: number;
@@ -239,7 +259,7 @@ console.log("CANARY_PR_QA_OBSERVATION:" + JSON.stringify({ url: page.url(), snap
       });
     }
     await check("model", async () => {
-      await new Model(config).json(
+      await new Model(doctorModelConfig(config)).json(
         'You are a connection diagnostic. Return only the JSON object {"ok":true}.',
         { purpose: "installation connectivity check" },
         z.object({ ok: z.literal(true) }).strict(),

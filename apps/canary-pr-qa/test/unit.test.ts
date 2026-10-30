@@ -3912,8 +3912,11 @@ it("rejects publication when worker ownership cannot be verified, even after pas
       costUsd: 0,
       reservedTokens: 0,
       reservedCostUsd: 0,
-      maxTokens: 100_000,
-      maxCostUsd: 10,
+      // The envelope the worker gives a real run (`worker.ts`), not a copy of
+      // a default: a hard-coded 100 000 could no longer fund one plan call
+      // once QA_PLAN_MAX_TOKENS reserved 98 304 output tokens per call.
+      maxTokens: f.config.QA_RUN_MAX_TOKENS,
+      maxCostUsd: f.config.QA_RUN_MAX_COST_USD,
       verifyOwnership: async () => {
         throw new Error("Lease expired before publication");
       },

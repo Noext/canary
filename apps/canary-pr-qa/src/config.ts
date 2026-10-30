@@ -82,8 +82,18 @@ const envSchema = z.object({
     .int()
     .min(30)
     .max(7200)
-    .default(900),
-  QA_RUN_MAX_TOKENS: z.coerce.number().int().min(1000).default(100_000),
+    // Mesuré sur la PR #20 (reasoning high) : une génération de plan prend
+    // 190 à 275 s, et un run complet en enchaîne jusqu'à trois (génération,
+    // correction, réécriture sur invariant) avant l'exécution Chromium.
+    .default(2400),
+  // Une seule planification réserve son entrée bornée (~158 000 tokens sur la
+  // PR #20) plus sa sortie (98 304) : l'ancien défaut de 100 000 refusait tout
+  // run avant le premier appel. Cette enveloppe est la SEULE borne par run tant
+  // que QA_INPUT/OUTPUT_COST_PER_MILLION valent 0 (leur défaut) : le coût
+  // calculé reste alors nul et QA_RUN_MAX_COST_USD ne se déclenche jamais. Un
+  // modèle du catalogue autre qu'OPENAI_MODEL est aussi tarifé à 0
+  // (`runModelConfig`). Les campagnes, elles, exigent un tarif (PRICING_MISSING).
+  QA_RUN_MAX_TOKENS: z.coerce.number().int().min(1000).default(1_000_000),
   QA_RUN_MAX_COST_USD: z.coerce.number().positive().default(10),
   QA_INPUT_COST_PER_MILLION: z.coerce.number().nonnegative().default(0),
   QA_OUTPUT_COST_PER_MILLION: z.coerce.number().nonnegative().default(0),
@@ -145,7 +155,12 @@ const envSchema = z.object({
     .int()
     .min(128)
     .max(1_000_000)
-    .default(8000),
+    // Le modèle par défaut raisonne (DeepSeek V4.1 Flash, effort high par
+    // défaut côté fournisseur) et paie son raisonnement dans max_tokens : à
+    // 8 000 puis 32 000, deux runs réels ont rendu 0 caractère
+    // (finish_reason=length) ; les plans complets mesurés consomment 36 655 à
+    // 42 524 tokens de sortie. Aligné sur le plafond d'un appel.
+    .default(MAX_OUTPUT_TOKENS_PER_CALL),
   QA_DOCTOR_MAX_TOKENS: z.coerce
     .number()
     .int()
@@ -175,7 +190,9 @@ const envSchema = z.object({
     .int()
     .min(5)
     .max(900)
-    .default(120),
+    // Mesuré : un plan en reasoning high arrive en 190 à 275 s ; 120 s coupait
+    // une génération déjà payée (run 51751951, TIMEOUT à 166 s).
+    .default(600),
   /**
    * Reprises d'un appel modèle qui n'a rien produit : transport interrompu
    * (reset, timeout, connexion coupée), ou statut transitoire de l'endpoint
@@ -209,7 +226,10 @@ const envSchema = z.object({
    */
   QA_REPLAN_ON_INVARIANT: z
     .union([z.boolean(), z.enum(["true", "false"])])
-    .default(false)
+    // Activé : sur le premier plan réel de la PR #20, la réécriture d'une
+    // transition impossible mesurée par Chromium a fait passer le run de 6/7 à
+    // 7/7 (run f2defd79), le plan révisé repassant toutes les portes.
+    .default(true)
     .transform((value) => value === true || value === "true"),
   /**
    * Un défaut de contrat qui ne concerne qu'un scénario (exigence non témoignée,
@@ -242,15 +262,24 @@ const envSchema = z.object({
    * l'expose pas (`/v1/models` ne rend que id/object/owned_by), donc elle est
    * déclarée ici : c'est elle qui borne l'entrée du planificateur, et non la
    * taille du payload (une borne qui s'étire avec ce qu'elle mesure ne garantit
-   * rien). La valeur par défaut est prudente ; la porter à la fenêtre réelle du
-   * modèle est un choix d'exploitation explicite.
+   * rien). La valeur par défaut est la fenêtre du modèle par défaut
+   * (OPENAI_MODEL), pas une borne prudente : elle vaut pour TOUT modèle, y
+   * compris un modèle choisi par run dans QA_ALLOWED_MODELS (`runModelConfig`
+   * ne change que l'identifiant et le tarif). Configurer un modèle de fenêtre
+   * plus petite sans abaisser cette valeur désarme le refus local « PR context
+   * exceeds model budget » : le payload trop gros part, et c'est le fournisseur
+   * qui le refuse.
    */
   QA_MODEL_CONTEXT_TOKENS: z.coerce
     .number()
     .int()
     .min(8192)
     .max(4_000_000)
-    .default(131_072),
+    // Fenêtre du modèle par défaut (opencode-go/deepseek-v4.1-flash), confirmée
+    // par l'opérateur. Avec 131 072, le budget du planificateur — fenêtre moins
+    // deux sorties de plan — était négatif : tout run était refusé. Un autre
+    // modèle exige de déclarer sa propre fenêtre (voir la JSDoc ci-dessus).
+    .default(1_000_000),
   QA_CONTEXT_CHARS: z.coerce
     .number()
     .int()

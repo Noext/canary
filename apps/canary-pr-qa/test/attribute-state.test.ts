@@ -1387,6 +1387,74 @@ describe("état de la caisse hérité d'un run antérieur", () => {
     expect(scenario.error).toContain("[data-cash-state]");
   });
 
+  it("ne joue pas la réécriture que le modèle n'a pas corrigée, ni sur l'aperçu ni sur la base", async () => {
+    // La réécriture sur invariant est épinglée ACTIVE : le refus avant
+    // exécution porte un code réécrivable, donc le planificateur est rappelé.
+    // Le modèle rend le même plan encore refusé (corrections épuisées) : le
+    // plan révisé repasse la table avant exécution et le scénario reste
+    // refusé, sans étape navigateur, aperçu de tête comme préversion de base.
+    const f = await setup();
+    const labels = cashPage("cloture");
+    const json = vi
+      .spyOn(Model.prototype, "json")
+      .mockImplementation((async () =>
+        PlanSchema.parse(assumedStatePlan())) as unknown as Model["json"]);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      {
+        ...f.config,
+        QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline`,
+        QA_REPLAN_ON_INVARIANT: true,
+      }
+    );
+    // Plan initial puis réécriture : la réécriture a bien été demandée.
+    expect(json).toHaveBeenCalledTimes(2);
+    expect(result.outcome).toBe("blocked");
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome).toBe("blocked");
+    expect(scenario.diagnostic?.code).toBe("PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT");
+    expect(scenario.steps).toEqual([]);
+    expect(scenario.artifacts).toEqual([]);
+    // Rien n'a été réexécuté, et seule la découverte a ouvert le navigateur.
+    expect(result.replannedScenarioIds).toEqual([]);
+    expect(labels).toEqual(["discover-preview"]);
+    expect(result.baseline?.scenarios).toEqual([]);
+  });
+
+  it("joue la réécriture que le modèle a corrigée, aperçu et base compris", async () => {
+    // Pendant du test précédent : la table avant exécution n'arrête que ce qui
+    // reste refusé. Une réécriture qui corrige le scénario (même id, état
+    // établi au lieu d'être supposé) est réexécutée et reçoit sa base.
+    const f = await setup();
+    const labels = cashPage("cloture");
+    const corrected = establishesOpenPlan();
+    corrected.scenarios = corrected.scenarios.map((scenario) => ({
+      ...scenario,
+      id: "comptage-juste-cloture",
+    }));
+    vi.spyOn(Model.prototype, "json")
+      .mockImplementationOnce((async () =>
+        PlanSchema.parse(assumedStatePlan())) as unknown as Model["json"])
+      .mockImplementationOnce((async () =>
+        PlanSchema.parse(corrected)) as unknown as Model["json"]);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      {
+        ...f.config,
+        QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline`,
+        QA_REPLAN_ON_INVARIANT: true,
+      }
+    );
+    expect(result.replannedScenarioIds).toEqual(["comptage-juste-cloture"]);
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome, scenario.error ?? "").toBe("passed");
+    expect(scenario.steps.length).toBeGreaterThan(0);
+    expect(labels.length).toBeGreaterThan(1);
+    expect(result.baseline?.scenarios.map((item) => item.scenario.id)).toEqual([
+      "comptage-juste-cloture",
+    ]);
+  });
+
   it("donne le MÊME verdict sur une caisse déjà ouverte : le refus ne dépend pas de l'état", async () => {
     const closed = await setup();
     cashPage("cloture");

@@ -16,7 +16,6 @@ import {
   fixtureCatalog,
   NO_DECLARED_PRECONDITIONS,
   preconditionPlanRefusal,
-  preconditionRefusals,
   type TrustedCatalog,
   trustedCatalog,
 } from "./fixtures.js";
@@ -25,9 +24,11 @@ import { type ConstrainedCorrection, Model, PLANNER_PROMPT } from "./model.js";
 import { runModelConfig } from "./model-catalog.js";
 import {
   attributeValueRefusals,
+  baselineRefusals,
   changedFileTexts,
   type DiscoveryEvidence,
   enforceObjectiveProof,
+  evidenceRefusalsByScenario,
   type InvariantObservation,
   ifPresentRefusals,
   invariantObservations,
@@ -37,6 +38,7 @@ import {
   type PlanFileText,
   planEvidenceDiagnostic,
   planPayload,
+  preExecutionRefusalTable,
   provenanceRefusals,
   replannedScenarios,
   replanPayload,
@@ -1312,7 +1314,14 @@ interface ReplanInput {
   root: string;
 }
 
-async function replanObservedInvariants(input: ReplanInput): Promise<void> {
+/**
+ * Rend les scénarios du plan réécrit que la table avant exécution refuse, ou
+ * `undefined` quand aucune réécriture n'a été adoptée (le plan exécuté reste
+ * celui dont les refus sont déjà connus).
+ */
+async function replanObservedInvariants(
+  input: ReplanInput
+): Promise<ReadonlySet<string> | undefined> {
   if (!(input.config.QA_REPLAN_ON_INVARIANT && input.result.plan)) {
     return;
   }
@@ -1326,7 +1335,7 @@ async function replanObservedInvariants(input: ReplanInput): Promise<void> {
   // lieu de perdre le run entier (mesuré au lot FF : deux runs bloqués en
   // RUN_BUDGET_EXCEEDED pour une passe de confort).
   try {
-    await replanWithObservations(
+    return await replanWithObservations(
       input,
       input.result.plan,
       observations,
@@ -1345,7 +1354,7 @@ async function replanWithObservations(
   plan: Plan,
   observations: InvariantObservation[],
   targets: TargetObservation[]
-): Promise<void> {
+): Promise<ReadonlySet<string> | undefined> {
   checkBudget();
   const revised = await input.model.json(
     PLANNER_PROMPT,
@@ -1393,7 +1402,45 @@ async function replanWithObservations(
     return;
   }
   input.result.plan = revised;
-  const replanned = replannedScenarios(revised, [...observations, ...targets]);
+  // Le plan révisé repasse la MÊME table avant exécution que le premier plan :
+  // quand les corrections sont épuisées, le modèle rend le candidat encore
+  // refusé, et ce candidat ne doit dépenser aucune étape navigateur. Le
+  // scénario concerné garde son verdict d'origine (exécuté ou refusé) : la
+  // réécriture n'a rien corrigé, elle ne requalifie rien.
+  const discovery = { url: input.initialPage.url, aria: input.evidence };
+  const revisedEvidence = validatePlanEvidence(revised, discovery);
+  const evidenceRefusals = evidenceRefusalsByScenario(revisedEvidence);
+  const revisedRefusals = preExecutionRefusalTable(revised, {
+    catalog: input.catalog,
+    config: input.config,
+    context: input.context,
+    evidence: discovery,
+    policy: input.policy,
+  });
+  const stillRefused = new Set([
+    ...evidenceRefusals.keys(),
+    ...revisedRefusals.keys(),
+  ]);
+  const replanned = replannedScenarios(revised, [
+    ...observations,
+    ...targets,
+  ]).filter((scenario) => {
+    const refusal = refusalDiagnostic(
+      input.result,
+      scenario,
+      evidenceRefusals,
+      revisedEvidence.inconclusive,
+      revisedRefusals,
+      input.config
+    );
+    if (refusal) {
+      logger.info(
+        { runId: input.result.id, scenario: scenario.id, code: refusal.code },
+        "Rewritten scenario still refused: keeping its verdict, not executing it"
+      );
+    }
+    return refusal === undefined;
+  });
   input.result.replannedScenarioIds = replanned.map((scenario) => scenario.id);
   for (const scenario of replanned) {
     logger.info(
@@ -1427,28 +1474,7 @@ async function replanWithObservations(
   }
   input.result.outcome = aggregate(input.result.scenarios);
   await saveReport(input.root, input.result, input.config);
-}
-
-/**
- * Les refus qui n'empêchent pas le run : ordre des marqueurs, et — quand le
- * drapeau est posé — les défauts de contrat propres à un scénario.
- */
-export function preExecutionFindings(
-  plan: Plan,
-  context: PrContext,
-  policy: Policy,
-  config: Config
-): { error: QaError; scenarioId: string }[] {
-  const findings = planFindings(plan, sourceLineMaterial(context), {
-    config,
-    context,
-    policy,
-  });
-  return [
-    ...findings.refusals,
-    ...findings.coverageRefusals,
-    ...provenanceRefusals(plan),
-  ];
+  return stillRefused;
 }
 
 async function executePlan(
@@ -1592,12 +1618,7 @@ async function executePlan(
     url: initialPage.url,
     aria: evidence,
   });
-  const refusals = new Map<string, PlanEvidenceRefusal[]>();
-  for (const refusal of planEvidence.refusals) {
-    const list = refusals.get(refusal.scenarioId) ?? [];
-    list.push(refusal);
-    refusals.set(refusal.scenarioId, list);
-  }
+  const refusals = evidenceRefusalsByScenario(planEvidence);
   // Les cibles non tranchées restent visibles : le contrôle ne prétend jamais
   // avoir vérifié ce que l'instantané de découverte ne couvre pas.
   const gaps = planEvidence.incomplete
@@ -1627,27 +1648,13 @@ async function executePlan(
   // la préversion de base la lisent tous les deux, donc une assertion sans
   // valeur attendue ne dépense aucune étape navigateur, dans l'un comme dans
   // l'autre.
-  const preExecutionRefusals = new Map([
-    ...(
-      [
-        ...preconditionRefusals(result.plan, catalog, context.ref.repo),
-        ...writeEvidenceRefusals(result.plan, policy),
-        ...unstableSelectorRefusals(result.plan),
-        ...attributeValueRefusals(result.plan),
-        ...stateTargetReadRefusals(result.plan, {
-          url: initialPage.url,
-          aria: evidence,
-        }),
-        ...missingExpectationRefusals(result.plan),
-        ...ifPresentRefusals(result.plan),
-      ] as const
-    ).map((item) => [item.scenario.id, item.error] as const),
-    // L'ordre des marqueurs coûte le scénario, jamais le run : un plan dont une
-    // assertion est impossible garde ses autres scénarios exécutables.
-    ...preExecutionFindings(result.plan, context, policy, config).map(
-      (item) => [item.scenarioId, item.error] as const
-    ),
-  ]);
+  const preExecutionRefusals = preExecutionRefusalTable(result.plan, {
+    catalog,
+    config,
+    context,
+    evidence: { url: initialPage.url, aria: evidence },
+    policy,
+  });
   await saveReport(root, result, config);
   for (const scenario of result.plan.scenarios) {
     const refusal = refusalDiagnostic(
@@ -1690,7 +1697,7 @@ async function executePlan(
   // l'exécution vient de mesurer : le plan est réécrit une fois, revalidé
   // entièrement, puis seuls les scénarios concernés sont réexécutés. Aucun
   // verdict n'est requalifié — le contrat révisé repasse le même gate.
-  await replanObservedInvariants({
+  const revisedRefusals = await replanObservedInvariants({
     canary,
     catalog,
     config,
@@ -1712,7 +1719,11 @@ async function executePlan(
     material,
     model,
     progress,
-    refused: new Set([...refusals.keys(), ...preExecutionRefusals.keys()]),
+    refused: baselineRefusals(
+      [...refusals.keys(), ...preExecutionRefusals.keys()],
+      result.replannedScenarioIds ?? [],
+      revisedRefusals
+    ),
     root,
   });
   if (config.QA_REPLAY_BUNDLE) {
