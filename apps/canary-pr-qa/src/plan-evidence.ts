@@ -2393,6 +2393,14 @@ export function enforceObjectiveProof(
   if (result.objectiveProven) {
     return result;
   }
+  // Un scénario déjà non vert a sa cause : la régression produit qui l'a
+  // arrêté, ou la faute de plan mesurée. La remplacer par CONTRACT_INCOMPLETE
+  // rendait une régression `failed` en `blocked` — le run n'était plus en
+  // échec — et taisait l'assertion fautive. Seul un vert sans objectif prouvé
+  // est rétrogradé ici.
+  if (result.outcome !== "passed") {
+    return result;
+  }
   const error =
     proof === undefined
       ? new QaError(
