@@ -751,29 +751,25 @@ export class Model {
   }
 
   /**
-   * Ce qu'une tentative engage au pire cas : la borne de l'entrée et la sortie
+   * Ce qu'une tentative engage au pire cas : la borne d'entrée et la sortie
    * maximale. C'est la borne de repli d'une tentative perdue dont le transport
-   * n'a rien laissé observer, et l'engagement de toute tentative qui part. Le
-   * coût garde la borne stricte d'un token par octet — plus stricte que la borne
-   * en tokens, elle ne peut pas sous-réserver l'entrée — et suit lui aussi le
-   * plancher observé, pour qu'une entrée déjà chiffrée plus haut ne soit pas
-   * réservée plus bas.
+   * n'a rien laissé observer, et l'engagement de toute tentative qui part.
+   *
+   * L'entrée est chiffrée par LA MÊME borne que le compteur de tokens
+   * (`inputTokenBound`) : deux estimations différentes dans le même engagement
+   * rendaient le coût réservé deux fois plus lourd que les tokens réservés, et
+   * un plafond de dépense dimensionné sur les tokens refusait alors un appel que
+   * la borne de tokens acceptait. Mesuré sur le payload du planificateur :
+   * 273 856 octets réservaient 0,0918 $ au lieu de 0,0507 $.
    */
   private reservation(
     messages: { content: string; role: string }[],
     maxTokens: number
   ): { costUsd: number; tokens: number } {
-    const inputCostBound = Math.max(
-      Buffer.byteLength(JSON.stringify(messages), "utf8") +
-        64 * (messages.length + 1),
-      runScope.getStore()?.observedInputTokens ?? 0
-    );
+    const inputTokens = this.inputTokenBound(messages);
     return {
-      costUsd:
-        (inputCostBound * this.config.QA_INPUT_COST_PER_MILLION +
-          maxTokens * this.config.QA_OUTPUT_COST_PER_MILLION) /
-        1_000_000,
-      tokens: maxTokens + this.inputTokenBound(messages),
+      costUsd: this.cost(inputTokens, maxTokens),
+      tokens: maxTokens + inputTokens,
     };
   }
 
