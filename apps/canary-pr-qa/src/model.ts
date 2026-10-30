@@ -77,7 +77,8 @@ interface ModelResponse {
  * transport a assemblé avant la coupure.
  */
 interface DeliveredTrial {
-  contentChars: number;
+  content: string;
+  finishReason?: string;
   reasoningChars: number;
   usage?: ChatUsage;
 }
@@ -344,7 +345,11 @@ export class Model {
             model: this.config.OPENAI_MODEL,
             runId: runScope.getStore()?.id ?? "doctor",
           },
-          () => this.completionWithRetries(call.messages, call.outputBound)
+          () =>
+            this.completionWithRetries(call.messages, call.outputBound, {
+              lost: call.log.lost(started, state.pending, call.outputBound),
+              unfunded: state.candidate,
+            })
         );
       } catch (error) {
         // Une correction perdue en transport (HTTP 400, coupure, délai) ne
@@ -797,7 +802,7 @@ export class Model {
     const reportedInput = measuredCount(usage?.prompt_tokens);
     const reportedOutput = measuredCount(usage?.completion_tokens);
     const reportedTotal = measuredCount(usage?.total_tokens);
-    const deliveredChars = delivered.contentChars + delivered.reasoningChars;
+    const deliveredChars = delivered.content.length + delivered.reasoningChars;
     // Rien de crédible à créditer : aucune mesure positive et, soit l'endpoint a
     // annoncé un usage qui n'en est pas un alors qu'il a produit du contenu — un
     // zéro annoncé ne prouve pas qu'il n'a rien facturé —, soit le transport n'a
@@ -882,7 +887,9 @@ export class Model {
    */
   private async completionWithRetries(
     messages: { content: string; role: string }[],
-    maxTokens: number
+    maxTokens: number,
+    // `lost` garde ce qu'une tentative rejetée a livré ; `unfunded`, voir `claim`.
+    attempts: { lost: ReturnType<ResponseLog["lost"]>; unfunded?: QaError }
   ): Promise<ModelResponse> {
     const max = this.config.QA_MODEL_RETRIES;
     for (let attempt = 0; ; attempt++) {
@@ -894,6 +901,7 @@ export class Model {
           delivered = snapshot;
         });
       } catch (error) {
+        attempts.lost(delivered, error, attempt + 1);
         const code = transportCode(error);
         if (!code) {
           throw error;
@@ -911,7 +919,7 @@ export class Model {
         if (!mayRetry(attempt, max, used)) {
           throw failedAttempt(error, code, attempt);
         }
-        this.claim(messages, maxTokens);
+        this.claim(messages, maxTokens, attempts.unfunded);
         if (scope) {
           scope.retries = (scope.retries ?? 0) + 1;
           scope.onRetry?.({ attempt: attempt + 1, max, code });
@@ -1088,6 +1096,8 @@ export class Model {
     const url = `${this.config.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`;
     if (!stream) {
       const { text } = await fetchText(url, init, timeout);
+      // Un corps non JSON a pu être facturé : il est livré à la capture.
+      onDelivered?.({ content: text, reasoningChars: 0 });
       const response = JSON.parse(text) as ModelResponse;
       // Le raisonnement arrive dans le même champ de limite en non streamé aussi :
       // le compter ici évite de sous-estimer la sortie d'un appel sans `usage`.
@@ -1107,7 +1117,8 @@ export class Model {
       (event) => {
         state = reduceChatStream(state, event);
         onDelivered?.({
-          contentChars: state.content.length,
+          content: state.content,
+          finishReason: state.finishReason,
           reasoningChars: state.reasoningChars,
           usage: state.usage,
         });

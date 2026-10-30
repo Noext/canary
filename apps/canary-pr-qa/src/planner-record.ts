@@ -49,7 +49,11 @@ function writeResponse(
   try {
     const dir = join(root, PLANNER_DIR);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = responseFile(record.call);
+    // Une tentative perdue garde son propre fichier : la reprise qui la suit
+    // porte le même rang d'appel et ne doit pas l'écraser.
+    const file = record.lost
+      ? `response-${record.call}-lost-${record.lost.attempt}.json`
+      : responseFile(record.call);
     writeFileSync(join(dir, file), `${JSON.stringify(record, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
@@ -65,6 +69,7 @@ function writeResponse(
           contentChars: record.contentChars,
           file: `${PLANNER_DIR}/${file}`,
           finishReason: record.finishReason ?? null,
+          ...(record.lost ? { lostAttempt: record.lost.attempt } : {}),
           purpose: record.purpose,
           verdict: record.verdict?.kind ?? "pending",
         },

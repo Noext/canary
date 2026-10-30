@@ -92,6 +92,30 @@ interface Judged {
 
 const PLANNER_PURPOSE = purposeOf(PLANNER_PROMPT);
 
+/**
+ * Le marqueur que `redact` écrit à la place d'un secret. Le run juge un plan
+ * contre le contexte BRUT, alors que `inputs.json` et le contenu capturé sont
+ * masqués. Mesuré : une ligne de diff `// Bearer tok123`, que le modèle cite
+ * telle qu'il l'a reçue (`Bearer [REDACTED]`), est refusée par le run — la
+ * citation n'existe pas dans le fichier — et acceptée par un rejugement sur les
+ * entrées masquées. Un verdict rendu sur un texte masqué n'est donc jamais
+ * déclaré reproductible, et ne compte jamais comme une acceptation.
+ */
+const REDACTION_MARKER = "[REDACTED]";
+
+/** Pourquoi ce verdict peut différer de celui du run, ou `undefined`. */
+function unreproducible(
+  maskedInputs: boolean,
+  content: string
+): string | undefined {
+  if (maskedInputs) {
+    return "inputs.json carries redacted text: the run judged the unredacted context, so its verdict may differ";
+  }
+  return content.includes(REDACTION_MARKER)
+    ? "the recorded content carries redacted text: the run judged the unredacted content, so its verdict may differ"
+    : undefined;
+}
+
 /** Le verdict qu'un run rendrait aujourd'hui sur cette réponse. */
 function judge(record: z.infer<typeof recordSchema>, input: Judged): Rejudged {
   if (record.purpose !== PLANNER_PURPOSE || record.constrained) {
@@ -180,41 +204,59 @@ export async function rejudge(
     evidence: inputs.evidence,
     policy: PolicySchema.parse(inputs.policy),
   };
+  const maskedInputs = JSON.stringify([
+    inputs.context,
+    inputs.policy,
+    inputs.catalog,
+    inputs.evidence,
+  ]).includes(REDACTION_MARKER);
   const responses: {
     call: number;
     contentChars: number;
     file: string;
     finishReason: string | null;
     recordedVerdict: string | null;
+    /** Faux quand le verdict a été rendu sur un texte masqué par `redact`. */
+    reproducible: boolean;
+    unreproducible?: string;
     verdict: Rejudged;
   }[] = [];
   for (const file of await responseFiles(dir, only)) {
     const record = recordSchema.parse(
       JSON.parse(await readFile(join(dir, file), "utf8"))
     );
+    const verdict = judge(record, judged);
+    const doubt =
+      verdict.kind === "skipped"
+        ? undefined
+        : unreproducible(maskedInputs, record.content);
     responses.push({
       call: record.call,
       contentChars: record.contentChars,
       file: `${PLANNER_DIR}/${file}`,
       finishReason: record.finishReason ?? null,
       recordedVerdict: record.verdict?.kind ?? null,
-      verdict: judge(record, judged),
+      reproducible: doubt === undefined,
+      ...(doubt ? { unreproducible: doubt } : {}),
+      verdict,
     });
   }
-  const verdicts = responses
-    .map((item) => item.verdict)
-    .filter((verdict) => verdict.kind !== "skipped");
+  const judgedResponses = responses.filter(
+    (item) => item.verdict.kind !== "skipped"
+  );
   return {
     source: inputs.source,
     model: inputs.model,
     /**
      * Vrai seulement quand chaque réponse jugée serait acceptée aujourd'hui,
-     * par la correction du planificateur ET par la porte d'avant exécution.
+     * par la correction du planificateur ET par la porte d'avant exécution, sur
+     * un texte que `redact` n'a pas masqué.
      */
     accepted:
-      verdicts.length > 0 &&
-      verdicts.every(
-        (verdict) =>
+      judgedResponses.length > 0 &&
+      judgedResponses.every(
+        ({ reproducible, verdict }) =>
+          reproducible &&
           verdict.kind === "accepted" &&
           !("refusals" in verdict && verdict.refusals.length > 0)
       ),

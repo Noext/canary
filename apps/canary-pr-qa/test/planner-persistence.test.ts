@@ -1,5 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import type { ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Canary } from "../src/canary.js";
@@ -162,5 +171,72 @@ describe("persistance du planificateur et rejugement hors ligne", () => {
     expect(verdict.refusal).toBe(first.verdict.refusal);
     const second = await rejudge(root, 2, f.config);
     expect(second.responses[0]?.verdict.kind).toBe("accepted");
+    expect(second.responses[0]?.reproducible).toBe(true);
+    expect(second.accepted).toBe(true);
+
+    // Rejugement d'un dossier dont aucune réponse n'est rejugeable : une réponse
+    // contrainte et une capture coupée sont `skipped`, et rien n'est accepté.
+    const copy = await mkdtemp(join(tmpdir(), "rejudge-skipped-"));
+    await mkdir(join(copy, "_planner"));
+    await copyFile(
+      join(root, "_planner", "inputs.json"),
+      join(copy, "_planner", "inputs.json")
+    );
+    const accepted = JSON.parse(
+      await readFile(join(root, "_planner", "response-2.json"), "utf8")
+    );
+    await writeFile(
+      join(copy, "_planner", "response-1.json"),
+      JSON.stringify({ ...accepted, call: 1, constrained: true })
+    );
+    await writeFile(
+      join(copy, "_planner", "response-2.json"),
+      JSON.stringify({ ...accepted, contentTruncated: true })
+    );
+    const skipped = await rejudge(copy, undefined, f.config);
+    expect(skipped.responses.map((item) => item.verdict.kind)).toEqual([
+      "skipped",
+      "skipped",
+    ]);
+    expect(
+      (skipped.responses[1]?.verdict as { reason: string }).reason
+    ).toContain("cut at capture");
+    expect(skipped.accepted).toBe(false);
+    await rm(copy, { recursive: true, force: true });
+  }, 60_000);
+
+  it("ne déclare jamais reproductible un verdict rendu sur des entrées masquées", async () => {
+    // La ligne du diff porte un jeton : le run juge sur le contexte brut, le
+    // modèle n'a vu que `Bearer [REDACTED]`, et c'est ce qu'il cite.
+    const line = "show('Welcome '+name) // Bearer tok123 fixture-token";
+    const quoted = structuredClone(plan);
+    quoted.scenarios[0]!.requirements[0]!.quote =
+      "show('Welcome '+name) // Bearer [REDACTED] [REDACTED]";
+    const f = await fixture({
+      formPatch: `- show('Hello')\n+ ${line}`,
+      plans: [quoted, plan],
+    });
+    close.push(f.close);
+    fakeBrowser();
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl, publish: false },
+      f.config
+    );
+    const root = join(f.dataDir, result.id);
+    const inputsText = await readFile(
+      join(root, "_planner", "inputs.json"),
+      "utf8"
+    );
+    expect(inputsText).not.toContain("fixture-token");
+    expect(inputsText).not.toContain("tok123");
+    expect(inputsText).toContain("Bearer [REDACTED]");
+    const first = JSON.parse(
+      await readFile(join(root, "_planner", "response-1.json"), "utf8")
+    );
+    expect(first.verdict.kind).toBe("gate");
+    const rejudged = await rejudge(root, 1, f.config);
+    expect(rejudged.responses[0]?.reproducible).toBe(false);
+    expect(rejudged.responses[0]?.unreproducible).toMatch(/redact/i);
+    expect(rejudged.accepted).toBe(false);
   }, 60_000);
 });

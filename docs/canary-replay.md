@@ -62,10 +62,12 @@ writes, regardless of `QA_REPLAY_BUNDLE` and of the outcome:
 | --- | --- | --- |
 | `_planner/inputs.json` | before the first planner call | PR context, trusted policy and catalog, the exact planner payload, discovery evidence (`url`, `aria`), the gate settings (`QA_MAX_SCENARIOS`, `QA_MAX_STEPS`, `QA_PER_SCENARIO_COVERAGE`) and the effective model configuration without secrets (model, base URL host only, token bounds, reasoning effort, JSON mode, stream, retries, timeout, run budgets) |
 | `_planner/response-<n>.json` | for every paid model response, as soon as its usage is counted and before any budget check, then rewritten with its verdict | `call` (the run's response number), `purpose` (first line of the system prompt), `constrained`, `content` (redacted, up to 1 MB, `contentChars`/`contentTruncated`), `finishReason`, raw `usage` (including `completion_tokens_details`), `reasoningChars` (a count — reasoning text is never stored), `maxTokens`, `durationMs`, and `verdict`: `accepted`, `unusable` (+ reason), `unreadable` (+ `JSON.parse` error), `schema` (+ the full issue list), `gate` (+ the correction sent to the model) or `discarded` |
+| `_planner/response-<n>-lost-<k>.json` | for an attempt the transport rejected after delivering part of it (`MODEL_STREAM_INVALID`, `MODEL_STREAM_ERROR`, `MODEL_STREAM_TRUNCATED`, a mid-stream timeout, a non-JSON body), before its retry is reserved | the same fields with what had been assembled (`content`, `finishReason`, `usage`), `lost: { attempt: k }` and verdict `unusable` with the error code and message. `n` is the call the attempt was for, so its retry, recorded as `response-<n>.json`, never overwrites it |
 
 Each response also appends a one-line `modelResponse` entry to `events.jsonl`
-(call, file, finish reason, verdict — never the content). Target-repair calls
-are recorded the same way, under their own `purpose`.
+(call, file, finish reason, verdict, `lostAttempt` for a lost attempt — never
+the content). Target-repair calls are recorded the same way, under their own
+`purpose`.
 
 The files are private: mode 0600 in a 0700 directory, passed through `redact`,
 and never served by the artifact route (signed, public or authenticated). They
@@ -95,8 +97,18 @@ functions the run uses: the usable-response check, `JSON.parse` and
 planner correction (`replayPlannerCorrection`, i.e. `planRefusals` plus the
 quote-pick correction) and the complete pre-execution gate
 (`replayPlanValidation`). Answers to a constrained correction and non-planner
-responses are reported as `skipped`. It prints JSON and exits 0 only when every
-judged response would be accepted with no refusal today, 1 otherwise. Because
+responses, and content cut at capture (over 1 MB), are reported as `skipped`;
+lost attempts (`-lost-` files) are not re-judged.
+
+The run judges against the unredacted context, while `inputs.json` and the
+recorded content are passed through `redact`. A verdict computed on text that
+carries `[REDACTED]` — in the stored context, policy, catalog or evidence, or in
+the response — is therefore reported with `reproducible: false` and an
+`unreproducible` reason: measured, a diff line `// Bearer tok123` that the
+model quoted as `Bearer [REDACTED]` was refused by the run and accepted when
+re-judged on the redacted inputs. It prints JSON and exits 0 only when at
+least one response was judged and every judged response is reproducible and
+would be accepted with no refusal today, 1 otherwise. Because
 the code is the current one, re-judging after a gate or schema change shows how
 that change would have judged the paid response.
 

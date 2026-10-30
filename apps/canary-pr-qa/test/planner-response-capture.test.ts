@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { loadConfig } from "../src/config.js";
@@ -5,6 +8,7 @@ import { QaError } from "../src/diagnostics.js";
 import { transportCode } from "../src/http.js";
 import { Model } from "../src/model.js";
 import type { ModelResponseRecord } from "../src/model-capture.js";
+import { recordModelResponses } from "../src/planner-record.js";
 import { type RunScope, runScope } from "../src/run-scope.js";
 
 /**
@@ -315,4 +319,259 @@ describe("un délai levé en plein flux est classé, réservé et rejoué", () =
     expect(run.reservedTokens).toBeGreaterThan(0);
     expect(run.estimated).toBe(true);
   }, 20_000);
+});
+
+/** Un flux SSE scripté : chaque entrée est un événement `data:` déjà sérialisé. */
+function stubStream(events: string[][]) {
+  const encoder = new TextEncoder();
+  let calls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      const script = events[Math.min(calls, events.length - 1)]!;
+      calls += 1;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const data of script) {
+              if (data === "TIMEOUT") {
+                // Après lecture des octets livrés : `error` viderait la file.
+                setTimeout(
+                  () =>
+                    controller.error(
+                      new DOMException("timed out", "TimeoutError")
+                    ),
+                  20
+                );
+                return;
+              }
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" }, status: 200 }
+      );
+    })
+  );
+  return () => calls;
+}
+
+const delta = (content: string) =>
+  JSON.stringify({ choices: [{ delta: { content } }] });
+const PAID_USAGE = {
+  completion_tokens: 40_000,
+  prompt_tokens: 100,
+  total_tokens: 40_100,
+};
+const finished = JSON.stringify({
+  choices: [{ delta: {}, finish_reason: "stop" }],
+  usage: PAID_USAGE,
+});
+
+describe("une tentative payée que le transport rejette reste enregistrée", () => {
+  const paidPlan = '{"scenarios":[{"id":"paid"}]}';
+  const streamed = (env: NodeJS.ProcessEnv = {}) =>
+    config({ OPENAI_STREAM: "true", QA_MODEL_RETRIES: "0", ...env });
+
+  const failures: [string, string[], string][] = [
+    [
+      "un événement illisible",
+      [delta(paidPlan), "{not json", finished, "[DONE]"],
+      "MODEL_STREAM_INVALID",
+    ],
+    [
+      "une erreur annoncée après le contenu",
+      [
+        delta(paidPlan),
+        JSON.stringify({
+          error: { message: "upstream failed" },
+          usage: PAID_USAGE,
+        }),
+      ],
+      "MODEL_STREAM_ERROR",
+    ],
+    [
+      "un flux fermé sans fin de génération",
+      [delta(paidPlan), JSON.stringify({ choices: [], usage: PAID_USAGE })],
+      "MODEL_STREAM_TRUNCATED",
+    ],
+    [
+      "un délai expiré en plein flux, reprises épuisées",
+      [delta(paidPlan.slice(0, 12)), "TIMEOUT"],
+      "TIMEOUT",
+    ],
+  ];
+  for (const [label, script, code] of failures) {
+    it(`après ${label}`, async () => {
+      stubStream([script]);
+      const records: ModelResponseRecord[] = [];
+      const error = await runScope.run(scope(1, records), () =>
+        new Model(streamed())
+          .json("s", messages, schema as never, 50)
+          .catch((caught: unknown) => caught)
+      );
+      expect(error).not.toEqual({ scenarios: [{ id: "paid" }] });
+      expect(records).toHaveLength(1);
+      const [lost] = records;
+      expect(lost!.call).toBe(1);
+      expect(lost!.lost).toEqual({ attempt: 1 });
+      expect(paidPlan.startsWith(lost!.content)).toBe(true);
+      expect(lost!.content.length).toBeGreaterThan(0);
+      expect(lost!.verdict).toMatchObject({ kind: "unusable" });
+      expect((lost!.verdict as { reason: string }).reason).toContain(code);
+      if (code !== "TIMEOUT") {
+        expect(lost!.content).toBe(paidPlan);
+        expect(lost!.usage).toMatchObject({ completion_tokens: 40_000 });
+      }
+    }, 20_000);
+  }
+
+  it("après un corps non JSON hors flux", async () => {
+    const body = "<html>upstream gateway page</html>";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 200 }))
+    );
+    const records: ModelResponseRecord[] = [];
+    const error = await runScope.run(scope(1, records), () =>
+      new Model(config({ QA_MODEL_RETRIES: "0" }))
+        .json("s", messages, schema as never, 50)
+        .catch((caught: unknown) => caught)
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      call: 1,
+      content: body,
+      lost: { attempt: 1 },
+      verdict: { kind: "unusable" },
+    });
+  });
+
+  it("la tentative perdue puis rejouée laisse deux enregistrements distincts", async () => {
+    const fetched = stubStream([
+      [delta('{"scenar'), "TIMEOUT"],
+      [
+        delta('{"scenarios":[]}'),
+        JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "[DONE]",
+      ],
+    ]);
+    const records: ModelResponseRecord[] = [];
+    const run = scope(1, records);
+    const root = await mkdtemp(join(tmpdir(), "lost-attempt-"));
+    const collect = run.onModelResponse!;
+    recordModelResponses(run, root, () => "plan");
+    const write = run.onModelResponse!;
+    run.onModelResponse = (record) => {
+      collect(record);
+      write(record);
+    };
+    const value = await runScope.run(run, () =>
+      new Model(streamed({ QA_MODEL_RETRIES: "1" })).json(
+        "s",
+        messages,
+        schema as never,
+        50
+      )
+    );
+    expect(value).toEqual({ scenarios: [] });
+    expect(fetched()).toBe(2);
+    expect(records[0]).toMatchObject({
+      call: 1,
+      content: '{"scenar',
+      lost: { attempt: 1 },
+    });
+    expect(records.at(-1)).toMatchObject({
+      call: 1,
+      content: '{"scenarios":[]}',
+      verdict: { kind: "accepted" },
+    });
+    expect(records.at(-1)!.lost).toBeUndefined();
+    // La reprise n'écrase pas la tentative perdue sur disque.
+    const lostFile = JSON.parse(
+      await readFile(join(root, "_planner", "response-1-lost-1.json"), "utf8")
+    );
+    expect(lostFile).toMatchObject({
+      content: '{"scenar',
+      lost: { attempt: 1 },
+    });
+    const kept = JSON.parse(
+      await readFile(join(root, "_planner", "response-1.json"), "utf8")
+    );
+    expect(kept.verdict).toEqual({ kind: "accepted" });
+    const events = await readFile(join(root, "events.jsonl"), "utf8");
+    expect(events).toContain('"lostAttempt":1');
+    await rm(root, { recursive: true, force: true });
+  }, 20_000);
+});
+
+describe("une correction dont la reprise ne tient plus garde sa cause", () => {
+  it("lève PLAN_SCHEMA_INVALID, pas un RUN_BUDGET_EXCEEDED nu", async () => {
+    const answers: Served[] = ['{"scenarios":[{"id":7}]}', { status: 503 }];
+    // Mesure : ce que la reprise d'un 503 réserve pour l'entrée seule.
+    stubProvider(answers);
+    const probe = scope(1, []);
+    await runScope.run(probe, () =>
+      new Model(config({ QA_MODEL_RETRIES: "0" }))
+        .json("s", messages, schema as never, 50)
+        .catch(() => undefined)
+    );
+    const input = probe.reservedTokens;
+    expect(input).toBeGreaterThan(0);
+    // L'enveloppe finance la correction, plus sa reprise après le 503.
+    const fetched = stubProvider(answers);
+    const run = scope(1, []);
+    run.maxTokens = probe.tokens + input + 50 + input - 1;
+    const error = await runScope.run(run, () =>
+      new Model(config({ QA_MODEL_RETRIES: "3" }))
+        .json("s", messages, schema as never, 50)
+        .catch((caught: unknown) => caught)
+    );
+    expect(fetched()).toBe(2);
+    expect((error as QaError).code).toBe("PLAN_SCHEMA_INVALID");
+    expect((error as QaError).hint).toMatch(/^Validation: scenarios\.0\.id/);
+    expect((error as QaError).message).toContain("Next model call not sent");
+  });
+});
+
+describe("la capture ne conserve aucun secret", () => {
+  it("le contenu enregistré est passé par redact", async () => {
+    stubProvider(['{"scenarios":[{"id":"fixture-key-1234567890"}]}']);
+    const records: ModelResponseRecord[] = [];
+    await runScope.run(scope(1, records), () =>
+      new Model(config()).json("s", messages, schema as never, 50)
+    );
+    expect(records.at(-1)!.content).not.toContain("fixture-key-1234567890");
+    expect(records.at(-1)!.content).toContain("[REDACTED]");
+  });
+});
+
+describe("un run annulé pendant la correction s'arrête", () => {
+  it("ne rend pas le plan refusé quand la correction est annulée", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return served('{"scenarios":[{"id":"refused"}]}');
+        }
+        controller.abort(new Error("run cancelled"));
+        throw controller.signal.reason;
+      })
+    );
+    const run = scope(1, []);
+    run.signal = controller.signal;
+    const outcome = await runScope.run(run, () =>
+      new Model(config())
+        .json("s", messages, schema as never, 50, () => "Plan rejected")
+        .catch((caught: unknown) => caught)
+    );
+    expect(calls).toBe(2);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/^run cancelled/);
+  });
 });

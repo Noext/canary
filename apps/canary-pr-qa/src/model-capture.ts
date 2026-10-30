@@ -2,6 +2,7 @@ import { createLogger } from "@usecanary/logger";
 import type { Config } from "./config.js";
 import { diagnose, redact } from "./diagnostics.js";
 import type { InvalidContent } from "./model-content.js";
+import { runScope } from "./run-scope.js";
 
 /**
  * Capture des réponses payées du modèle.
@@ -46,6 +47,12 @@ export interface ModelResponseRecord {
   contentTruncated: boolean;
   durationMs: number;
   finishReason?: string;
+  /**
+   * Présent quand le transport a rejeté la tentative APRÈS en avoir livré une
+   * part — événement illisible, erreur annoncée en fin de flux, coupure, délai,
+   * corps non JSON — : son rang parmi les tentatives de cet appel.
+   */
+  lost?: { attempt: number };
   /** Borne de sortie transmise au fournisseur pour cet appel. */
   maxTokens: number;
   /** Première ligne du prompt système : le rôle de l'appel (plan, cible, doctor). */
@@ -56,6 +63,20 @@ export interface ModelResponseRecord {
 }
 
 export type ModelResponseHook = (record: ModelResponseRecord) => void;
+
+/** Ce que le transport avait assemblé d'une tentative quand elle a été rejetée. */
+export interface DeliveredContent {
+  content: string;
+  finishReason?: string;
+  reasoningChars: number;
+  usage?: unknown;
+}
+
+export type LostAttemptHook = (
+  delivered: DeliveredContent | undefined,
+  error: unknown,
+  attempt: number
+) => void;
 
 /** Le rôle d'un appel, lu sur la première ligne de son prompt système. */
 export function purposeOf(system: string): string {
@@ -119,21 +140,45 @@ export class ResponseLog {
     if (!this.hook) {
       return;
     }
-    const safe = redact(input.content ?? "", this.config);
-    this.current = {
-      call: input.call,
-      constrained: input.constrained,
-      content: safe.slice(0, RECORDED_CONTENT_CHARS),
-      contentChars: safe.length,
-      contentTruncated: safe.length > RECORDED_CONTENT_CHARS,
-      durationMs: input.durationMs,
-      finishReason: input.finishReason,
-      maxTokens: input.maxTokens,
-      purpose: this.purpose,
-      reasoningChars: input.reasoningChars,
-      usage: input.usage,
+    this.current = this.capture(input);
+    this.emit(this.current);
+  }
+
+  /**
+   * Le crochet des tentatives qu'un appel perd en transport après une livraison
+   * — `MODEL_STREAM_INVALID`, `MODEL_STREAM_ERROR`, `MODEL_STREAM_TRUNCATED`,
+   * délai en plein flux, corps non JSON —. Elles ne sont jamais comptées comme
+   * réponses, donc jamais jugées : sans ce crochet, ce qu'elles ont livré — et
+   * facturé — n'était conservé nulle part. Chacune est enregistrée AVANT la
+   * réservation de sa reprise, qui peut lever, sous le rang de l'appel qu'elle
+   * tentait (`RunScope.calls + 1`). `started` date le premier envoi de l'appel ;
+   * `pending`, la correction contrainte à laquelle il répond, s'il y en a une.
+   */
+  lost(started: number, pending: unknown, maxTokens: number): LostAttemptHook {
+    return (delivered, error, attempt) => {
+      // Rien de livré, rien de payé à conserver : un refus avant tout octet.
+      if (!(this.hook && (delivered?.content || delivered?.usage))) {
+        return;
+      }
+      const diagnostic = diagnose(error, this.config);
+      this.emit({
+        ...this.capture({
+          call: (runScope.getStore()?.calls ?? 0) + 1,
+          constrained: pending !== undefined,
+          content: delivered.content,
+          durationMs: Date.now() - started,
+          finishReason: delivered.finishReason,
+          maxTokens,
+          reasoningChars: delivered.reasoningChars,
+          usage: delivered.usage,
+        }),
+        lost: { attempt },
+        verdict: {
+          kind: "unusable",
+          reason: `${diagnostic.code}: ${diagnostic.message}`,
+        },
+      });
     };
-    this.emit();
   }
 
   /** Complète la dernière réponse avec le verdict qui l'a jugée. */
@@ -142,7 +187,7 @@ export class ResponseLog {
       return;
     }
     this.current = { ...this.current, verdict };
-    this.emit();
+    this.emit(this.current);
   }
 
   /**
@@ -166,12 +211,29 @@ export class ResponseLog {
     return refused;
   }
 
-  private emit(): void {
-    if (!(this.hook && this.current)) {
+  private capture(input: Parameters<ResponseLog["response"]>[0]) {
+    const safe = redact(input.content ?? "", this.config);
+    return {
+      call: input.call,
+      constrained: input.constrained,
+      content: safe.slice(0, RECORDED_CONTENT_CHARS),
+      contentChars: safe.length,
+      contentTruncated: safe.length > RECORDED_CONTENT_CHARS,
+      durationMs: input.durationMs,
+      finishReason: input.finishReason,
+      maxTokens: input.maxTokens,
+      purpose: this.purpose,
+      reasoningChars: input.reasoningChars,
+      usage: input.usage,
+    };
+  }
+
+  private emit(record: ModelResponseRecord): void {
+    if (!this.hook) {
       return;
     }
     try {
-      this.hook(this.current);
+      this.hook(record);
     } catch (error) {
       logger.warn(
         { message: diagnose(error, this.config).message },
