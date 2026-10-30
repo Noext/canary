@@ -22,7 +22,7 @@ const fileSchema = z.object({
   patch: z.string().optional(),
   previous_filename: z.string().optional(),
 });
-const contextSchema = z.object({
+export const contextSchema = z.object({
   baseSha: z.string().regex(/^[0-9a-f]{40}$/),
   body: z.string(),
   context: z.array(

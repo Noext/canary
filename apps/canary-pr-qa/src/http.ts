@@ -28,6 +28,73 @@ export function parseRetryAfter(value: string | null): number | undefined {
     : undefined;
 }
 
+/**
+ * Codes de transport rejouables : la connexion meurt avant tout contenu utile,
+ * donc la reprise est sans effet de bord et sans double facturation. Les deux
+ * derniers sont nos normalisations de transport — `TIMEOUT` (délai du client
+ * modèle, issu d'un `AbortSignal.timeout`) et `MODEL_STREAM_TRUNCATED` (flux
+ * fermé proprement avant `[DONE]`). Restent définitifs un refus de plan (preuve,
+ * schéma, couverture) et une erreur rapportée par l'endpoint
+ * (`MODEL_STREAM_ERROR`) : ils ne s'améliorent pas en rejouant la même requête.
+ * Les deux codes d'une réponse reçue mais inexploitable ont leur propre reprise,
+ * unique (`CONTENT_RETRY_CODES`).
+ */
+const TRANSPORT_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "TIMEOUT",
+  "MODEL_STREAM_TRUNCATED",
+]);
+
+/**
+ * Statuts HTTP rejouables : l'endpoint était momentanément indisponible (503,
+ * celui qu'un gateway renvoie quand son amont refuse la requête) ou appliquait
+ * sa fenêtre de débit (429). La requête est partie sans produire de contenu utile
+ * — la même situation qu'une connexion coupée —, donc la reprise est sans effet
+ * de bord. Tout autre statut reste définitif : un 4xx de requête (400, 401, 403,
+ * 404) ne s'améliore pas au second essai.
+ */
+export const RETRYABLE_HTTP_CODES = new Set(["HTTP_429", "HTTP_503"]);
+
+/**
+ * Vrai pour le délai du client modèle levé EN COURS de flux : l'`AbortSignal`
+ * du délai rejette la lecture du corps avec une `DOMException` nommée
+ * `TimeoutError` (code numérique 23), que rien ne normalise après les en-têtes.
+ * Mesure du run 6 : jamais rejouée, et les tokens facturés jamais réservés. Une
+ * annulation du run (`AbortError`, ou la raison `RUN_DEADLINE`) n'est pas un
+ * délai d'appel et reste définitive.
+ */
+function midStreamTimeout(candidate: unknown): boolean {
+  return (candidate as { name?: unknown } | undefined)?.name === "TimeoutError";
+}
+
+/** Classe une erreur : code rejouable, ou `undefined` (échec définitif). */
+export function transportCode(error: unknown): string | undefined {
+  for (const candidate of [
+    error,
+    (error as { cause?: { code?: string } } | undefined)?.cause,
+  ]) {
+    const code = (candidate as { code?: unknown } | undefined)?.code;
+    if (
+      typeof code === "string" &&
+      (TRANSPORT_CODES.has(code) || RETRYABLE_HTTP_CODES.has(code))
+    ) {
+      return code;
+    }
+    if (midStreamTimeout(candidate)) {
+      return "TIMEOUT";
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  // Node signale une socket détruite en plein échange par « terminated » ou
+  // « socket hang up », parfois sans code : c'est la même classe rejouable.
+  return /terminated|socket hang up/i.test(message)
+    ? "UND_ERR_SOCKET"
+    : undefined;
+}
+
 /** Ouvre la requête et traduit tout échec en diagnostic nommé, comme le reste du harnais. */
 async function open(
   url: string | URL,

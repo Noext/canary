@@ -425,7 +425,13 @@ export const ActionSchema = z.discriminatedUnion("type", [
     .object({ type: z.literal("fill"), locator, value: z.string().max(2000) })
     .strict(),
   z.object({ type: z.literal("press"), locator, key: text }).strict(),
-  z.object({ type: z.literal("select"), locator, value: text }).strict(),
+  // Valeur vide admise, comme pour `fill` : choisir l'option `value=""`
+  // (« Choisir un motif… ») est l'action réelle qui vide un motif. Le premier
+  // plan réel de la PR #20 l'exigeait (Q13 « vider le motif ») et le schéma le
+  // refusait ; `selectOption("")` la sélectionne dans Chromium.
+  z
+    .object({ type: z.literal("select"), locator, value: z.string().max(2000) })
+    .strict(),
   z
     .object({ type: z.literal("check"), locator, checked: z.boolean() })
     .strict(),

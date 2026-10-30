@@ -81,6 +81,7 @@ import { Progress } from "./progress.js";
 import {
   attachReplayRuntimeResults,
   reportMarkdown,
+  savePlannerInputs,
   saveReplayBundle,
   saveReport,
 } from "./report.js";
@@ -1486,6 +1487,16 @@ async function executePlan(
   );
   const policy = await trustedPolicy(github, context);
   validateProvider(policy, config);
+  const discovery = { url: initialPage.url, aria: evidence };
+  await savePlannerInputs({
+    catalog,
+    config,
+    context,
+    evidence: discovery,
+    payload,
+    policy,
+    root,
+  });
   await progress.record({ phase: "planning" });
   result.plan = await model.json(
     PLANNER_PROMPT,
@@ -1510,7 +1521,7 @@ async function executePlan(
         config,
         catalog,
         scans,
-        { url: initialPage.url, aria: evidence }
+        discovery
       );
       if (messages.length === 0) {
         return;
@@ -1547,7 +1558,7 @@ async function executePlan(
       payload,
       generatedPlan,
       plan: result.plan,
-      evidence: { url: initialPage.url, aria: evidence },
+      evidence: discovery,
     });
   }
   publishUnverifiedPreconditions(result, context);
@@ -1923,6 +1934,7 @@ async function runUnscoped(
   const model = new Model(config);
   const progress = new Progress(root, id);
   relayModelRetries(runScope.getStore(), progress);
+  progress.recordModelResponses(runScope.getStore());
   let context: PrContext | undefined;
   const reportUrl = config.ARTIFACT_BASE_URL
     ? `${config.ARTIFACT_BASE_URL.replace(/\/$/, "")}/artifacts/${id}/report.html`

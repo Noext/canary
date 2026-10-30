@@ -49,6 +49,69 @@ Exit 0 therefore means *this plan is not refused*, never *the original run passe
 reader never confuses the two: offline replay re-executes no scenario and cannot pronounce an
 execution verdict.
 
+## Planner capture and offline re-judging (`_planner/`, `rejudge`)
+
+The replay bundle above exists only when the run produced an accepted plan. A
+paid planner response that was refused (unreadable JSON, a plan that violates
+the schema, a gate refusal) or that the budget no longer allowed to correct used
+to leave no trace: `result.json` carries no plan, and the diagnostic only kept a
+500-character excerpt and the first 12 schema violations. Every run therefore
+writes, regardless of `QA_REPLAY_BUNDLE` and of the outcome:
+
+| File | Written | Contents |
+| --- | --- | --- |
+| `_planner/inputs.json` | before the first planner call | PR context, trusted policy and catalog, the exact planner payload, discovery evidence (`url`, `aria`), the gate settings (`QA_MAX_SCENARIOS`, `QA_MAX_STEPS`, `QA_PER_SCENARIO_COVERAGE`) and the effective model configuration without secrets (model, base URL host only, token bounds, reasoning effort, JSON mode, stream, retries, timeout, run budgets) |
+| `_planner/response-<n>.json` | for every paid model response, as soon as its usage is counted and before any budget check, then rewritten with its verdict | `call` (the run's response number), `purpose` (first line of the system prompt), `constrained`, `content` (redacted, up to 1 MB, `contentChars`/`contentTruncated`), `finishReason`, raw `usage` (including `completion_tokens_details`), `reasoningChars` (a count — reasoning text is never stored), `maxTokens`, `durationMs`, and `verdict`: `accepted`, `unusable` (+ reason), `unreadable` (+ `JSON.parse` error), `schema` (+ the full issue list), `gate` (+ the correction sent to the model) or `discarded` |
+| `_planner/response-<n>-lost-<k>.json` | for an attempt the transport rejected after delivering part of it (`MODEL_STREAM_INVALID`, `MODEL_STREAM_ERROR`, `MODEL_STREAM_TRUNCATED`, a mid-stream timeout, a non-JSON body), before its retry is reserved | the same fields with what had been assembled (`content`, `finishReason`, `usage`), `lost: { attempt: k }` and verdict `unusable` with the error code and message. `n` is the call the attempt was for, so its retry, recorded as `response-<n>.json`, never overwrites it |
+
+Each response also appends a one-line `modelResponse` entry to `events.jsonl`
+(call, file, finish reason, verdict, `lostAttempt` for a lost attempt — never
+the content). Target-repair calls are recorded the same way, under their own
+`purpose`.
+
+The files are private: mode 0600 in a 0700 directory, passed through `redact`,
+and never served by the artifact route (signed, public or authenticated). They
+contain source and page text, like the replay bundle: keep the run directory
+private. A failed write is logged and never fails the run.
+
+When a refused response cannot be corrected because the envelope no longer
+covers the next call, the run now fails with the response's own error
+(`PLAN_SCHEMA_INVALID`, `MODEL_JSON_INVALID`, `MODEL_OUTPUT_INCOMPLETE`),
+its excerpt and `Validation:` detail, followed by `Next model call not sent:
+reservation … for … remaining`, instead of a bare `RUN_BUDGET_EXCEEDED`. When
+the correction of a gate-refused plan fails (HTTP error, timeout, empty,
+unreadable, schema-invalid or discarded answer), the refused plan is returned to
+the runner, which re-applies its gates and records it — it is never marked valid.
+
+Re-judge the saved responses for free — no model, no browser, no network:
+
+```bash
+canary-pr-qa rejudge ./qa-data/<run-id>               # every planner response
+canary-pr-qa rejudge ./qa-data/<run-id> --response 1  # one response
+# from a checkout: pnpm --filter @usecanary/pr-qa build && node apps/canary-pr-qa/dist/cli.js rejudge …
+```
+
+`rejudge` loads `inputs.json` and the responses, then applies the exact
+functions the run uses: the usable-response check, `JSON.parse` and
+`plannerPlanSchema(sourceLineMaterial(context))` with the full issue list, the
+planner correction (`replayPlannerCorrection`, i.e. `planRefusals` plus the
+quote-pick correction) and the complete pre-execution gate
+(`replayPlanValidation`). Answers to a constrained correction and non-planner
+responses, and content cut at capture (over 1 MB), are reported as `skipped`;
+lost attempts (`-lost-` files) are not re-judged.
+
+The run judges against the unredacted context, while `inputs.json` and the
+recorded content are passed through `redact`. A verdict computed on text that
+carries `[REDACTED]` — in the stored context, policy, catalog or evidence, or in
+the response — is therefore reported with `reproducible: false` and an
+`unreproducible` reason: measured, a diff line `// Bearer tok123` that the
+model quoted as `Bearer [REDACTED]` was refused by the run and accepted when
+re-judged on the redacted inputs. It prints JSON and exits 0 only when at
+least one response was judged and every judged response is reproducible and
+would be accepted with no refusal today, 1 otherwise. Because
+the code is the current one, re-judging after a gate or schema change shows how
+that change would have judged the paid response.
+
 ## Regression workflow
 
 1. Change the implementation locally.

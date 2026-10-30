@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { context, trace } from "@opentelemetry/api";
 import { createLogger } from "@usecanary/logger";
 import type { Diagnostic } from "./diagnostics.js";
+import { recordModelResponses } from "./planner-record.js";
 import { writeJson } from "./report.js";
+import type { RunScope } from "./run-scope.js";
 
 export type Phase =
   | "context"
@@ -35,6 +37,13 @@ export class Progress {
   constructor(root: string, runId: string) {
     this.root = root;
     this.runId = runId;
+  }
+  /**
+   * Conserve chaque réponse payée du modèle sous `_planner/`, avec une ligne
+   * d'événement sans contenu dans la phase en cours (`planner-record.ts`).
+   */
+  recordModelResponses(scope: RunScope | undefined) {
+    recordModelResponses(scope, this.root, () => this.phase);
   }
   async record(event: ProgressEvent) {
     this.phase = event.phase;

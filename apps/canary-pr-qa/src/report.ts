@@ -1,10 +1,17 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createLogger } from "@usecanary/logger";
 import { resolvedTargetName } from "./canary.js";
 import type { Config } from "./config.js";
-import { classifyFailure, type Diagnostic, redact } from "./diagnostics.js";
+import {
+  classifyFailure,
+  type Diagnostic,
+  diagnose,
+  redact,
+} from "./diagnostics.js";
 import type { TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
+import { effectiveModelConfig, PLANNER_DIR } from "./planner-record.js";
 import type { Policy } from "./policy.js";
 import type { Plan, RunResult } from "./schema.js";
 
@@ -158,6 +165,71 @@ interface SaveReplayBundleInput {
   root: string;
 }
 
+/** La PR et les deux commits épinglés d'un run. */
+function runSource(context: PrContext) {
+  return {
+    prUrl: context.ref.url,
+    repo: context.ref.repo,
+    number: context.ref.number,
+    headSha: context.sha,
+    baseSha: context.baseSha,
+  };
+}
+
+/** Les réglages que les portes du plan lisent, rejoués tels quels hors ligne. */
+function validationConfig(config: Config) {
+  return {
+    QA_MAX_SCENARIOS: config.QA_MAX_SCENARIOS,
+    QA_MAX_STEPS: config.QA_MAX_STEPS,
+    QA_PER_SCENARIO_COVERAGE: config.QA_PER_SCENARIO_COVERAGE,
+  };
+}
+
+const logger = createLogger({ name: "pr-qa-report" });
+
+/**
+ * Écrit les entrées du planificateur AVANT le premier appel payé, sous
+ * `_planner/inputs.json` : le contexte, la politique, le catalogue, le message
+ * envoyé, l'instantané de découverte et la configuration modèle effective sans
+ * secret — ce que les portes lisent pour juger un plan, et ce que
+ * `canary-pr-qa rejudge` relit hors ligne. Contrairement au bundle de rejeu,
+ * il ne dépend ni d'un plan accepté ni de `QA_REPLAY_BUNDLE` : une réponse
+ * refusée doit rester rejugeable. Fichier privé (0600, dossier 0700), passé par
+ * `redact`, jamais servi par la route des artefacts ; un échec d'écriture est
+ * journalisé et n'échoue pas le run.
+ */
+export async function savePlannerInputs(
+  input: Omit<SaveReplayBundleInput, "generatedPlan" | "plan">
+): Promise<void> {
+  const { config, context } = input;
+  const inputs = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    source: runSource(context),
+    model: effectiveModelConfig(config),
+    validationConfig: validationConfig(config),
+    context,
+    policy: input.policy,
+    catalog: input.catalog,
+    payload: input.payload,
+    evidence: input.evidence,
+  };
+  try {
+    const dir = join(input.root, PLANNER_DIR);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(dir, "inputs.json"),
+      `${redact(JSON.stringify(inputs, null, 2), config)}\n`,
+      { encoding: "utf8", mode: 0o600 }
+    );
+  } catch (error) {
+    logger.warn(
+      { message: diagnose(error, config).message },
+      "Planner inputs not persisted"
+    );
+  }
+}
+
 /**
  * Stores the inputs needed to replay the plan locally. This is deliberately
  * opt-in at the caller: source and page text can contain sensitive information.
@@ -179,19 +251,8 @@ export async function saveReplayBundle(
   const bundle = {
     version: 1,
     createdAt: new Date().toISOString(),
-    source: {
-      prUrl: context.ref.url,
-      repo: context.ref.repo,
-      number: context.ref.number,
-      headSha: context.sha,
-      baseSha: context.baseSha,
-      model: config.OPENAI_MODEL,
-    },
-    validationConfig: {
-      QA_MAX_SCENARIOS: config.QA_MAX_SCENARIOS,
-      QA_MAX_STEPS: config.QA_MAX_STEPS,
-      QA_PER_SCENARIO_COVERAGE: config.QA_PER_SCENARIO_COVERAGE,
-    },
+    source: { ...runSource(context), model: config.OPENAI_MODEL },
+    validationConfig: validationConfig(config),
     context,
     policy,
     catalog,

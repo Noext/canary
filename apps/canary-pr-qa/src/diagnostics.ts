@@ -38,9 +38,12 @@ export function redact(value: string, config?: Config): string {
     config?.GITHUB_WEBHOOK_SECRET,
     config?.githubPrivateKey,
     config?.DATABASE_URL,
+    // `TOKEN(?!S)` : `QA_PLAN_MAX_TOKENS=98304` est un compte de tokens, pas un
+    // jeton. Le traiter en secret effaçait « 98304 » de tout texte — payload du
+    // planificateur, réponses du modèle, `_planner/inputs.json` rendu illisible.
     ...Object.entries(process.env)
       .filter(([key]) =>
-        /TOKEN|SECRET|PASSWORD|STORAGE_STATE|API_KEY/.test(key)
+        /TOKEN(?!S)|SECRET|PASSWORD|STORAGE_STATE|API_KEY/.test(key)
       )
       .map(([, value]) => value),
   ]) {

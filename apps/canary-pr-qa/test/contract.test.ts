@@ -72,3 +72,24 @@ it("rejects GitHub metadata whose live preview has no SHA proof", async () => {
     { code: "PREVIEW_SHA_MISMATCH" }
   );
 });
+it("accepts selecting the empty placeholder option, like clearing a field with fill", () => {
+  // Premier plan réel de la PR #20 : « vider le motif » (Q13) sélectionne
+  // `<option value="">Choisir un motif…</option>`. Le schéma refusait la valeur
+  // vide pour `select` alors qu'il l'admet pour `fill`.
+  const cleared = structuredClone(plan);
+  const steps = cleared.scenarios[0]!.steps;
+  steps.splice(1, 0, {
+    id: "clear-reason",
+    description: "vider le motif",
+    action: {
+      type: "select",
+      locator: { by: "label", value: "Motif" },
+      value: "",
+    },
+  });
+  const parsed = PlanSchema.parse(cleared);
+  expect(parsed.scenarios[0]!.steps[1]!.action).toMatchObject({
+    type: "select",
+    value: "",
+  });
+});
