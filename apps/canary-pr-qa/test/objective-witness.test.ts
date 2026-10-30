@@ -283,11 +283,11 @@ describe("faux verts de la revue : refusés", () => {
       kind: "count",
       target: { by: "css", value: "[data-variance-cents]" },
     },
-  ])("(g) lecture négative d'une cible qu'aucune ligne retirée n'écrit : %o", async (read) => {
-    // Aucune de ces cibles n'existe : l'absence passe sur la base comme sur la
-    // tête, quel que soit le mot qu'elle emprunte au diff.
+  ])("(g) lecture négative en state d'une cible qu'aucune ligne retirée n'écrit : %o", async (read) => {
+    // Aucune de ces cibles n'existe : en `state`, l'absence passe sur la base
+    // comme sur la tête, quel que soit le mot qu'elle emprunte au diff.
     const scenario = mutant((item) => {
-      Object.assign(objective(item), read);
+      Object.assign(objective(item), read, { verification: "state" });
     });
     expect(witnessRefusals((await gate(scenario)).refusals)).toHaveLength(1);
   });
@@ -580,12 +580,34 @@ describe("libellés que le diff écrit en entier", () => {
         assertion: {
           kind: "hidden",
           target: { by: "text", value: "Maintenance prévue" },
+          verification: "state",
         },
         files: oneLine(removed, added),
       });
     expect(hidden("  <Banner>Maintenance prévue</Banner>", "")).toEqual([]);
     // Ajoutée seulement : la cible n'existait pas, l'absence passait déjà.
     expect(hidden("", "  <Banner>Maintenance prévue</Banner>")).toHaveLength(1);
+  });
+
+  it("une absence en transition se juge comme une présence : la cible était là juste avant", () => {
+    // PR #20, run d6b3656d : le bouton « Rouvrir » que le diff AJOUTE disparaît
+    // après la réouverture. En transition, l'exécuteur exige le bouton présent
+    // avant l'étape : une cible qui n'a jamais existé échoue à l'exécution.
+    const reopen = (verification: "state" | "transition") =>
+      synthetic({
+        assertion: {
+          expected: 0,
+          kind: "count",
+          target: { by: "css", value: '[data-cash-action="rouvrir"]' },
+          verification,
+        },
+        files: oneLine(
+          "",
+          '  <Button onClick={reopen} data-cash-action="rouvrir">Rouvrir la session</Button>'
+        ),
+      });
+    expect(reopen("transition")).toEqual([]);
+    expect(reopen("state")).toHaveLength(1);
   });
 });
 
@@ -721,7 +743,7 @@ describe("le jeu de régression reste vert", () => {
     expect(declared).toBe(21);
   });
 
-  it("79 plans historiques : 99 lectures de présence sans témoin sur 2914, 0 scénario sur 681", () => {
+  it("79 plans historiques : 93 lectures de présence sans témoin sur 2914, 0 scénario sur 681", () => {
     expect(historicalPlans).toHaveLength(79);
     let scenarios = 0;
     let presence = 0;
@@ -749,7 +771,10 @@ describe("le jeu de régression reste vert", () => {
         }
       }
     }
-    // Contrefactuel : 98 lectures négatives (81 `count` à 0, 17 `hidden`) d'une
+    // Contrefactuel : 99 avant la règle de transition, 93 depuis — les 6
+    // absences lues en transition se jugent comme des présences, l'exécuteur
+    // exigeant la cible juste avant l'étape. Restent les lectures négatives en
+    // state (sur 98 : 81 `count` à 0, 17 `hidden`) d'une
     // cible que la PR 20 AJOUTE (`[data-cash-action="rouvrir"]`, « Rouvrir la
     // session »…) : sur la base, cette cible n'existe pas, l'absence y passe
     // donc aussi — elle ne prouve pas le changement si elle est prise pour
@@ -760,7 +785,7 @@ describe("le jeu de régression reste vert", () => {
       fallback: 0,
       presence: 2914,
       scenarios: 681,
-      unwitnessed: 99,
+      unwitnessed: 93,
     });
   });
 });
@@ -774,6 +799,6 @@ it("le prompt énonce le matériel des consommateurs et le refus de témoin", ()
   );
   expect(PLANNER_PROMPT).toContain("never copied from an observed view");
   expect(PLANNER_PROMPT).toContain(
-    "A hidden or zero-count objective proves the change only when the lines the diff removes write its target"
+    "A hidden or zero-count objective read with verification state proves the change only when the lines the diff removes write its target"
   );
 });

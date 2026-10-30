@@ -32,9 +32,9 @@ import type { Plan, Scenario } from "./schema.js";
  *   fichier que le diff AJOUTE (une route par fichier n'existait pas avant). Un
  *   `count` dont le nombre attendu est écrit dans la citation qu'il cite est
  *   témoin.
- * - Lecture négative (`hidden`, `count` attendu 0) : elle passe aussi sur une
- *   base où la cible n'a jamais existé. Elle n'est témoin que d'une cible que les
- *   lignes RETIRÉES écrivent comme littéral : la cible existait avant.
+ * - Lecture négative (`hidden`, `count` attendu 0) en `state` : elle passe aussi
+ *   sans cible ; témoin seulement d'une cible que les lignes RETIRÉES écrivent.
+ *   En `transition`/`persisted`, elle se juge comme une lecture positive.
  * - Lecture à valeur (`text`, `value`, `visual`, `popup`, `download`) : témoin
  *   quand elle cite une exigence (la provenance contrôle alors son attendu), ou
  *   quand sa cible ou son attendu partage une suite de mots ou un littéral avec
@@ -406,7 +406,12 @@ function witnessed(
   files: readonly FileWitness[]
 ): boolean {
   const parts = observedParts(assertion);
-  if (isNegativeRead(assertion)) {
+  // En transition/persisted, l'exécuteur exige la cible présente juste avant
+  // l'étape : l'absence se juge alors comme une présence (PR #20, d6b3656d).
+  const priorPresence = ["transition", "persisted"].includes(
+    assertion.verification ?? ""
+  );
+  if (isNegativeRead(assertion) && !priorPresence) {
     // Une absence passe aussi sur une base où la cible n'a jamais existé : elle
     // ne témoigne que d'une cible que les lignes retirées écrivent.
     return parts.some((part) =>
