@@ -204,7 +204,11 @@ describe("rejeu des plans historiques sur le nouveau chemin", () => {
   });
 
   it("un indice arbitraire ne suffit pas : la valeur doit être justifiée", () => {
-    expect(totals.refusalsIndexZero).toBe(393);
+    // 393 avant l'exemption de la saisie relue (echoed-input.ts) : deux
+    // attendus égaux à un commentaire tapé puis relu dans l'historique, dont
+    // l'exigence d'indice 0 concerne bien la cible, ne sont plus refusés. Les
+    // 68 autres échos restent refusés : leur exigence d'indice 0 est étrangère.
+    expect(totals.refusalsIndexZero).toBe(391);
     expect(totals.refusalsValueGuided).toBe(11);
   });
 

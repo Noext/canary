@@ -7,7 +7,7 @@
     "assertions": 3738,
     "assertionsWithoutJustifyingRequirement": 3164,
     "refusalsUndeclared": 0,
-    "refusalsIndexZero": 393,
+    "refusalsIndexZero": 391,
     "refusalsValueGuided": 11,
     "historicalGreensRefusedToday": 67,
     "families": {
@@ -299,7 +299,7 @@
       "assertions": 62,
       "assertionsWithoutJustifyingRequirement": 55,
       "refusalsUndeclared": 0,
-      "refusalsIndexZero": 5,
+      "refusalsIndexZero": 4,
       "refusalsValueGuided": 0,
       "scenarios": [
         {
@@ -3074,7 +3074,7 @@
       "assertions": 39,
       "assertionsWithoutJustifyingRequirement": 35,
       "refusalsUndeclared": 0,
-      "refusalsIndexZero": 4,
+      "refusalsIndexZero": 3,
       "refusalsValueGuided": 0,
       "scenarios": [
         {

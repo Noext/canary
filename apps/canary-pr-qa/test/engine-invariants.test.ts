@@ -249,3 +249,94 @@ describe("I4 — réparation non permissive : elle ne touche qu'à l'action", ()
     expect(scenarioBody.assertions).toEqual(before);
   });
 });
+
+describe("I2 — provenance : une valeur que le scénario a lui-même saisie", () => {
+  // Premier plan réel de la PR #20 : le commentaire saisi puis relu dans
+  // l'historique après la clôture était refusé comme valeur inventée.
+  const echo = (
+    mutate: (scenario: Plan["scenarios"][number]) => void = () => undefined
+  ) => {
+    const echoed = structuredClone(fixturePlan);
+    const scenario = echoed.scenarios[0]!;
+    (scenario.steps[0]!.action as { value: string }).value = "Ada Lovelace";
+    Object.assign(scenario.assertions[0]!, {
+      description: "Shows the name saved via the form",
+      expected: "Ada Lovelace",
+      requirement: 0,
+    });
+    mutate(scenario);
+    return provenanceRefusals(echoed);
+  };
+
+  it("accepte l'attendu égal à une saisie faite avant l'étape d'ancrage", () => {
+    expect(echo()).toEqual([]);
+  });
+
+  it("accepte aussi une option choisie par select avant l'ancrage", () => {
+    expect(
+      echo((scenario) => {
+        scenario.steps[0]!.action = {
+          type: "select",
+          locator: { by: "label", value: "Name" },
+          value: " Ada Lovelace ",
+        };
+      })
+    ).toEqual([]);
+  });
+
+  it("refuse toujours une valeur que rien n'a saisie", () => {
+    const refusals = echo((scenario) => {
+      (scenario.steps[0]!.action as { value: string }).value = "Grace Hopper";
+    });
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.error.message).toContain("does not justify");
+  });
+
+  it("refuse une relecture ancrée sur la saisie elle-même", () => {
+    expect(
+      echo((scenario) => {
+        scenario.assertions[0]!.afterStep = "enter";
+      })
+    ).toHaveLength(1);
+  });
+
+  it("refuse une assertion sans étape d'ancrage", () => {
+    expect(
+      echo((scenario) => {
+        Reflect.deleteProperty(scenario.assertions[0]!, "afterStep");
+      })
+    ).toHaveLength(1);
+  });
+
+  it("refuse une relecture en state : seule une valeur qui a changé prouve quelque chose", () => {
+    // Relire en `state` le champ qu'on vient de remplir passait au vert sur une
+    // application inerte (ancrage sur une observation, intention invariant,
+    // ifPresent sauté) : l'exemption exige transition ou persisted.
+    expect(
+      echo((scenario) => {
+        scenario.assertions[0]!.verification = "state";
+      })
+    ).toHaveLength(1);
+  });
+
+  it("refuse une saisie justifiée par une exigence étrangère à la cible", () => {
+    expect(
+      echo((scenario) => {
+        scenario.requirements[0] = {
+          sourceFile: "src/form.ts",
+          quote: "publishVarianceCents(total)",
+          behavior: "Variance is published in cents",
+        };
+      })
+    ).toHaveLength(1);
+  });
+
+  it("refuse une saisie placée après l'étape d'ancrage", () => {
+    expect(
+      echo((scenario) => {
+        const [enter, save, verify] = scenario.steps;
+        scenario.steps = [save!, enter!, verify!];
+      })
+    ).toHaveLength(1);
+  });
+});

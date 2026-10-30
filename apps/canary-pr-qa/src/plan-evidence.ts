@@ -9,6 +9,7 @@ import {
 } from "./canary.js";
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
+import { echoesEarlierInput } from "./echoed-input.js";
 import { declaredPreconditionNames, type TrustedCatalog } from "./fixtures.js";
 import type { PrContext } from "./github.js";
 import {
@@ -2466,7 +2467,8 @@ export function provenanceRefusals(plan: Plan): {
         literal &&
         cited !== undefined &&
         typeof assertion.expected === "string" &&
-        !justifiedByExpectedValue(assertion.expected, cited)
+        !justifiedByExpectedValue(assertion.expected, cited) &&
+        !echoesEarlierInput(scenario, assertion, cited, assertion.expected)
       ) {
         refuse(
           scenario.id,
