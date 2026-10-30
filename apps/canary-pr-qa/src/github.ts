@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import { z } from "zod";
 import type { Config } from "./config.js";
+import { type ConsumerMaterial, consumerContext } from "./consumer-context.js";
 import { githubToken } from "./github-app.js";
 import { fetchText } from "./http.js";
 
@@ -64,6 +65,8 @@ export function unavailableContextWarning(path: string, ref: string): string {
 export interface PrContext {
   baseSha: string;
   body: string;
+  /** Consommateurs non modifiés (consumer-context.ts) ; absent si aucun. */
+  consumers?: ConsumerMaterial[];
   context: { path: string; ref: string; content: string }[];
   contextWarnings: string[];
   files: z.infer<typeof fileSchema>[];
@@ -211,6 +214,25 @@ export class GitHub {
         contextWarnings.push(`No textual patch for ${file.filename}`);
       }
     }
+    // Pris sur ce que le contexte de dépendances laisse de QA_CONTEXT_CHARS.
+    const consumers = await consumerContext({
+      budget: Math.min(
+        this.config.QA_CONSUMER_CONTEXT_CHARS,
+        this.config.QA_CONTEXT_CHARS -
+          context.reduce((sum, item) => sum + item.content.length, 0)
+      ),
+      files,
+      maxFiles: this.config.QA_CONSUMER_SCAN_FILES,
+      read: {
+        file: (path) => this.optionalFile(headRepo, path, data.head.sha),
+        tree: () =>
+          this.request(
+            `/repos/${headRepo}/git/trees/${data.head.sha}?recursive=1`
+          ),
+      },
+      ref: data.head.sha,
+    });
+    contextWarnings.push(...consumers.warnings);
     const current = await this.pr(input);
     if (
       current.data.head.sha !== data.head.sha ||
@@ -228,6 +250,9 @@ export class GitHub {
       files,
       context,
       contextWarnings,
+      ...(consumers.consumers.length > 0
+        ? { consumers: consumers.consumers }
+        : {}),
     };
   }
 

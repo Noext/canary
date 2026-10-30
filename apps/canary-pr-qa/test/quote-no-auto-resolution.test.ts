@@ -117,13 +117,38 @@ function pageLine(line: number): string {
 const UNIT_QUOTE_07429B97 = `\${counted.totalUnits} unité\${counted.totalUnits>1?"s":"":""} comptée\${counted.totalUnits>1?"s":""}`;
 
 /**
+ * Le véhicule de ces plans est une présence : depuis le témoin d'objectif
+ * (OBJECTIVE_UNWITNESSED), elle doit lire un mot que le diff écrit, sinon le
+ * plan porterait un second défaut, hors citation, et la correction par indice
+ * ne serait jamais posée. Elle lit donc le texte du témoin exact du scénario
+ * (sa première exigence), qu'elle cite.
+ */
+function parseVehicle(input: unknown): Plan {
+  const plan = PlanSchema.parse(input);
+  return {
+    ...plan,
+    scenarios: plan.scenarios.map((scenario) => ({
+      ...scenario,
+      assertions: scenario.assertions.map((assertion) => ({
+        ...assertion,
+        requirement: 0,
+        target: {
+          by: "text" as const,
+          value: scenario.requirements[0]?.quote.trim() ?? "",
+        },
+      })),
+    })),
+  };
+}
+
+/**
  * Le plan minimal qui porte une citation fautive et rien d'autre : un scénario
  * qui couvre le fichier changé, un témoin exact, et la copie refusée au rang 2.
  * Aucune autre classe fatale ne s'ouvre, donc la correction par indice reste
  * offerte.
  */
 function planWith(faulty: string): Plan {
-  return PlanSchema.parse({
+  return parseVehicle({
     scenarios: [
       {
         assertions: [
@@ -648,7 +673,7 @@ describe("vue partielle du fichier cité", () => {
         amputationScans()
       ).map((candidate) => candidate.line)
     ).toEqual([116]);
-    const plan = PlanSchema.parse({
+    const plan = parseVehicle({
       ...planWith("ecart-a-justifier"),
       scenarios: [
         {

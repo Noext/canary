@@ -33,6 +33,25 @@ export const contextSchema = z.object({
     })
   ),
   contextWarnings: z.array(z.string()),
+  // Rejoué tel quel : sans lui, un rejeu planifierait sans le matériel que le
+  // run d'origine avait reçu.
+  consumers: z
+    .array(
+      z.object({
+        excerpts: z.array(
+          z.object({
+            endLine: z.number().int(),
+            startLine: z.number().int(),
+            text: z.string(),
+          })
+        ),
+        imports: z.string(),
+        path: z.string(),
+        ref: z.string(),
+        symbols: z.array(z.string()),
+      })
+    )
+    .optional(),
   files: z.array(fileSchema),
   headRepo: z.string(),
   ref: z.object({

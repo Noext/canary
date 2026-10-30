@@ -34,8 +34,17 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(close.splice(0).map((fn) => fn()));
 });
+/**
+ * Le diff servi par défaut : la ligne citée par les plans, plus la lignes qui
+ * écrivent le titre et l'élément `#saved` que leurs assertions de présence
+ * lisent. Sans elle, une
+ * présence du titre ne lirait rien que le diff produit (OBJECTIVE_UNWITNESSED)
+ * et le scénario serait bloqué avant la première étape.
+ */
+const HEADING_PATCH =
+  "- show('Hello')\n+ show('Welcome '+name)\n+ <h1>Pilotage</h1>\n+ <p id=\"saved\"></p>";
 async function setup(options?: Parameters<typeof fixture>[0]) {
-  const f = await fixture(options);
+  const f = await fixture({ formPatch: HEADING_PATCH, ...options });
   close.push(f.close);
   return f;
 }
@@ -1056,9 +1065,11 @@ describe("scénario refusé avant exécution", () => {
   it("n'oppose aucun refus quand l'instantané est coupé au plafond, mais le dit", async () => {
     const f = await setup();
     stubCanary("x".repeat(PLAN_EVIDENCE_SNAPSHOT_CHARS));
+    // « P&L Pilotage » : un titre que l'instantané complet n'a pas (il serait
+    // refusé), et dont un mot est écrit par le diff (témoin d'objectif).
     scriptPlan(
       PlanSchema.parse(
-        readOnlyPlan({ by: "role", value: "heading", name: "P&L" })
+        readOnlyPlan({ by: "role", value: "heading", name: "P&L Pilotage" })
       )
     );
     const result = await runQa(
@@ -2102,11 +2113,9 @@ describe("résolution d'une citation refusée (run 9add286d)", () => {
   const AMBIGUOUS_B =
     '  if (varianceCents===null) { setMessage("Écart non calculable"); return; }';
   function planWith(quote: string): Plan {
-    const plan = readOnlyPlan({
-      by: "role",
-      value: "heading",
-      name: "Pilotage",
-    });
+    // Le véhicule lit ce que la ligne 368 écrit (`counted`) : une présence du
+    // titre de la page ne lirait rien du diff (OBJECTIVE_UNWITNESSED).
+    const plan = readOnlyPlan({ by: "css", value: "[data-counted]" });
     plan.scenarios[0]!.requirements = [
       {
         behavior: "Le badge compte les unités comptées",
@@ -2289,11 +2298,9 @@ describe("résolution d'une référence de ligne (run 9add286d, forme sans recop
   const REAL_LINE = `          <span className="rounded-full bg-[#f1f2f8] px-2.5 py-1 text-xs font-bold text-[#74758d]">{counted.ok?\`\${counted.totalUnits} unité\${counted.totalUnits>1?"s":""} comptée\${counted.totalUnits>1?"s":""}\`:"—"}</span>`;
   /** Le même plan, mais son exigence désigne la ligne au lieu de la citer. */
   function designatedPlan(): Plan {
-    const plan = readOnlyPlan({
-      by: "role",
-      value: "heading",
-      name: "Pilotage",
-    });
+    // Le véhicule lit ce que la ligne 368 écrit (`counted`) : une présence du
+    // titre de la page ne lirait rien du diff (OBJECTIVE_UNWITNESSED).
+    const plan = readOnlyPlan({ by: "css", value: "[data-counted]" });
     plan.scenarios[0]!.requirements = [
       {
         behavior: "Le badge compte les unités comptées",

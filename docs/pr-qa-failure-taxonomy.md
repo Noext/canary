@@ -53,3 +53,17 @@ code n'est enregistré, bucket séparé et non fondu dans la planification.
 | sans diagnostic (4 runs JJ/MM/TT, un échec produit chacun, aucun code) | 4 |
 
 Total des runs non verts : 80 sur 200.
+
+## Code de plan ajouté après le corpus : `OBJECTIVE_UNWITNESSED`
+
+`OBJECTIVE_UNWITNESSED` est un **défaut de plan** (catégorie planification) :
+l'objectif d'un scénario — ou, sans objectif déclaré, chacune de ses assertions —
+est une lecture de présence ou d'adresse (`visible`, `hidden`, `count`, `url`) dont
+la cible ne partage aucun mot avec les lignes que le diff ajoute ou retire dans les
+`sourceFiles` du scénario, ni avec la citation qu'elle cite. Une telle lecture passe
+identiquement avant le changement : le titre d'une vue quittée, un contrôle de
+navigation. Le refus est rendu au planificateur dans sa correction, puis rejoué
+avant exécution (`src/objective-witness.ts`) : le scénario non corrigé est bloqué,
+classé `test-defect`, jamais publié vert. Il ne figure dans aucun des 200 runs du
+corpus ci-dessus, qui le précède ; sur les 79 plans stockés, la règle ne refuse
+aucun scénario (voir [`pr-qa-measurements.md`](pr-qa-measurements.md)).

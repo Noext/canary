@@ -4756,7 +4756,7 @@ function measuredContextOf(measured: MeasuredCopyRefusal): PrContext {
 function measuredPlanOf(measured: MeasuredCopyRefusal): Plan {
   const witness =
     measured.lineFile === measured.declaredFile ? measured.realLine : "";
-  return planWithWitnesses([
+  const plan = planWithWitnesses([
     {
       id: measured.scenarioId,
       sourceFiles: [measured.declaredFile],
@@ -4768,6 +4768,20 @@ function measuredPlanOf(measured: MeasuredCopyRefusal): Plan {
       ],
     },
   ]);
+  // La présence du véhicule lit le texte de sa première exigence, qu'elle cite :
+  // sans cela elle ne lirait rien du diff (OBJECTIVE_UNWITNESSED), un défaut
+  // hors citation qui écarterait la correction par indice.
+  for (const scenario of plan.scenarios) {
+    scenario.assertions = scenario.assertions.map((assertion) => ({
+      ...assertion,
+      requirement: 0,
+      target: {
+        by: "text" as const,
+        value: scenario.requirements[0]?.quote.trim() ?? "",
+      },
+    }));
+  }
+  return plan;
 }
 const MEASURED_NINE_ADD = MEASURED_COPY_REFUSALS.find((measured) =>
   measured.runId.startsWith("9add286d")

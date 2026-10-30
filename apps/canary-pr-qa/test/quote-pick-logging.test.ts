@@ -77,7 +77,10 @@ function planWithRefusedCopy(): Plan {
             description: "The changed output is visible",
             id: "seen",
             kind: "visible",
-            target: { by: "css", value: "#seen" },
+            // `submit` est écrit par la ligne témoin du diff : la présence lit
+            // ce que le diff produit (sinon OBJECTIVE_UNWITNESSED écarterait la
+            // correction par indice que ce test journalise).
+            target: { by: "css", value: "#submit" },
             verification: "state",
           },
         ],

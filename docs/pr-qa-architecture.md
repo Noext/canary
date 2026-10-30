@@ -107,6 +107,34 @@ sur les plans historiques : cela supprime ~1 100 lignes de forensique de copie (
 ni en tête n'est jamais un défaut produit ; la comparaison base/tête (`QA_BASELINE_URL_TEMPLATE`,
 déjà présente) devient la preuve d'attribution, pas la forme de l'assertion.
 
+### 3.4 bis Un objectif qui lit ce que le diff produit, et le matériel pour l'écrire
+
+Un objectif de présence ou d'adresse (`visible`, `hidden`, `count`, `url`) dont la cible ne
+partage aucun mot avec les lignes que le diff ajoute ou retire dans les `sourceFiles` du
+scénario, ni avec la citation qu'il cite, passe identiquement avant le changement : il est
+refusé (`OBJECTIVE_UNWITNESSED`, `src/objective-witness.ts`), d'abord dans la correction du
+planificateur, puis avant exécution — le scénario non corrigé est bloqué, jamais vert. Sans
+objectif déclaré, toutes les assertions du scénario forment la preuve. Les lectures de valeur
+(`text`, `value`) restent jugées par la provenance de leur attendu.
+
+Pour que le planificateur puisse lire la valeur changée là où elle est rendue, le contexte de
+la PR porte `pr.consumers` : les déclarations des fichiers **non modifiés** qui utilisent un
+symbole exporté touché par le diff (écran, formatage, contrôles, tests qui fixent la valeur),
+trouvées en remontant le graphe d'imports à la révision de tête (`src/consumer-context.ts`,
+`src/consumer-resolution.ts` : imports relatifs, réexports, nom de paquet du workspace, alias
+`paths` de tsconfig). Deux réglages :
+
+- `QA_CONSUMER_CONTEXT_CHARS` (défaut 24 000, 0 désactive) : caractères d'excerpts, pris sur
+  ce que `QA_CONTEXT_CHARS` laisse après le contexte de dépendances. Un contexte déjà plein
+  ne lance aucune recherche (aucune requête d'arbre) ; ce que le budget coupe est nommé dans
+  les avertissements de contexte.
+- `QA_CONSUMER_SCAN_FILES` (défaut 400) : plafond de fichiers source lus par la recherche,
+  fichiers modifiés d'abord, tests en dernier ; un plafond atteint est nommé.
+
+Coût : une requête d'arbre plus une lecture par manifeste et par fichier source parcouru.
+Angles morts assumés : imports dynamiques calculés, autres langages, valeur transmise par HTTP
+à un client séparé, second saut (un composant qui ne reçoit la valeur qu'en prop).
+
 ### 3.5 Contrat idempotent
 
 `plan.asWritten` (ce que le modèle a écrit, hashé) et `plan.settled` (après réparation, avec la liste

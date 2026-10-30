@@ -160,3 +160,18 @@ isolées, et le meilleur lot n'est pas présenté comme une moyenne séparée.
 **Durées** : `startedAt`/`endedAt` sont publiés par run ci-dessus pour les lots BA à
 II, et la campagne contrôlée les enregistre aussi : 492,6 s contre 427,9 s par run,
 un écart non séparable (erreur-type 50 s).
+
+## Témoin d'objectif et matériel des consommateurs
+
+Mesuré hors ligne, sans appel modèle, avec la règle courante
+(`src/objective-witness.ts`, `src/consumer-context.ts`).
+
+- **79 plans stockés** (681 scénarios, aucun objectif déclaré) : 0 refus `OBJECTIVE_UNWITNESSED` sous la règle de repli (toutes les assertions forment la preuve). Contrefactuel, chaque lecture de présence prise pour objectif : 0 sans témoin sur 2914.
+- **Run `8db4a07b`** (PR 20) : 7 objectifs déclarés sur 7 scénarios, 0 refus.
+- **Run `f89a0684`** (PR 20) : 7 objectifs déclarés sur 7 scénarios, 0 refus.
+- **Run `1cc2b0a0`** (PR 20) : 7 objectifs déclarés sur 7 scénarios, 0 refus.
+- **PR 21** (plan publié vert sur « le titre de la vue d'accueil est masqué ») : 1 refus `OBJECTIVE_UNWITNESSED`.
+- **Consommateurs de la PR 21** (révision de tête, budget 24 000) : `apps/web/app/page.tsx` lignes 340–395 (7477 caractères) ; `packages/domain/src/__tests__/cash.spec.ts` lignes 79–109 (1571 caractères).
+
+Limite : les 79 plans viennent tous de la PR 20, un grand diff d'interface ;
+le zéro faux positif dit peu des petits diffs ou des diffs sans interface.

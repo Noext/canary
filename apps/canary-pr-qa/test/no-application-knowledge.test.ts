@@ -33,6 +33,21 @@ describe("aucune connaissance de l'application testée dans la règle", () => {
     }
   });
 
+  it("le témoin d'objectif et la recherche de consommateurs ne nomment aucune application", () => {
+    // Ces modules ont été mesurés sur le dépôt ci-dessus : leurs règles (jetons,
+    // lignes changées, graphe d'imports) doivent rester structurelles.
+    for (const name of [
+      "objective-witness.ts",
+      "consumer-context.ts",
+      "consumer-resolution.ts",
+    ]) {
+      const text = source(name);
+      for (const token of FORBIDDEN) {
+        expect(text, `${name} ${token}`).not.toContain(token);
+      }
+    }
+  });
+
   it("la liste des attributs d'état n'énumère aucune application", () => {
     // Le code qui décide ne doit pas contenir d'attribut du dépôt mesuré : la
     // règle se déduit du nom (`data-*-state`), et le test le vérifie littéralement.

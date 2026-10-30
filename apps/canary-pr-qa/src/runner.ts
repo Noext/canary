@@ -33,6 +33,7 @@ import {
   ifPresentRefusals,
   invariantObservations,
   missingExpectationRefusals,
+  objectiveWitnessCorrections,
   type PlanEvidenceRefusal,
   type PlanEvidenceReport,
   type PlanFileText,
@@ -849,6 +850,10 @@ function planRefusalParts(
     ],
     ungrounded: ungroundedPlanRefusals(candidate, context, policy, scans),
     after: [
+      // En tête : l'objectif qui ne lit rien du diff est la correction que le
+      // planificateur doit lire d'abord ; un plan non corrigé est bloqué par la
+      // table d'avant exécution, jamais publié vert.
+      ...objectiveWitnessCorrections(candidate, context),
       ...writeEvidenceRefusals(candidate, policy).map(
         (item) => `${item.error.message}. ${item.error.hint}`
       ),
