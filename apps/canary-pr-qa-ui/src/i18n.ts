@@ -26,6 +26,8 @@ export const errorMessages: Record<string, string | undefined> = {
     "Cette clé a été révoquée : son jeton ne peut plus être copié. Créez-en une nouvelle si vous en avez besoin.",
   API_KEY_UNKNOWN:
     "Cette clé n’existe plus sur le serveur. Rechargez la page pour voir la liste à jour.",
+  BASELINE_REGRESSION:
+    "Une assertion qui passe sur la version de base échoue sur la pull request : le changement casse un comportement qui fonctionnait.",
   CANARY_START_FAILED:
     "Canary n’a pas pu ouvrir sa session Chromium : le moteur ou son navigateur n’était pas disponible.",
   CONTEXT_INCOMPLETE:
@@ -55,6 +57,8 @@ export const errorMessages: Record<string, string | undefined> = {
     "La réponse du modèle était incomplète : le plan de test n’a pas pu être finalisé.",
   MODEL_PROVIDER_DENIED:
     "Le fournisseur IA a refusé la requête. Vérifiez la clé, le quota et l’autorisation Cloudflare de l’IP du VPS.",
+  OBJECTIVE_NOT_DISCRIMINATING:
+    "La preuve du scénario passe aussi sur la version de base de la pull request : le scénario serait vert sans le changement, il ne le prouve donc pas.",
   OBJECTIVE_UNWITNESSED:
     "La preuve du scénario ne lit rien de ce que la pull request ajoute ou retire : un titre de vue, un bouton de navigation ou une absence passent de la même façon avant le changement.",
   PR_CHANGED:
@@ -682,6 +686,8 @@ export const runDiagnostic = {
  * English: the dashboard never hides the advice it was given.
  */
 export const runAdvice: Record<string, string> = {
+  BASELINE_REGRESSION:
+    "Ouvrez le rapport : la comparaison à la base donne la valeur observée de chaque côté. Corrigez la régression, ou faites attendre au plan le nouveau comportement s’il est voulu.",
   CANARY_START_FAILED:
     "Vérifiez que le service browser tourne et dispose de Chromium (docker compose ps), puis relancez le test.",
   CONTEXT_INCOMPLETE:
@@ -722,6 +728,8 @@ export const runAdvice: Record<string, string> = {
     "Relancez le test ; si l’erreur revient, choisissez un modèle plus fiable ou augmentez `QA_RUN_MAX_TOKENS`.",
   MODEL_PROVIDER_DENIED:
     "Autorisez l’IP de sortie du VPS chez le fournisseur (Cloudflare), vérifiez la clé, puis relancez.",
+  OBJECTIVE_NOT_DISCRIMINATING:
+    "Ouvrez le rapport : la comparaison à la base montre ce que la base affichait. Relancez pour obtenir une preuve dont l’attendu distingue la pull request de sa base.",
   OBJECTIVE_UNWITNESSED:
     "Relancez le test : le plan doit lire la valeur que le changement produit là où elle s’affiche, avec la valeur attendue avant le changement et l’exigence qu’elle cite. Une absence ne prouve le changement que si les lignes retirées écrivent sa cible.",
   PLAN_ATTRIBUTE_VALUE_READ_AS_TEXT:

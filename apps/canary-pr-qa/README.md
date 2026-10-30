@@ -229,10 +229,38 @@ proviennent pas de la PR testée. Les assertions de ces trois types utilisent
 `verification: state`.
 
 `QA_BASELINE_URL_TEMPLATE`, lorsqu'il est renseigné, lance également le contrat
-sur une preview du SHA **base**, dont la provenance est vérifiée. Le résultat
-séparé figure dans `baseline` ; un nouveau comportement peut naturellement ne
-pas exister sur la base. Le runner ne transforme pas un échec head en réussite
-sous prétexte qu'il existe aussi sur la base.
+sur une preview du SHA **base** (`{sha}` = SHA de base, `{pr}` = numéro de PR),
+dont la provenance est vérifiée comme celle de la tête, avant et après le
+rejeu. Les scénarios refusés n'y sont pas joués. Le résultat brut figure dans
+`baseline` ; la base sert ensuite d'**oracle indépendant**, assertion par
+assertion (même scénario, même identifiant, même contrat), sans appel modèle
+(`src/baseline-diff.ts`, champ `baselineComparison` de `result.json`) :
+
+| Base | Tête | Effet |
+| --- | --- | --- |
+| passe | échoue | régression : scénario `failed` (`BASELINE_REGRESSION`) |
+| échoue ou cible absente | passe | comportement modifié, listé ; la tête reste verte |
+| passe | passe | non discriminante ; si c'est la preuve du scénario (objectif, ou toutes ses assertions sans objectif), `blocked` (`OBJECTIVE_NOT_DISCRIMINATING`) |
+| échoue, non exécutée | — | non concluante, publiée, verdict de tête inchangé |
+
+Une valeur observée différente alors que l'assertion passe des deux côtés (le
+texte est comparé par inclusion) est aussi un comportement modifié. Une tête
+qui affiche déjà l'attendu mais échoue sur sa vérification
+(`STATE_ALREADY_SATISFIED`, `TRANSITION_ON_INVARIANT`) n'est pas une régression.
+Les comportements modifiés figurent en tête de `report.md`, du commentaire et de
+la description du statut de commit (« 1 behavior change vs base … ») ; les
+valeurs lues dans la page restent dans `result.json`, `report.md` et
+`report.html`, jamais dans le commentaire publié. Une base injoignable ou dont
+le SHA ne correspond pas rend la comparaison **indisponible** : c'est publié, et
+le verdict ne repose que sur la tête. Le runner ne transforme jamais un échec
+head en réussite sous prétexte qu'il existe aussi sur la base.
+
+**La base est un environnement réel** : le contrat y joue les mêmes clics et
+saisies que sur la tête, avec la même politique d'egress, la même liste d'hôtes
+de preview et sans publication. Pointer `QA_BASELINE_URL_TEMPLATE` uniquement
+vers un environnement où ces interactions QA sont acceptables (preview de la
+branche de base, recette), jamais vers une production dont les données
+comptent.
 
 ## GitHub App et déclenchement automatique
 

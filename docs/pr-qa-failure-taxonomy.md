@@ -69,3 +69,16 @@ avant exécution (`src/objective-witness.ts`) : le scénario non corrigé est bl
 classé `test-defect`, jamais publié vert. Il ne figure dans aucun des 200 runs du
 corpus ci-dessus, qui le précède ; sur les 79 plans stockés, la règle ne refuse
 aucun scénario (voir [`pr-qa-measurements.md`](pr-qa-measurements.md)).
+
+## Codes ajoutés avec l'oracle de base : `OBJECTIVE_NOT_DISCRIMINATING`, `BASELINE_REGRESSION`
+
+Ils n'existent que lorsque `QA_BASELINE_URL_TEMPLATE` rejoue le contrat sur la
+préversion de base (`src/baseline-diff.ts`) et ne figurent dans aucun run du corpus.
+
+- `OBJECTIVE_NOT_DISCRIMINATING` est un **défaut de plan** (catégorie planification) :
+  la preuve du scénario — son objectif, ou toutes ses assertions sans objectif —
+  passe aussi sur la base. Le scénario serait vert sans la PR ; il est bloqué,
+  classé `test-defect`.
+- `BASELINE_REGRESSION` est une **régression produit** : une assertion qui passe
+  sur la base échoue sur la tête. Le scénario est `failed`, classé `failed` ; les
+  deux valeurs observées sont dans `baselineComparison.regressions`.

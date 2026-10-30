@@ -83,10 +83,12 @@ import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import {
   attachReplayRuntimeResults,
+  judgeAgainstBaseline,
   reportMarkdown,
   savePlannerInputs,
   saveReplayBundle,
   saveReport,
+  statusDescription,
 } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
@@ -1731,6 +1733,10 @@ async function executePlan(
     ),
     root,
   });
+  // La base est un oracle indépendant : une régression devient rouge, une preuve
+  // qui passe aussi sur la base n'est plus verte, le reste est publié.
+  judgeAgainstBaseline(result, config);
+  result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {
     await attachReplayRuntimeResults(root, result);
   }
@@ -1756,42 +1762,62 @@ async function runBaseline(
   const url = template
     .replaceAll("{sha}", context.baseSha)
     .replaceAll("{pr}", String(context.ref.number));
-  const basePreview = await verifyPreviewUrl(
-    url,
-    context.baseSha,
-    options.config
-  );
-  const scope = runScope.getStore();
-  if (scope) {
-    scope.previewSha = context.baseSha;
+  // La provenance de la base est prouvée comme celle de la tête, avant et après
+  // le rejeu. Une base fausse ou injoignable rend la comparaison indisponible,
+  // publiée comme telle : le verdict retombe sur la seule tête, jamais sur une
+  // base non prouvée.
+  const verify = () =>
+    verifyPreviewUrl(url, context.baseSha, options.config).catch(
+      (error: unknown) => diagnose(error, options.config)
+    );
+  const basePreview = await verify();
+  if ("code" in basePreview) {
+    result.baseline = {
+      sha: context.baseSha,
+      url,
+      scenarios: [],
+      diagnostic: basePreview,
+    };
+    return;
   }
-  result.baseline = {
+  const baseline: NonNullable<RunResult["baseline"]> = {
     sha: context.baseSha,
     url: basePreview.url,
     scenarios: [],
   };
-  for (const scenario of plan.scenarios) {
-    if (options.refused.has(scenario.id)) {
-      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
-      continue;
-    }
-    result.baseline.scenarios.push(
-      await executeScenario(
-        scenario,
-        basePreview.url,
-        join(options.root, "_baseline"),
-        options.config,
-        options.canary,
-        (event) => options.progress.record(event),
-        context.ref.repo,
-        options.material,
-        options.model
-      )
-    );
+  result.baseline = baseline;
+  const scope = runScope.getStore();
+  if (scope) {
+    scope.previewSha = context.baseSha;
   }
-  const activeScope = runScope.getStore();
-  if (activeScope) {
-    activeScope.previewSha = context.sha;
+  try {
+    for (const scenario of plan.scenarios) {
+      if (options.refused.has(scenario.id)) {
+        // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
+        continue;
+      }
+      baseline.scenarios.push(
+        await executeScenario(
+          scenario,
+          basePreview.url,
+          join(options.root, "_baseline"),
+          options.config,
+          options.canary,
+          (event) => options.progress.record(event),
+          context.ref.repo,
+          options.material,
+          options.model
+        )
+      );
+    }
+  } finally {
+    if (scope) {
+      scope.previewSha = context.sha;
+    }
+  }
+  const after = await verify();
+  if ("code" in after) {
+    baseline.diagnostic = after;
   }
 }
 async function recheck(
@@ -1853,12 +1879,7 @@ async function publish(
   try {
     await runScope.getStore()?.verifyOwnership?.();
     const verdict = statusFor(result.outcome);
-    await github.status(
-      context,
-      verdict,
-      `QA ${result.outcome}: ${result.scenarios.filter((s) => s.outcome === "passed").length}/${result.scenarios.length} scenarios`,
-      reportUrl
-    );
+    await github.status(context, verdict, statusDescription(result), reportUrl);
     publication.commitStatus = verdict;
     await runScope.getStore()?.verifyOwnership?.();
     commentAttempted = true;

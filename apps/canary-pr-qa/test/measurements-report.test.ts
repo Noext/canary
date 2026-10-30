@@ -3,6 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { compareWithBaseline } from "../src/baseline-diff.js";
+import { assertionMatches } from "../src/canary.js";
+import type { Config } from "../src/config.js";
 import { consumerContext } from "../src/consumer-search.js";
 import { classifyFailure, summarizeFailures } from "../src/diagnostics.js";
 import type { PrContext } from "../src/github.js";
@@ -12,7 +15,14 @@ import {
   requirementSourceRefusal,
   unwitnessedPlanRefusals,
 } from "../src/policy.js";
-import { type Plan, PlanSchema } from "../src/schema.js";
+import { reportMarkdown } from "../src/report.js";
+import {
+  type Assertion,
+  type Plan,
+  PlanSchema,
+  type RunResult,
+  type ScenarioResult,
+} from "../src/schema.js";
 
 /**
  * **Le générateur des mesures**, et son test.
@@ -228,6 +238,94 @@ function duration(start?: string, end?: string): string {
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
 }
 
+/**
+ * La mesure de l'oracle de base sur la PR 21 de `pharmania/arpilabe-pilotage`,
+ * calculée par le code courant : l'assertion `message-ecart` du plan réel
+ * `0b9b7fa2`, jugée par l'inclusion de l'exécuteur contre la valeur de base
+ * relevée sur le déploiement `7427180` et la valeur de tête que le diff produit.
+ */
+const PR21_HEAD = "Écart de 40,00 €";
+const PR21_BASE = "Écart de -40,00 €";
+const BASE_SHA = "7427180".padEnd(40, "0");
+
+function pr21Scenario(assertion: Assertion, actual: string): ScenarioResult {
+  const passed = assertionMatches(assertion, actual);
+  return {
+    scenario: {
+      id: "ecart",
+      title: "ecart",
+      objective: assertion.id,
+      assertions: [assertion],
+      steps: [],
+    } as unknown as ScenarioResult["scenario"],
+    outcome: passed ? "passed" : "failed",
+    steps: [],
+    assertions: [{ id: assertion.id, passed, actual }],
+    artifacts: [],
+    contract: { completedSteps: [], totalSteps: 0, hash: "pr21" },
+  };
+}
+
+/** Le run PR 21 jugé contre sa base, pour l'attendu donné. */
+function pr21Judged(expected: string): RunResult {
+  const assertion = {
+    id: "message-ecart",
+    description: "message d'écart",
+    kind: "text",
+    expected,
+    target: { by: "css", value: '[role="status"]' },
+    afterStep: "close",
+    verification: "transition",
+  } as Assertion;
+  const result: RunResult = {
+    id: "pr21",
+    prUrl: "https://github.com/pharmania/arpilabe-pilotage/pull/21",
+    startedAt: "2026-10-30T00:00:00.000Z",
+    outcome: "passed",
+    scenarios: [pr21Scenario(assertion, PR21_HEAD)],
+    baseline: {
+      sha: BASE_SHA,
+      url: "https://base.invalid/",
+      scenarios: [pr21Scenario(assertion, PR21_BASE)],
+    },
+  };
+  compareWithBaseline(result, {} as Config);
+  return result;
+}
+
+/** Les lignes de `docs/pr-qa-measurements.md`, recalculées. */
+function baselineOracleLines(): string[] {
+  const tight = pr21Judged("Écart de 40,00");
+  const loose = pr21Judged("40,00 €");
+  const listed = reportMarkdown(tight, undefined, true)
+    .split("\n")
+    .find((line) => line.startsWith("- ecart · message-ecart"));
+  return [
+    "## Oracle de base (comparaison base/tête)",
+    "",
+    "Mesuré hors ligne, sans appel modèle ni requête vers un hôte réel, avec la règle",
+    "courante (`src/baseline-diff.ts`).",
+    "",
+    "- **PR 21**, assertion `message-ecart` du plan réel `0b9b7fa2` (objectif, `text`,",
+    "  attendu « Écart de 40,00 », la valeur du bug), jugée par l'inclusion de",
+    `  l'exécuteur contre « ${PR21_HEAD} » (tête) et « ${PR21_BASE} » (base`,
+    `  \`7427180\` déployée) : scénario ${tight.scenarios[0]?.outcome}, ${tight.baselineComparison?.changes.length} comportement modifié, écrit en tête du rapport :`,
+    `  \`${listed}\`.`,
+    `- Même valeurs, attendu « 40,00 € » : la preuve passe des deux côtés, scénario ${loose.scenarios[0]?.outcome} (\`${loose.scenarios[0]?.diagnostic?.code}\`), ${loose.baselineComparison?.changes.length} comportement modifié listé.`,
+    "- Fixture locale, Chromium réel (`test/e2e/baseline-oracle.test.ts`, deux",
+    "  origines) : base « Hello » → 1 comportement modifié, run vert ; tête cassée et",
+    "  base juste → `BASELINE_REGRESSION`, run rouge ; base identique à la tête →",
+    "  `OBJECTIVE_NOT_DISCRIMINATING` ; base au mauvais SHA → comparaison indisponible,",
+    "  verdict de tête seul.",
+    "",
+    "Limite : aucun run réel n'a encore rejoué une base. La valeur de tête de la PR 21",
+    "est déduite du diff (inversion de signe), pas observée par un run ; seule la",
+    "valeur de base est relevée sur le déploiement. Le premier run réel avec",
+    "`QA_BASELINE_URL_TEMPLATE` doit confirmer ces verdicts.",
+    "",
+  ];
+}
+
 describe("le document de mesures est généré, et ses classes viennent du code", () => {
   const rows = records.map((record) => {
     const refused = refusedByGate(record);
@@ -433,7 +531,8 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       "règle ne bloque pas les plans verts, pas qu'elle discrimine sur un tel diff.",
       "Les lectures négatives, elles, n'y sont plus témoins que d'une cible écrite",
       "par une ligne retirée.",
-      ""
+      "",
+      ...baselineOracleLines()
     );
     const document = `${lines.join("\n")}`;
     // Le document est comparé, jamais réécrit en silence : une mesure périmée fait

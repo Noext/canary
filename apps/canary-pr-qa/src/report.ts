@@ -1,6 +1,11 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
+import {
+  compareWithBaseline,
+  comparisonSections,
+  comparisonStatusNote,
+} from "./baseline-diff.js";
 import { resolvedTargetName } from "./canary.js";
 import type { Config } from "./config.js";
 import {
@@ -14,6 +19,27 @@ import type { PrContext } from "./github.js";
 import { effectiveModelConfig, PLANNER_DIR } from "./planner-record.js";
 import type { Policy } from "./policy.js";
 import type { Plan, RunResult } from "./schema.js";
+
+/**
+ * Juge le run contre la préversion de base avant sa publication : régression
+ * rouge, preuve non discriminante bloquée, comportements modifiés listés. Le
+ * runner est à sa limite d'imports : il l'atteint par le module qui rend déjà
+ * cette comparaison dans le rapport, le statut et le commentaire.
+ */
+export function judgeAgainstBaseline(result: RunResult, config: Config): void {
+  compareWithBaseline(result, config);
+}
+
+/**
+ * La description du statut de commit. La comparaison à la base y figure en tête
+ * de ce que GitHub tronque (140 caractères) : un comportement modifié par la PR
+ * ne peut pas passer inaperçu sous un statut vert.
+ */
+export function statusDescription(result: RunResult): string {
+  const passed = result.scenarios.filter((s) => s.outcome === "passed").length;
+  const note = comparisonStatusNote(result);
+  return `QA ${result.outcome}: ${passed}/${result.scenarios.length} scenarios${note ? ` · ${note}` : ""}`;
+}
 
 export async function writeJson(path: string, data: unknown) {
   const temp = `${path}.tmp`;
@@ -29,7 +55,16 @@ function escapeHtml(input: unknown) {
       ] ?? char
   );
 }
-export function reportMarkdown(result: RunResult, reportUrl?: string): string {
+/**
+ * Le rapport Markdown. Par défaut c'est le corps PUBLIÉ en commentaire de PR :
+ * aucune valeur lue dans la page n'y figure. `withObservedValues` sert au seul
+ * `report.md` privé, qui recopie les valeurs de la comparaison à la base.
+ */
+export function reportMarkdown(
+  result: RunResult,
+  reportUrl?: string,
+  withObservedValues = false
+): string {
   const clean = (value: string) =>
     value.replace(/[\r\n|<>]/g, " ").replace(/`/g, "'");
   // Un nom accessible visé par le repli typographique n'est pas celui que le plan
@@ -68,10 +103,19 @@ export function reportMarkdown(result: RunResult, reportUrl?: string): string {
       : [
           `- ${inherited.length} assertion(s) already satisfied before their step: they prove the state is there, not that the step produced it`,
         ];
+  // La comparaison à la base vient juste après le verdict : une liste de
+  // comportements modifiés en bas d'un rapport vert serait manquée.
+  const comparison = comparisonSections(result, withObservedValues).flatMap(
+    (section) => [
+      `### ${clean(section.title)}`,
+      section.items.map((item) => `- ${clean(item)}`).join("\n"),
+    ]
+  );
   return [
     "<!-- canary-pr-qa -->",
     "## Canary autonomous PR QA",
     `**Result: ${result.outcome.toUpperCase()}** · Commit \`${result.sha ?? "unavailable"}\``,
+    ...comparison,
     `Model: \`${clean(result.model ?? "historical / unavailable")}\``,
     result.preview
       ? `Preview: ${result.preview.url}\nProvenance: ${clean(result.preview.evidence)}`
@@ -124,7 +168,10 @@ export async function saveReport(
   );
   await mkdir(root, { recursive: true });
   await writeJson(join(root, "result.json"), result);
-  await writeFile(join(root, "report.md"), reportMarkdown(result));
+  await writeFile(
+    join(root, "report.md"),
+    reportMarkdown(result, undefined, true)
+  );
   const items = result.scenarios
     .map(
       (
@@ -144,7 +191,17 @@ ${item.artifacts
     .join("");
   await writeFile(
     join(root, "report.html"),
-    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Canary PR QA</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 24px;background:#111827;color:#e5e7eb}a{color:#93c5fd}section{border-top:1px solid #475569;padding:24px 0}video{display:block;width:100%;max-height:600px;margin:20px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}p{overflow-wrap:anywhere}</style><h1>Canary PR QA: ${escapeHtml(result.endedAt ? result.outcome : "running")}</h1><p>${escapeHtml(result.prUrl)}</p><p>Commit: ${escapeHtml(result.sha)}</p><p>${escapeHtml(result.preview?.url)}</p><p>${escapeHtml(result.error)}</p>${diagnosticHtml(result.diagnostic)}<p>${escapeHtml(result.plan?.summary)}</p><p><a href="result.json">Machine-readable results</a> · <a href="progress.json">Current progress</a> · <a href="events.jsonl">Action timeline</a></p>${items}<h2>Not browser-tested</h2><ul>${result.plan?.skipped.map((item) => `<li>${escapeHtml(item.sourceFile)}: ${escapeHtml(item.reason)}</li>`).join("") ?? ""}</ul></html>`
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Canary PR QA</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 24px;background:#111827;color:#e5e7eb}a{color:#93c5fd}section{border-top:1px solid #475569;padding:24px 0}video{display:block;width:100%;max-height:600px;margin:20px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}p{overflow-wrap:anywhere}</style><h1>Canary PR QA: ${escapeHtml(result.endedAt ? result.outcome : "running")}</h1><p>${escapeHtml(result.prUrl)}</p><p>Commit: ${escapeHtml(result.sha)}</p><p>${escapeHtml(result.preview?.url)}</p><p>${escapeHtml(result.error)}</p>${diagnosticHtml(result.diagnostic)}${comparisonSections(
+      result,
+      true
+    )
+      .map(
+        (section) =>
+          `<h2>${escapeHtml(section.title)}</h2><ul>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      )
+      .join(
+        ""
+      )}<p>${escapeHtml(result.plan?.summary)}</p><p><a href="result.json">Machine-readable results</a> · <a href="progress.json">Current progress</a> · <a href="events.jsonl">Action timeline</a></p>${items}<h2>Not browser-tested</h2><ul>${result.plan?.skipped.map((item) => `<li>${escapeHtml(item.sourceFile)}: ${escapeHtml(item.reason)}</li>`).join("") ?? ""}</ul></html>`
   );
 }
 function diagnosticHtml(diagnostic?: Diagnostic) {
