@@ -53,7 +53,9 @@ const requirement = {
 const staticScenario: Scenario = {
   id: "static-banner",
   title: "The welcome banner is visible after load",
-  kind: "regression",
+  // Il vérifie la valeur que le diff CHANGE (« Welcome » au lieu de « Hello ») :
+  // un scénario `regression` déclarerait au contraire une valeur inchangée.
+  kind: "happy_path",
   rationale: "The diff changes the saved welcome output",
   sourceFiles: ["src/form.ts"],
   preconditions: [],

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compareWithBaseline } from "../src/baseline-diff.js";
 import { assertionMatches } from "../src/canary.js";
 import type { Config } from "../src/config.js";
+import { PLANNER_PROMPT } from "../src/model.js";
 import { reportMarkdown, statusDescription } from "../src/report.js";
 import type { Assertion, RunResult, ScenarioResult } from "../src/schema.js";
 
@@ -39,6 +40,7 @@ function scenario(
     code?: string;
     error?: string;
     hash?: string;
+    kind?: string;
     preconditions?: string[];
     steps?: ScenarioResult["steps"];
   } = {}
@@ -53,6 +55,7 @@ function scenario(
     scenario: {
       id,
       title: id,
+      kind: options.kind ?? "happy_path",
       objective: options.objective,
       assertions,
       preconditions: options.preconditions ?? [],
@@ -777,4 +780,84 @@ describe("ce que la base ne peut pas trancher", () => {
       "scenario not replayed on the base: its fixtures are seeded for the head environment only"
     );
   });
+});
+
+describe("un scénario `regression` déclare un comportement inchangé", () => {
+  // PR 21 mesurée (run réel) : le planificateur a pris le nouveau code pour la
+  // vérité et attendait « Écart de 240,00 » ; la tête passe, la base affiche
+  // « Écart de -240,00 € » et échoue. Le scénario se dit de non-régression.
+  const view = (value: string) =>
+    `Caisse et Coffre · DEMO17 ${"Coupures et pièces ".repeat(30)}Écart de ${value} : une justification écrite est obligatoire avant clôture.`;
+  const a = text("a", "Écart de 240,00");
+  const pr21 = (kind: string) =>
+    run(
+      [
+        scenario("s", [a], [read(true, view("240,00 €"))], {
+          kind,
+          objective: "a",
+        }),
+      ],
+      [
+        scenario("s", [a], [read(false, view("-240,00 €"))], {
+          kind,
+          objective: "a",
+        }),
+      ]
+    );
+
+  it("une autre valeur que la base est une régression, quel que soit l'attendu", () => {
+    const result = pr21("regression");
+    compareWithBaseline(result, CONFIG);
+    const head = result.scenarios[0]!;
+    expect(head.outcome).toBe("failed");
+    expect(head.diagnostic?.code).toBe("BASELINE_REGRESSION");
+    expect(head.error).toContain("declares unchanged");
+    expect(result.baselineComparison?.regressions).toHaveLength(1);
+  });
+
+  it("hors `regression`, le même écart reste un comportement modifié listé", () => {
+    const result = pr21("happy_path");
+    compareWithBaseline(result, CONFIG);
+    expect(result.scenarios[0]!.outcome).toBe("passed");
+    expect(result.baselineComparison?.regressions).toHaveLength(0);
+    expect(result.baselineComparison?.changes).toHaveLength(1);
+  });
+
+  it("vert des deux côtés, un scénario `regression` reste vert : c'est sa preuve", () => {
+    const same = text("a", "Comptage juste");
+    const result = run(
+      [
+        scenario("s", [same], [read(true, "Comptage juste")], {
+          kind: "regression",
+          objective: "a",
+        }),
+      ],
+      [
+        scenario("s", [same], [read(true, "Comptage juste")], {
+          kind: "regression",
+          objective: "a",
+        }),
+      ]
+    );
+    compareWithBaseline(result, CONFIG);
+    expect(result.scenarios[0]!.outcome).toBe("passed");
+    expect(result.scenarios[0]!.diagnostic).toBeUndefined();
+  });
+
+  it("le rapport montre l'endroit où les deux lectures diffèrent, pas leur début", () => {
+    const result = pr21("happy_path");
+    compareWithBaseline(result, CONFIG);
+    const report = reportMarkdown(result, undefined, true);
+    expect(report).toContain("Écart de -240,00 €");
+    expect(report).toContain("Écart de 240,00 €");
+  });
+});
+
+it("le prompt énonce le contrat d'un scénario `regression` jugé contre la base", () => {
+  expect(PLANNER_PROMPT).toContain(
+    "A regression scenario checks behavior the diff must NOT change: its expected values are the base behavior"
+  );
+  expect(PLANNER_PROMPT).toContain(
+    "a scenario that checks a value the diff intends to change is a happy_path or edge_case, never a regression"
+  );
 });

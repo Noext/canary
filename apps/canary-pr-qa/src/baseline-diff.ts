@@ -9,19 +9,14 @@ import type {
 } from "./results.js";
 
 /**
- * La préversion de base comme oracle indépendant.
- *
- * Le planificateur écrit l'attendu en lisant le diff : quand il prend le NOUVEAU
- * code pour la vérité, l'assertion passe sur la tête quelle que soit la justesse
- * du changement (PR 21 de `pharmania/arpilabe-pilotage` : « Écart de 40,00 »
- * attendu, valeur que le bug produit). Le même contrat rejoué sur la base donne
- * une seconde lecture, sans appel modèle : pour chaque assertion, ce que la base
- * a montré et si elle a passé. La comparaison se fait par identifiant
- * d'assertion dans le même scénario, sur le contrat joué des deux côtés.
+ * La préversion de base comme oracle indépendant : le planificateur peut prendre
+ * le NOUVEAU code pour la vérité (PR 21 : « Écart de 40,00 » attendu, valeur du
+ * bug). Le même contrat rejoué sur la base, sans modèle, donne une seconde
+ * lecture, comparée par identifiant d'assertion dans le même scénario.
  *
  * - base verte, tête rouge : la PR casse ce qui marchait — régression produit ;
- * - tête verte, base rouge (ou cible absente) : comportement modifié par la PR,
- *   listé pour un humain, le verdict reste celui de la tête ;
+ * - tête verte, base rouge (ou cible absente) : comportement modifié, listé ;
+ *   pour un scénario `regression`, qui le déclare inchangé, c'est une régression ;
  * - verte des deux côtés : l'assertion ne distingue pas la PR de la base ; si
  *   c'est la preuve du scénario, il passerait sans la PR et n'est pas prouvé ;
  * - rouge des deux côtés, base non exécutable : non concluant, publié, jamais
@@ -32,11 +27,9 @@ type Category = "changed" | "inconclusive" | "notDiscriminating" | "regression";
 type RecordedAssertion = ScenarioResult["assertions"][number];
 
 /**
- * Codes où la valeur lue satisfait déjà l'attendu et où seule la vérification
- * échoue (valeur déjà en place avant l'étape) : l'état laissé par un run
- * antérieur sur cet environnement l'explique aussi bien qu'un changement de
- * code. Vaut pour les deux côtés : la base est un environnement persistant que
- * chaque run de QA écrit, la tête aussi.
+ * Codes où la valeur satisfait déjà l'attendu et où seule la vérification échoue :
+ * l'état laissé par un run antérieur l'explique aussi bien qu'un changement de
+ * code, des deux côtés (environnements persistants que chaque run écrit).
  */
 const VALUE_SATISFIED = new Set([
   "STATE_ALREADY_SATISFIED",
@@ -222,7 +215,13 @@ function classify(
     return inconclusive("fails on both the head and the base");
   }
   if (!b.passed) {
-    return baseFailed(base, h, b);
+    const changed = baseFailed(base, h, b);
+    // `regression` déclare un comportement inchangé : une autre valeur que la base
+    // est la régression (PR 21 : « -240,00 € » sur main, « 240,00 € » sur la PR).
+    return head.scenario.kind === "regression" &&
+      changed.categories.includes("changed")
+      ? { categories: ["changed", "regression"] }
+      : changed;
   }
   return {
     categories: sameValue(h.actual, b.actual)
@@ -239,7 +238,9 @@ function markRegression(
 ) {
   const error = new QaError(
     "BASELINE_REGRESSION",
-    `Assertion ${entry.assertionId} passes on the base commit ${short(sha)} and fails on the PR head: the PR breaks behavior that works on the base`,
+    entry.head?.passed
+      ? `Regression scenario ${head.scenario.id}: assertion ${entry.assertionId} reads a different value on the PR head than on the base commit ${short(sha)}: the PR changes behavior this scenario declares unchanged`
+      : `Assertion ${entry.assertionId} passes on the base commit ${short(sha)} and fails on the PR head: the PR breaks behavior that works on the base`,
     "Both observed values are in the base comparison of the private report and result.json (baselineComparison.regressions), never in this message. Fix the regression; if the change is intended, the plan must expect the new behavior from the diff."
   );
   const previous = head.error;
@@ -311,8 +312,10 @@ export function compareWithBaseline(result: RunResult, config: Config): void {
     const proof = head.scenario.objective
       ? [head.scenario.objective]
       : head.scenario.assertions.map((item) => item.id);
+    // Un scénario `regression` prouve justement qu'il passe des deux côtés.
     if (
       head.outcome === "passed" &&
+      head.scenario.kind !== "regression" &&
       proof.length > 0 &&
       proof.every((id) => undiscriminated.has(id))
     ) {
@@ -360,7 +363,8 @@ function diffScenario(
   return { regression, undiscriminated };
 }
 
-function shown(value: unknown): string {
+/** Le texte affiché, centré sur `from` : une longue lecture de vue montre où elle diffère. */
+function shown(value: unknown, from = 0): string {
   if (value === undefined) {
     return "cible absente";
   }
@@ -368,22 +372,35 @@ function shown(value: unknown): string {
     typeof value === "string"
       ? value.replace(/\s+/g, " ").trim()
       : JSON.stringify(value);
-  const bounded =
-    text.length > VALUE_CHARS ? `${text.slice(0, VALUE_CHARS)}…` : text;
+  const start = text.length > VALUE_CHARS ? Math.max(0, from - 60) : 0;
+  const bounded = `${start > 0 ? "…" : ""}${text.slice(start, start + VALUE_CHARS)}${start + VALUE_CHARS < text.length ? "…" : ""}`;
   return typeof value === "string" ? `« ${bounded} »` : bounded;
+}
+
+/** Premier caractère qui diffère entre les deux lectures repliées. */
+function firstDifference(entry: BaselineAssertionDiff): number {
+  const fold = (value: unknown) =>
+    typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  const [a, b] = [fold(entry.head?.actual), fold(entry.base?.actual)];
+  let index = 0;
+  while (index < a.length && a[index] === b[index]) {
+    index += 1;
+  }
+  return index;
 }
 
 function sideText(
   label: string,
   value: BaselineAssertionDiff["head"],
-  withValues: boolean
+  withValues: boolean,
+  from = 0
 ): string {
   if (value === undefined) {
     return `${label} : non exécutée`;
   }
   const verdict = value.passed ? "passe" : "échoue";
   return withValues
-    ? `${label} : ${shown(value.actual)} (${verdict})`
+    ? `${label} : ${shown(value.actual, from)} (${verdict})`
     : `${label} : ${verdict}`;
 }
 
@@ -391,7 +408,8 @@ function line(entry: BaselineAssertionDiff, withValues: boolean): string {
   const expected =
     entry.expected === undefined ? "" : ` (attendu ${shown(entry.expected)})`;
   const reason = entry.reason ? ` — ${entry.reason}` : "";
-  return `${entry.scenarioId} · ${entry.assertionId}${entry.objective ? " [objectif]" : ""}${expected} : ${sideText("main", entry.base, withValues)} → ${sideText("PR", entry.head, withValues)}${reason}`;
+  const from = firstDifference(entry);
+  return `${entry.scenarioId} · ${entry.assertionId}${entry.objective ? " [objectif]" : ""}${expected} : ${sideText("main", entry.base, withValues, from)} → ${sideText("PR", entry.head, withValues, from)}${reason}`;
 }
 
 /**
