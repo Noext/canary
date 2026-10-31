@@ -466,7 +466,9 @@ and all three runners had been OOM-killed during `check`. Each job now gets a `T
 `$RUNNER_TEMP` (wiped by the runner), the test jobs get their own `HOME` (so their own Canary daemon,
 while `PLAYWRIGHT_BROWSERS_PATH` keeps the shared browser cache), and every process inherits a
 `CANARY_CI_JOB` marker. These three variables are listed in `globalPassThroughEnv` of `turbo.json`: turbo's strict env mode strips undeclared variables from tasks, so without it `pnpm check` lost the marker and the browser path (measured on the first run of this change). A final `if: always()` step kills only the processes carrying this job's
-marker — never a sibling job's — and removes the job's directories. Docker prunes go through the same
+marker, or whose `HOME`/`TMPDIR` is this job's directory (the Canary daemon is started with a filtered
+environment that keeps `HOME` but drops the marker) — never a sibling job's — and removes the job's
+directories. Docker prunes go through the same
 script, which retries them because two concurrent prunes on the shared Docker daemon make the second
 one fail.
 

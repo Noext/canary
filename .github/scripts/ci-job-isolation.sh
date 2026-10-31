@@ -59,6 +59,11 @@ ancestors() {
 
 marked() {
   local marker="CANARY_CI_JOB=${CANARY_CI_JOB:?setup was not run in this job}"
+  # Le démon Canary est lancé avec un environnement filtré : il garde HOME mais
+  # perd le marqueur (mesuré sur la CI de cette PR, cinq démons survivaient). Le
+  # HOME et le TMPDIR du job le désignent aussi : ce dossier appartient à une seule
+  # instance de runner, qui ne traite qu'un job à la fois.
+  local home="HOME=$root/home" tmp="TMPDIR=$root/tmp"
   local skip
   skip=" $(ancestors | tr '\n' ' ') "
   local entry pid
@@ -67,7 +72,8 @@ marked() {
     case "$skip" in *" $pid "*) continue ;; esac
     # Lisible seulement pour les processus de cet utilisateur : ceux de root ou
     # d'un autre compte ne sont jamais candidats.
-    if tr '\0' '\n' < "$entry/environ" 2>/dev/null | grep -qxF "$marker"; then
+    if tr '\0' '\n' < "$entry/environ" 2>/dev/null |
+      grep -qxF -e "$marker" -e "$home" -e "$tmp"; then
       echo "$pid"
     fi
   done
