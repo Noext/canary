@@ -606,9 +606,9 @@ function assertionReadIndex(
   scenario: Scenario,
   assertion: Scenario["assertions"][number]
 ): number {
-  // Une vérification transition/persisted relève sa référence avant
-  // l'interaction : la cible doit donc déjà exister à l'entrée de `afterStep`.
-  // Les autres vérifications lisent leur cible pendant leur propre étape.
+  // Une vérification transition/persisted relève sa référence à l'entrée de
+  // `afterStep` (une cible encore absente y vaut `null`) et la relit à sa
+  // sortie. Les autres vérifications lisent leur cible pendant leur étape.
   if (readsAfterStep(assertion)) {
     return stepIndex(
       scenario,
@@ -673,11 +673,16 @@ function inspectScenario(
       });
       continue;
     }
+    // Une transition/persisted peut être satisfaite par l'APPARITION de sa cible
+    // (`captureBaselines` note `null` une cible absente avant l'étape) : elle
+    // n'a donc à exister qu'à la SORTIE de `afterStep`, là où elle est relue.
+    // Juger l'entrée refusait « Remettre à zéro », visible après le clic sur
+    // « Caisse et Coffre » (banc f1, runs 2 et 3), que l'exécution accepte.
     checkTarget(
       scenario,
       scenario.steps[readIndex]?.id ?? assertion.id,
       assertion.target,
-      pageUnchanged[readIndex] ?? false,
+      pageUnchanged[advicePageIndex(scenario, assertion)] ?? false,
       names,
       report,
       assertion.kind === "count" ? assertion.expected : undefined

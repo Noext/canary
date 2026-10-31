@@ -1759,7 +1759,7 @@ async function executePlan(
   });
   // La base est un oracle indépendant : une régression devient rouge, une preuve
   // qui passe aussi sur la base n'est plus verte, le reste est publié.
-  judgeAgainstBaseline(result, config, context.title);
+  judgeAgainstBaseline(result, config, context.title, context.files);
   restoreDeferredRefusals(result, deferred, config);
   result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {
@@ -1877,9 +1877,9 @@ async function runBaseline(
       ) {
         continue;
       }
-      // Sans modèle : aucune reprise de cible sur la base. Elle joue le plan tel
-      // qu'il est écrit, sans dépense ni clic sur un élément que le plan ne
-      // nomme pas, sur un environnement réel.
+      // Sans modèle : aucune reprise par modèle sur la base, seule la reprise
+      // par inclusion, déterministe, que la tête joue aussi : la comparaison
+      // reste valable quand les deux côtés ont joué la même substitution.
       baseline.scenarios.push(
         await executeScenario(
           scenario,

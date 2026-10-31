@@ -283,15 +283,18 @@ async function playStepWithRepair(args: {
         config,
         material
       );
+      // La reprise par inclusion est déterministe et sans modèle : elle passe
+      // avant la reprise par modèle, base comprise (`missing-target.ts`).
       const chosen =
         attempt === 1
-          ? await repairStepTarget({
+          ? (failure.contained ??
+            (await repairStepTarget({
               model,
               preview,
               scenario: result.scenario.title,
               step,
               targets: failure.targets,
-            })
+            })))
           : undefined;
       if (!chosen) {
         return { failure };
@@ -423,9 +426,9 @@ export async function executeScenario(
   repo = "",
   material: SourceLineMaterial[] = [],
   /**
-   * Fourni par le runner. Absent en test unitaire : la reprise de cible est
-   * alors purement désactivée, et l'échec reste l'échec — aucun test ne peut
-   * passer grâce à une reprise qu'il n'a pas demandée.
+   * Fourni par le runner. Absent en test unitaire et sur la base : la reprise
+   * par modèle est alors désactivée ; seule reste la reprise par inclusion,
+   * déterministe (un champ unique, mêmes nombres, `missing-target.ts`).
    */
   model?: Model
 ): Promise<ScenarioResult> {

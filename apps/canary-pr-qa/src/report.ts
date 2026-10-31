@@ -29,7 +29,8 @@ export { settleNonRuntimeDiff } from "./approved-skips.js";
  * rouge, preuve non discriminante bloquée, comportements modifiés listés. Le
  * runner est à sa limite d'imports : il l'atteint par le module qui rend déjà
  * cette comparaison dans le rapport, le statut et le commentaire. Le titre de
- * la PR y porte son intention : un `refactor` déclare un comportement inchangé.
+ * la PR y porte son intention : un `refactor` déclare un comportement inchangé ;
+ * ses fichiers disent quels littéraux le diff ajoute.
  */
 export const judgeAgainstBaseline = compareWithBaseline;
 

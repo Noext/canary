@@ -1,3 +1,4 @@
+import { diffAddedLiteral } from "./added-literal.js";
 import {
   type Category,
   classify,
@@ -6,6 +7,7 @@ import {
 } from "./baseline-classify.js";
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
+import type { PrContext } from "./github.js";
 import type {
   BaselineAssertionDiff,
   BaselineComparison,
@@ -30,6 +32,11 @@ import type {
  */
 
 type RecordedAssertion = ScenarioResult["assertions"][number];
+type AddedLiteral = ReturnType<typeof diffAddedLiteral>;
+
+/** Pourquoi l'écart d'une assertion annexe d'un scénario `regression` reste un changement. */
+const ADDED_LITERAL_RULE =
+  "secondary assertion of a regression scenario on a literal the diff adds: the base cannot show it, so the difference is a change, not a regression";
 
 const VALUE_CHARS = 160;
 const LIST = {
@@ -100,12 +107,14 @@ function markNotDiscriminating(
  * régression (rouge) et preuve qui ne distingue pas la PR (bloqué). Sans
  * `QA_BASELINE_URL_TEMPLATE`, rien ne change. Le runner recalcule l'issue du run
  * après cet appel. Un `title` de PR `refactor` déclare un comportement
- * inchangé : chaque scénario y est jugé comme un scénario `regression`.
+ * inchangé : chaque scénario y est jugé comme un scénario `regression`. Les
+ * `files` du diff disent quels littéraux la PR ajoute (`src/added-literal.ts`).
  */
 export function compareWithBaseline(
   result: RunResult,
   config: Config,
-  title?: string
+  title?: string,
+  files?: PrContext["files"]
 ): void {
   const baseline = result.baseline;
   if (baseline === undefined) {
@@ -128,12 +137,15 @@ export function compareWithBaseline(
     baseline.scenarios.map((item) => [item.scenario.id, item])
   );
   const refactor = declaresNoBehaviorChange(title);
+  // Une PR `refactor` déclare TOUT inchangé : un littéral ajouté y est déjà
+  // un comportement nouveau, donc aucune exemption.
+  const added = refactor ? undefined : diffAddedLiteral(files);
   for (const head of result.scenarios) {
     const { regression, undiscriminated } = diffScenario(
       head,
       bases.get(head.scenario.id),
       comparison,
-      refactor || head.scenario.kind === "regression"
+      { added, unchanged: refactor || head.scenario.kind === "regression" }
     );
     if (regression) {
       markRegression(head, regression, baseline.sha, config);
@@ -159,7 +171,7 @@ function diffScenario(
   head: ScenarioResult,
   base: ScenarioResult | undefined,
   comparison: BaselineComparison,
-  unchanged: boolean
+  intent: { added: AddedLiteral; unchanged: boolean }
 ) {
   const undiscriminated = new Set<string>();
   let regression: BaselineAssertionDiff | undefined;
@@ -169,7 +181,13 @@ function diffScenario(
     if (h === undefined && b === undefined) {
       continue;
     }
-    const { categories, reason } = classify(head, base, h, b, unchanged);
+    const { categories, reason } = secondaryAddition(
+      head,
+      planned,
+      h,
+      intent.added,
+      classify(head, base, h, b, intent.unchanged)
+    );
     const entry: BaselineAssertionDiff = {
       scenarioId: head.scenario.id,
       assertionId: planned.id,
@@ -192,6 +210,30 @@ function diffScenario(
     }
   }
   return { regression, undiscriminated };
+}
+
+/**
+ * L'assertion ANNEXE (un objectif est déclaré, ce n'est pas lui) d'un scénario
+ * `regression`, verte sur la tête, qui lit un littéral que le diff ajoute :
+ * la base échoue faute de l'élément, ce n'est pas une régression. Tout le
+ * reste garde son classement — objectif, tête rouge, interface existante.
+ */
+function secondaryAddition(
+  head: ScenarioResult,
+  planned: ScenarioResult["scenario"]["assertions"][number],
+  h: RecordedAssertion | undefined,
+  added: AddedLiteral,
+  classified: ReturnType<typeof classify>
+): ReturnType<typeof classify> {
+  const { kind, objective } = head.scenario;
+  return kind === "regression" &&
+    objective !== undefined &&
+    objective !== planned.id &&
+    h?.passed === true &&
+    classified.categories.includes("regression") &&
+    added?.(planned) === true
+    ? { categories: ["changed"], reason: ADDED_LITERAL_RULE }
+    : classified;
 }
 
 /** Le texte affiché, centré sur `from` : une longue lecture de vue montre où elle diffère. */

@@ -68,15 +68,32 @@ function valueSatisfied(
     : undefined;
 }
 
+/** Les substitutions d'un côté, étape par étape, dans l'ordre joué. */
+function substitutions(item: ScenarioResult): string {
+  return JSON.stringify(
+    item.steps
+      .filter((entry) => entry.repairedTarget !== undefined)
+      .map((entry) => [entry.stepId ?? entry.index, entry.repairedTarget])
+  );
+}
+
 /**
  * La cible qu'un côté a jouée à la place de celle du plan (reprise par le
  * modèle, ré-ancrage observe→act) : le hash du contrat est calculé sur le plan
- * d'origine, il ne voit pas cette substitution.
+ * d'origine, il ne voit pas cette substitution. La MÊME substitution jouée des
+ * deux côtés, aux mêmes étapes, garde la comparaison valable : les deux
+ * préversions ont joué le même contrat réparé. Sans cela, un scénario réparé
+ * (reprise par inclusion, banc f3) ne pouvait jamais être jugé non
+ * discriminant.
  */
 function substitutedTarget(
   head: ScenarioResult,
   base: ScenarioResult
 ): string | undefined {
+  const played = substitutions(head);
+  if (played !== "[]" && played === substitutions(base)) {
+    return;
+  }
   for (const [label, item] of [
     ["head", head],
     ["base", base],
