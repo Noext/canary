@@ -16,14 +16,28 @@ const ARIA = `- form [ref=e1]:
   - textbox "Name" [ref=e2]
   - button "Save" [ref=e3]`;
 
-function fakeBrowser() {
+/**
+ * `baseActual` est ce que montre la préversion de base (ouverte sur
+ * `/baseline`) : une base identique à la tête rendrait toute preuve non
+ * discriminante (`OBJECTIVE_NOT_DISCRIMINATING`), ce que ces tests ne visent pas.
+ */
+function fakeBrowser(baseActual = "Welcome Ada") {
+  let onBase = false;
   vi.spyOn(Canary.prototype, "start").mockResolvedValue("fixture-session");
-  vi.spyOn(Canary.prototype, "act").mockImplementation(async (_id, label) => ({
-    url: "http://fixture/",
-    snapshot: ARIA,
-    evidence: label === "discover-preview" ? ARIA : undefined,
-    actual: label.endsWith("assert") ? "Welcome Ada" : undefined,
-  }));
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_id, label, script) => {
+      if (label === "open-preview") {
+        onBase = script.includes("/baseline");
+      }
+      const shown = onBase ? baseActual : "Welcome Ada";
+      return {
+        url: "http://fixture/",
+        snapshot: ARIA,
+        evidence: label === "discover-preview" ? ARIA : undefined,
+        actual: label.endsWith("assert") ? shown : undefined,
+      };
+    }
+  );
   vi.spyOn(Canary.prototype, "end").mockResolvedValue([
     "video.webm",
     "trace.zip",
@@ -39,7 +53,9 @@ const requirement = {
 const staticScenario: Scenario = {
   id: "static-banner",
   title: "The welcome banner is visible after load",
-  kind: "regression",
+  // Il vérifie la valeur que le diff CHANGE (« Welcome » au lieu de « Hello ») :
+  // un scénario `regression` déclarerait au contraire une valeur inchangée.
+  kind: "happy_path",
   rationale: "The diff changes the saved welcome output",
   sourceFiles: ["src/form.ts"],
   preconditions: [],
@@ -219,12 +235,17 @@ it("keeps a write-refused scenario out of the baseline run", async () => {
     plans: [planWith(staticScenario, switchViewScenario("state"))],
   });
   cleanup.push(f.close);
-  fakeBrowser();
+  // La base précède le diff : elle affiche encore l'ancien message.
+  fakeBrowser("Hello Ada");
   const result = await runQa(
     { prUrl: PR_URL, previewUrl: f.baseUrl },
     { ...f.config, QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline` }
   );
   expect(result.baseline?.sha).toBe(BASE_SHA);
+  // La bannière lue par la tête échoue sur la base : comportement modifié.
+  expect(
+    result.baselineComparison?.changes.map((item) => item.assertionId)
+  ).toEqual(["banner"]);
   expect(result.baseline?.scenarios.map((item) => item.scenario.id)).toEqual([
     "static-banner",
   ]);

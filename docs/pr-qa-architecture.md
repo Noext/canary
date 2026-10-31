@@ -105,7 +105,13 @@ sur les plans historiques : cela supprime ~1 100 lignes de forensique de copie (
 `unverified` avec la **cause** : `plan-impossible`, `plan-incomplete`, `product-regression`,
 `product-broken-baseline`, `infrastructure`, `non-conclusive`. Un invariant qui ne change ni en base
 ni en tête n'est jamais un défaut produit ; la comparaison base/tête (`QA_BASELINE_URL_TEMPLATE`,
-déjà présente) devient la preuve d'attribution, pas la forme de l'assertion.
+déjà présente) devient la preuve d'attribution, pas la forme de l'assertion. Elle est en place
+(`src/baseline-diff.ts`) : base verte et tête rouge → `BASELINE_REGRESSION` ; tête verte et base
+rouge → comportement modifié, listé en tête du rapport et du statut ; preuve verte des deux côtés
+→ `OBJECTIVE_NOT_DISCRIMINATING` ; le reste est non concluant et publié comme tel. La base est la
+base de fusion de la PR (API `compare`), rejouée sans modèle (aucune reprise de cible) ; un côté
+qui a joué une cible substituée, un état déjà en place avant l'étape d'un côté ou de l'autre, ou
+deux points de départ différents rendent l'assertion non concluante.
 
 ### 3.4 bis Un objectif qui lit ce que le diff produit, et le matériel pour l'écrire
 

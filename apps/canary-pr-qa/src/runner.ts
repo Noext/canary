@@ -9,7 +9,11 @@ import {
   type ProbedView,
   probeAndReplan,
 } from "./canary.js";
-import { type Config, validateConfiguration } from "./config.js";
+import {
+  type Config,
+  validateConfiguration,
+  validatePreviewUrl,
+} from "./config.js";
 import { type Diagnostic, diagnose, QaError } from "./diagnostics.js";
 import { executeScenario } from "./executor.js";
 import {
@@ -83,10 +87,12 @@ import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import {
   attachReplayRuntimeResults,
+  judgeAgainstBaseline,
   reportMarkdown,
   savePlannerInputs,
   saveReplayBundle,
   saveReport,
+  statusDescription,
 } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
@@ -1721,8 +1727,8 @@ async function executePlan(
   await runBaseline(result, context, {
     canary,
     config,
+    github,
     material,
-    model,
     progress,
     refused: baselineRefusals(
       [...refusals.keys(), ...preExecutionRefusals.keys()],
@@ -1731,8 +1737,48 @@ async function executePlan(
     ),
     root,
   });
+  // La base est un oracle indépendant : une régression devient rouge, une preuve
+  // qui passe aussi sur la base n'est plus verte, le reste est publié.
+  judgeAgainstBaseline(result, config);
+  result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {
     await attachReplayRuntimeResults(root, result);
+  }
+}
+/** L'URL de la préversion de base pour un commit donné. */
+function baselineUrl(template: string, sha: string, context: PrContext) {
+  return template
+    .replaceAll("{sha}", sha)
+    .replaceAll("{pr}", String(context.ref.number));
+}
+/**
+ * La base de fusion de la PR : le commit d'où la tête est partie, donc celui
+ * dont le diff de la PR est exactement l'écart. `per_page=1` borne la liste des
+ * commits renvoyée avec la comparaison.
+ */
+async function mergeBase(github: GitHub, context: PrContext): Promise<string> {
+  const data = z
+    .object({
+      merge_base_commit: z.object({ sha: z.string().regex(/^[0-9a-f]{40}$/) }),
+    })
+    .parse(
+      await github.request(
+        `/repos/${context.ref.repo}/compare/${context.baseSha}...${context.sha}?per_page=1`
+      )
+    );
+  return data.merge_base_commit.sha;
+}
+/**
+ * Une base hors de la liste d'hôtes échoue fort, et avant toute dépense : une
+ * erreur de configuration n'est jamais une comparaison « indisponible »
+ * publiée à chaque PR.
+ */
+function checkBaselineHost(context: PrContext, config: Config) {
+  if (config.QA_BASELINE_URL_TEMPLATE) {
+    validatePreviewUrl(
+      baselineUrl(config.QA_BASELINE_URL_TEMPLATE, context.baseSha, context),
+      config
+    );
   }
 }
 async function runBaseline(
@@ -1741,8 +1787,8 @@ async function runBaseline(
   options: {
     canary: Canary;
     config: Config;
+    github: GitHub;
     material: SourceLineMaterial[];
-    model: Model;
     progress: Progress;
     refused: ReadonlySet<string>;
     root: string;
@@ -1753,45 +1799,87 @@ async function runBaseline(
   if (!(template && plan)) {
     return;
   }
-  const url = template
-    .replaceAll("{sha}", context.baseSha)
-    .replaceAll("{pr}", String(context.ref.number));
-  const basePreview = await verifyPreviewUrl(
-    url,
-    context.baseSha,
-    options.config
+  // L'oracle est le commit d'où la tête est partie (base de fusion), pas la
+  // pointe de la branche de base : un correctif fusionné sur main après la
+  // bifurcation passerait sur la base et échouerait sur une tête qui ne l'a
+  // jamais reçu, sans que la PR y soit pour rien.
+  const sha = await mergeBase(options.github, context).catch((error: unknown) =>
+    diagnose(error, options.config)
   );
-  const scope = runScope.getStore();
-  if (scope) {
-    scope.previewSha = context.baseSha;
+  const url = baselineUrl(
+    template,
+    typeof sha === "string" ? sha : context.baseSha,
+    context
+  );
+  // Une base hors de la liste d'hôtes est une erreur de configuration : elle
+  // bloque le run, jamais une comparaison « indisponible » à chaque PR.
+  validatePreviewUrl(url, options.config);
+  // La provenance de la base est prouvée comme celle de la tête, avant et après
+  // le rejeu. Une base fausse ou injoignable rend la comparaison indisponible,
+  // publiée comme telle : le verdict retombe sur la seule tête, jamais sur une
+  // base non prouvée.
+  const verify = async () =>
+    typeof sha === "string"
+      ? await verifyPreviewUrl(url, sha, options.config).catch(
+          (error: unknown) => diagnose(error, options.config)
+        )
+      : sha;
+  const basePreview = await verify();
+  if ("code" in basePreview) {
+    result.baseline = {
+      sha: typeof sha === "string" ? sha : context.baseSha,
+      url,
+      scenarios: [],
+      diagnostic: basePreview,
+    };
+    return;
   }
-  result.baseline = {
-    sha: context.baseSha,
+  const baseline: NonNullable<RunResult["baseline"]> = {
+    sha: basePreview.sha,
     url: basePreview.url,
     scenarios: [],
   };
-  for (const scenario of plan.scenarios) {
-    if (options.refused.has(scenario.id)) {
-      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
-      continue;
-    }
-    result.baseline.scenarios.push(
-      await executeScenario(
-        scenario,
-        basePreview.url,
-        join(options.root, "_baseline"),
-        options.config,
-        options.canary,
-        (event) => options.progress.record(event),
-        context.ref.repo,
-        options.material,
-        options.model
-      )
-    );
+  result.baseline = baseline;
+  const scope = runScope.getStore();
+  if (scope) {
+    scope.previewSha = basePreview.sha;
   }
-  const activeScope = runScope.getStore();
-  if (activeScope) {
-    activeScope.previewSha = context.sha;
+  try {
+    for (const scenario of plan.scenarios) {
+      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
+      // Un scénario à fixtures n'est pas rejoué : le catalogue sème
+      // l'environnement de tête, sous l'espace de noms et la clé d'idempotence
+      // de son exécution de tête.
+      if (
+        options.refused.has(scenario.id) ||
+        scenario.preconditions.some((item) => item.startsWith("fixture:"))
+      ) {
+        continue;
+      }
+      // Sans modèle : aucune reprise de cible sur la base. Elle joue le plan tel
+      // qu'il est écrit, sans dépense ni clic sur un élément que le plan ne
+      // nomme pas, sur un environnement réel.
+      baseline.scenarios.push(
+        await executeScenario(
+          scenario,
+          basePreview.url,
+          join(options.root, "_baseline"),
+          options.config,
+          options.canary,
+          (event) => options.progress.record(event),
+          context.ref.repo,
+          options.material
+        )
+      );
+    }
+  } finally {
+    if (scope) {
+      scope.previewSha = context.sha;
+    }
+  }
+  const after = await verify();
+  if ("code" in after) {
+    baseline.diagnostic = after;
   }
 }
 async function recheck(
@@ -1853,12 +1941,7 @@ async function publish(
   try {
     await runScope.getStore()?.verifyOwnership?.();
     const verdict = statusFor(result.outcome);
-    await github.status(
-      context,
-      verdict,
-      `QA ${result.outcome}: ${result.scenarios.filter((s) => s.outcome === "passed").length}/${result.scenarios.length} scenarios`,
-      reportUrl
-    );
+    await github.status(context, verdict, statusDescription(result), reportUrl);
     publication.commitStatus = verdict;
     await runScope.getStore()?.verifyOwnership?.();
     commentAttempted = true;
@@ -2000,6 +2083,7 @@ async function runUnscoped(
       config,
       options.previewUrl
     );
+    checkBaselineHost(context, config);
     await executePlan(
       result,
       context,

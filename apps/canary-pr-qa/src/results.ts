@@ -68,8 +68,53 @@ export interface ScenarioResult {
   sessionId?: string;
   steps: StepResult[];
 }
+/**
+ * Une assertion lue des deux côtés : la tête de la PR et la préversion de base.
+ * Les valeurs observées viennent de la page, donc d'une session parfois
+ * authentifiée : elles vivent ici et dans le rapport privé, jamais dans un
+ * message publié.
+ */
+export interface BaselineAssertionDiff {
+  assertionId: string;
+  base?: { passed: boolean; actual?: unknown };
+  /** L'attendu du plan : il vient de la source, pas de la page. */
+  expected?: unknown;
+  head?: { passed: boolean; actual?: unknown };
+  /** Vrai quand cette assertion est l'objectif déclaré du scénario. */
+  objective: boolean;
+  /** Pourquoi la comparaison ne tranche pas (entrées non concluantes). */
+  reason?: string;
+  scenarioId: string;
+}
+/**
+ * La base rejouée comme oracle indépendant, assertion par assertion. Une même
+ * entrée peut figurer dans `changes` et `notDiscriminating` : la valeur a
+ * changé, et l'assertion passe pourtant des deux côtés.
+ */
+export interface BaselineComparison {
+  /** Tête verte, base en échec ou de valeur différente : à relire par un humain. */
+  changes: BaselineAssertionDiff[];
+  /** Pourquoi la comparaison est indisponible (`status: "unavailable"`). */
+  diagnostic?: Diagnostic;
+  /** Ni vert ni rouge : échec des deux côtés, base non exécutable. */
+  inconclusive: BaselineAssertionDiff[];
+  /** Verte des deux côtés : passerait sans la PR. */
+  notDiscriminating: BaselineAssertionDiff[];
+  /** Verte sur la base, en échec sur la tête : la PR casse ce qui marchait. */
+  regressions: BaselineAssertionDiff[];
+  sha: string;
+  status: "compared" | "unavailable";
+}
 export interface RunResult {
-  baseline?: { sha: string; url: string; scenarios: ScenarioResult[] };
+  baseline?: {
+    /** La préversion de base n'a pas pu servir d'oracle (SHA, accès). */
+    diagnostic?: Diagnostic;
+    sha: string;
+    url: string;
+    scenarios: ScenarioResult[];
+  };
+  /** Le verdict de la base, lu par le rapport, le statut et le commentaire. */
+  baselineComparison?: BaselineComparison;
   coverage?: {
     covered: string[];
     skipped: Plan["skipped"];
