@@ -286,6 +286,19 @@ const envSchema = z.object({
     .min(10_000)
     .max(1_000_000)
     .default(120_000),
+  /**
+   * Excerpts de consommateurs (fichiers non modifiés qui utilisent un symbole
+   * touché, voir consumer-context.ts), pris sur ce que `QA_CONTEXT_CHARS` laisse
+   * après le contexte de dépendances ; 0 désactive la recherche.
+   */
+  QA_CONSUMER_CONTEXT_CHARS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(200_000)
+    .default(24_000),
+  /** Plafond de fichiers source lus pour chercher les consommateurs. */
+  QA_CONSUMER_SCAN_FILES: z.coerce.number().int().min(1).max(5000).default(400),
   PREVIEW_ALLOWED_HOSTS: z.string().default(""),
   PREVIEW_URL_TEMPLATE: z.string().default(""),
   PREVIEW_SHA_PATH: z.string().default(""),

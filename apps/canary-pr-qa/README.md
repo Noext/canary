@@ -132,6 +132,22 @@ modèle de menace exige de résister à une évasion de Chromium.
 7. Recontrôler head/base, état de PR et provenance live ; publier un statut et,
    avec GitHub App, un Check et un commentaire mis à jour.
 
+Le contexte de la PR porte aussi, quand il en trouve, les **consommateurs** du
+changement (`pr.consumers`) : les déclarations des fichiers non modifiés qui
+utilisent un symbole touché par le diff — l'écran qui rend la valeur, son
+formatage, les tests qui la fixent. `QA_CONSUMER_CONTEXT_CHARS` (défaut 24000,
+`0` désactive) borne leurs caractères, pris sur ce que `QA_CONTEXT_CHARS` laisse
+après le contexte de dépendances ; `QA_CONSUMER_SCAN_FILES` (défaut 400) borne
+les fichiers source lus (au plus 100 manifestes en plus). Un dépôt de tête non
+installé, lu anonymement, n'est pas parcouru. Tout plafond atteint, toute lecture
+en échec hors 404 et tout module modifié non analysé sont nommés dans les
+avertissements.
+Un objectif qui ne lit rien de ce que le diff ajoute ou retire dans ses fichiers,
+ni sa citation, est refusé (`OBJECTIVE_UNWITNESSED`) : il passerait identiquement
+avant le changement, et le scénario non corrigé est bloqué, jamais vert. Une
+absence (`hidden`, `count` à 0) ne lit que les cibles qu'une ligne retirée
+écrit ; une lecture de texte ou de valeur non citée suit la même règle de mots.
+
 `passed` nécessite la totalité du contrat et des preuves ; `failed` signale une
 assertion fausse ; `blocked` une précondition/limite/probe non satisfaite ; `stale`
 un commit devenu obsolète ; `skipped` ne signifie jamais réussite. Le résultat
@@ -213,10 +229,66 @@ proviennent pas de la PR testée. Les assertions de ces trois types utilisent
 `verification: state`.
 
 `QA_BASELINE_URL_TEMPLATE`, lorsqu'il est renseigné, lance également le contrat
-sur une preview du SHA **base**, dont la provenance est vérifiée. Le résultat
-séparé figure dans `baseline` ; un nouveau comportement peut naturellement ne
-pas exister sur la base. Le runner ne transforme pas un échec head en réussite
-sous prétexte qu'il existe aussi sur la base.
+sur une preview de la **base de fusion** de la PR (`{sha}` = commit d'où la
+tête est partie, lu par l'API `compare` de GitHub, et non la pointe de la
+branche de base : un correctif fusionné sur main après la bifurcation n'est pas
+dans la tête et accuserait la PR à tort ; `{pr}` = numéro de PR). Sa provenance
+est vérifiée comme celle de la tête, avant et après le rejeu. Les scénarios
+refusés n'y sont pas joués, ni ceux qui exigent une fixture (`fixture:` : le
+catalogue sème l'environnement de tête). Le rejeu se fait **sans modèle** :
+aucune reprise de cible, la base joue le plan tel qu'il est écrit. Le résultat
+brut figure dans `baseline` ; la base sert ensuite d'**oracle indépendant**,
+assertion par assertion (même scénario, même identifiant, même contrat), sans
+appel modèle (`src/baseline-diff.ts`, champ `baselineComparison` de
+`result.json`) :
+
+| Base | Tête | Effet |
+| --- | --- | --- |
+| passe | échoue | régression : scénario `failed` (`BASELINE_REGRESSION`) |
+| échoue ou cible absente | passe | comportement modifié, listé ; la tête reste verte |
+| passe | passe | non discriminante ; si c'est la preuve du scénario (objectif, ou toutes ses assertions sans objectif), `blocked` (`OBJECTIVE_NOT_DISCRIMINATING`) |
+| échoue ou non exécutée | échoue ou non exécutée | non concluante, publiée, verdict de tête inchangé |
+
+Une valeur observée différente alors que l'assertion passe des deux côtés (le
+texte est comparé par inclusion) est aussi un comportement modifié. Restent
+**non concluants**, publiés et sans effet sur le verdict, les cas où un état
+antérieur explique l'écart aussi bien que le code :
+
+- un côté affiche déjà l'attendu et n'échoue que sur sa vérification
+  (`STATE_ALREADY_SATISFIED`, `TRANSITION_ON_INVARIANT`, valeur déjà en place
+  avant l'étape) ; vaut pour la tête comme pour la base, que chaque run écrit ;
+- la base échoue en montrant la même valeur que la tête (seule sa vérification
+  a échoué) ;
+- une transition dont la valeur d'avant l'étape diffère entre tête et base
+  (points de départ différents) ;
+- un côté a joué une cible substituée (reprise de cible, ré-ancrage
+  observe→act) : ce n'est plus le même contrat ;
+- un scénario de tête arrêté avant l'assertion que la base a jouée et passée :
+  la comparaison le dit, le scénario garde son verdict non vert (une cible
+  renommée par la PR et une cible supprimée par erreur se ressemblent ici).
+Les comportements modifiés figurent en tête de `report.md`, du commentaire et de
+la description du statut de commit (« 1 behavior change vs base … ») ; les
+valeurs lues dans la page restent dans `result.json`, `report.md` et
+`report.html`, jamais dans le commentaire publié. Une base injoignable ou dont
+le SHA n'est pas la base de fusion rend la comparaison **indisponible** : c'est
+publié, et le verdict ne repose que sur la tête. Une base dont l'hôte n'est pas
+dans la liste d'hôtes de preview, ou dont l'URL est invalide, est en revanche
+une erreur de configuration : le run est bloqué avant toute dépense, jamais
+dégradé en silence à chaque PR. Le runner ne transforme jamais un échec head en
+réussite sous prétexte qu'il existe aussi sur la base.
+
+**La base est un environnement réel** : le contrat y joue les mêmes clics et
+saisies que sur la tête, avec la même politique d'egress, la même liste d'hôtes
+de preview et sans publication. Pointer `QA_BASELINE_URL_TEMPLATE` uniquement
+vers un environnement où ces interactions QA sont acceptables (preview de la
+branche de base, recette), jamais vers une production dont les données
+comptent, et qui ne partage pas d'état modifiable (base de données, stockage)
+avec la preview de tête : la base est rejouée après la tête, sans
+réinitialisation, et un état écrit par l'une fausse la lecture de l'autre. Le
+rejeu ajoute le temps navigateur de chaque scénario à celui de la tête, sous la
+même échéance : dimensionner `QA_RUN_TIMEOUT_SECONDS` en conséquence (environ
+le double du temps d'exécution), sinon un run interrompu pendant la base perd
+aussi le verdict de la tête.
 
 ## GitHub App et déclenchement automatique
 

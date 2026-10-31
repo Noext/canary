@@ -53,3 +53,34 @@ code n'est enregistré, bucket séparé et non fondu dans la planification.
 | sans diagnostic (4 runs JJ/MM/TT, un échec produit chacun, aucun code) | 4 |
 
 Total des runs non verts : 80 sur 200.
+
+## Code de plan ajouté après le corpus : `OBJECTIVE_UNWITNESSED`
+
+`OBJECTIVE_UNWITNESSED` est un **défaut de plan** (catégorie planification) :
+l'objectif d'un scénario — ou, sans objectif déclaré, chacune de ses assertions —
+ne lit rien de ce que le diff ajoute ou retire dans les `sourceFiles` du scénario,
+ni de la citation qu'elle cite : une lecture positive dont la cible ne partage aucune
+suite de mots ni aucun littéral avec ces lignes, une absence (`hidden`, `count` à 0)
+d'une cible qu'aucune ligne retirée n'écrit, une lecture de texte ou de valeur non
+citée sans mot commun. Une telle lecture passe identiquement avant le changement :
+le titre d'une vue quittée, un contrôle de navigation, l'absence d'un élément qui
+n'a jamais existé. Le refus est rendu au planificateur dans sa correction, puis rejoué
+avant exécution (`src/objective-witness.ts`) : le scénario non corrigé est bloqué,
+classé `test-defect`, jamais publié vert. Il ne figure dans aucun des 200 runs du
+corpus ci-dessus, qui le précède ; sur les 79 plans stockés, la règle ne refuse
+aucun scénario (voir [`pr-qa-measurements.md`](pr-qa-measurements.md)).
+
+## Codes ajoutés avec l'oracle de base : `OBJECTIVE_NOT_DISCRIMINATING`, `BASELINE_REGRESSION`
+
+Ils n'existent que lorsque `QA_BASELINE_URL_TEMPLATE` rejoue le contrat sur la
+préversion de base (`src/baseline-diff.ts`) et ne figurent dans aucun run du corpus.
+
+- `OBJECTIVE_NOT_DISCRIMINATING` est un **défaut de plan** (catégorie planification) :
+  la preuve du scénario — son objectif, ou toutes ses assertions sans objectif —
+  passe aussi sur la base. Le scénario serait vert sans la PR ; il est bloqué,
+  classé `test-defect`.
+- `BASELINE_REGRESSION` est une **régression produit** : une assertion qui passe
+  sur la base de fusion échoue sur la tête, à contrat joué identique (aucune
+  cible substituée) et, pour une transition, depuis le même point de départ. Le
+  scénario est `failed`, classé `failed` ; les deux valeurs observées sont dans
+  `baselineComparison.regressions`.

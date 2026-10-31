@@ -16,8 +16,16 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(close.splice(0).map((fn) => fn()));
 });
+/**
+ * Le diff servi : la ligne citée par les plans, plus la ligne qui écrit
+ * l'attribut d'état que leurs objectifs lisent. Sans elle, une présence de
+ * `[data-cash-state]` ne lirait rien que le diff produit (OBJECTIVE_UNWITNESSED)
+ * et chaque scénario serait bloqué avant la première étape.
+ */
+const STATE_PATCH =
+  "- show('Hello')\n+ show('Welcome '+name)\n+ <section data-cash-state={state}>";
 async function setup(options?: Parameters<typeof fixture>[0]) {
-  const f = await fixture(options);
+  const f = await fixture({ formPatch: STATE_PATCH, ...options });
   close.push(f.close);
   return f;
 }
@@ -52,9 +60,18 @@ type CashState = "ouvert" | "cloture";
  * L'état de départ est un paramètre : c'est l'état laissé par un run antérieur
  * (« état sale hérité ») que le même scénario doit affronter.
  */
-function cashPage(initial: CashState) {
+function cashPage(
+  initial: CashState,
+  /**
+   * La préversion de base (ouverte sur `/baseline`) précède la clôture : son
+   * bouton « Clôturer la session » ne verrouille rien. Sans cela, la base
+   * rejouerait la tête à l'identique et aucune preuve ne la distinguerait.
+   */
+  options: { baseWithoutClosure?: boolean } = {}
+) {
   let state: CashState = initial;
   let view: "pilotage" | "cash" = "pilotage";
+  let onBase = false;
   const labels: string[] = [];
   const region = () =>
     view === "pilotage"
@@ -65,6 +82,9 @@ function cashPage(initial: CashState) {
   vi.spyOn(Canary.prototype, "act").mockImplementation(
     async (_id: string, label: string, script: string) => {
       labels.push(label);
+      if (label === "open-preview") {
+        onBase = script.includes("/baseline");
+      }
       // Un chargement de page repart de la vue par défaut ; l'état de la caisse,
       // lui, survit — c'est l'état que laisse un run antérieur.
       if (script.includes("page.goto(")) {
@@ -77,7 +97,11 @@ function cashPage(initial: CashState) {
       if (view === "cash" && script.includes("Réouvrir le comptage")) {
         state = "ouvert";
       }
-      if (view === "cash" && script.includes("Clôturer la session")) {
+      if (
+        view === "cash" &&
+        script.includes("Clôturer la session") &&
+        !(onBase && options.baseWithoutClosure)
+      ) {
         state = "cloture";
       }
       return {
@@ -1426,7 +1450,7 @@ describe("état de la caisse hérité d'un run antérieur", () => {
     // reste refusé. Une réécriture qui corrige le scénario (même id, état
     // établi au lieu d'être supposé) est réexécutée et reçoit sa base.
     const f = await setup();
-    const labels = cashPage("cloture");
+    const labels = cashPage("cloture", { baseWithoutClosure: true });
     const corrected = establishesOpenPlan();
     corrected.scenarios = corrected.scenarios.map((scenario) => ({
       ...scenario,
@@ -1453,6 +1477,45 @@ describe("état de la caisse hérité d'un run antérieur", () => {
     expect(result.baseline?.scenarios.map((item) => item.scenario.id)).toEqual([
       "comptage-juste-cloture",
     ]);
+    // La clôture n'existe pas sur la base : la tête la démontre, la base non.
+    expect(
+      result.baselineComparison?.changes.map((item) => item.assertionId)
+    ).toEqual(["etabli-cloture"]);
+  });
+
+  it("bloque la réécriture corrigée que la base rejoue à l'identique", async () => {
+    // Même run, base identique à la tête : chaque assertion passe aussi sur la
+    // base, donc le scénario serait vert sans la PR — il n'est pas prouvé.
+    const f = await setup();
+    cashPage("cloture");
+    const corrected = establishesOpenPlan();
+    corrected.scenarios = corrected.scenarios.map((scenario) => ({
+      ...scenario,
+      id: "comptage-juste-cloture",
+    }));
+    vi.spyOn(Model.prototype, "json")
+      .mockImplementationOnce((async () =>
+        PlanSchema.parse(assumedStatePlan())) as unknown as Model["json"])
+      .mockImplementationOnce((async () =>
+        PlanSchema.parse(corrected)) as unknown as Model["json"]);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      {
+        ...f.config,
+        QA_BASELINE_URL_TEMPLATE: `${f.baseUrl}/baseline`,
+        QA_REPLAN_ON_INVARIANT: true,
+      }
+    );
+    const scenario = result.scenarios[0]!;
+    expect(scenario.outcome).toBe("blocked");
+    expect(scenario.classification).toBe("test-defect");
+    expect(scenario.diagnostic?.code).toBe("OBJECTIVE_NOT_DISCRIMINATING");
+    expect(result.outcome).toBe("blocked");
+    expect(
+      result.baselineComparison?.notDiscriminating.map(
+        (item) => item.assertionId
+      )
+    ).toEqual(["etabli-ouvert", "etabli-cloture"]);
   });
 
   it("donne le MÊME verdict sur une caisse déjà ouverte : le refus ne dépend pas de l'état", async () => {

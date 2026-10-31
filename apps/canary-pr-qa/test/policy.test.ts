@@ -5,6 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
 import { PLANNER_PROMPT } from "../src/model.js";
+import { objectiveWitnessRefusals } from "../src/objective-witness.js";
 import { plannerInputBudget, planPayload } from "../src/plan-evidence.js";
 import {
   absentRequirementRemedy,
@@ -4756,7 +4757,7 @@ function measuredContextOf(measured: MeasuredCopyRefusal): PrContext {
 function measuredPlanOf(measured: MeasuredCopyRefusal): Plan {
   const witness =
     measured.lineFile === measured.declaredFile ? measured.realLine : "";
-  return planWithWitnesses([
+  const plan = planWithWitnesses([
     {
       id: measured.scenarioId,
       sourceFiles: [measured.declaredFile],
@@ -4768,6 +4769,26 @@ function measuredPlanOf(measured: MeasuredCopyRefusal): Plan {
       ],
     },
   ]);
+  return readsFirstRequirement(plan);
+}
+/**
+ * La présence du véhicule lit le texte de sa première exigence, qu'elle cite :
+ * sans cela elle ne lirait rien du diff (OBJECTIVE_UNWITNESSED), un défaut hors
+ * citation qui écarterait la correction par indice avant le garde que le test
+ * vise.
+ */
+function readsFirstRequirement(plan: Plan): Plan {
+  for (const scenario of plan.scenarios) {
+    scenario.assertions = scenario.assertions.map((assertion) => ({
+      ...assertion,
+      requirement: 0,
+      target: {
+        by: "text" as const,
+        value: scenario.requirements[0]?.quote.trim() ?? "",
+      },
+    }));
+  }
+  return plan;
 }
 const MEASURED_NINE_ADD = MEASURED_COPY_REFUSALS.find((measured) =>
   measured.runId.startsWith("9add286d")
@@ -4947,19 +4968,24 @@ it("stays on today's refusal when no real candidate can be offered", () => {
       context
     )
   ).toEqual([]);
-  const plan = planWithWitnesses([
-    {
-      id: MEASURED_NINE_ADD.scenarioId,
-      sourceFiles: [MEASURED_NINE_ADD.declaredFile],
-      requirements: [
-        {
-          sourceFile: MEASURED_NINE_ADD.declaredFile,
-          quote: MEASURED_NINE_ADD.realLine,
-        },
-        { sourceFile: MEASURED_NINE_ADD.declaredFile, quote: junk },
-      ],
-    },
-  ]);
+  const plan = readsFirstRequirement(
+    planWithWitnesses([
+      {
+        id: MEASURED_NINE_ADD.scenarioId,
+        sourceFiles: [MEASURED_NINE_ADD.declaredFile],
+        requirements: [
+          {
+            sourceFile: MEASURED_NINE_ADD.declaredFile,
+            quote: MEASURED_NINE_ADD.realLine,
+          },
+          { sourceFile: MEASURED_NINE_ADD.declaredFile, quote: junk },
+        ],
+      },
+    ])
+  );
+  // Aucun autre défaut ne court-circuite la correction : c'est bien l'absence
+  // de candidat qui la retient, pas un refus de témoin posé avant elle.
+  expect(objectiveWitnessRefusals(plan, context)).toEqual([]);
   expect(ungroundedRequirements(plan, context)).toHaveLength(1);
   expect(
     quotePickCorrection(plan, policyFor(), context, config)

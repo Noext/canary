@@ -231,12 +231,29 @@ export async function fixture(
     retryAfter?: string;
     /** Variables d'environnement ajoutées à la configuration du fixture. */
     env?: Record<string, string>;
+    /**
+     * Préversion de base servie par un second serveur, donc sur une autre
+     * origine comme un vrai déploiement : le même formulaire, dont la sortie
+     * commence par `greeting`, et `sha` (défaut `BASE_SHA`) annoncé en
+     * `x-commit-sha`. Son hôte est ajouté à `PREVIEW_ALLOWED_HOSTS`.
+     */
+    baseApp?: { greeting: string; sha?: string; button?: string };
+    /**
+     * Base de fusion servie par `compare` (défaut `BASE_SHA`) : une autre valeur
+     * dit que main a avancé depuis la bifurcation de la PR.
+     */
+    mergeBaseSha?: string;
   } = {}
 ) {
+  const baseServer = options.baseApp
+    ? await serveBaseApp(options.baseApp)
+    : undefined;
   const outgoing: { path: string; payload: Record<string, unknown> }[] = [];
   const comments: { id: number; body: string; user: { type: string } }[] = [];
   const modelRequests: Record<string, unknown>[] = [];
   const catalogRequests: string[] = [];
+  /** Appels de semis et de nettoyage reçus par le catalogue de fixtures local. */
+  const fixtureCalls: { path: string; key: string | undefined }[] = [];
 
   let prReads = 0;
   let planRequests = 0;
@@ -409,6 +426,17 @@ export async function fixture(
       );
       return;
     }
+    if (
+      req.method === "POST" &&
+      (path === "/fixture-seed" || path === "/fixture-cleanup")
+    ) {
+      fixtureCalls.push({
+        path,
+        key: req.headers["idempotency-key"] as string | undefined,
+      });
+      json(res, { ok: true });
+      return;
+    }
     if (path === "/version.json") {
       json(res, { sha: options.noSha ? BASE_SHA : SHA });
       return;
@@ -440,6 +468,12 @@ export async function fixture(
             ]
           : []),
       ]);
+      return;
+    }
+    if (path.startsWith(`/repos/fixture/app/compare/${BASE_SHA}...${SHA}`)) {
+      json(res, {
+        merge_base_commit: { sha: options.mergeBaseSha ?? BASE_SHA },
+      });
       return;
     }
     if (path === "/repos/fixture/app/pulls/1") {
@@ -669,7 +703,10 @@ export async function fixture(
     OPENAI_BASE_URL: `${baseUrl}/v1`,
     OPENAI_MODEL: "fixture-scripted-model",
     QA_DATA_DIR: dataDir,
-    PREVIEW_ALLOWED_HOSTS: `127.0.0.1:${address.port}`,
+    PREVIEW_ALLOWED_HOSTS: [address.port, baseServer?.port]
+      .filter((port) => port !== undefined)
+      .map((port) => `127.0.0.1:${port}`)
+      .join(","),
     QA_API_TOKEN: "fixture-api-token-123456789012345",
     ...options.env,
   });
@@ -678,10 +715,57 @@ export async function fixture(
     baseUrl,
     outgoing,
     modelRequests,
+    fixtureCalls,
     /** Nombre d'envois reçus par `chat/completions`, réponse ou refus confondus. */
     completionRequests: () => completionRequests,
     catalogRequests,
     dataDir,
+    /** Origine de la préversion de base, quand `baseApp` est fourni. */
+    baseAppUrl: baseServer?.url,
+    setBaseSha: baseServer?.setSha,
+    close: async () => {
+      await baseServer?.close();
+      await new Promise<void>((done) => {
+        server.closeAllConnections();
+        server.close(() => done());
+      });
+    },
+  };
+}
+
+/** Le formulaire de la préversion de base, sur son propre port. */
+async function serveBaseApp(app: {
+  greeting: string;
+  sha?: string;
+  /** Libellé du bouton d'envoi (défaut « Save », celui du plan). */
+  button?: string;
+}) {
+  let sha = app.sha ?? BASE_SHA;
+  const server = createServer((req, res) => {
+    if ((req.url ?? "/") !== "/") {
+      json(res, { error: "Unknown base path" }, 404);
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "x-commit-sha": sha,
+    });
+    res.end(
+      `<!doctype html><html lang="en"><title>QA base fixture</title><h1>Welcome form</h1><form><label for="name">Name</label><input id="name" name="name"><button type="submit">${app.button ?? "Save"}</button></form><p role="status" id="saved"></p><script>document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();document.querySelector('#saved').textContent=${JSON.stringify(app.greeting)}+document.querySelector('#name').value})</script></html>`
+    );
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("No base fixture address");
+  }
+  return {
+    port: address.port,
+    /** Redéploie la base sur un autre SHA, en cours de run. */
+    setSha: (next: string) => {
+      sha = next;
+    },
+    url: `http://127.0.0.1:${address.port}/`,
     close: () =>
       new Promise<void>((done) => {
         server.closeAllConnections();

@@ -16,6 +16,7 @@ import {
   type TrustedCatalog,
 } from "./fixtures.js";
 import type { PrContext } from "./github.js";
+import { objectiveWitnessRefusals } from "./objective-witness.js";
 import {
   bracketBlocks,
   cssSelectors,
@@ -2215,6 +2216,26 @@ export function planPayload(
     )
   );
   const total = JSON.stringify(payload).length;
+  if (total > limit && context.consumers) {
+    // Les consommateurs éclairent le plan, ils ne sont pas une preuve requise :
+    // ils cèdent leur place avant tout refus, et le planificateur le lit.
+    const { consumers: _omitted, ...rest } = context;
+    return planPayload(
+      {
+        ...rest,
+        contextWarnings: [
+          ...context.contextWarnings,
+          `Consumer context omitted: the planner payload exceeded its limit by ${total - limit} characters`,
+        ],
+      },
+      preview,
+      initialPage,
+      catalog,
+      config,
+      files,
+      views
+    );
+  }
   if (total > limit) {
     // Rien n'est tronqué : le refus nomme le dépassement et ce qui le desserre.
     throw new Error(
@@ -2568,6 +2589,10 @@ export function preExecutionRefusalTable(
   return new Map([
     ...(
       [
+        // En tête : un défaut plus précis du même scénario, posé ensuite, garde
+        // sa place dans la table. L'objectif sans témoin bloque le scénario
+        // avant toute étape : il passerait identiquement sans le changement.
+        ...objectiveWitnessRefusals(plan, gate.context),
         ...preconditionRefusals(plan, gate.catalog, gate.context.ref.repo),
         ...writeEvidenceRefusals(plan, gate.policy),
         ...unstableSelectorRefusals(plan),
@@ -2583,6 +2608,20 @@ export function preExecutionRefusalTable(
       (item) => [item.scenarioId, item.error] as const
     ),
   ]);
+}
+
+/**
+ * Les refus de témoin d'objectif rendus au planificateur dans sa correction :
+ * la même règle que la table d'avant exécution, rédigée comme les autres refus
+ * de lecture (message, puis remède).
+ */
+export function objectiveWitnessCorrections(
+  plan: Plan,
+  context: Pick<PrContext, "files">
+): string[] {
+  return objectiveWitnessRefusals(plan, context).map(
+    (item) => `${item.error.message}. ${item.error.hint}`
+  );
 }
 
 export function evidenceRefusalsByScenario(

@@ -3,14 +3,26 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { compareWithBaseline } from "../src/baseline-diff.js";
+import { assertionMatches } from "../src/canary.js";
+import type { Config } from "../src/config.js";
+import { consumerContext } from "../src/consumer-search.js";
 import { classifyFailure, summarizeFailures } from "../src/diagnostics.js";
 import type { PrContext } from "../src/github.js";
+import { objectiveWitnessRefusals } from "../src/objective-witness.js";
 import {
   PolicySchema,
   requirementSourceRefusal,
   unwitnessedPlanRefusals,
 } from "../src/policy.js";
-import { PlanSchema } from "../src/schema.js";
+import { reportMarkdown } from "../src/report.js";
+import {
+  type Assertion,
+  type Plan,
+  PlanSchema,
+  type RunResult,
+  type ScenarioResult,
+} from "../src/schema.js";
 
 /**
  * **Le générateur des mesures**, et son test.
@@ -85,12 +97,237 @@ function refusedByGate(record: Recorded): boolean {
   );
 }
 
+/**
+ * Le témoin d'objectif (`OBJECTIVE_UNWITNESSED`) et le matériel des
+ * consommateurs, recalculés depuis les fixtures réelles : les 79 plans stockés,
+ * les plans des runs 16, 15 et 11 de la PR 20, le plan de la PR 21 et le
+ * sous-ensemble de sa révision de tête.
+ */
+const witnessFixture = JSON.parse(read("objective-witness.json.gz")) as {
+  pr21: {
+    bundle: { context: PrContext; evidence: { aria: string }; plan: Plan };
+  };
+  regression: { plan: Plan; run: string }[];
+};
+/**
+ * Discrimination : chaque nom accessible de la page de découverte de la PR 21,
+ * pris pour objectif (`visible`, puis `hidden`) de chacun des 21 scénarios des
+ * runs 16, 15 et 11, sur leurs propres `sourceFiles` et le diff de la PR 20.
+ * La part acceptée mesure ce que la règle laisse passer sur un grand diff
+ * d'interface : un resserrement ultérieur se lit sur ce chiffre.
+ */
+function witnessDiscrimination() {
+  const names = [
+    ...witnessFixture.pr21.bundle.evidence.aria.matchAll(/- (\w+) "([^"]+)"/g),
+  ].map((match) => ({ name: match[2] ?? "", value: match[1] ?? "" }));
+  const accepted = { hidden: 0, visible: 0 };
+  let trials = 0;
+  for (const run of witnessFixture.regression) {
+    const plan = PlanSchema.parse(run.plan);
+    for (const scenario of plan.scenarios) {
+      for (const target of names) {
+        trials += 1;
+        for (const kind of ["hidden", "visible"] as const) {
+          const assertions = scenario.assertions.map((assertion) =>
+            assertion.id === scenario.objective
+              ? ({
+                  afterStep: assertion.afterStep,
+                  description: assertion.description,
+                  id: assertion.id,
+                  kind,
+                  target: { by: "role", ...target },
+                  verification: assertion.verification,
+                } as Plan["scenarios"][number]["assertions"][number])
+              : assertion
+          );
+          if (
+            objectiveWitnessRefusals(
+              { ...plan, scenarios: [{ ...scenario, assertions }] },
+              context
+            ).length === 0
+          ) {
+            accepted[kind] += 1;
+          }
+        }
+      }
+    }
+  }
+  return { accepted, names: names.length, trials };
+}
+const PRESENCE_KINDS = new Set(["visible", "hidden", "count"]);
+function witnessCounts() {
+  let scenarios = 0;
+  let presence = 0;
+  let unwitnessed = 0;
+  let negative = 0;
+  let refused = 0;
+  for (const record of records) {
+    const plan = PlanSchema.parse(record.plan);
+    scenarios += plan.scenarios.length;
+    refused += objectiveWitnessRefusals(plan, context).length;
+    for (const scenario of plan.scenarios) {
+      for (const assertion of scenario.assertions) {
+        if (PRESENCE_KINDS.has(assertion.kind)) {
+          presence += 1;
+          const gap = objectiveWitnessRefusals(
+            {
+              ...plan,
+              scenarios: [{ ...scenario, objective: assertion.id }],
+            },
+            context
+          ).length;
+          unwitnessed += gap;
+          if (
+            assertion.kind === "hidden" ||
+            (assertion.kind === "count" && assertion.expected === 0)
+          ) {
+            negative += gap;
+          }
+        }
+      }
+    }
+  }
+  const regression = witnessFixture.regression.map((run) => {
+    const plan = PlanSchema.parse(run.plan);
+    return {
+      objectives: plan.scenarios.filter((item) => item.objective).length,
+      refused: objectiveWitnessRefusals(plan, context).length,
+      run: run.run.slice(0, 8),
+      scenarios: plan.scenarios.length,
+    };
+  });
+  const pr21 = objectiveWitnessRefusals(
+    PlanSchema.parse(witnessFixture.pr21.bundle.plan),
+    witnessFixture.pr21.bundle.context
+  ).length;
+  return {
+    negative,
+    presence,
+    pr21,
+    refused,
+    regression,
+    scenarios,
+    unwitnessed,
+  };
+}
+const consumerFixture = JSON.parse(read("pr21-consumers.json.gz")) as {
+  changed: { filename: string; patch?: string }[];
+  files: Record<string, string>;
+  ref: string;
+};
+const consumerFiles = new Map(Object.entries(consumerFixture.files));
+const pr21Consumers = await consumerContext({
+  budget: 24_000,
+  files: consumerFixture.changed,
+  maxFiles: 400,
+  read: {
+    file: (path) => Promise.resolve(consumerFiles.get(path)),
+    tree: () =>
+      Promise.resolve({
+        tree: [...consumerFiles.keys()].map((path) => ({ path, type: "blob" })),
+      }),
+  },
+  ref: consumerFixture.ref,
+});
+
 function duration(start?: string, end?: string): string {
   if (!(start && end)) {
     return "—";
   }
   const seconds = Math.round((Date.parse(end) - Date.parse(start)) / 1000);
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+/**
+ * La mesure de l'oracle de base sur la PR 21 de `pharmania/arpilabe-pilotage`,
+ * calculée par le code courant : l'assertion `message-ecart` du plan réel
+ * `0b9b7fa2`, jugée par l'inclusion de l'exécuteur contre la valeur de base
+ * relevée sur le déploiement `7427180` et la valeur de tête que le diff produit.
+ */
+const PR21_HEAD = "Écart de 40,00 €";
+const PR21_BASE = "Écart de -40,00 €";
+const BASE_SHA = "7427180".padEnd(40, "0");
+
+function pr21Scenario(assertion: Assertion, actual: string): ScenarioResult {
+  const passed = assertionMatches(assertion, actual);
+  return {
+    scenario: {
+      id: "ecart",
+      title: "ecart",
+      objective: assertion.id,
+      assertions: [assertion],
+      steps: [],
+    } as unknown as ScenarioResult["scenario"],
+    outcome: passed ? "passed" : "failed",
+    steps: [],
+    assertions: [{ id: assertion.id, passed, actual }],
+    artifacts: [],
+    contract: { completedSteps: [], totalSteps: 0, hash: "pr21" },
+  };
+}
+
+/** Le run PR 21 jugé contre sa base, pour l'attendu donné. */
+function pr21Judged(expected: string): RunResult {
+  const assertion = {
+    id: "message-ecart",
+    description: "message d'écart",
+    kind: "text",
+    expected,
+    target: { by: "css", value: '[role="status"]' },
+    afterStep: "close",
+    verification: "transition",
+  } as Assertion;
+  const result: RunResult = {
+    id: "pr21",
+    prUrl: "https://github.com/pharmania/arpilabe-pilotage/pull/21",
+    startedAt: "2026-10-30T00:00:00.000Z",
+    outcome: "passed",
+    scenarios: [pr21Scenario(assertion, PR21_HEAD)],
+    baseline: {
+      sha: BASE_SHA,
+      url: "https://base.invalid/",
+      scenarios: [pr21Scenario(assertion, PR21_BASE)],
+    },
+  };
+  compareWithBaseline(result, {} as Config);
+  return result;
+}
+
+/** Les lignes de `docs/pr-qa-measurements.md`, recalculées. */
+function baselineOracleLines(): string[] {
+  const tight = pr21Judged("Écart de 40,00");
+  const loose = pr21Judged("40,00 €");
+  const listed = reportMarkdown(tight, undefined, true)
+    .split("\n")
+    .find((line) => line.startsWith("- ecart · message-ecart"));
+  return [
+    "## Oracle de base (comparaison base/tête)",
+    "",
+    "Mesuré hors ligne, sans appel modèle ni requête vers un hôte réel, avec la règle",
+    "courante (`src/baseline-diff.ts`).",
+    "",
+    "- **PR 21**, assertion `message-ecart` du plan réel `0b9b7fa2` (objectif, `text`,",
+    "  attendu « Écart de 40,00 », la valeur du bug), jugée par l'inclusion de",
+    `  l'exécuteur contre « ${PR21_HEAD} » (tête) et « ${PR21_BASE} » (base`,
+    `  \`7427180\` déployée) : scénario ${tight.scenarios[0]?.outcome}, ${tight.baselineComparison?.changes.length} comportement modifié, écrit en tête du rapport :`,
+    `  \`${listed}\`.`,
+    `- Même valeurs, attendu « 40,00 € » : la preuve passe des deux côtés, scénario ${loose.scenarios[0]?.outcome} (\`${loose.scenarios[0]?.diagnostic?.code}\`), ${loose.baselineComparison?.changes.length} comportement modifié listé.`,
+    "- Fixture locale, Chromium réel (`test/e2e/baseline-oracle.test.ts`, deux",
+    "  origines) : base « Hello » → 1 comportement modifié, run vert ; tête cassée et",
+    "  base juste → `BASELINE_REGRESSION`, run rouge ; base identique à la tête →",
+    "  `OBJECTIVE_NOT_DISCRIMINATING` ; base au mauvais SHA, ou qui n'est pas la base",
+    "  de fusion de la PR → comparaison indisponible, verdict de tête seul ; bouton du",
+    "  plan absent de la base → aucune reprise de cible ni appel modèle, non concluant ;",
+    "  scénario à fixture → non rejoué sur la base ; hôte de base non autorisé → run",
+    "  bloqué avant toute dépense.",
+    "",
+    "Limite : aucun run réel n'a encore rejoué une base. La valeur de tête de la PR 21",
+    "est déduite du diff (inversion de signe), pas observée par un run ; seule la",
+    "valeur de base est relevée sur le déploiement. Le premier run réel avec",
+    "`QA_BASELINE_URL_TEMPLATE` doit confirmer ces verdicts, et que `7427180` est",
+    "bien la base de fusion de la PR 21 : sinon la comparaison y est indisponible.",
+    "",
+  ];
 }
 
 describe("le document de mesures est généré, et ses classes viennent du code", () => {
@@ -133,6 +370,10 @@ describe("le document de mesures est généré, et ses classes viennent du code"
   });
 
   it("écrit docs/pr-qa-measurements.md à partir des artefacts", () => {
+    const witness = witnessCounts();
+    const discrimination = witnessDiscrimination();
+    const share = (count: number) =>
+      `${count} sur ${discrimination.trials} (${((100 * count) / discrimination.trials).toFixed(1)} %)`;
     const lines = [
       "# Mesures — campagnes de runs, classes d'échec et comparaison appariée",
       "",
@@ -268,7 +509,34 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       "**Durées** : `startedAt`/`endedAt` sont publiés par run ci-dessus pour les lots BA à",
       "II, et la campagne contrôlée les enregistre aussi : 492,6 s contre 427,9 s par run,",
       "un écart non séparable (erreur-type 50 s).",
-      ""
+      "",
+      "## Témoin d'objectif et matériel des consommateurs",
+      "",
+      "Mesuré hors ligne, sans appel modèle, avec la règle courante",
+      "(`src/objective-witness.ts`, `src/consumer-context.ts`, `src/consumer-search.ts`).",
+      "",
+      `- **79 plans stockés** (${witness.scenarios} scénarios, aucun objectif déclaré) : ${witness.refused} refus \`OBJECTIVE_UNWITNESSED\` sous la règle de repli (toutes les assertions forment la preuve). Contrefactuel, chaque lecture de présence prise pour objectif : ${witness.unwitnessed} sans témoin sur ${witness.presence}, dont ${witness.negative} lectures négatives (\`hidden\`, \`count\` à 0) d'une cible que la PR 20 ajoute — sur la base, cette cible n'existe pas et l'absence y passe aussi.`,
+      ...witness.regression.map(
+        (run) =>
+          `- **Run \`${run.run}\`** (PR 20) : ${run.objectives} objectifs déclarés sur ${run.scenarios} scénarios, ${run.refused} refus.`
+      ),
+      `- **PR 21** (plan publié vert sur « le titre de la vue d'accueil est masqué ») : ${witness.pr21} refus \`OBJECTIVE_UNWITNESSED\`.`,
+      `- **Consommateurs de la PR 21** (révision de tête, budget 24 000) : ${pr21Consumers.consumers
+        .map(
+          (item) =>
+            `\`${item.path}\` lignes ${item.excerpts.map((excerpt) => `${excerpt.startLine}–${excerpt.endLine} (${excerpt.text.length} caractères)`).join(", ")}`
+        )
+        .join(" ; ")}.`,
+      `- **Discrimination sur un grand diff** : les ${discrimination.names} noms accessibles de la page de découverte de la PR 21, pris pour objectif de chacun des 21 scénarios des runs 16, 15 et 11 (leurs \`sourceFiles\`, le diff de la PR 20). Acceptés en \`visible\` : ${share(discrimination.accepted.visible)} ; en \`hidden\` : ${share(discrimination.accepted.hidden)}.`,
+      "",
+      "Limite : les 79 plans viennent tous de la PR 20, un grand diff d'interface ;",
+      "le zéro refus de repli y est mesuré là où la règle accepte la majorité des",
+      "noms d'une page en lecture positive (un mot partagé suffit) : il dit que la",
+      "règle ne bloque pas les plans verts, pas qu'elle discrimine sur un tel diff.",
+      "Les lectures négatives, elles, n'y sont plus témoins que d'une cible écrite",
+      "par une ligne retirée.",
+      "",
+      ...baselineOracleLines()
     );
     const document = `${lines.join("\n")}`;
     // Le document est comparé, jamais réécrit en silence : une mesure périmée fait
