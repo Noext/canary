@@ -1060,7 +1060,7 @@ describe("scénario refusé avant exécution", () => {
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
-    ).toBe("error");
+    ).toBe("failure");
     const saved = JSON.parse(
       await readFile(join(f.dataDir, result.id, "result.json"), "utf8")
     ) as { scenarios: { diagnostic?: { code?: string } }[] };

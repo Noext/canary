@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { declaresNoBehaviorChange } from "../src/baseline-classify.js";
 import { compareWithBaseline } from "../src/baseline-diff.js";
 import { assertionMatches } from "../src/canary.js";
+import { commitStatus } from "../src/commit-status.js";
 import type { Config } from "../src/config.js";
 import { PLANNER_PROMPT } from "../src/model.js";
-import {
-  judgeAgainstBaseline,
-  reportMarkdown,
-  statusDescription,
-} from "../src/report.js";
+import { judgeAgainstBaseline, reportMarkdown } from "../src/report.js";
 import type { Assertion, RunResult, ScenarioResult } from "../src/schema.js";
+
+const statusDescription = (result: Parameters<typeof commitStatus>[0]) =>
+  commitStatus(result).description;
 
 /**
  * La base comme oracle indépendant, assertion par assertion. Les valeurs de la

@@ -1297,7 +1297,7 @@ describe("runner false-green regressions", () => {
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
-    ).toBe("error");
+    ).toBe("failure");
     expect(result.scenarios).toEqual([]);
   }, 60_000);
   /** Ce que le fixture renvoie pour un commentaire réellement écrit. */
@@ -1330,11 +1330,11 @@ describe("runner false-green regressions", () => {
   }[] = [
     {
       blockedFixture: true,
-      commitStatus: "error",
+      commitStatus: "failure",
       commentUrl,
       name: "run bloqué, publication normale",
       outcome: "blocked",
-      postedStates: ["pending", "error"],
+      postedStates: ["pending", "failure"],
       status: "published",
     },
     {
@@ -1604,7 +1604,7 @@ describe("runner false-green regressions", () => {
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
-    ).toBe("error");
+    ).toBe("failure");
   });
   /**
    * Le plan du run 985c3de7, réduit à ce que son refus mesuré portait : six
@@ -3783,7 +3783,7 @@ describe("runner false-green regressions", () => {
     expect(
       f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
         .state
-    ).toBe("error");
+    ).toBe("failure");
     expect(
       (await stat(join(f.dataDir, result.id, "report.html"))).size
     ).toBeGreaterThan(0);
