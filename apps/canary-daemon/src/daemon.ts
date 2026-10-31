@@ -25,6 +25,7 @@ import {
 import { createKeyedLock, createMutex } from "./lock.js";
 import { runScript } from "./sandbox/script-runner-quickjs.js";
 import { SessionManager, sessionBrowserName } from "./session-manager.js";
+import { claimUnixSocket, type SocketClaim } from "./socket-claim.js";
 import { ensureCanaryTempDir } from "./temp-files.js";
 import { authenticTransportRequest } from "./transport-auth.js";
 
@@ -652,10 +653,6 @@ function shutdown(exitCode = 0): Promise<void> {
 async function start(): Promise<void> {
   await mkdir(BASE_DIR, { recursive: true });
   await ensureCanaryTempDir();
-  if (!TCP_CONFIG && requiresDaemonEndpointCleanup()) {
-    await unlinkIfExists(SOCKET_PATH);
-  }
-  await writeFile(PID_PATH, `${process.pid}\n`);
 
   server = net.createServer((socket) => {
     if (shuttingDown) {
@@ -708,20 +705,34 @@ async function start(): Promise<void> {
     });
   });
 
+  // Le socket est pris AVANT tout gestionnaire d'erreur permanent et avant le
+  // fichier PID : un démon qui perd la course ne doit ni supprimer le socket du
+  // gagnant (shutdown le ferait) ni écraser son PID.
+  const claim: SocketClaim =
+    !TCP_CONFIG && requiresDaemonEndpointCleanup()
+      ? await claimUnixSocket(server, SOCKET_PATH)
+      : await new Promise<SocketClaim>((resolve, reject) => {
+          server?.once("error", reject);
+          const endpoint = TCP_CONFIG
+            ? { host: TCP_CONFIG.host, port: TCP_CONFIG.port }
+            : { path: SOCKET_PATH };
+          server?.listen(endpoint, () => {
+            server?.off("error", reject);
+            resolve("listening");
+          });
+        });
+  if (claim === "owned-by-another") {
+    log.info(
+      { socket: SOCKET_PATH, pid: process.pid },
+      "another daemon already serves this socket; exiting without touching it"
+    );
+    process.exit(0);
+  }
+  await writeFile(PID_PATH, `${process.pid}\n`);
+
   server.on("error", (error) => {
     log.error({ err: error }, "daemon server error");
     void shutdown(1);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server?.once("error", reject);
-    const endpoint = TCP_CONFIG
-      ? { host: TCP_CONFIG.host, port: TCP_CONFIG.port }
-      : { path: SOCKET_PATH };
-    server?.listen(endpoint, () => {
-      server?.off("error", reject);
-      resolve();
-    });
   });
 
   log.info(
