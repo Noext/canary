@@ -165,6 +165,39 @@ describe("I2 — provenance : pas d'assertion sans exigence qui la justifie", ()
     expect(refusals[0]?.error.message).toContain("does not justify");
   });
 
+  // Banc pharmania (r1-1, f1-1) : « Écart justifié » se coupait en « cart » et
+  // « justifi », et la citation `ecart-justifie` ne le justifiait plus.
+  const accented = (expected: string, quote: string) => {
+    const cited = structuredClone(plan);
+    const scenario = cited.scenarios[0]!;
+    (scenario.assertions[0] as { expected: string }).expected = expected;
+    scenario.requirements[0] = {
+      behavior: "the status badge is rendered",
+      quote,
+      sourceFile: "src/form.ts",
+    };
+    return provenanceRefusals(cited);
+  };
+
+  it("replie les accents : « Écart justifié » est justifié par `ecart-justifie`", () => {
+    expect(accented("Écart justifié", 'status: "ecart-justifie"')).toEqual([]);
+    // Dans l'autre sens aussi : la citation accentuée justifie l'attendu ASCII.
+    expect(accented("ecart-justifie", "label: 'Écart justifié'")).toEqual([]);
+  });
+
+  it("refuse toujours une valeur inventée, accentuée ou non", () => {
+    // Le repli ne relâche que la graphie : un attendu sans mot commun avec la
+    // ligne citée reste une invention.
+    for (const invented of ["Clôture refusée", "Société générale"]) {
+      const refusals = accented(invented, 'status: "ecart-justifie"');
+      expect(refusals, invented).toHaveLength(1);
+      expect(refusals[0]?.error.message).toContain("does not justify");
+    }
+    // Le fragment qu'une coupe sur l'accent fabriquait n'est plus un mot de la
+    // citation : « cart » ne se justifie plus par « Écart justifié ».
+    expect(accented("cart", "label: 'Écart justifié'")).toHaveLength(1);
+  });
+
   it("le prompt du planificateur demande les deux champs", () => {
     expect(PLANNER_PROMPT).toContain("objective field");
     expect(PLANNER_PROMPT.toLowerCase()).toContain(

@@ -7,9 +7,9 @@
     "assertions": 3738,
     "assertionsWithoutJustifyingRequirement": 3164,
     "refusalsUndeclared": 0,
-    "refusalsIndexZero": 391,
-    "refusalsValueGuided": 11,
-    "historicalGreensRefusedToday": 67,
+    "refusalsIndexZero": 388,
+    "refusalsValueGuided": 0,
+    "historicalGreensRefusedToday": 0,
     "families": {
       "TARGET_NOT_FOUND": [
         {
@@ -786,55 +786,55 @@
       "assertionsWithoutJustifyingRequirement": 38,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 9,
-      "refusalsValueGuided": 1,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "cash-empty-drawer-blocked",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-exact-count-closes",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-negative-variance-justification-guided",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-negative-variance-close-archive-reopen",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-positive-variance-blocks",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-invalid-quantity-no-variance",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-invalid-expected-amount-no-variance",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-comment-length-boundary",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -1461,68 +1461,68 @@
       "assertions": 54,
       "assertionsWithoutJustifyingRequirement": 48,
       "refusalsUndeclared": 0,
-      "refusalsIndexZero": 2,
-      "refusalsValueGuided": 1,
+      "refusalsIndexZero": 1,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "cash-compte-juste-cloture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-manque-justification-bloque",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-excedent-50-bloque",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-comptage-invalide-indisponible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-montant-attendu-illisible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-commentaire-trop-long",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-cloture-reouverture-histoire",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-reblocage-apres-retrait-justification",
           "outcome": "blocked",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-persistance-vue",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-tiroir-vide-et-docs",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -1665,61 +1665,61 @@
       "assertionsWithoutJustifyingRequirement": 43,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 1,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "cash-empty-drawer-blocks-close",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-balanced-close-with-history",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-missing-justified-close-history",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-excess-blocks-close",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-invalid-count-no-variance",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-unreadable-expected-no-variance",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-comment-too-long-blocks",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-reopen-and-reblock",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-state-survives-view-and-pharmacy",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -2378,50 +2378,50 @@
       "assertions": 38,
       "assertionsWithoutJustifyingRequirement": 31,
       "refusalsUndeclared": 0,
-      "refusalsIndexZero": 8,
-      "refusalsValueGuided": 1,
+      "refusalsIndexZero": 7,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "cash-compte-juste-et-cloture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-manque-justification-cloture-reouverture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-excedent-50-bloque",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-comptage-invalide-indisponible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-montant-attendu-illisible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-etat-conserve-entre-vues",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-cloisonnement-pharmacie",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -2432,74 +2432,74 @@
       "assertions": 57,
       "assertionsWithoutJustifyingRequirement": 48,
       "refusalsUndeclared": 0,
-      "refusalsIndexZero": 6,
-      "refusalsValueGuided": 1,
+      "refusalsIndexZero": 5,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "caisse-tiroir-vide-refus-cloture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-manque-40-bloque",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-excedent-50-bloque",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-comptage-invalide-indisponible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-montant-attendu-illisible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-justification-guidee",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-commentaire-trop-long",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-cloture-reouverture-historique",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-retrait-justification-rebloque",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-persistance-vue-et-pharmacie",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-compte-juste-cloture-sans-motif",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -2739,67 +2739,67 @@
       "assertionsWithoutJustifyingRequirement": 36,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 11,
-      "refusalsValueGuided": 3,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "caisse-compte-juste-cloture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-manque-40-refus-cloture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-excedent-50-bloquant",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-comptage-invalide-indisponible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-montant-attendu-illisible",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-justification-guidee-cloture",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-commentaire-trop-long",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-reouverture-reblocage",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-etat-conserve-et-pharmacies",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "caisse-ecart-un-centime",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -2811,67 +2811,67 @@
       "assertionsWithoutJustifyingRequirement": 53,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 2,
-      "refusalsValueGuided": 1,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "empty-drawer-blocks-closure",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "exact-count-closes-without-justification",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "missing-40-guided-justification-close-reopen-reblock",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "reopen-keeps-history-and-blank-comment-reblocks",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "positive-variance-50-blocks-closure",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "invalid-quantity-shows-unavailable-variance",
           "outcome": "blocked",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "invalid-expected-amount-shows-attente-montant",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "justification-comment-length-boundary-281-280",
           "outcome": "blocked",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "pharmacy-switch-isolates-cash-session",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "one-cent-variance-blocks-closure",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },
@@ -4567,43 +4567,43 @@
       "assertionsWithoutJustifyingRequirement": 34,
       "refusalsUndeclared": 0,
       "refusalsIndexZero": 7,
-      "refusalsValueGuided": 2,
+      "refusalsValueGuided": 0,
       "scenarios": [
         {
           "id": "cash-negative-variance-justification",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-exact-count-closes-without-justification",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-positive-variance-blocks-like-negative",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-invalid-count-no-variance",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-justification-comment-boundary",
           "outcome": "blocked",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         },
         {
           "id": "cash-reopen-and-reblock",
           "outcome": "passed",
           "code": null,
-          "today": "refused-when-declared"
+          "today": "accepted"
         }
       ]
     },

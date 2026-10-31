@@ -9,7 +9,7 @@ import {
 } from "./canary.js";
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
-import { echoesEarlierInput } from "./echoed-input.js";
+import { echoesEarlierInput, foldedWords } from "./echoed-input.js";
 import {
   declaredPreconditionNames,
   preconditionRefusals,
@@ -2531,17 +2531,10 @@ function justifiedByExpectedValue(
   expected: string,
   requirement: { behavior?: string; quote?: string }
 ): boolean {
-  const words = (text: string) =>
-    new Set(
-      foldTypography(text)
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((word) => word.length >= 4)
-    );
-  const source = words(
+  const source = foldedWords(
     `${requirement.quote ?? ""} ${requirement.behavior ?? ""}`
   );
-  const target = words(expected);
+  const target = foldedWords(expected);
   if (source.size === 0 || target.size === 0) {
     return true;
   }

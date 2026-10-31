@@ -1,9 +1,19 @@
 import { foldTypography } from "./canary.js";
 import type { Assertion, Scenario } from "./schema.js";
 
-const words = (text: string) =>
+/**
+ * Les mots réels d'un texte, typographie et accents repliés : « Écart justifié »
+ * lit `ecart` et `justifie`, comme la citation `ecart-justifie`. Sans le repli
+ * des accents, `[^a-z0-9]` coupait chaque mot accentué (« Écart » donnait
+ * « cart », « justifié » donnait « justifi ») et refusait un libellé que la
+ * ligne citée écrit. Partagé avec la porte de provenance : la justification et
+ * l'exemption de saisie relue lisent les mêmes mots.
+ */
+export const foldedWords = (text: string) =>
   new Set(
     foldTypography(text)
+      .normalize("NFD")
+      .replace(/\p{M}+/gu, "")
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter((word) => word.length >= 4)
@@ -51,8 +61,10 @@ export function echoesEarlierInput(
   if (anchor <= 0 || typed.length === 0) {
     return false;
   }
-  const requirement = words(`${cited.quote ?? ""} ${cited.behavior ?? ""}`);
-  const read = words(
+  const requirement = foldedWords(
+    `${cited.quote ?? ""} ${cited.behavior ?? ""}`
+  );
+  const read = foldedWords(
     `${JSON.stringify(assertion.target ?? "")} ${assertion.description}`
   );
   if (![...read].some((word) => requirement.has(word))) {
