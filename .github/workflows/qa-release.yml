@@ -28,6 +28,10 @@ jobs:
         with: {node-version: 22, cache: pnpm}
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --prod --audit-level high
+      # Même runner partagé que ci.yml : TMPDIR sur disque propre au job et marqueur
+      # de processus, pour que rien ne survive au job (voir le script).
+      - name: Isolate this job (own TMPDIR, process marker)
+        run: .github/scripts/ci-job-isolation.sh setup
       - name: Build candidate image
         run: docker build -f Dockerfile.pr-qa -t canary-pr-qa:release .
       - name: Test fresh Compose installation before publishing
@@ -80,4 +84,7 @@ jobs:
           name: qa-release-evidence
           path: |
             sbom.spdx.json
-            /tmp/canary-container-*/service.log
+            ${{ runner.temp }}/job-isolation/tmp/canary-container-*/service.log
+      - name: Reap what this job left (processes and temp dirs)
+        if: always()
+        run: .github/scripts/ci-job-isolation.sh reap

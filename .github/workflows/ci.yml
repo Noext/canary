@@ -151,6 +151,12 @@ jobs:
             pnpm --filter @usecanary/daemon exec playwright install chromium
           fi
 
+      # Le runner est partagé et non éphémère : sans cette étape, le /tmp en RAM
+      # et le démon Canary de ~/.canary sont communs aux trois instances, et ce
+      # qu'un job laisse tue les suivants par OOM (voir le script).
+      - name: Isolate this job (own TMPDIR and HOME, process marker)
+        run: .github/scripts/ci-job-isolation.sh setup --home
+
       - run: pnpm check
 
       # The one step that consumed the database is over. `if: always()` is the
@@ -163,6 +169,13 @@ jobs:
           if docker container inspect "$POSTGRES_CONTAINER" >/dev/null 2>&1; then
             docker container rm --force --volumes "$POSTGRES_CONTAINER"
           fi
+
+      # `if: always()` : c'est le job qui échoue ou qu'on tue qui laisse un démon,
+      # ses navigateurs et ses dossiers. Seuls les processus marqués par CE job
+      # sont visés, jamais ceux d'un job voisin.
+      - name: Reap what this job left (processes and temp dirs)
+        if: always()
+        run: .github/scripts/ci-job-isolation.sh reap
 
   # The Chromium suite used to be the last step of `check`, so it waited behind
   # the 58 s PostgreSQL block and the 60 s of `pnpm check` while the other two
@@ -203,6 +216,12 @@ jobs:
             pnpm --filter @usecanary/daemon exec playwright install chromium
           fi
 
+      # Le runner est partagé et non éphémère : sans cette étape, le /tmp en RAM
+      # et le démon Canary de ~/.canary sont communs aux trois instances, et ce
+      # qu'un job laisse tue les suivants par OOM (voir le script).
+      - name: Isolate this job (own TMPDIR and HOME, process marker)
+        run: .github/scripts/ci-job-isolation.sh setup --home
+
       # `pnpm check` used to be what produced `dist/`, through the build task
       # its tests depend on. This job does not run that task, so the build is
       # explicit and the runtime install below keeps its supplier.
@@ -230,6 +249,13 @@ jobs:
           name: e2e-per-file-durations
           path: ${{ runner.temp }}/e2e-ci.json
           if-no-files-found: ignore
+
+      # `if: always()` : c'est le job qui échoue ou qu'on tue qui laisse un démon,
+      # ses navigateurs et ses dossiers. Seuls les processus marqués par CE job
+      # sont visés, jamais ceux d'un job voisin.
+      - name: Reap what this job left (processes and temp dirs)
+        if: always()
+        run: .github/scripts/ci-job-isolation.sh reap
 
   # The image build and the Compose first-install suite are the only steps that
   # need a Docker daemon, and they do not consume what the `check` job builds:
@@ -276,6 +302,11 @@ jobs:
             pnpm --filter @usecanary/daemon exec playwright install chromium
           fi
 
+      # Le runner est partagé et non éphémère : un TMPDIR sur disque propre au job
+      # et un marqueur de processus, pour que rien ne survive au job (voir le script).
+      - name: Isolate this job (own TMPDIR, process marker)
+        run: .github/scripts/ci-job-isolation.sh setup
+
       # The runner is not ephemeral and its Docker daemon is shared with every
       # other job. A job killed mid-step (run 38362415208, 2026-10-13) was killed
       # by ENOSPC and never ran a cleanup, so its dangling image and its build
@@ -287,12 +318,12 @@ jobs:
           docker system df
           # Dangling only. Without `-a`, a tagged image a sibling job may still
           # be testing is never a candidate.
-          docker image prune -f
+          .github/scripts/ci-job-isolation.sh prune docker image prune -f
           # A cache record untouched for over an hour cannot belong to a build
           # still running here (this job is capped at 30 minutes), while a sibling
           # job keeps the warm cache it just produced. Records older than that are
           # what accumulated to 24.6 GB / 157 entries before this step existed.
-          docker builder prune -f --filter until=1h
+          .github/scripts/ci-job-isolation.sh prune docker builder prune -f --filter until=1h
           docker system df
 
       - name: Build production Docker image from a clean context
@@ -314,13 +345,13 @@ jobs:
         run: |
           docker system df
           # Dangling only, and never the still-tagged image of a running sibling.
-          docker image prune -f
+          .github/scripts/ci-job-isolation.sh prune docker image prune -f
           # Unfiltered on purpose: this run is over, so its own build cache has no
           # reader left, and a build in progress elsewhere keeps its own records.
           # Bounded like the pre-build reclaim: an unfiltered prune threw
           # away the cache this very build produced, so the next run rebuilt
           # from scratch (68 s measured) instead of reusing it (21 s).
-          docker builder prune -f --filter until=1h
+          .github/scripts/ci-job-isolation.sh prune docker builder prune -f --filter until=1h
           docker system df
 
       - name: Preserve container diagnostics
@@ -328,8 +359,16 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pr-qa-container-logs
-          path: /tmp/canary-container-*/service.log
+          # TMPDIR du job (étape « Isolate this job ») : le test y crée ses dossiers.
+          path: ${{ runner.temp }}/job-isolation/tmp/canary-container-*/service.log
           if-no-files-found: ignore
+
+      # `if: always()` : c'est le job qui échoue ou qu'on tue qui laisse un démon,
+      # ses navigateurs et ses dossiers. Seuls les processus marqués par CE job
+      # sont visés, jamais ceux d'un job voisin. Après l'artefact, qui lit ces dossiers.
+      - name: Reap what this job left (processes and temp dirs)
+        if: always()
+        run: .github/scripts/ci-job-isolation.sh reap
 
   # Architecture intelligence for the two UI-facing workspaces. Runs on its own
   # runner so a score regression is reported as one fast job, independent from
