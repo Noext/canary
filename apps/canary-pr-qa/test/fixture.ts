@@ -250,6 +250,8 @@ export async function fixture(
      * dit que main a avancé depuis la bifurcation de la PR.
      */
     mergeBaseSha?: string;
+    /** Titre de la PR servi par `/pulls/1` (défaut : un titre `feat` implicite). */
+    title?: string;
   } = {}
 ) {
   const baseServer = options.baseApp
@@ -493,7 +495,7 @@ export async function fixture(
     if (path === "/repos/fixture/app/pulls/1") {
       prReads++;
       json(res, {
-        title: "Welcome users by name",
+        title: options.title ?? "Welcome users by name",
         body: "Save the name via the form",
         state: "open",
         changed_files:
