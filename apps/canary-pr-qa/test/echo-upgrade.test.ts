@@ -92,6 +92,30 @@ describe("surclassement d'une saisie relue en state", () => {
     expect(refusals).toHaveLength(1);
   });
 
+  it("refuse la relecture du champ saisi par un autre localisateur que la saisie", () => {
+    // La saisie vise `label Name` ; le même champ s'atteint par son rôle et
+    // son nom, par CSS ou par placeholder, ou se lit en `value`.
+    for (const target of [
+      { by: "role", value: "textbox", name: "Name" },
+      { by: "role", value: "combobox", name: "Name" },
+      { by: "css", value: "input[name=name]" },
+      { by: "css", value: "textarea#comment" },
+      { by: "placeholder", value: "Your name" },
+    ] as const) {
+      const { upgraded, verification, refusals } = settle((scenario) => {
+        scenario.assertions[0]!.target = target;
+      });
+      expect(upgraded, JSON.stringify(target)).toEqual([]);
+      expect(verification, JSON.stringify(target)).toBe("state");
+      expect(refusals, JSON.stringify(target)).toHaveLength(1);
+    }
+    const asValue = settle((scenario) => {
+      Object.assign(scenario.assertions[0]!, { kind: "value" });
+    });
+    expect(asValue.upgraded).toEqual([]);
+    expect(asValue.refusals).toHaveLength(1);
+  });
+
   it("ne surclasse ni un clic ifPresent, ni une intention déclarée", () => {
     const skippable = settle((scenario) => {
       (scenario.steps[1]!.action as { ifPresent?: boolean }).ifPresent = true;

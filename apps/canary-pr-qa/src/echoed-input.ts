@@ -101,6 +101,38 @@ export function echoesEarlierInput(
     );
 }
 
+/** Rôles ARIA d'un champ de saisie : la cible d'un `fill` ou d'un `select`. */
+const FIELD_ROLES = new Set([
+  "combobox",
+  "listbox",
+  "option",
+  "searchbox",
+  "slider",
+  "spinbutton",
+  "textbox",
+]);
+/** Un sélecteur CSS qui peut désigner un champ de saisie. */
+const FIELD_SELECTOR = /input|textarea|select|contenteditable|\[name|\[type/i;
+
+/**
+ * Vrai quand la cible PEUT être un champ de saisie, quelle que soit la forme du
+ * localisateur : une `value` lit toujours un contrôle de formulaire, un
+ * libellé ou un placeholder désignent un champ, un rôle de champ aussi. Le
+ * même champ s'atteint par `label`, par `role` + nom ou par CSS : comparer les
+ * localisateurs bruts laissait passer la relecture de la frappe elle-même.
+ */
+function readsField(assertion: Assertion): boolean {
+  const target = assertion.target;
+  return (
+    assertion.kind === "value" ||
+    target === undefined ||
+    target.by === "label" ||
+    target.by === "placeholder" ||
+    (target.by === "role" && FIELD_ROLES.has(target.value.toLowerCase())) ||
+    (target.by === "css" && FIELD_SELECTOR.test(target.value))
+  );
+}
+
 /**
  * Une relecture en `state` de la valeur saisie, ancrée sur un clic RÉEL sur un
  * AUTRE élément que le champ rempli : la forme du premier plan réel de la PR #20
@@ -115,7 +147,8 @@ export function echoesEarlierInput(
  *   d'établissement sauté ne déplace rien ;
  * - la saisie précède strictement le clic, le clic ne vise pas le champ rempli
  *   et l'assertion ne relit pas un champ rempli : relire la saisie elle-même ne
- *   prouve que la frappe.
+ *   prouve que la frappe. Une cible qui peut être un champ (`readsField`) est
+ *   tenue pour le champ rempli, quel que soit le localisateur choisi.
  */
 function upgradableStateRead(
   scenario: Scenario,
@@ -125,7 +158,8 @@ function upgradableStateRead(
   if (
     (assertion.verification ?? "state") !== "state" ||
     assertion.assertionIntent !== undefined ||
-    assertion.afterStep === undefined
+    assertion.afterStep === undefined ||
+    readsField(assertion)
   ) {
     return false;
   }
