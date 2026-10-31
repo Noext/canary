@@ -5,6 +5,8 @@ import {
   probeAndReplan,
   probedViewsPayload,
 } from "../src/canary.js";
+import { QaError } from "../src/diagnostics.js";
+import { runScope } from "../src/run-scope.js";
 import type { Plan } from "../src/schema.js";
 
 /** Les bornes de la sonde, telles que `probeAndReplan` les applique. */
@@ -185,6 +187,76 @@ describe("sonde de navigation : observer les vues que le plan traverse", () => {
       "open-drawer",
     ]);
     expect(ended).toBe(true);
+  });
+
+  it("garde le premier plan quand la réécriture n'est pas financée ou refusée", async () => {
+    // Le premier plan a déjà passé toutes les portes : une réécriture que
+    // l'enveloppe ne finance plus, ou que `settle` refuse, n'est pas adoptée,
+    // et le run continue sur ce plan au lieu d'être perdu.
+    const failures = [
+      {
+        ask: () =>
+          Promise.reject(
+            new QaError(
+              "RUN_BUDGET_EXCEEDED",
+              "Run token or cost budget exhausted",
+              "Inspect usage in result.json."
+            )
+          ),
+        settle: () => undefined,
+      },
+      {
+        ask: () => Promise.resolve(PLAN),
+        settle: () => {
+          throw new Error("requirement source refused");
+        },
+      },
+    ];
+    for (const failure of failures) {
+      const { canary } = fakeCanary();
+      const refined = await probeAndReplan({
+        askPlanner: failure.ask,
+        canary,
+        label: "probe",
+        plan: PLAN,
+        preview: PREVIEW as never,
+        root: "/tmp",
+        settle: failure.settle,
+      });
+      expect(refined).toBeUndefined();
+    }
+  });
+
+  it("laisse remonter l'annulation du run pendant la réécriture", async () => {
+    const { canary } = fakeCanary();
+    const controller = new AbortController();
+    const scope = {
+      calls: 0,
+      costUsd: 0,
+      id: "run",
+      maxCostUsd: 1,
+      maxTokens: 1000,
+      reservedCostUsd: 0,
+      reservedTokens: 0,
+      signal: controller.signal,
+      tokens: 0,
+    };
+    await expect(
+      runScope.run(scope, () =>
+        probeAndReplan({
+          askPlanner: () => {
+            controller.abort(new Error("run cancelled"));
+            return Promise.reject(new Error("aborted"));
+          },
+          canary,
+          label: "probe",
+          plan: PLAN,
+          preview: PREVIEW as never,
+          root: "/tmp",
+          settle: () => undefined,
+        })
+      )
+    ).rejects.toThrow("run cancelled");
   });
 
   it("borne le nombre de vues et la taille de ce qui part au modèle", () => {

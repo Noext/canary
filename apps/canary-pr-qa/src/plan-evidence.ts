@@ -2248,10 +2248,33 @@ export function planPayload(
       views
     );
   }
+  if (total > limit && files.length > 0) {
+    // Les fichiers entiers non plus ne sont pas une preuve (le gate lit le
+    // diff) : ils cèdent leur place après les consommateurs, les moins modifiés
+    // d'abord, et le planificateur lit lesquels manquent.
+    const kept = files.slice(0, -1);
+    const omitted = files.at(-1) as PlanFileText;
+    return planPayload(
+      {
+        ...context,
+        contextWarnings: [
+          ...context.contextWarnings,
+          `Whole changed file omitted: ${omitted.path} (${omitted.content.length} characters), the planner payload exceeded its limit by ${total - limit} characters`,
+        ],
+      },
+      preview,
+      initialPage,
+      catalog,
+      config,
+      kept,
+      views
+    );
+  }
   if (total > limit) {
-    // Rien n'est tronqué : le refus nomme le dépassement et ce qui le desserre.
+    // Rien de requis n'est tronqué : le refus nomme le dépassement et ce qui le
+    // desserre.
     throw new Error(
-      `PR context exceeds model budget: ${total} characters for a payload limit of ${limit} (shortfall ${total - limit}), computed from QA_MODEL_CONTEXT_TOKENS=${config.QA_MODEL_CONTEXT_TOKENS}, QA_PLAN_MAX_TOKENS=${config.QA_PLAN_MAX_TOKENS} and QA_PLAN_FILE_CHARS=${config.QA_PLAN_FILE_CHARS}. Nothing was truncated: the diff, its source lines, the discovery snapshot and the whole changed files are all required evidence. To proceed safely, in this order: lower QA_PLAN_FILE_CHARS (currently ${config.QA_PLAN_FILE_CHARS}, the allowance for whole changed files), raise QA_MODEL_CONTEXT_TOKENS to a window the configured model really serves, or plan a PR whose diff is smaller.`
+      `PR context exceeds model budget: ${total} characters for a payload limit of ${limit} (shortfall ${total - limit}), computed from QA_MODEL_CONTEXT_TOKENS=${config.QA_MODEL_CONTEXT_TOKENS} and QA_PLAN_MAX_TOKENS=${config.QA_PLAN_MAX_TOKENS}, with every whole changed file (QA_PLAN_FILE_CHARS=${config.QA_PLAN_FILE_CHARS}) and every consumer excerpt already omitted. Nothing was truncated: the diff, its source lines and the discovery snapshot are all required evidence. To proceed safely: raise QA_MODEL_CONTEXT_TOKENS to a window the configured model really serves, or plan a PR whose diff is smaller.`
     );
   }
   return payload;

@@ -205,18 +205,19 @@ const envSchema = z.object({
    * Ce que les fichiers modifiés, EN ENTIER, peuvent peser dans le message du
    * planificateur.
    *
-   * Zéro par défaut, et ce n'est pas un renoncement : le lot HH (10 runs, même
-   * build, même PR, même modèle) est passé à 10/10 avec 86 scénarios et 2,44 M de
-   * tokens là où le même build avec 120 000 caractères de fichiers entiers
-   * donnait 5/10 et 3,83 M. Le message plus court est lu plus fidèlement ; les
-   * fichiers entiers restent disponibles pour un dépôt où la jointure manque
-   * vraiment, mais ils ne sont plus payés par défaut.
+   * 120 000 par défaut : le zéro du lot HH (PR #20 seule) coûtait le rappel du
+   * banc de 33 runs, où chaque plan raté de r4 et r5 nomme les libellés que la
+   * jointure hors hunks lui cachait. Contexte, jamais preuve : risque de faux
+   * vert neutre. Sur les entrées de PR #20, +124 733 caractères de payload
+   * (~+39 000 tokens par appel), loin de la borne d'envoi ; sous une fenêtre
+   * plus petite, ces fichiers cèdent leur place avant tout refus (`planPayload`).
    */
   /**
    * Rejouer le préfixe de navigation du plan pour observer la vue réellement
    * testée, puis faire réécrire le plan une fois. Coût : une session navigateur
-   * et un appel de planification supplémentaires ; bénéfice mesurable, donc
-   * désactivable pour comparer.
+   * et un appel de planification. Activé par défaut (libellés inventés de f3) :
+   * le plan réécrit repasse toutes les portes, et une réécriture refusée ou non
+   * financée laisse le premier plan en place (`probeAndReplan`).
    */
   /**
    * Réécrire le plan, une fois, quand l'exécution mesure qu'une vérification ne
@@ -254,9 +255,9 @@ const envSchema = z.object({
     .transform((value) => value === true || value === "true"),
   QA_VIEW_PROBE: z
     .union([z.boolean(), z.enum(["true", "false"])])
-    .default(false)
+    .default(true)
     .transform((value) => value === true || value === "true"),
-  QA_PLAN_FILE_CHARS: z.coerce.number().int().min(0).max(1_000_000).default(0),
+  QA_PLAN_FILE_CHARS: z.coerce.number().int().min(0).max(1e6).default(120_000),
   /**
    * Fenêtre de contexte du modèle configuré, en TOKENS. Le fournisseur ne
    * l'expose pas (`/v1/models` ne rend que id/object/owned_by), donc elle est

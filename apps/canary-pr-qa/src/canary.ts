@@ -1230,7 +1230,8 @@ async function probeNavigationViews(input: {
  * le préfixe de NAVIGATION — `goto` et des clics, aucune saisie, aucune
  * soumission, donc aucun effet métier — et la seconde écriture reçoit
  * l'instantané réel de chaque vue. Une seule passe, bornée, jamais fatale :
- * sans vue, le plan initial reste et le run continue.
+ * sans vue, ou sans réécriture adoptée, le plan initial reste et le run
+ * continue.
  */
 export async function probeAndReplan(input: {
   askPlanner: (views: ProbedView[]) => Promise<Plan | undefined>;
@@ -1255,10 +1256,21 @@ export async function probeAndReplan(input: {
   if (views.length === 0) {
     return;
   }
-  const refined = await input.askPlanner(views);
-  if (!refined) {
-    return;
+  // La réécriture est un supplément : le premier plan a déjà passé toutes les
+  // portes. Un refus de la réécriture, ou un appel que l'enveloppe du run ne
+  // finance plus (fichiers entiers et vues alourdissent chaque envoi), garde ce
+  // plan au lieu de perdre le run ; seule une annulation remonte.
+  try {
+    const refined = await input.askPlanner(views);
+    if (refined) {
+      input.settle(refined);
+    }
+    return refined;
+  } catch (error) {
+    runScope.getStore()?.signal.throwIfAborted();
+    logger.warn(
+      { error: String(error), label: input.label },
+      "Probe replan not adopted: keeping the first plan"
+    );
   }
-  input.settle(refined);
-  return refined;
 }

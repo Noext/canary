@@ -727,6 +727,10 @@ export async function fixture(
       .map((port) => `127.0.0.1:${port}`)
       .join(","),
     QA_API_TOKEN: "fixture-api-token-123456789012345",
+    // Les plans du fixture sont scriptés envoi par envoi : la sonde de vues,
+    // active par défaut, consommerait un plan destiné à une correction ou à une
+    // réécriture. Un test qui la vise l'active (`QA_VIEW_PROBE: true`).
+    QA_VIEW_PROBE: "false",
     ...options.env,
   });
   return {

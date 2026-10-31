@@ -1621,7 +1621,6 @@ async function executePlan(
       evidence: discovery,
     });
   }
-  publishUnverifiedPreconditions(result, context);
   const refined = config.QA_VIEW_PROBE
     ? await probeAndReplan({
         askPlanner: (views) =>
@@ -1648,6 +1647,8 @@ async function executePlan(
   if (refined) {
     result.plan = refined;
   }
+  // Publiées sur le plan qui s'exécute, réécrit par la sonde ou non.
+  publishUnverifiedPreconditions(result, context);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,

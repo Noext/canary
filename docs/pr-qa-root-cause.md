@@ -23,7 +23,7 @@ qu'il observe.
   « Le plan est un contrat figé : l'hôte joue chaque étape dans l'ordre, sans consulter le
   modèle. » Chaque scénario ouvre bien sa propre session (`src/executor.ts:451`), donc
   l'isolation **navigateur** existe ; c'est l'isolation **logique** des hypothèses qui manque.
-- `src/runner.ts:1342` et `src/runner.ts:1737` — `replanObservedInvariants` n'intervient qu'**après** qu'une
+- `src/runner.ts:1342` et `src/runner.ts:1738` — `replanObservedInvariants` n'intervient qu'**après** qu'une
   exécution a contredit le plan : la boucle d'observation existe, mais en réparation, pas en
   décision.
 
