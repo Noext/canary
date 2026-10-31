@@ -28,10 +28,11 @@ import { captureBaselines } from "./step-outcome.js";
  * - après le retour, la valeur attendue est relue et diffère de cette valeur
  *   d'avant, comme pour une `transition`.
  *
- * Un plan qui parle de rechargement garde le rechargement. Seuls les kinds
- * `text`, `value` et `visible` ont une absence lisible. Dans tous les autres
- * cas, rien ne change : la page est rechargée et relue. Le résultat publie
- * « reload persistence not claimed » sur chaque assertion jugée ainsi.
+ * Un plan qui parle de rechargement, ou un scénario `regression`, garde le
+ * rechargement. Seuls les kinds `text`, `value` et `visible` ont une absence
+ * lisible. Dans tous les autres cas, rien ne change : la page est rechargée
+ * et relue. Le résultat publie « reload persistence not claimed » sur chaque
+ * assertion jugée ainsi.
  */
 const REENTRY_KINDS = new Set(["text", "value", "visible"]);
 const RELOAD_WORDING = /reload|refresh|recharg|rafra[iî]ch|actualis|\bF5\b/i;
@@ -49,7 +50,11 @@ function leaveStepOf(
   scenario: Scenario,
   assertion: Assertion
 ): string | undefined {
+  // Un scénario `regression` déclare inchangée une persistance qui existe
+  // déjà : une PR qui casse sa relecture (hydratation, restauration) sans
+  // mot-clé d'écriture doit toujours être rechargée, comme sur la base.
   if (
+    scenario.kind === "regression" ||
     assertion.verification !== "persisted" ||
     !REENTRY_KINDS.has(assertion.kind) ||
     RELOAD_WORDING.test(JSON.stringify(scenario))

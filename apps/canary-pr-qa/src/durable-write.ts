@@ -17,8 +17,9 @@ import type { SourceLineMaterial } from "./schema.js";
  * coûte qu'un faux rouge déjà connu, un motif trop étroit pourrait coûter un
  * faux vert. Les lignes retirées comptent autant que les ajoutées — une
  * régression qui SUPPRIME l'écriture `localStorage` doit garder sa relecture
- * après rechargement. Un fichier sans patch textuel, hors ressource binaire,
- * est illisible : il compte comme une écriture.
+ * après rechargement — et les lignes de contexte aussi : le diff touche alors
+ * du code qui lit ou écrit un état durable. Un fichier sans patch textuel,
+ * hors ressource binaire, est illisible : il compte comme une écriture.
  */
 const DURABLE_WRITE_WORDS = [
   "save",
@@ -98,22 +99,23 @@ function fileClaimsDurableWrite(file: PrContext["files"][number]): boolean {
   if (!file.patch) {
     return !BINARY_ASSET.test(file.filename);
   }
-  return file.patch.split("\n").some((raw) => {
-    const changed =
-      (raw.startsWith("+") || raw.startsWith("-")) &&
-      !(raw.startsWith("+++ ") || raw.startsWith("--- "));
-    const text = raw.slice(1);
-    return (
-      changed && DURABLE_WRITE_PATTERNS.some((pattern) => pattern.test(text))
+  // Les lignes de contexte et l'en-tête `@@` comptent aussi : une régression
+  // peut casser la relecture d'un stockage existant (`if (saved)` devenu
+  // `if (!saved)`) sur une ligne sans mot-clé, à côté du `getItem` intact.
+  return file.patch
+    .split("\n")
+    .some(
+      (raw) =>
+        !(raw.startsWith("+++ ") || raw.startsWith("--- ")) &&
+        DURABLE_WRITE_PATTERNS.some((pattern) => pattern.test(raw))
     );
-  });
 }
 
 /**
- * Vrai quand le diff écrit (ou cessait d'écrire) un état durable, ou quand la
- * question ne peut pas être tranchée : matériel sans fichiers liés — test
- * unitaire, rejeu ciblé — ou diff vide. Faux seulement quand chaque ligne
- * modifiée a été lue et qu'aucune ne revendique d'écriture.
+ * Vrai quand le diff écrit (ou cessait d'écrire) un état durable, en touche
+ * le voisinage, ou quand la question ne peut pas être tranchée : matériel sans
+ * fichiers liés — test unitaire, rejeu ciblé — ou diff vide. Faux seulement
+ * quand chaque ligne du patch a été lue et qu'aucune ne revendique d'écriture.
  */
 export function durableWriteClaimed(material: SourceLineMaterial[]): boolean {
   const known = claims.get(material);

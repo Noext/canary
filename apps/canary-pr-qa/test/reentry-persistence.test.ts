@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { durableWriteClaimed } from "../src/durable-write.js";
 import { executeScenario } from "../src/executor.js";
 import type { PrContext } from "../src/github.js";
 import { sourceLineMaterial } from "../src/policy.js";
-import { reportMarkdown } from "../src/report.js";
+import { reportMarkdown, saveReport } from "../src/report.js";
 import type { RunResult } from "../src/results.js";
 import { type Scenario, ScenarioSchema } from "../src/schema.js";
 
@@ -45,7 +45,12 @@ function context(patch: string, filename = "apps/web/app/page.tsx") {
 }
 
 function scenario(
-  overrides: { leave?: "click" | "fill"; refill?: boolean; title?: string } = {}
+  overrides: {
+    kind?: Scenario["kind"];
+    leave?: "click" | "fill";
+    refill?: boolean;
+    title?: string;
+  } = {}
 ): Scenario {
   const refill = overrides.refill
     ? [
@@ -75,7 +80,7 @@ function scenario(
     id: "justification-conservee",
     title: overrides.title ?? "La justification survit à la sortie de la vue",
     rationale: "La justification est gardée dans la vue Caisse et Coffre",
-    kind: "happy_path",
+    kind: overrides.kind ?? "happy_path",
     sourceFiles: ["apps/web/app/page.tsx"],
     preconditions: [],
     requirements: [
@@ -224,14 +229,24 @@ describe("persisted sans écriture durable dans le diff", () => {
       verification: "persisted",
       reloadPersistence: "not-claimed",
     });
-    const report = reportMarkdown({
+    const runResult = {
       id: "run",
       outcome: "passed",
       prUrl: "https://github.com/o/r/pull/1",
       scenarios: [result],
       startedAt: "2026-10-31T00:00:00.000Z",
-    } as RunResult);
-    expect(report).toContain("reload persistence not claimed");
+    } as RunResult;
+    expect(reportMarkdown(runResult)).toContain(
+      "reload persistence not claimed"
+    );
+    // Le rapport HTML publie la même réserve que report.md.
+    const root = await mkdtemp(join(tmpdir(), "canary-reentry-report-"));
+    cleanups.push(() => rm(root, { force: true, recursive: true }));
+    await saveReport(root, runResult);
+    const html = await readFile(join(root, "report.html"), "utf8");
+    expect(html).toContain(
+      "judged on re-entry: reload persistence not claimed"
+    );
   });
 
   it("garde le rechargement quand le diff ajoute une écriture localStorage", async () => {
@@ -288,6 +303,21 @@ describe("persisted sans écriture durable dans le diff", () => {
     expect(result.outcome).toBe("failed");
   });
 
+  it("garde le rechargement pour un scénario `regression`, même sans écriture dans le diff", async () => {
+    // Une régression peut casser la relecture d'une persistance existante sur
+    // une ligne sans mot-clé ; l'aller-retour, servi par un état en mémoire,
+    // passerait des deux côtés. Le rechargement, lui, la mesure.
+    const { labels, result } = await run(
+      scenario({ kind: "regression" }),
+      IN_MEMORY_PATCH,
+      reloadsLost
+    );
+    expect(labels.some((label) => label.startsWith("departure-"))).toBe(false);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+    expect(result.assertions[0]?.reloadPersistence).toBeUndefined();
+  });
+
   it("garde le rechargement quand le scénario parle de rechargement", async () => {
     const { labels, result } = await run(
       scenario({ title: "La justification survit au rechargement de la page" }),
@@ -342,6 +372,25 @@ describe("lecture du diff pour l'écriture durable", () => {
       "+  persist(store);",
     ]) {
       expect(claimed(`${IN_MEMORY_PATCH}\n${line}`), line).toBe(true);
+    }
+  });
+
+  it("revendique une écriture quand le diff touche le voisinage d'un stockage, même sans mot-clé modifié", () => {
+    for (const patch of [
+      [
+        "@@ -4,3 +4,3 @@ export function Draft() {",
+        "   const saved = localStorage.getItem('draft');",
+        "-  if (saved) setDraft(saved);",
+        "+  if (!saved) setDraft(saved);",
+      ].join("\n"),
+      [
+        "@@ -8,3 +8,3 @@ function restoreDraft() {",
+        "   const raw = window.sessionStorage.getItem('draft');",
+        "-  hydrate(JSON.parse(raw));",
+        "+  hydrate(raw);",
+      ].join("\n"),
+    ]) {
+      expect(claimed(patch), patch).toBe(true);
     }
   });
 
