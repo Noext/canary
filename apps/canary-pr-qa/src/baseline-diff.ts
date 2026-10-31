@@ -36,7 +36,7 @@ type AddedLiteral = ReturnType<typeof diffAddedLiteral>;
 
 /** Pourquoi l'écart d'une assertion annexe d'un scénario `regression` reste un changement. */
 const ADDED_LITERAL_RULE =
-  "secondary assertion of a regression scenario on a literal the diff adds: the base cannot show it, so the difference is a change, not a regression";
+  "secondary assertion of a regression scenario on a literal the diff adds, whose target the base does not have: the difference is a change, not a regression";
 
 const VALUE_CHARS = 160;
 const LIST = {
@@ -184,7 +184,7 @@ function diffScenario(
     const { categories, reason } = secondaryAddition(
       head,
       planned,
-      h,
+      { b, h },
       intent.added,
       classify(head, base, h, b, intent.unchanged)
     );
@@ -213,15 +213,37 @@ function diffScenario(
 }
 
 /**
+ * Vrai quand la base a ENREGISTRÉ la cible absente : aucune valeur lue
+ * (`TARGET_NOT_FOUND`, `undefined` ou `null`), ou une `visible` lue fausse.
+ * Une base qui a lu une valeur montre l'élément : l'écart est mesuré, jamais
+ * excusé par un littéral du diff (un littéral « ajouté » peut déplacer un
+ * texte que la base construisait déjà, par gabarit ou dans un autre fichier).
+ */
+function baseLacksTarget(
+  planned: ScenarioResult["scenario"]["assertions"][number],
+  b: RecordedAssertion | undefined
+): boolean {
+  if (b === undefined) {
+    return false;
+  }
+  return (
+    b.actual === undefined ||
+    b.actual === null ||
+    (planned.kind === "visible" && b.actual === false)
+  );
+}
+
+/**
  * L'assertion ANNEXE (un objectif est déclaré, ce n'est pas lui) d'un scénario
- * `regression`, verte sur la tête, qui lit un littéral que le diff ajoute :
- * la base échoue faute de l'élément, ce n'est pas une régression. Tout le
- * reste garde son classement — objectif, tête rouge, interface existante.
+ * `regression`, verte sur la tête, qui lit un littéral que le diff ajoute,
+ * quand la base n'a PAS l'élément : la base échoue faute de lui, ce n'est pas
+ * une régression. Tout le reste garde son classement — objectif, tête rouge,
+ * interface existante, base qui a lu une autre valeur.
  */
 function secondaryAddition(
   head: ScenarioResult,
   planned: ScenarioResult["scenario"]["assertions"][number],
-  h: RecordedAssertion | undefined,
+  sides: { b: RecordedAssertion | undefined; h: RecordedAssertion | undefined },
   added: AddedLiteral,
   classified: ReturnType<typeof classify>
 ): ReturnType<typeof classify> {
@@ -229,7 +251,8 @@ function secondaryAddition(
   return kind === "regression" &&
     objective !== undefined &&
     objective !== planned.id &&
-    h?.passed === true &&
+    sides.h?.passed === true &&
+    baseLacksTarget(planned, sides.b) &&
     classified.categories.includes("regression") &&
     added?.(planned) === true
     ? { categories: ["changed"], reason: ADDED_LITERAL_RULE }

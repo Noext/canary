@@ -170,6 +170,63 @@ describe("assertion annexe d'un scénario `regression` (correctif 2, variante s�
     }
   });
 
+  it("une base qui LIT l'élément avec une autre valeur escalade, littéral ajouté ou non", () => {
+    // Le libellé « Billet de 20 € » passe d'un gabarit à une table ajoutée :
+    // le diff l'épelle sur une ligne ajoutée, mais la base rend déjà la ligne,
+    // avec la bonne valeur (20,00 €). La tête épingle la valeur du bug.
+    const row: Assertion = {
+      id: "row20",
+      description: "la ligne du billet de 20 €",
+      kind: "text",
+      expected: "25,00 €",
+      target: { by: "role", value: "row", name: "Billet de 20 €" },
+    } as Assertion;
+    const assertions = [row, objective];
+    const result = run(
+      side("regression", assertions, [
+        { id: "row20", passed: true, actual: "Billet de 20 € 1 25,00 €" },
+        { id: "total", passed: true, actual: "Total 1 240,00 €" },
+      ]),
+      side("regression", assertions, [
+        { id: "row20", passed: false, actual: "Billet de 20 € 1 20,00 €" },
+        { id: "total", passed: true, actual: "Total 1 240,00 €" },
+      ])
+    );
+    compareWithBaseline(
+      result,
+      CONFIG,
+      "fix(caisse): centraliser les coupures",
+      [
+        file(
+          "apps/web/lib/denominations.ts",
+          '@@ -0,0 +1,3 @@\n+export const DENOMINATIONS = [\n+  { label: "Billet de 20 €", cents: 2500 },\n+];'
+        ),
+        file(
+          "apps/web/app/page.tsx",
+          [
+            "@@ -10,1 +10,1 @@",
+            // Le gabarit de la base, tel que le patch le montre.
+            ["-  label={`Billet de ", "$", "{value} €`}"].join(""),
+            "+  label={d.label}",
+          ].join("\n")
+        ),
+      ]
+    );
+    const head = result.scenarios[0]!;
+    expect(head.outcome).toBe("failed");
+    expect(head.diagnostic?.code).toBe("BASELINE_REGRESSION");
+    expect(result.baselineComparison?.regressions).toHaveLength(1);
+  });
+
+  it("une cible introuvable sur la base (aucune valeur lue) reste un ajout", () => {
+    const result = secondary("Remettre à zéro");
+    const base = result.baseline!.scenarios[0]!;
+    base.assertions[0] = { id: "button", passed: false, actual: undefined };
+    compareWithBaseline(result, CONFIG, "feat: remise à zéro", ADDS_RESET);
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(result.baselineComparison?.regressions).toEqual([]);
+  });
+
   it("un fichier sans patch lisible rend l'ajout indécidable : escalade", () => {
     const result = secondary("Remettre à zéro");
     compareWithBaseline(result, CONFIG, "feat: remise à zéro", [
