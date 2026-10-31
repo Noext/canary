@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
-import { APPROVED_SKIPS_GATE } from "./approved-skips.js";
+import { nonRuntimeStatus } from "./approved-skips.js";
 import {
   compareWithBaseline,
   comparisonSections,
@@ -21,8 +21,8 @@ import { effectiveModelConfig, PLANNER_DIR } from "./planner-record.js";
 import type { Policy } from "./policy.js";
 import type { Plan, RunResult } from "./schema.js";
 
-// biome-ignore lint/performance/noBarrelFile: one re-export; the runner, at its import limit, reaches the approved-skips verdict through the module that reports it.
-export { settleApprovedSkips } from "./approved-skips.js";
+// biome-ignore lint/performance/noBarrelFile: one re-export; the runner, at its import limit, reaches the documentation-and-tests verdict through the module that reports it.
+export { settleNonRuntimeDiff } from "./approved-skips.js";
 
 /**
  * Juge le run contre la préversion de base avant sa publication : régression
@@ -37,13 +37,13 @@ export function judgeAgainstBaseline(result: RunResult, config: Config): void {
 /**
  * La description du statut de commit. La comparaison à la base y figure en tête
  * de ce que GitHub tronque (140 caractères) : un comportement modifié par la PR
- * ne peut pas passer inaperçu sous un statut vert. Un diff entièrement
- * approuvé ignoré le dit plutôt qu'un « 0/0 scenarios » muet.
+ * ne peut pas passer inaperçu sous un statut vert. Un diff de documentation et
+ * de tests seuls le dit plutôt qu'un « 0/0 scenarios » muet.
  */
 export function statusDescription(result: RunResult): string {
-  if (result.coverage?.gate === APPROVED_SKIPS_GATE) {
-    const files = result.coverage.skipped.length;
-    return `QA skipped: ${files}/${files} changed files are approved skips (.canary/qa.json); no browser scenario run`;
+  const nonRuntime = nonRuntimeStatus(result);
+  if (nonRuntime) {
+    return nonRuntime;
   }
   const passed = result.scenarios.filter((s) => s.outcome === "passed").length;
   const note = comparisonStatusNote(result);

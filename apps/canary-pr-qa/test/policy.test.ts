@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import { isDocumentationPath } from "../src/approved-skips.js";
 import type { Observation } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { QaError } from "../src/diagnostics.js";
@@ -13,7 +14,6 @@ import {
   amputatedQuoteRemedy,
   amputationScans,
   criticalSkipRefused,
-  isDocumentationPath,
   numberedSourceLines,
   PolicySchema,
   planFindings,

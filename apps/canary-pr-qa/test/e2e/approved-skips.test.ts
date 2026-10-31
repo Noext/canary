@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { APPROVED_SKIPS_GATE } from "../../src/approved-skips.js";
+import { NON_RUNTIME_GATE } from "../../src/approved-skips.js";
 import { Canary } from "../../src/canary.js";
 import { runQa } from "../../src/runner.js";
 import type { Plan } from "../../src/schema.js";
@@ -9,9 +9,9 @@ import { fixture, PR_URL, plan } from "../fixture.js";
 
 /**
  * Le même contrat qu'en test unitaire, contre la préversion servie à un vrai
- * Chromium : une PR de documentation seule, approuvée ignorée par la base, ne
- * dépense ni appel modèle ni session navigateur ; une PR mêlée est planifiée et
- * jouée comme avant.
+ * Chromium : une PR de documentation seule ne dépense ni appel modèle ni session
+ * navigateur, avec ou sans entrée `approvedSkips` ; une PR mêlée est planifiée
+ * et jouée comme avant.
  */
 const DOCS_REASON = "Documentation only, reviewed by humans";
 const APPROVED = [{ path: "docs/**", reason: DOCS_REASON }];
@@ -25,13 +25,14 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("skips a docs-only PR approved by the base policy with zero model requests", async () => {
+it("skips a docs-only PR with zero model requests, approved or not", async () => {
   const start = vi.spyOn(Canary.prototype, "start");
   const f = await fixture({
     approvedSkips: APPROVED,
     changedFiles: [
       { filename: "docs/guide.md", patch: DOCS_PATCH },
       { filename: "docs/api/index.md", patch: DOCS_PATCH },
+      { filename: "README.md", patch: DOCS_PATCH },
     ],
   });
   closers.push(f.close);
@@ -44,16 +45,21 @@ it("skips a docs-only PR approved by the base policy with zero model requests", 
   expect(result.usage).toMatchObject({ calls: 0, reservedTokens: 0 });
   expect(start).not.toHaveBeenCalled();
   expect(result.scenarios).toEqual([]);
-  expect(result.coverage?.gate).toBe(APPROVED_SKIPS_GATE);
+  expect(result.coverage?.gate).toBe(NON_RUNTIME_GATE);
   expect(result.plan?.skipped).toEqual([
     { sourceFile: "docs/guide.md", reason: DOCS_REASON },
     { sourceFile: "docs/api/index.md", reason: DOCS_REASON },
+    {
+      sourceFile: "README.md",
+      reason:
+        "Documentation (never critical): no runtime behavior to exercise in a browser.",
+    },
   ]);
   expect(
     f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
       .description
   ).toBe(
-    "QA skipped: 2/2 changed files are approved skips (.canary/qa.json); no browser scenario run"
+    "QA skipped: 3/3 changed files are documentation or tests; no browser scenario run"
   );
   expect(
     await readFile(join(f.dataDir, result.id, "report.md"), "utf8")

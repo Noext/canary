@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { approvedSkipCovers } from "./approved-skips.js";
+import {
+  approvedSkipCovers,
+  isDocumentationPath,
+  isTestPath,
+} from "./approved-skips.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
@@ -53,32 +57,6 @@ export async function trustedPolicy(
     ? PolicySchema.parse({ version: 1 })
     : PolicySchema.parse(JSON.parse(value));
 }
-const DOCUMENTATION_DIRECTORY = /(^|\/)(docs|openspec)\//;
-const MARKDOWN_FILE = /\.mdx?$/i;
-/**
- * Un fichier de test ne porte aucun comportement visible : son comportement EST
- * celui du code qu'il éprouve, déjà couvert par le scénario qui exerce ce code.
- * L'exiger comme chemin critique demandait un scénario navigateur pour
- * `apps/web/lib/cash-session.test.ts` (run 338f18d8), c'est-à-dire une preuve en
- * double et un run bloqué pour un fichier qui n'affiche rien. Le skip reste
- * visible : il est listé, compté et publié.
- */
-const TEST_FILE = /(^|\/)(__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
-const LICENSE_FILE = /(^|\/)LICEN[CS]E(\.[^/]*)?$/i;
-/**
- * Documentation is never gated by `criticalPaths`: markdown prose, `docs/` and
- * `openspec/` trees and licence texts change no runtime behavior, including
- * when an application keeps them under a critical prefix such as `apps/`.
- * `.github/` is deliberately not listed here - workflows are executable
- * configuration, so a repository that wants them gated adds the prefix itself.
- */
-export function isDocumentationPath(file: string): boolean {
-  return (
-    DOCUMENTATION_DIRECTORY.test(file) ||
-    MARKDOWN_FILE.test(file) ||
-    LICENSE_FILE.test(file)
-  );
-}
 /**
  * Un fichier critique : le runtime, jamais de la documentation. Le gate de
  * couverture s'en sert pour refuser un skip (`criticalSkipRefused`), et le
@@ -90,7 +68,7 @@ export function isDocumentationPath(file: string): boolean {
  */
 function isCriticalPath(policy: Policy, file: string): boolean {
   return (
-    !(isDocumentationPath(file) || TEST_FILE.test(file)) &&
+    !(isDocumentationPath(file) || isTestPath(file)) &&
     policy.criticalPaths.some((prefix) => file.startsWith(prefix))
   );
 }
@@ -3300,7 +3278,7 @@ function hasInitialValue(
   const assigned = new RegExp(`\\b${key}\\s*:\\s*"(?!")`);
   return material.some(
     (source) =>
-      !TEST_FILE.test(source.path) &&
+      !isTestPath(source.path) &&
       source.lines.some(
         (line) =>
           assigned.test(line.text) &&

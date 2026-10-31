@@ -182,14 +182,24 @@ rien et la run est refusée comme pour un skip non approuvé, sans exception.
 Un chemin exact continue de fonctionner ; la politique reste lue sur le SHA de
 base, donc une PR ne peut pas approuver son propre skip.
 
-Quand **chaque** fichier changé (et l'ancien chemin d'un fichier renommé) est
-couvert par un `approvedSkips`, la PR n'a rien de testable au navigateur : la run
-se conclut `skipped` sans découverte, sans appel au planificateur ni scénario.
-`result.json` porte `coverage.gate: "approved-skips-only"` et le plan liste chaque
-fichier avec la raison approuvée ; le rapport les publie en « Not browser-tested »
-et le statut de commit (`error`, puisque `skipped` n'est jamais une réussite) dit
-`QA skipped: N/N changed files are approved skips (.canary/qa.json)…`. Un seul
-fichier non couvert suffit pour que la PR soit planifiée comme avant.
+Quand **chaque** fichier changé (et l'ancien chemin d'un fichier renommé) est de
+la documentation ou un test, la PR n'a rien de testable au navigateur : la run se
+conclut `skipped` sans attendre la préversion, sans découverte, sans appel au
+planificateur ni scénario. Comptent comme tels, avec ou sans entrée
+`approvedSkips` : un fichier de test (`*.test.*`, `*.spec.*`, `__tests__/`,
+`__mocks__/`), un fichier `*.md`, un texte de licence, et tout fichier d'un arbre
+`docs/` ou `openspec/` situé hors des préfixes de `criticalPaths`. Un `.mdx`
+(compilé en composant) ou un dossier `docs/` sous `apps/` (qui peut être une
+route, `apps/web/app/docs/page.tsx`) n'en font pas partie. `result.json` porte
+`coverage.gate: "documentation-and-tests-only"` et le plan liste chaque fichier
+avec la raison de son `approvedSkips`, ou à défaut une raison fixe ; le rapport
+les publie en « Not browser-tested » et le statut de commit (`error`, puisque
+`skipped` n'est jamais une réussite) dit `QA skipped: N/N changed files are
+documentation or tests…`. Une PR dont la tête ou la base change pendant la run
+reste `stale`, avec le texte générique. Une approbation n'est pas un verdict :
+elle permet au planificateur de laisser un fichier hors de ses scénarios, pas de
+conclure sans eux. Un seul fichier exécuté, approuvé ignoré ou non (un barrel
+`index.ts`, `src/generated.ts`), suffit pour que la PR soit planifiée comme avant.
 
 Configurer les autres checks GitHub obligatoires pour couvrir les tests unitaires,
 backend, sécurité et builds. Les citations lexicales rendent le contrat vérifiable ;
