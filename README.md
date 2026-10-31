@@ -457,6 +457,21 @@ is root-equivalent inside it, and a runner is **not** ephemeral: `_work`, the pn
 images survive between jobs, so a malicious pull request could poison a cache a later job reuses. The
 container boundary and the egress table are what limit the damage.
 
+Every job is isolated from its siblings by
+[`.github/scripts/ci-job-isolation.sh`](.github/scripts/ci-job-isolation.sh). The three `canary-ci`
+instances run as the same `gh-runner` user, so they shared `/tmp` — a tmpfs, i.e. RAM — and the Canary
+daemon under `~/.canary`. Measured on 2026-10-31: a daemon a test had started ten days earlier still
+held 42 `chrome-headless` and 232 `ffmpeg` processes, 77 488 test directories filled 20 GB of `/tmp`,
+and all three runners had been OOM-killed during `check`. Each job now gets a `TMPDIR` on disk under
+`$RUNNER_TEMP` (wiped by the runner), the test jobs get their own `HOME` (so their own Canary daemon,
+while `PLAYWRIGHT_BROWSERS_PATH` keeps the shared browser cache), and every process inherits a
+`CANARY_CI_JOB` marker. These three variables are listed in `globalPassThroughEnv` of `turbo.json`: turbo's strict env mode strips undeclared variables from tasks, so without it `pnpm check` lost the marker and the browser path (measured on the first run of this change). A final `if: always()` step kills only the processes carrying this job's
+marker, or whose `HOME`/`TMPDIR` is this job's directory (the Canary daemon is started with a filtered
+environment that keeps `HOME` but drops the marker) — never a sibling job's — and removes the job's
+directories. Docker prunes go through the same
+script, which retries them because two concurrent prunes on the shared Docker daemon make the second
+one fail.
+
 The runner's disk needs the same hygiene as its caches: `check` reclaims dangling images and build
 cache older than an hour before it builds, then prunes what it built even when it fails. A job killed
 mid-step otherwise hands the full disk it created — the 2026-10-13 ENOSPC kill — to the next run.

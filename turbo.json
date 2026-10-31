@@ -1,5 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "CANARY_CI_JOB",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "TMPDIR"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
