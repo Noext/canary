@@ -1,0 +1,368 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Canary, type Observation } from "../src/canary.js";
+import { loadConfig } from "../src/config.js";
+import { QaError } from "../src/diagnostics.js";
+import { durableWriteClaimed } from "../src/durable-write.js";
+import { executeScenario } from "../src/executor.js";
+import type { PrContext } from "../src/github.js";
+import { sourceLineMaterial } from "../src/policy.js";
+import { reportMarkdown } from "../src/report.js";
+import type { RunResult } from "../src/results.js";
+import { type Scenario, ScenarioSchema } from "../src/schema.js";
+
+/**
+ * Point 6 du plan du juge (banc pharmania, PR #20 run 1 et f1 run 1) : une
+ * `persisted` sur un état tenu en mémoire de la vue échouait au rechargement
+ * sur la base comme sur la tête. Sans écriture durable dans le diff, et avec
+ * un aller-retour de vue prouvé, elle se juge à la réentrée ; partout ailleurs
+ * le rechargement reste la règle.
+ */
+const EXPECTED = "Erreur de rendu de monnaie";
+const IN_MEMORY_PATCH = [
+  "@@ -1,3 +1,4 @@",
+  " export function CashView() {",
+  "-  const [note, setNote] = useState('');",
+  "+  const [note, setNote] = useState(draft);",
+  "+  const reset = () => setCounts(empty);",
+  " }",
+].join("\n");
+
+function context(patch: string, filename = "apps/web/app/page.tsx") {
+  return {
+    files: [
+      { filename, status: "modified", patch },
+      {
+        filename: "openspec/proposal.md",
+        status: "modified",
+        patch:
+          "@@ -1 +1 @@\n-ancien\n+Aucune persistance : fetch, localStorage, mutation.",
+      },
+    ],
+  } as unknown as PrContext;
+}
+
+function scenario(
+  overrides: { leave?: "click" | "fill"; refill?: boolean; title?: string } = {}
+): Scenario {
+  const refill = overrides.refill
+    ? [
+        {
+          id: "refill",
+          description: "ressaisir la justification",
+          action: {
+            type: "fill",
+            locator: { by: "label", value: "Justification" },
+            value: EXPECTED,
+          },
+        },
+      ]
+    : [];
+  const leave =
+    overrides.leave === "fill"
+      ? {
+          type: "fill",
+          locator: { by: "label", value: "Commentaire" },
+          value: "ok",
+        }
+      : {
+          type: "click",
+          locator: { by: "role", value: "link", name: "Pilotage" },
+        };
+  return ScenarioSchema.parse({
+    id: "justification-conservee",
+    title: overrides.title ?? "La justification survit à la sortie de la vue",
+    rationale: "La justification est gardée dans la vue Caisse et Coffre",
+    kind: "happy_path",
+    sourceFiles: ["apps/web/app/page.tsx"],
+    preconditions: [],
+    requirements: [
+      {
+        sourceFile: "apps/web/app/page.tsx",
+        quote: "const [note, setNote] = useState(draft);",
+        behavior: "La justification saisie reste dans la vue",
+      },
+    ],
+    steps: [
+      {
+        id: "open",
+        description: "ouvrir",
+        action: { type: "goto", path: "/" },
+      },
+      {
+        id: "fill",
+        description: "saisir la justification",
+        action: {
+          type: "fill",
+          locator: { by: "label", value: "Justification" },
+          value: EXPECTED,
+        },
+      },
+      { id: "leave", description: "quitter la vue", action: leave },
+      {
+        id: "back",
+        description: "revenir sur Caisse et Coffre",
+        action: {
+          type: "click",
+          locator: { by: "role", value: "link", name: "Caisse et Coffre" },
+        },
+      },
+      ...refill,
+      {
+        id: "check",
+        description: "relire la justification",
+        action: { type: "assert", assertionId: "justification-retrouvee" },
+      },
+    ],
+    assertions: [
+      {
+        id: "justification-retrouvee",
+        description: "la justification saisie est retrouvée",
+        kind: "value",
+        expected: EXPECTED,
+        target: { by: "label", value: "Justification" },
+        afterStep: "back",
+        verification: "persisted",
+        assertionIntent: "persistence",
+        requirement: 0,
+      },
+    ],
+  });
+}
+
+interface Probes {
+  /** Valeur juste avant le retour ; absente = cible introuvable. */
+  beforeReturn?: string;
+  /** Valeur avant le départ ; absente = cible introuvable. */
+  departure?: string;
+  /** Valeur après le rechargement. */
+  reloaded: string;
+  /** Valeur relue après le retour ; l'attendu par défaut. */
+  returned?: string;
+}
+
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(cleanups.splice(0).map((close) => close()));
+});
+
+async function run(plan: Scenario, patch: string | undefined, probes: Probes) {
+  const dataDir = await mkdtemp(join(tmpdir(), "canary-reentry-"));
+  cleanups.push(() => rm(dataDir, { force: true, recursive: true }));
+  const preview = "http://127.0.0.1:9/preview";
+  const config = loadConfig({
+    OPENAI_BASE_URL: "http://127.0.0.1:9/v1",
+    OPENAI_MODEL: "fixture-scripted-model",
+    QA_ALLOW_PRIVATE_PREVIEWS: "true",
+    QA_API_TOKEN: "fixture-api-token-123456789012345",
+    QA_DATA_DIR: dataDir,
+  });
+  const labels: string[] = [];
+  const read = (value: string | undefined): Observation => {
+    if (value === undefined) {
+      throw new QaError("TARGET_NOT_FOUND", "cible absente", "relire");
+    }
+    return { actual: value, snapshot: "vue", url: preview };
+  };
+  vi.spyOn(Canary.prototype, "start").mockResolvedValue("reentry");
+  vi.spyOn(Canary.prototype, "act").mockImplementation(
+    async (_session, label) => {
+      labels.push(label);
+      if (label.startsWith("departure-")) {
+        return read(probes.departure);
+      }
+      if (label.startsWith("baseline-")) {
+        return read(probes.beforeReturn);
+      }
+      if (label.startsWith("persistence-")) {
+        return read(probes.reloaded);
+      }
+      return read(
+        label.endsWith("-assert") ? (probes.returned ?? EXPECTED) : EXPECTED
+      );
+    }
+  );
+  vi.spyOn(Canary.prototype, "end").mockResolvedValue([]);
+  const result = await executeScenario(
+    plan,
+    preview,
+    dataDir,
+    config,
+    new Canary(config),
+    undefined,
+    "",
+    patch === undefined ? [] : sourceLineMaterial(context(patch))
+  );
+  return { labels, result };
+}
+
+const reloadsLost = {
+  departure: EXPECTED,
+  reloaded: "",
+} satisfies Probes;
+
+describe("persisted sans écriture durable dans le diff", () => {
+  it("se juge à la réentrée quand le diff est purement en mémoire et que la vue a été quittée puis retrouvée", async () => {
+    const { labels, result } = await run(
+      scenario(),
+      IN_MEMORY_PATCH,
+      reloadsLost
+    );
+    expect(result.outcome).toBe("passed");
+    // Aucun rechargement : la valeur perdue au reload ne compte pas.
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(
+      false
+    );
+    expect(result.assertions[0]).toMatchObject({
+      passed: true,
+      actual: EXPECTED,
+      baseline: null,
+      changed: true,
+      verification: "persisted",
+      reloadPersistence: "not-claimed",
+    });
+    const report = reportMarkdown({
+      id: "run",
+      outcome: "passed",
+      prUrl: "https://github.com/o/r/pull/1",
+      scenarios: [result],
+      startedAt: "2026-10-31T00:00:00.000Z",
+    } as RunResult);
+    expect(report).toContain("reload persistence not claimed");
+  });
+
+  it("garde le rechargement quand le diff ajoute une écriture localStorage", async () => {
+    const patch = `${IN_MEMORY_PATCH}\n+  localStorage.setItem("note", note);`;
+    const { labels, result } = await run(scenario(), patch, reloadsLost);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+    expect(result.assertions[0]?.reloadPersistence).toBeUndefined();
+  });
+
+  it("garde le rechargement quand le diff retire une écriture localStorage", async () => {
+    const patch = `${IN_MEMORY_PATCH}\n-  localStorage.setItem("note", note);`;
+    const { labels, result } = await run(scenario(), patch, reloadsLost);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("garde le rechargement sans aller-retour de vue avant l'étape d'ancrage", async () => {
+    const { labels, result } = await run(
+      scenario({ leave: "fill" }),
+      IN_MEMORY_PATCH,
+      reloadsLost
+    );
+    expect(labels.some((label) => label.startsWith("departure-"))).toBe(false);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("garde le rechargement quand une écriture sépare le retour de la lecture", async () => {
+    const { labels, result } = await run(
+      scenario({ refill: true }),
+      IN_MEMORY_PATCH,
+      reloadsLost
+    );
+    expect(labels.some((label) => label.startsWith("departure-"))).toBe(false);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("garde le rechargement quand la valeur n'était pas là avant le départ", async () => {
+    const { labels, result } = await run(scenario(), IN_MEMORY_PATCH, {
+      reloaded: "",
+    });
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("garde le rechargement quand la cible n'a pas disparu avant le retour", async () => {
+    const { labels, result } = await run(scenario(), IN_MEMORY_PATCH, {
+      ...reloadsLost,
+      beforeReturn: "",
+    });
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("garde le rechargement quand le scénario parle de rechargement", async () => {
+    const { labels, result } = await run(
+      scenario({ title: "La justification survit au rechargement de la page" }),
+      IN_MEMORY_PATCH,
+      reloadsLost
+    );
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("garde le rechargement sans matériel de diff lié", async () => {
+    const { labels, result } = await run(scenario(), undefined, reloadsLost);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("échoue à la réentrée quand la valeur est perdue au retour", async () => {
+    const { result } = await run(scenario(), IN_MEMORY_PATCH, {
+      ...reloadsLost,
+      returned: "",
+    });
+    expect(result.outcome).toBe("failed");
+    expect(result.assertions[0]).toMatchObject({
+      passed: false,
+      actual: "",
+      reloadPersistence: "not-claimed",
+    });
+  });
+});
+
+describe("lecture du diff pour l'écriture durable", () => {
+  const claimed = (patch: string, filename?: string) =>
+    durableWriteClaimed(sourceLineMaterial(context(patch, filename)));
+
+  it("ne lit pas la prose ni un attribut de repérage data-*-action", () => {
+    expect(claimed(IN_MEMORY_PATCH)).toBe(false);
+    expect(
+      claimed(`${IN_MEMORY_PATCH}\n+  <Button data-cash-action="cloturer" />`)
+    ).toBe(false);
+  });
+
+  it("revendique une écriture pour le réseau, une action ou une aide d'écriture", () => {
+    for (const line of [
+      "+  await fetch('/api/notes', { body });",
+      "+  axios.post(url, note);",
+      "+  <form action={saveNote}>",
+      "+'use server';",
+      "-  saveDraft(note);",
+      "+  const mutation = useMutation(update);",
+      "+  document.cookie = 'note=' + note;",
+      "+  router.replace('?note=' + note);",
+      "+  persist(store);",
+    ]) {
+      expect(claimed(`${IN_MEMORY_PATCH}\n${line}`), line).toBe(true);
+    }
+  });
+
+  it("tient un fichier de code sans patch pour une écriture, pas une image", () => {
+    const material = sourceLineMaterial({
+      files: [
+        { filename: "src/a.ts", status: "modified", patch: IN_MEMORY_PATCH },
+        { filename: "src/huge.ts", status: "modified" },
+      ],
+    } as unknown as PrContext);
+    expect(durableWriteClaimed(material)).toBe(true);
+    const image = sourceLineMaterial({
+      files: [
+        { filename: "src/a.ts", status: "modified", patch: IN_MEMORY_PATCH },
+        { filename: "public/logo.png", status: "added" },
+      ],
+    } as unknown as PrContext);
+    expect(durableWriteClaimed(image)).toBe(false);
+  });
+
+  it("tient un matériel non lié pour une écriture", () => {
+    expect(durableWriteClaimed([])).toBe(true);
+  });
+});

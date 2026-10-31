@@ -46,6 +46,13 @@ export interface ScenarioResult {
     changed?: boolean;
     /** L'indice de l'exigence qui justifie l'attendu : la preuve, dans le rapport. */
     requirement?: number;
+    /**
+     * Présent quand une `persisted` a été jugée à la RÉENTRÉE (aller-retour de
+     * vue prouvé), sans rechargement : aucune ligne du diff n'écrit d'état
+     * durable, donc la survie au rechargement n'est pas revendiquée — et pas
+     * démontrée. Le rapport le publie (voir `reentry.ts`).
+     */
+    reloadPersistence?: "not-claimed";
   }[];
   /**
    * Le classement explicite du scénario : ce qui a été démontré, ce qui a échoué,

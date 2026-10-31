@@ -17,6 +17,7 @@ import {
   resolveStepFromObservation,
 } from "./observe-act.js";
 import type { ProgressEvent } from "./progress.js";
+import { captureReadings, reentryEvidence } from "./reentry.js";
 import type {
   Assertion,
   Scenario,
@@ -24,7 +25,6 @@ import type {
   SourceLineMaterial,
 } from "./schema.js";
 import {
-  captureBaselines,
   finish,
   readPersisted,
   recordStepPlayed,
@@ -133,8 +133,11 @@ async function evaluateAssertion(
   repo: string
 ) {
   const baseline = baselines.get(assertion.id);
+  // Aller-retour prouvé sans écriture durable dans le diff : la persistance se
+  // juge à la réentrée, sans rechargement (voir `reentry.ts`).
+  const reentry = reentryEvidence(result, assertion, baseline);
   let persisted: unknown;
-  if (assertion.verification === "persisted") {
+  if (assertion.verification === "persisted" && !reentry) {
     const probe = await readPersisted(
       sessionId,
       assertion,
@@ -185,7 +188,9 @@ async function evaluateAssertion(
     !alreadySatisfied &&
     (!["transition", "persisted"].includes(verification) ||
       (measured && !unchangedSinceBaseline)) &&
-    (verification !== "persisted" || assertionMatches(assertion, persisted));
+    (verification !== "persisted" ||
+      reentry !== undefined ||
+      assertionMatches(assertion, persisted));
   // A transition whose value did not change proves nothing: the element may be
   // broken or invariant, and the identical baseline cannot tell the two apart.
   const unchanged =
@@ -204,6 +209,7 @@ async function evaluateAssertion(
     verification: verification as "state" | "transition" | "persisted",
     assertionIntent: assertion.assertionIntent,
     ...(measured ? { changed: !unchangedSinceBaseline } : {}),
+    ...reentry,
     ...(assertion.requirement === undefined
       ? {}
       : { requirement: assertion.requirement }),
@@ -220,18 +226,6 @@ async function evaluateAssertion(
     );
   }
 }
-/**
- * Ce qu'un relevé non conforme veut dire. Une valeur inchangée qui satisfait
- * déjà l'attendu rejette la faute sur le plan : elle montre exactement ce que
- * l'assertion demande, donc c'est la vérification choisie qui est fausse, pas la
- * fonctionnalité. Mesuré sur le lot AM (runs 59edcd21 et 9599ccc1), où le plan
- * exigeait une `transition` sur un libellé et sur un attribut d'état qui
- * RESTENT à leur valeur tant que la justification manque. Le verdict reste non
- * vert — `blocked`, statut de commit en erreur — donc rien ne passe en silence ;
- * seul le blâme change de camp. Un changement vers une autre valeur reste
- * `failed`, comme une valeur inchangée qui n'atteint pas l'attendu, et
- * `persisted` garde la règle précédente.
- */
 async function playStepWithRepair(args: {
   baselines: Map<string, unknown>;
   canary: Canary;
@@ -358,14 +352,15 @@ async function driveScenario(
     }
     const effective = resolution.step;
     const started = Date.now();
-    await captureBaselines(
-      sessionId,
-      result.scenario,
-      effective.action.type === "observe" ? undefined : effective.id,
+    await captureReadings({
       baselines,
+      canary,
+      material,
       preview,
-      canary
-    );
+      result,
+      sessionId,
+      stepId: effective.action.type === "observe" ? undefined : effective.id,
+    });
     await record({
       phase: "execution",
       scenarioId: result.scenario.id,

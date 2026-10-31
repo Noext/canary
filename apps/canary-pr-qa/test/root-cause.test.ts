@@ -105,7 +105,7 @@ describe("cause racine : un plan figé sur un instantané unique", () => {
       ["src/canary.ts", "export async function discoverPreview"],
       ["src/executor.ts", "Le plan est un contrat figé"],
       ["src/executor.ts", "canary.start(scenario.title"],
-      ["src/executor.ts", "await captureBaselines("],
+      ["src/executor.ts", "await captureReadings("],
       ["src/runner.ts", "async function replanObservedInvariants"],
       ["src/runner.ts", "await replanObservedInvariants({"],
     ];

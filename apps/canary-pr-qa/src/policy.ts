@@ -6,6 +6,7 @@ import {
 } from "./approved-skips.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
+import { bindDiffFiles } from "./durable-write.js";
 import type { GitHub, PrContext } from "./github.js";
 import { persistenceIntentRefusals } from "./persistence-intent.js";
 import {
@@ -613,7 +614,8 @@ export function sourceLineMaterial(context: PrContext): SourceLineMaterial[] {
     }
     files.push({ lines, path: file.filename });
   }
-  return files;
+  // Les lignes retirées restent lisibles pour la règle de réentrée.
+  return bindDiffFiles(files, context.files);
 }
 /**
  * La part du matériel que le message AFFICHE : celle qui tient dans le budget

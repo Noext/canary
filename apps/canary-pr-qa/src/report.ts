@@ -134,7 +134,7 @@ export function reportMarkdown(
     "| --- | --- | --- | --- |",
     ...result.scenarios.map(
       (item) =>
-        `| ${clean(item.scenario.title)} | ${item.scenario.kind} | ${item.outcome} | ${item.assertions.filter((a) => a.passed).length}/${item.scenario.assertions.length} |`
+        `| ${clean(item.scenario.title)} | ${item.scenario.kind} | ${item.outcome}${item.assertions.some((a) => a.reloadPersistence) ? " — judged on re-entry: reload persistence not claimed" : ""} | ${item.assertions.filter((a) => a.passed).length}/${item.scenario.assertions.length} |`
     ),
     ...result.scenarios
       .filter((item) => item.error)
@@ -194,7 +194,7 @@ ${item.artifacts
       `<video controls preload="metadata" src="${escapeHtml(item.scenario.id)}/${escapeHtml(file)}"></video>`
   )
   .join("")}
-<ul>${item.assertions.map((a) => `<li>${escapeHtml(a.id)}: ${a.passed ? "PASS" : "FAIL"}${a.preMatched ? " (already satisfied before the step)" : ""} — actual: ${escapeHtml(JSON.stringify(a.actual))}</li>`).join("")}</ul>
+<ul>${item.assertions.map((a) => `<li>${escapeHtml(a.id)}: ${a.passed ? "PASS" : "FAIL"}${a.preMatched ? " (already satisfied before the step)" : ""}${a.reloadPersistence ? " (judged on re-entry: reload persistence not claimed)" : ""} — actual: ${escapeHtml(JSON.stringify(a.actual))}</li>`).join("")}</ul>
 <details><summary>Executed steps</summary><pre>${escapeHtml(JSON.stringify(item.steps, null, 2))}</pre></details></section>`
     )
     .join("");
