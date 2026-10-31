@@ -32,6 +32,9 @@ async function socketPath(): Promise<string> {
 /** Un « démon » qui répond son nom à chaque connexion. */
 function daemon(name: string): net.Server {
   const server = net.createServer((socket) => {
+    // La sonde se connecte puis ferme aussitôt : écrire sur cette connexion
+    // peut échouer (ECONNRESET), comme le vrai démon le tolère pour ses clients.
+    socket.on("error", () => undefined);
     socket.end(name);
   });
   servers.push(server);
