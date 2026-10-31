@@ -92,6 +92,7 @@ import {
   savePlannerInputs,
   saveReplayBundle,
   saveReport,
+  settleApprovedSkips,
   statusDescription,
 } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
@@ -1499,6 +1500,13 @@ async function executePlan(
   progress: Progress,
   github: GitHub
 ) {
+  const policy = await trustedPolicy(github, context);
+  // Un diff entièrement approuvé ignoré par la base n'a rien de testable au
+  // navigateur : verdict `skipped`, sans découverte ni appel au planificateur.
+  if (settleApprovedSkips(result, policy, context)) {
+    return;
+  }
+  validateProvider(policy, config);
   await progress.record({ phase: "discovery" });
   const { evidence, initialPage } = await discoverPreview(
     context,
@@ -1522,8 +1530,6 @@ async function executePlan(
     config,
     planFiles
   );
-  const policy = await trustedPolicy(github, context);
-  validateProvider(policy, config);
   const discovery = { url: initialPage.url, aria: evidence };
   await savePlannerInputs({
     catalog,

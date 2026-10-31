@@ -182,6 +182,15 @@ rien et la run est refusée comme pour un skip non approuvé, sans exception.
 Un chemin exact continue de fonctionner ; la politique reste lue sur le SHA de
 base, donc une PR ne peut pas approuver son propre skip.
 
+Quand **chaque** fichier changé (et l'ancien chemin d'un fichier renommé) est
+couvert par un `approvedSkips`, la PR n'a rien de testable au navigateur : la run
+se conclut `skipped` sans découverte, sans appel au planificateur ni scénario.
+`result.json` porte `coverage.gate: "approved-skips-only"` et le plan liste chaque
+fichier avec la raison approuvée ; le rapport les publie en « Not browser-tested »
+et le statut de commit (`error`, puisque `skipped` n'est jamais une réussite) dit
+`QA skipped: N/N changed files are approved skips (.canary/qa.json)…`. Un seul
+fichier non couvert suffit pour que la PR soit planifiée comme avant.
+
 Configurer les autres checks GitHub obligatoires pour couvrir les tests unitaires,
 backend, sécurité et builds. Les citations lexicales rendent le contrat vérifiable ;
 elles ne garantissent pas que le modèle a identifié tous les bugs.
