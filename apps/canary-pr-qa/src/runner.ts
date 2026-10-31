@@ -92,6 +92,7 @@ import {
   savePlannerInputs,
   saveReplayBundle,
   saveReport,
+  settleNonRuntimeDiff,
   statusDescription,
 } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
@@ -1491,7 +1492,7 @@ async function replanWithObservations(
 async function executePlan(
   result: RunResult,
   context: PrContext,
-  preview: Preview,
+  options: RunOptions,
   root: string,
   config: Config,
   canary: Canary,
@@ -1499,6 +1500,22 @@ async function executePlan(
   progress: Progress,
   github: GitHub
 ) {
+  const policy = await trustedPolicy(github, context);
+  // Un diff de documentation et de tests seuls n'a rien de testable au
+  // navigateur : verdict `skipped` sans préversion à attendre, découverte ni
+  // appel au planificateur. Tout autre diff est planifié comme avant.
+  if (settleNonRuntimeDiff(result, policy, context)) {
+    return;
+  }
+  const preview = await resolvePreview(
+    context,
+    github,
+    config,
+    options.previewUrl
+  );
+  result.preview = preview;
+  checkBaselineHost(context, config);
+  validateProvider(policy, config);
   await progress.record({ phase: "discovery" });
   const { evidence, initialPage } = await discoverPreview(
     context,
@@ -1522,8 +1539,6 @@ async function executePlan(
     config,
     planFiles
   );
-  const policy = await trustedPolicy(github, context);
-  validateProvider(policy, config);
   const discovery = { url: initialPage.url, aria: evidence };
   await savePlannerInputs({
     catalog,
@@ -1885,7 +1900,7 @@ async function runBaseline(
 async function recheck(
   result: RunResult,
   context: PrContext,
-  preview: Preview,
+  preview: Preview | undefined,
   options: RunOptions,
   github: GitHub,
   config: Config
@@ -1899,6 +1914,11 @@ async function recheck(
     result.outcome = "stale";
     result.error =
       "PR head/base or state changed during QA. Results apply only to the recorded SHA; run again.";
+    return;
+  }
+  // Un run conclu sans préversion n'a rien affirmé d'elle : seuls la tête, la
+  // base et l'état de la PR le rendent périmé.
+  if (!preview) {
     return;
   }
   const currentPreview = await resolvePreview(
@@ -2077,17 +2097,10 @@ async function runUnscoped(
       );
     }
     await progress.record({ phase: "preview" });
-    result.preview = await resolvePreview(
-      context,
-      github,
-      config,
-      options.previewUrl
-    );
-    checkBaselineHost(context, config);
     await executePlan(
       result,
       context,
-      result.preview,
+      options,
       root,
       config,
       canary,

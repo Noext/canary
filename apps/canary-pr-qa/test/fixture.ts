@@ -192,6 +192,13 @@ export async function fixture(
     headContent?: string;
     /** Second fichier changé, pour déclarer une source sans exigence témoignée. */
     secondChangedFile?: string;
+    /**
+     * Fichiers changés servis à la place de `src/form.ts` (et du second
+     * fichier) : un diff de documentation seule, ou un diff mêlé.
+     */
+    changedFiles?: { filename: string; patch: string }[];
+    /** `approvedSkips` de la politique `.canary/qa.json` servie sur la base. */
+    approvedSkips?: { path: string; reason: string }[];
     requireWriteEvidence?: boolean;
     unchangedState?: boolean;
     persistent?: boolean;
@@ -442,6 +449,13 @@ export async function fixture(
       return;
     }
     if (path.startsWith("/repos/fixture/app/pulls/1/files")) {
+      if (options.changedFiles) {
+        json(
+          res,
+          options.changedFiles.map((file) => ({ ...file, status: "modified" }))
+        );
+        return;
+      }
       json(res, [
         {
           filename: "src/form.ts",
@@ -482,7 +496,8 @@ export async function fixture(
         title: "Welcome users by name",
         body: "Save the name via the form",
         state: "open",
-        changed_files: options.secondChangedFile ? 2 : 1,
+        changed_files:
+          options.changedFiles?.length ?? (options.secondChangedFile ? 2 : 1),
         head: {
           sha: options.updatedSha && prReads >= 3 ? BASE_SHA : SHA,
           repo: { full_name: "fixture/app" },
@@ -492,7 +507,10 @@ export async function fixture(
       return;
     }
     if (path.includes("/contents/.canary/qa.json")) {
-      if (options.requireWriteEvidence === undefined) {
+      if (
+        options.requireWriteEvidence === undefined &&
+        options.approvedSkips === undefined
+      ) {
         json(res, { message: "Not Found" }, 404);
         return;
       }
@@ -502,6 +520,7 @@ export async function fixture(
           JSON.stringify({
             version: 1,
             requireWriteEvidence: options.requireWriteEvidence,
+            approvedSkips: options.approvedSkips,
           })
         ).toString("base64"),
       });

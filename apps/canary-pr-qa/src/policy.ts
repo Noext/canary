@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  approvedSkipCovers,
+  isDocumentationPath,
+  isTestPath,
+} from "./approved-skips.js";
 import type { Config } from "./config.js";
 import { QaError } from "./diagnostics.js";
 import type { GitHub, PrContext } from "./github.js";
@@ -52,78 +57,6 @@ export async function trustedPolicy(
     ? PolicySchema.parse({ version: 1 })
     : PolicySchema.parse(JSON.parse(value));
 }
-const DOCUMENTATION_DIRECTORY = /(^|\/)(docs|openspec)\//;
-const MARKDOWN_FILE = /\.mdx?$/i;
-/**
- * Un fichier de test ne porte aucun comportement visible : son comportement EST
- * celui du code qu'il éprouve, déjà couvert par le scénario qui exerce ce code.
- * L'exiger comme chemin critique demandait un scénario navigateur pour
- * `apps/web/lib/cash-session.test.ts` (run 338f18d8), c'est-à-dire une preuve en
- * double et un run bloqué pour un fichier qui n'affiche rien. Le skip reste
- * visible : il est listé, compté et publié.
- */
-const TEST_FILE = /(^|\/)(__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
-const LICENSE_FILE = /(^|\/)LICEN[CS]E(\.[^/]*)?$/i;
-/**
- * Documentation is never gated by `criticalPaths`: markdown prose, `docs/` and
- * `openspec/` trees and licence texts change no runtime behavior, including
- * when an application keeps them under a critical prefix such as `apps/`.
- * `.github/` is deliberately not listed here - workflows are executable
- * configuration, so a repository that wants them gated adds the prefix itself.
- */
-export function isDocumentationPath(file: string): boolean {
-  return (
-    DOCUMENTATION_DIRECTORY.test(file) ||
-    MARKDOWN_FILE.test(file) ||
-    LICENSE_FILE.test(file)
-  );
-}
-function segmentMatches(pattern: string, segment: string): boolean {
-  if (!pattern.includes("*")) {
-    return pattern === segment;
-  }
-  const source = pattern
-    .split("*")
-    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("[^/]*");
-  return new RegExp(`^${source}$`).test(segment);
-}
-function segmentsMatch(pattern: string[], file: string[]): boolean {
-  const [head, ...rest] = pattern;
-  if (head === undefined) {
-    return file.length === 0;
-  }
-  if (head === "**") {
-    // `**` spans zero or more segments, including every one of them.
-    return Array.from({ length: file.length + 1 }, (_, index) => index).some(
-      (index) => segmentsMatch(rest, file.slice(index))
-    );
-  }
-  return (
-    file.length > 0 &&
-    segmentMatches(head, file[0] as string) &&
-    segmentsMatch(rest, file.slice(1))
-  );
-}
-/**
- * `approvedSkips[].path` accepts an exact path or a pattern: `*` matches
- * inside one segment and `**` spans segments, so a wildcard app directory
- * followed by a file name is honoured. A pattern made only of wildcard
- * segments, or ending with a slash, would approve every skip and disable this
- * gate, so it approves nothing and the run is refused exactly like an
- * unapproved skip.
- */
-function approvedSkipCovers(pattern: string, file: string): boolean {
-  const segments = pattern.split("/").filter(Boolean);
-  if (
-    segments.length === 0 ||
-    pattern.endsWith("/") ||
-    segments.every((segment) => segment === "*" || segment === "**")
-  ) {
-    return false;
-  }
-  return segmentsMatch(segments, file.split("/").filter(Boolean));
-}
 /**
  * Un fichier critique : le runtime, jamais de la documentation. Le gate de
  * couverture s'en sert pour refuser un skip (`criticalSkipRefused`), et le
@@ -135,7 +68,7 @@ function approvedSkipCovers(pattern: string, file: string): boolean {
  */
 function isCriticalPath(policy: Policy, file: string): boolean {
   return (
-    !(isDocumentationPath(file) || TEST_FILE.test(file)) &&
+    !(isDocumentationPath(file) || isTestPath(file)) &&
     policy.criticalPaths.some((prefix) => file.startsWith(prefix))
   );
 }
@@ -3345,7 +3278,7 @@ function hasInitialValue(
   const assigned = new RegExp(`\\b${key}\\s*:\\s*"(?!")`);
   return material.some(
     (source) =>
-      !TEST_FILE.test(source.path) &&
+      !isTestPath(source.path) &&
       source.lines.some(
         (line) =>
           assigned.test(line.text) &&
