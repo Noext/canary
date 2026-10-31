@@ -427,6 +427,63 @@ describe("refus différés et réécriture après observation", () => {
     expect(result.outcome).not.toBe("passed");
   });
 
+  /**
+   * Un scénario `regression` justifié et témoigné, joué une fois sur la tête,
+   * puis réécrit par la réécriture du plan entier SANS être réexécuté : seul
+   * `manquant` l'est. `rewrite` change son contrat dans le plan final.
+   */
+  function rewrittenUnexecuted(
+    rewrite: (scenario: Plan["scenarios"][number]) => void
+  ): Plan[] {
+    const first = deferredPlan("regression", { expected: "Welcome" });
+    first.scenarios.push(missingTarget());
+    const second = structuredClone(first);
+    rewrite(second.scenarios[0]!);
+    return [first, second];
+  }
+
+  it("une réécriture qui change un scénario sans le réexécuter garde sa comparaison à la base : BASELINE_REGRESSION", async () => {
+    const { by, calls, result } = await runPlans(
+      rewrittenUnexecuted((scenario) => {
+        scenario.title = "Le total réécrit est affiché";
+      }),
+      "Welcome Ada",
+      "Hello Ada"
+    );
+    expect(calls).toBe(2);
+    expect(result.replannedScenarioIds ?? []).not.toContain("total");
+    expect(result.plan?.scenarios[0]?.title).toBe(
+      "Le total réécrit est affiché"
+    );
+    // La base rejoue le contrat que la tête a exécuté : mêmes hashes.
+    const base = result.baseline?.scenarios.find(
+      (item) => item.scenario.id === "total"
+    );
+    expect(base?.contract?.hash).toBe(by("total")?.contract?.hash);
+    expect(result.baselineComparison?.inconclusive ?? []).not.toContainEqual(
+      expect.objectContaining({ scenarioId: "total" })
+    );
+    expect(by("total")?.outcome).toBe("failed");
+    expect(by("total")?.diagnostic?.code).toBe("BASELINE_REGRESSION");
+  });
+
+  it("une réécriture refusée d'un scénario déjà exécuté ne lui retire pas sa base", async () => {
+    const { by, result } = await runPlans(
+      rewrittenUnexecuted((scenario) => {
+        Object.assign(scenario.assertions[0]!, {
+          target: { by: "css", value: ".text-green-600" },
+        });
+      }),
+      "Welcome Ada",
+      "Hello Ada"
+    );
+    expect(
+      result.baseline?.scenarios.map((item) => item.scenario.id)
+    ).toContain("total");
+    expect(by("total")?.outcome).toBe("failed");
+    expect(by("total")?.diagnostic?.code).toBe("BASELINE_REGRESSION");
+  });
+
   it("un refus avant exécution garde son code précis, base ou non", async () => {
     // Objectif sans témoin ET sélecteur instable : rien n'est joué, le
     // diagnostic reste celui du sélecteur, comme sur main.

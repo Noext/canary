@@ -1875,14 +1875,26 @@ async function runBaseline(
   if (scope) {
     scope.previewSha = basePreview.sha;
   }
+  // La base rejoue le contrat que la tête a EXÉCUTÉ, pas celui du plan final :
+  // une réécriture (après observation, sur invariant, sonde de vue) réécrit
+  // tout le plan et peut changer un scénario qu'elle ne réexécute pas. Son
+  // hash différerait des deux côtés, la comparaison resterait non concluante,
+  // et une régression que la base aurait vue resterait verte.
+  const executed = new Map(
+    result.scenarios
+      .filter((item) => item.contract !== undefined)
+      .map((item) => [item.scenario.id, item.scenario])
+  );
   try {
-    for (const scenario of plan.scenarios) {
-      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
-      // Un scénario à fixtures n'est pas rejoué : le catalogue sème
-      // l'environnement de tête, sous l'espace de noms et la clé d'idempotence
-      // de son exécution de tête.
+    for (const planned of plan.scenarios) {
+      const scenario = executed.get(planned.id) ?? planned;
+      // Un scénario refusé ne dépense aucune étape navigateur, base comprise,
+      // sauf si la tête en a joué un contrat accepté : la réécriture refusée
+      // ne retire pas sa base au contrat exécuté. Un scénario à fixtures n'est
+      // pas rejoué : le catalogue sème l'environnement de tête, sous l'espace
+      // de noms et la clé d'idempotence de son exécution de tête.
       if (
-        options.refused.has(scenario.id) ||
+        (options.refused.has(scenario.id) && !executed.has(scenario.id)) ||
         scenario.preconditions.some((item) => item.startsWith("fixture:"))
       ) {
         continue;
