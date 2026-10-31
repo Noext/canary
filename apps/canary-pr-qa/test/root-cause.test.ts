@@ -126,6 +126,17 @@ describe("cause racine : un plan figé sur un instantané unique", () => {
       );
       expect(found, `inattendu ${file}:${line}`).toBe(true);
     }
+    // Une plage `a-b` va vers l'avant, et ne déborde pas du fichier : une
+    // mise à jour qui déplace son début sans sa fin la rendait inversée.
+    for (const [, file, start, end] of doc.matchAll(
+      /(src\/[a-z-]+\.ts):(\d+)-(\d+)/g
+    )) {
+      const lines = read(...(file ?? "").split("/")).split("\n").length;
+      expect(Number(end), `${file}:${start}-${end}`).toBeGreaterThanOrEqual(
+        Number(start)
+      );
+      expect(Number(end), `${file}:${start}-${end}`).toBeLessThanOrEqual(lines);
+    }
   });
 
   it("les ancrages de code cités existent encore", () => {

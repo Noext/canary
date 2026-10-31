@@ -329,3 +329,122 @@ describe("W — objectif sans témoin différé à la base", () => {
     expect(result.outcome).toBe("failed");
   });
 });
+
+describe("refus différés et réécriture après observation", () => {
+  const unwitnessed = () =>
+    deferredPlan("happy_path", {
+      target: { by: "css", value: "#autre" },
+      expected: "Bonjour à tous",
+      requirement: undefined,
+    });
+
+  /**
+   * Un scénario dont l'étape vise un bouton absent de la découverte
+   * (PLAN_TARGET_MISSING, refus que la réécriture traite) : il déclenche la
+   * réécriture après observation.
+   */
+  function missingTarget(): Plan["scenarios"][number] {
+    const plan = deferredPlan("happy_path");
+    const scenario = plan.scenarios[0]!;
+    scenario.id = "manquant";
+    scenario.steps.splice(1, 0, {
+      id: "press",
+      description: "appuyer sur le bouton",
+      action: {
+        type: "click",
+        locator: { by: "role", value: "button", name: "Inexistant" },
+      },
+    } as never);
+    Object.assign(scenario.assertions[0]!, {
+      expected: "Welcome",
+      afterStep: "press",
+    });
+    return scenario;
+  }
+
+  /** Le modèle rend `plans[i]` au i-ème appel, puis le dernier. */
+  function scriptPlans(plans: Plan[]) {
+    let calls = 0;
+    vi.spyOn(Model.prototype, "json").mockImplementation((async () => {
+      const plan = plans[Math.min(calls, plans.length - 1)]!;
+      calls += 1;
+      return structuredClone(plan);
+    }) as unknown as Model["json"]);
+    return () => calls;
+  }
+
+  async function runPlans(plans: Plan[], head: unknown, base: unknown) {
+    const f = await setup();
+    stubSides(head, base);
+    const calls = scriptPlans(plans);
+    const result = await runQa(
+      { prUrl: PR_URL, previewUrl: f.baseUrl },
+      { ...f.config, QA_BASELINE_URL_TEMPLATE: withBase(f.baseUrl) }
+    );
+    const by = (id: string) =>
+      result.scenarios.find((item) => item.scenario.id === id);
+    return { by, calls: calls(), result };
+  }
+
+  it("une réécriture adoptée garde la base d'un scénario différé : BASELINE_REGRESSION", async () => {
+    const plan = unwitnessed();
+    plan.scenarios.push(missingTarget());
+    const { by, calls, result } = await runPlans(
+      [plan],
+      "Au revoir",
+      "Bonjour à tous"
+    );
+    // La réécriture a bien eu lieu, et le plan rendu est adopté.
+    expect(calls).toBe(2);
+    expect(result.replannedScenarioIds).toBeDefined();
+    expect(result.baseline?.scenarios.map((item) => item.scenario.id)).toEqual([
+      "total",
+    ]);
+    expect(by("total")?.diagnostic?.code).toBe("BASELINE_REGRESSION");
+    expect(by("total")?.outcome).toBe("failed");
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("un scénario réécrit sans témoin, réexécuté, n'est jamais vert", async () => {
+    const first = deferredPlan("happy_path");
+    first.scenarios = [missingTarget()];
+    // La réécriture retire le bouton absent, mais lit une cible que le diff
+    // n'écrit pas : objectif sans témoin, différé à la base.
+    const rewritten = unwitnessed();
+    rewritten.scenarios[0]!.id = "manquant";
+    (rewritten.scenarios[0]!.assertions[0] as { expected: string }).expected =
+      "Au revoir";
+    const { by, calls, result } = await runPlans(
+      [first, rewritten],
+      "Au revoir",
+      "Bonjour à tous"
+    );
+    expect(calls).toBe(2);
+    const scenario = by("manquant");
+    expect(scenario?.steps.length).toBeGreaterThan(0);
+    expect(scenario?.outcome).toBe("blocked");
+    expect(scenario?.diagnostic?.code).toBe("OBJECTIVE_UNWITNESSED");
+    expect(result.outcome).not.toBe("passed");
+  });
+
+  it("un refus avant exécution garde son code précis, base ou non", async () => {
+    // Objectif sans témoin ET sélecteur instable : rien n'est joué, le
+    // diagnostic reste celui du sélecteur, comme sur main.
+    const plan = deferredPlan("happy_path", {
+      target: { by: "css", value: ".text-green-600" },
+      expected: "Bonjour à tous",
+      requirement: undefined,
+    });
+    for (const template of [undefined, withBase]) {
+      vi.restoreAllMocks();
+      const { scenario } = await run(
+        plan,
+        { head: "Au revoir", base: "Bonjour à tous" },
+        template
+      );
+      expect(scenario.steps, String(template)).toEqual([]);
+      expect(scenario.outcome).toBe("blocked");
+      expect(scenario.diagnostic?.code).toBe("PLAN_SELECTOR_UNSTABLE");
+    }
+  });
+});

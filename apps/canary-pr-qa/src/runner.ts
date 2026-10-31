@@ -1430,10 +1430,13 @@ async function replanWithObservations(
   const discovery = { url: input.initialPage.url, aria: input.evidence };
   const revisedEvidence = validatePlanEvidence(revised, discovery);
   const evidenceRefusals = evidenceRefusalsByScenario(revisedEvidence);
+  // Avec une base, provenance et témoin restent différés comme au premier
+  // passage : sinon chaque scénario différé quittait la base, et sa régression.
   const revisedRefusals = preExecutionRefusalTable(revised, {
     catalog: input.catalog,
     config: input.config,
     context: input.context,
+    deferToBase: Boolean(input.config.QA_BASELINE_URL_TEMPLATE),
     evidence: discovery,
     policy: input.policy,
   });
@@ -1767,7 +1770,7 @@ async function executePlan(
   // La base est un oracle indépendant : une régression devient rouge, une preuve
   // qui passe aussi sur la base n'est plus verte, le reste est publié.
   judgeAgainstBaseline(result, config, context.title, context.files);
-  restoreDeferredRefusals(result, deferred, config);
+  restoreDeferredRefusals(result, deferred, config, context);
   result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {
     await attachReplayRuntimeResults(root, result);

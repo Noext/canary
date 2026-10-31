@@ -2614,16 +2614,28 @@ export function deferredProvenanceRefusals(
  * bloqué. Seule une régression que la base confirme reste rouge ; un scénario
  * différé n'est jamais vert. Appelé après `judgeAgainstBaseline`, avant
  * l'agrégation du run.
+ *
+ * Les refus différés du plan FINAL s'ajoutent à ceux du premier plan : une
+ * réécriture après observation, jugée elle aussi avec le différé, ne fait pas
+ * passer au vert un scénario réexécuté sans témoin. Un scénario refusé avant
+ * exécution pour une autre raison (bloqué, aucune étape) garde son diagnostic,
+ * plus précis : il n'a rien joué, la base n'a rien eu à juger.
  */
 export function restoreDeferredRefusals(
   result: RunResult,
   deferred: ReadonlyMap<string, QaError>,
-  config: Config
+  config: Config,
+  context: Pick<PrContext, "files">
 ): void {
+  const final = result.plan
+    ? deferredProvenanceRefusals(result.plan, config, context)
+    : new Map<string, QaError>();
   for (const scenario of result.scenarios) {
-    const refusal = deferred.get(scenario.scenario.id);
+    const id = scenario.scenario.id;
+    const refusal = deferred.get(id) ?? final.get(id);
     if (
       refusal === undefined ||
+      (scenario.outcome === "blocked" && scenario.steps.length === 0) ||
       (scenario.outcome === "failed" &&
         scenario.diagnostic?.code === "BASELINE_REGRESSION")
     ) {

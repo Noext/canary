@@ -15,15 +15,15 @@ Le planificateur reçoit **une fois** la découverte de la page et le diff, puis
 joue ce script dans l'ordre **sans consulter le modèle** et sans choisir la suite à partir de ce
 qu'il observe.
 
-- `src/runner.ts:1561` — un appel `model.json(PLANNER_PROMPT, payload, …)` produit le plan entier ;
+- `src/runner.ts:1564` — un appel `model.json(PLANNER_PROMPT, payload, …)` produit le plan entier ;
   le seul retour du modèle après cela est une **correction de validation**, avant exécution.
 - `src/canary.ts:782` — `discoverPreview` collecte l'instantané **une fois**, à l'ouverture de la
   preview ; rien ne le rafraîchit ensuite (`PLAN_EVIDENCE_SNAPSHOT_CHARS`, `src/canary.ts:26`).
-- `src/executor.ts:337-336` — le commentaire du code dit la décision architecturale :
+- `src/executor.ts:337-339` — le commentaire du code dit la décision architecturale :
   « Le plan est un contrat figé : l'hôte joue chaque étape dans l'ordre, sans consulter le
   modèle. » Chaque scénario ouvre bien sa propre session (`src/executor.ts:451`), donc
   l'isolation **navigateur** existe ; c'est l'isolation **logique** des hypothèses qui manque.
-- `src/runner.ts:1342` et `src/runner.ts:1738` — `replanObservedInvariants` n'intervient qu'**après** qu'une
+- `src/runner.ts:1342` et `src/runner.ts:1741` — `replanObservedInvariants` n'intervient qu'**après** qu'une
   exécution a contredit le plan : la boucle d'observation existe, mais en réparation, pas en
   décision.
 
