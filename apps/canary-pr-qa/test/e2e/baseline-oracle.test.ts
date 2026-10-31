@@ -161,7 +161,7 @@ describe("la base rejouée comme oracle indépendant", () => {
     expect(scenario.classification).toBe("test-defect");
     expect(stored.baselineComparison.notDiscriminating).toHaveLength(1);
     expect(stored.baselineComparison.changes).toEqual([]);
-    expect(status?.state).toBe("error");
+    expect(status?.state).toBe("failure");
   }, 180_000);
 
   it("rend la comparaison indisponible quand la base ne prouve pas son SHA", async () => {
