@@ -21,7 +21,7 @@ qu'il observe.
   preview ; rien ne le rafraîchit ensuite (`PLAN_EVIDENCE_SNAPSHOT_CHARS`, `src/canary.ts:26`).
 - `src/executor.ts:337-339` — le commentaire du code dit la décision architecturale :
   « Le plan est un contrat figé : l'hôte joue chaque étape dans l'ordre, sans consulter le
-  modèle. » Chaque scénario ouvre bien sa propre session (`src/executor.ts:451`), donc
+  modèle. » Chaque scénario ouvre bien sa propre session (`src/executor.ts:452`), donc
   l'isolation **navigateur** existe ; c'est l'isolation **logique** des hypothèses qui manque.
 - `src/runner.ts:1342` et `src/runner.ts:1741` — `replanObservedInvariants` n'intervient qu'**après** qu'une
   exécution a contredit le plan : la boucle d'observation existe, mais en réparation, pas en

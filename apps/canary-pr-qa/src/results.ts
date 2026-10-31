@@ -53,6 +53,15 @@ export interface ScenarioResult {
      * démontrée. Le rapport le publie (voir `reentry.ts`).
      */
     reloadPersistence?: "not-claimed";
+    /**
+     * Sur une assertion jugée à la réentrée : la relecture APRÈS rechargement,
+     * faite en fin de scénario. Elle ne décide jamais l'issue de ce côté ; la
+     * comparaison à la base la confronte à celle de la base
+     * (`reload-oracle.ts`). `reloadPassed` absent : relecture impossible,
+     * jamais « passée ».
+     */
+    reloadPassed?: boolean;
+    reloadReading?: unknown;
   }[];
   /**
    * Le classement explicite du scénario : ce qui a été démontré, ce qui a échoué,

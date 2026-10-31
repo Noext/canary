@@ -9,7 +9,11 @@ import { durableWriteClaimed } from "../src/durable-write.js";
 import { executeScenario } from "../src/executor.js";
 import type { PrContext } from "../src/github.js";
 import { sourceLineMaterial } from "../src/policy.js";
-import { reportMarkdown, saveReport } from "../src/report.js";
+import {
+  judgeAgainstBaseline,
+  reportMarkdown,
+  saveReport,
+} from "../src/report.js";
 import type { RunResult } from "../src/results.js";
 import { type Scenario, ScenarioSchema } from "../src/schema.js";
 
@@ -138,12 +142,16 @@ function scenario(
 }
 
 interface Probes {
+  /** Avec un oracle de base (`QA_BASELINE_URL_TEMPLATE`) ; vrai par défaut. */
+  base?: boolean;
   /** Valeur juste avant le retour ; absente = cible introuvable. */
   beforeReturn?: string;
   /** Valeur avant le départ ; absente = cible introuvable. */
   departure?: string;
-  /** Valeur après le rechargement. */
-  reloaded: string;
+  /** Code d'une erreur de navigateur levée par la relecture de fin de scénario. */
+  reloadError?: string;
+  /** Valeur après le rechargement ; absente = cible introuvable. */
+  reloaded: string | undefined;
   /** Valeur relue après le retour ; l'attendu par défaut. */
   returned?: string;
 }
@@ -164,6 +172,9 @@ async function run(plan: Scenario, patch: string | undefined, probes: Probes) {
     QA_ALLOW_PRIVATE_PREVIEWS: "true",
     QA_API_TOKEN: "fixture-api-token-123456789012345",
     QA_DATA_DIR: dataDir,
+    ...(probes.base === false
+      ? {}
+      : { QA_BASELINE_URL_TEMPLATE: "http://127.0.0.1:9/base/{sha}" }),
   });
   const labels: string[] = [];
   const read = (value: string | undefined): Observation => {
@@ -183,6 +194,12 @@ async function run(plan: Scenario, patch: string | undefined, probes: Probes) {
         return read(probes.beforeReturn);
       }
       if (label.startsWith("persistence-")) {
+        return read(probes.reloaded);
+      }
+      if (label.startsWith("reload-")) {
+        if (probes.reloadError) {
+          throw new QaError(probes.reloadError, "navigateur", "relancer");
+        }
         return read(probes.reloaded);
       }
       return read(
@@ -217,10 +234,13 @@ describe("persisted sans écriture durable dans le diff", () => {
       reloadsLost
     );
     expect(result.outcome).toBe("passed");
-    // Aucun rechargement : la valeur perdue au reload ne compte pas.
+    // Aucun rechargement pendant le scénario : la valeur perdue au reload ne
+    // décide pas l'issue de la tête. La relecture après rechargement est faite
+    // en fin de scénario et consignée pour la base.
     expect(labels.some((label) => label.startsWith("persistence-"))).toBe(
       false
     );
+    expect(labels.at(-1)).toBe("reload-justification-retrouvee");
     expect(result.assertions[0]).toMatchObject({
       passed: true,
       actual: EXPECTED,
@@ -228,6 +248,8 @@ describe("persisted sans écriture durable dans le diff", () => {
       changed: true,
       verification: "persisted",
       reloadPersistence: "not-claimed",
+      reloadPassed: false,
+      reloadReading: "",
     });
     const runResult = {
       id: "run",
@@ -345,6 +367,189 @@ describe("persisted sans écriture durable dans le diff", () => {
       actual: "",
       reloadPersistence: "not-claimed",
     });
+  });
+});
+
+describe("persisted jugée à la réentrée, confrontée au rechargement de la base", () => {
+  // Une PR casse une persistance existante dont la lecture du stockage est
+  // HORS du diff : `loadCart` lit localStorage ailleurs, le diff n'a aucun
+  // mot-clé d'écriture durable.
+  const LOAD_CART_PATCH = [
+    "@@ -10,3 +10,3 @@ export function CartView() {",
+    "-  useEffect(() => setItems(loadCart()), []);",
+    "+  useEffect(() => setItems([]), []);",
+  ].join("\n");
+  const BASE_SHA = "b".repeat(40);
+
+  function judged(
+    head: Awaited<ReturnType<typeof run>>["result"],
+    base: Awaited<ReturnType<typeof run>>["result"] | undefined
+  ): RunResult {
+    const result = {
+      id: "run",
+      outcome: "passed",
+      prUrl: "https://github.com/o/r/pull/1",
+      scenarios: [head],
+      startedAt: "2026-10-31T00:00:00.000Z",
+      baseline: {
+        sha: BASE_SHA,
+        url: "http://127.0.0.1:9/base",
+        scenarios: base ? [base] : [],
+      },
+    } as RunResult;
+    judgeAgainstBaseline(result, loadConfig({}));
+    return result;
+  }
+
+  it("sans base, garde le rechargement comme sur main", async () => {
+    const { labels, result } = await run(scenario(), LOAD_CART_PATCH, {
+      ...reloadsLost,
+      base: false,
+    });
+    expect(labels.some((label) => label.startsWith("departure-"))).toBe(false);
+    expect(labels.some((label) => label.startsWith("persistence-"))).toBe(true);
+    expect(labels.some((label) => label.startsWith("reload-"))).toBe(false);
+    expect(result.outcome).toBe("failed");
+    expect(result.assertions[0]?.reloadPersistence).toBeUndefined();
+  });
+
+  it("rend BASELINE_REGRESSION quand la base garde la valeur au rechargement et pas la tête", async () => {
+    const head = await run(scenario(), LOAD_CART_PATCH, reloadsLost);
+    expect(head.result.outcome).toBe("passed");
+    expect(head.result.assertions[0]).toMatchObject({
+      reloadPersistence: "not-claimed",
+      reloadPassed: false,
+    });
+    // La base joue le même plan avec le même exécuteur : elle aussi juge à la
+    // réentrée, et consigne la relecture après rechargement.
+    const base = await run(scenario(), LOAD_CART_PATCH, {
+      departure: EXPECTED,
+      reloaded: EXPECTED,
+    });
+    expect(base.result.assertions[0]).toMatchObject({
+      reloadPersistence: "not-claimed",
+      reloadPassed: true,
+      reloadReading: EXPECTED,
+    });
+    const result = judged(head.result, base.result);
+    expect(head.result.outcome).toBe("failed");
+    expect(head.result.diagnostic?.code).toBe("BASELINE_REGRESSION");
+    expect(result.baselineComparison?.regressions).toEqual([
+      expect.objectContaining({
+        assertionId: "justification-retrouvee",
+        head: { passed: false, actual: "" },
+        base: { passed: true, actual: EXPECTED },
+      }),
+    ]);
+  });
+
+  it("rend BASELINE_REGRESSION quand la base, rechargée sans réentrée, relit la valeur", async () => {
+    const head = await run(scenario(), LOAD_CART_PATCH, reloadsLost);
+    // Sur la base, la vue n'a pas été quittée : rechargement ordinaire.
+    const base = await run(scenario(), LOAD_CART_PATCH, {
+      beforeReturn: EXPECTED,
+      departure: EXPECTED,
+      reloaded: EXPECTED,
+    });
+    expect(base.result.assertions[0]?.reloadPersistence).toBeUndefined();
+    judged(head.result, base.result);
+    expect(head.result.outcome).toBe("failed");
+    expect(head.result.diagnostic?.code).toBe("BASELINE_REGRESSION");
+  });
+
+  it("bloque quand la relecture de la base après rechargement n'est pas concluante", async () => {
+    const head = await run(scenario(), LOAD_CART_PATCH, reloadsLost);
+    const base = await run(scenario(), LOAD_CART_PATCH, {
+      departure: EXPECTED,
+      reloaded: EXPECTED,
+      reloadError: "BROWSER_UNAVAILABLE",
+    });
+    expect(base.result.assertions[0]?.reloadPassed).toBeUndefined();
+    const result = judged(head.result, base.result);
+    expect(head.result.outcome).toBe("blocked");
+    expect(head.result.diagnostic?.code).toBe("RELOAD_PERSISTENCE_UNPROVEN");
+    expect(result.baselineComparison?.inconclusive).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ assertionId: "justification-retrouvee" }),
+      ])
+    );
+  });
+
+  it("bloque quand la base manque ou est indisponible", async () => {
+    const missing = await run(scenario(), LOAD_CART_PATCH, reloadsLost);
+    judged(missing.result, undefined);
+    expect(missing.result.outcome).toBe("blocked");
+    const unavailable = await run(scenario(), LOAD_CART_PATCH, reloadsLost);
+    const result = {
+      id: "run",
+      outcome: "passed",
+      prUrl: "https://github.com/o/r/pull/1",
+      scenarios: [unavailable.result],
+      startedAt: "2026-10-31T00:00:00.000Z",
+      baseline: {
+        sha: BASE_SHA,
+        url: "http://127.0.0.1:9/base",
+        scenarios: [],
+        diagnostic: { code: "PREVIEW_UNREACHABLE", message: "x", hint: "" },
+      },
+    } as RunResult;
+    judgeAgainstBaseline(result, loadConfig({}));
+    expect(unavailable.result.outcome).toBe("blocked");
+  });
+
+  it("bloque quand la relecture de la tête après rechargement manque", async () => {
+    const head = await run(scenario(), IN_MEMORY_PATCH, {
+      ...reloadsLost,
+      reloadError: "BROWSER_UNAVAILABLE",
+    });
+    const base = await run(scenario(), IN_MEMORY_PATCH, reloadsLost);
+    judged(head.result, base.result);
+    expect(head.result.outcome).toBe("blocked");
+  });
+
+  it("laisse passer, avec la réserve, quand la valeur est perdue au rechargement des deux côtés", async () => {
+    const head = await run(scenario(), IN_MEMORY_PATCH, reloadsLost);
+    // La base montre une autre valeur au retour (la PR change le
+    // comportement), et la perd elle aussi au rechargement.
+    const base = await run(scenario(), IN_MEMORY_PATCH, {
+      ...reloadsLost,
+      returned: "Autre motif",
+    });
+    expect(base.result.assertions[0]).toMatchObject({
+      reloadPersistence: "not-claimed",
+      reloadPassed: false,
+    });
+    const result = judged(head.result, base.result);
+    expect(head.result.outcome).toBe("passed");
+    expect(result.baselineComparison?.regressions).toEqual([]);
+    expect(reportMarkdown(result)).toContain("reload persistence not claimed");
+  });
+
+  it("laisse passer quand la cible est absente sur la base (interface ajoutée par la PR)", async () => {
+    const head = await run(scenario(), IN_MEMORY_PATCH, reloadsLost);
+    const base = await run(scenario(), IN_MEMORY_PATCH, {
+      ...reloadsLost,
+      departure: undefined,
+      reloaded: undefined,
+    });
+    base.result.assertions = [];
+    base.result.outcome = "blocked";
+    base.result.diagnostic = {
+      code: "TARGET_NOT_FOUND",
+      message: "cible absente",
+      hint: "",
+    };
+    judged(head.result, base.result);
+    expect(head.result.outcome).toBe("passed");
+  });
+
+  it("laisse passer quand la tête garde la valeur au rechargement", async () => {
+    const head = await run(scenario(), LOAD_CART_PATCH, {
+      departure: EXPECTED,
+      reloaded: EXPECTED,
+    });
+    judged(head.result, undefined);
+    expect(head.result.outcome).toBe("passed");
   });
 });
 

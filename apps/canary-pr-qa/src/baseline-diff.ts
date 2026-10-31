@@ -8,6 +8,7 @@ import {
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import type { PrContext } from "./github.js";
+import { judgeReloadPersistence } from "./reload-oracle.js";
 import type {
   BaselineAssertionDiff,
   BaselineComparison,
@@ -109,6 +110,9 @@ function markNotDiscriminating(
  * après cet appel. Un `title` de PR `refactor` déclare un comportement
  * inchangé : chaque scénario y est jugé comme un scénario `regression`. Les
  * `files` du diff disent quels littéraux la PR ajoute (`src/added-literal.ts`).
+ * Une `persisted` jugée à la réentrée est confrontée au rechargement de la base
+ * (`src/reload-oracle.ts`), y compris quand la base manque : jamais verte sans
+ * preuve.
  */
 export function compareWithBaseline(
   result: RunResult,
@@ -118,6 +122,9 @@ export function compareWithBaseline(
 ): void {
   const baseline = result.baseline;
   if (baseline === undefined) {
+    for (const head of result.scenarios) {
+      judgeReloadPersistence(head, undefined, undefined, config);
+    }
     return;
   }
   const comparison: BaselineComparison = {
@@ -131,6 +138,9 @@ export function compareWithBaseline(
   };
   result.baselineComparison = comparison;
   if (baseline.diagnostic) {
+    for (const head of result.scenarios) {
+      judgeReloadPersistence(head, undefined, comparison, config);
+    }
     return;
   }
   const bases = new Map(
@@ -149,6 +159,10 @@ export function compareWithBaseline(
     );
     if (regression) {
       markRegression(head, regression, baseline.sha, config);
+      continue;
+    }
+    const base = bases.get(head.scenario.id);
+    if (judgeReloadPersistence(head, base, comparison, config)) {
       continue;
     }
     const proof = head.scenario.objective

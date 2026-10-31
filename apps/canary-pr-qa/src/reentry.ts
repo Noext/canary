@@ -1,4 +1,6 @@
 import { assertionMatches, type Canary, compileProbe } from "./canary.js";
+import type { Config } from "./config.js";
+import { diagnose } from "./diagnostics.js";
 import { durableWriteClaimed } from "./durable-write.js";
 import type {
   Assertion,
@@ -27,6 +29,15 @@ import { captureBaselines } from "./step-outcome.js";
  *   — ou invisible pour une assertion `visible` : la vue a bien été quittée ;
  * - après le retour, la valeur attendue est relue et diffère de cette valeur
  *   d'avant, comme pour une `transition`.
+ *
+ * La réentrée n'est jamais accordée sans oracle de base
+ * (`QA_BASELINE_URL_TEMPLATE`), ni pour un scénario à fixtures que la base ne
+ * rejoue pas : une PR peut casser une persistance existante dont l'appel de
+ * stockage est hors du diff (`setItems(loadCart())` devenu `setItems([])`).
+ * Sans base, le rechargement reste la règle, comme sur main. Avec base, la
+ * page est EN PLUS rechargée et relue en fin de scénario
+ * (`readReloaded`) : ce relevé ne décide rien de ce côté, la
+ * comparaison à la base le juge (`reload-oracle.ts`).
  *
  * Un plan qui parle de rechargement, ou un scénario `regression`, garde le
  * rechargement. Seuls les kinds `text`, `value` et `visible` ont une absence
@@ -87,6 +98,18 @@ function leaveStepOf(
 }
 
 /**
+ * Vrai quand une base rejouera ce scénario : seule elle peut dire si la
+ * persistance après rechargement existait avant la PR. Un scénario à fixtures
+ * n'est pas rejoué sur la base (`runner.ts`).
+ */
+function baseReplays(config: Config, scenario: Scenario): boolean {
+  return (
+    Boolean(config.QA_BASELINE_URL_TEMPLATE) &&
+    !scenario.preconditions.some((item) => item.startsWith("fixture:"))
+  );
+}
+
+/**
  * Les relevés d'avant-étape : la valeur d'avant de `captureBaselines`, puis,
  * avant une étape de départ, la valeur que la vue montre encore. Une sonde de
  * départ en échec ne laisse aucun relevé : l'assertion est alors rechargée,
@@ -95,6 +118,7 @@ function leaveStepOf(
 export async function captureReadings(input: {
   baselines: Map<string, unknown>;
   canary: Canary;
+  config: Config;
   material: SourceLineMaterial[];
   preview: string;
   result: ScenarioResult;
@@ -110,7 +134,11 @@ export async function captureReadings(input: {
     preview,
     canary
   );
-  if (stepId === undefined || durableWriteClaimed(input.material)) {
+  if (
+    stepId === undefined ||
+    !baseReplays(input.config, result.scenario) ||
+    durableWriteClaimed(input.material)
+  ) {
     return;
   }
   for (const assertion of result.scenario.assertions) {
@@ -152,4 +180,44 @@ export function reentryEvidence(
   return left && assertionMatches(assertion, read.get(assertion.id))
     ? { reloadPersistence: "not-claimed" }
     : undefined;
+}
+
+/**
+ * Recharge la page et relit la cible de chaque assertion jugée à la réentrée,
+ * une fois le scénario joué : relire au milieu du scénario effacerait l'état en
+ * mémoire que les étapes suivantes lisent encore. Le relevé est consigné sur
+ * l'assertion (`reloadReading`, `reloadPassed`) sans toucher à l'issue : la
+ * base, qui joue le même plan, fait le même relevé, et la comparaison les
+ * confronte. Une cible absente après rechargement est un relevé en échec ; une
+ * autre erreur ne laisse aucun relevé, que la comparaison tient pour non
+ * prouvé, jamais pour passé.
+ */
+export async function readReloaded(
+  result: ScenarioResult,
+  preview: string,
+  canary: Canary,
+  config: Config
+) {
+  const sessionId = result.sessionId ?? "";
+  for (const entry of result.assertions) {
+    const assertion = result.scenario.assertions.find(
+      (item) => item.id === entry.id
+    );
+    if (entry.reloadPersistence !== "not-claimed" || assertion === undefined) {
+      continue;
+    }
+    try {
+      const { actual } = await canary.act(
+        sessionId,
+        `reload-${assertion.id}`,
+        compileProbe(assertion, preview, true)
+      );
+      entry.reloadReading = actual;
+      entry.reloadPassed = assertionMatches(assertion, actual);
+    } catch (error) {
+      if (diagnose(error, config).code === "TARGET_NOT_FOUND") {
+        entry.reloadPassed = false;
+      }
+    }
+  }
 }

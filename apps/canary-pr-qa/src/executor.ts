@@ -17,7 +17,7 @@ import {
   resolveStepFromObservation,
 } from "./observe-act.js";
 import type { ProgressEvent } from "./progress.js";
-import { captureReadings, reentryEvidence } from "./reentry.js";
+import { captureReadings, readReloaded, reentryEvidence } from "./reentry.js";
 import type {
   Assertion,
   Scenario,
@@ -358,6 +358,7 @@ async function driveScenario(
     await captureReadings({
       baselines,
       canary,
+      config,
       material,
       preview,
       result,
@@ -460,6 +461,7 @@ export async function executeScenario(
       material,
       model
     );
+    await readReloaded(result, preview, canary, config);
   } catch (error) {
     result.diagnostic = diagnose(error, config);
     result.error = result.diagnostic.message;
