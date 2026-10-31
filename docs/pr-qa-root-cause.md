@@ -17,7 +17,7 @@ qu'il observe.
 
 - `src/runner.ts:1553` — un appel `model.json(PLANNER_PROMPT, payload, …)` produit le plan entier ;
   le seul retour du modèle après cela est une **correction de validation**, avant exécution.
-- `src/canary.ts:776` — `discoverPreview` collecte l'instantané **une fois**, à l'ouverture de la
+- `src/canary.ts:782` — `discoverPreview` collecte l'instantané **une fois**, à l'ouverture de la
   preview ; rien ne le rafraîchit ensuite (`PLAN_EVIDENCE_SNAPSHOT_CHARS`, `src/canary.ts:26`).
 - `src/executor.ts:340-342` — le commentaire du code dit la décision architecturale :
   « Le plan est un contrat figé : l'hôte joue chaque étape dans l'ordre, sans consulter le

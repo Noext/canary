@@ -644,7 +644,13 @@ export function compileProbe(
   preview: string,
   reload = false
 ): string {
-  const read = readAssertion(assertion, assertion.target);
+  const { target } = assertion;
+  // Une assertion typée en ENTRÉE peut omettre le `name` d'un rôle : il vaut
+  // "" comme au parse (schema.ts), jamais une recherche par rôle sans nom.
+  const read = readAssertion(
+    assertion,
+    target?.by === "role" ? { ...target, name: target.name ?? "" } : target
+  );
   return compileAction({ type: "observe" }, preview).replace(
     "let actual;",
     `let actual; ${reload ? 'await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 });' : ""} actual = ${read};`
