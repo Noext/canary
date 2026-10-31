@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { declaresNoBehaviorChange } from "../src/baseline-classify.js";
 import { compareWithBaseline } from "../src/baseline-diff.js";
 import { assertionMatches } from "../src/canary.js";
 import type { Config } from "../src/config.js";
 import { PLANNER_PROMPT } from "../src/model.js";
-import { reportMarkdown, statusDescription } from "../src/report.js";
+import {
+  judgeAgainstBaseline,
+  reportMarkdown,
+  statusDescription,
+} from "../src/report.js";
 import type { Assertion, RunResult, ScenarioResult } from "../src/schema.js";
 
 /**
@@ -860,4 +865,106 @@ it("le prompt énonce le contrat d'un scénario `regression` jugé contre la bas
   expect(PLANNER_PROMPT).toContain(
     "a scenario that checks a value the diff intends to change is a happy_path or edge_case, never a regression"
   );
+});
+
+describe("une PR `refactor` déclare un comportement inchangé", () => {
+  it("lit le titre Conventional Commits, sans la rupture `!`", () => {
+    expect(
+      declaresNoBehaviorChange(
+        "refactor(domain): catalogue des espèces scindé en billets et pièces"
+      )
+    ).toBe(true);
+    expect(declaresNoBehaviorChange("refactor: extraire un helper")).toBe(true);
+    expect(declaresNoBehaviorChange("refactor!: nouvelle API")).toBe(false);
+    expect(declaresNoBehaviorChange("refactor(api)!: nouvelle API")).toBe(
+      false
+    );
+    expect(declaresNoBehaviorChange("feat(caisse): sous-totaux")).toBe(false);
+    expect(declaresNoBehaviorChange("fix: refactor du calcul")).toBe(false);
+    // Non mesurés : ni `chore`, ni `perf`, ni `style` ne déclarent l'invariance.
+    expect(declaresNoBehaviorChange("chore: ranger")).toBe(false);
+    expect(declaresNoBehaviorChange("perf: mémoïser")).toBe(false);
+    expect(declaresNoBehaviorChange("style: formater")).toBe(false);
+    expect(declaresNoBehaviorChange(undefined)).toBe(false);
+  });
+
+  // Banc du 31/10/2026, r6-2 : un scénario `edge_case` épingle « 25,00 € » pour
+  // un billet de 20 €, la base affiche « 20,00 € » ; lu comme un changement
+  // voulu, il passait vert.
+  const a = text("a", "25,00 €");
+  const twenty = () =>
+    run(
+      [
+        scenario("s", [a], [read(true, "Billet de 20 € 25,00 €")], {
+          objective: "a",
+          kind: "edge_case",
+        }),
+      ],
+      [
+        scenario("s", [a], [read(false, "Billet de 20 € 20,00 €")], {
+          objective: "a",
+          kind: "edge_case",
+        }),
+      ]
+    );
+
+  it("une valeur que la base ne montre pas est une régression, quel que soit le libellé", () => {
+    const result = twenty();
+    judgeAgainstBaseline(
+      result,
+      CONFIG,
+      "refactor(domain): catalogue des espèces scindé en billets et pièces"
+    );
+    const head = result.scenarios[0]!;
+    expect(head.outcome).toBe("failed");
+    expect(head.diagnostic?.code).toBe("BASELINE_REGRESSION");
+    // Le rapport dit pourquoi : le titre `refactor` déclare l'invariance.
+    expect(head.error).toContain("declares no behavior change");
+    expect(result.baselineComparison?.regressions).toHaveLength(1);
+    expect(result.baselineComparison?.regressions[0]?.reason).toContain(
+      "declares no behavior change"
+    );
+    expect(reportMarkdown(result, undefined, true)).toContain(
+      "the PR title declares a refactor, which declares no behavior change"
+    );
+  });
+
+  it("sans déclaration, le même écart reste un comportement modifié", () => {
+    const result = twenty();
+    compareWithBaseline(result, CONFIG);
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(result.baselineComparison?.regressions).toEqual([]);
+    expect(result.baselineComparison?.changes).toHaveLength(1);
+  });
+
+  it("un titre `feat` laisse une tête verte différente de la base en changement", () => {
+    const result = twenty();
+    judgeAgainstBaseline(result, CONFIG, "feat(caisse): billet de 20 €");
+    expect(result.scenarios[0]?.outcome).toBe("passed");
+    expect(result.scenarios[0]?.diagnostic).toBeUndefined();
+    expect(result.baselineComparison?.regressions).toEqual([]);
+    expect(result.baselineComparison?.changes).toHaveLength(1);
+    expect(result.baselineComparison?.changes[0]?.reason).toBeUndefined();
+  });
+
+  it("ne lève pas le blocage d'une preuve qui passe aussi sur la base", () => {
+    const b = text("b", "225,00 €");
+    const result = run(
+      [
+        scenario("s", [b], [read(true, "Total 225,00 €", "b")], {
+          objective: "b",
+        }),
+      ],
+      [
+        scenario("s", [b], [read(true, "Total 225,00 €", "b")], {
+          objective: "b",
+        }),
+      ]
+    );
+    judgeAgainstBaseline(result, CONFIG, "refactor: extraire un helper");
+    expect(result.scenarios[0]?.outcome).toBe("blocked");
+    expect(result.scenarios[0]?.diagnostic?.code).toBe(
+      "OBJECTIVE_NOT_DISCRIMINATING"
+    );
+  });
 });

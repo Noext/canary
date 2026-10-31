@@ -16,6 +16,7 @@ import { type Diagnostic, diagnose, QaError, redact } from "./diagnostics.js";
 import { GitHub, type PrContext } from "./github.js";
 import { GitHubSetup } from "./github-setup.js";
 import { Model } from "./model.js";
+import { plannerInputBudget } from "./plan-evidence.js";
 import { resolvePreview } from "./preview.js";
 import {
   applyPreviewHosts,
@@ -67,6 +68,16 @@ function configSummary(config: Config) {
       name: config.OPENAI_MODEL,
       keyConfigured: Boolean(config.OPENAI_API_KEY),
       jsonMode: config.OPENAI_JSON_MODE,
+    },
+    // Le matériel du planificateur et la borne qui le refuse : les fichiers
+    // entiers et la sonde de vues alourdissent chaque envoi, et cèdent ou se
+    // replient avant de faire perdre un run.
+    planner: {
+      contextTokens: config.QA_MODEL_CONTEXT_TOKENS,
+      payloadLimitChars: plannerInputBudget(config).limit,
+      wholeFileChars: config.QA_PLAN_FILE_CHARS,
+      viewProbe: config.QA_VIEW_PROBE,
+      runMaxTokens: config.QA_RUN_MAX_TOKENS,
     },
     previewHosts: config.allowedHosts,
     dataDir: config.QA_DATA_DIR,

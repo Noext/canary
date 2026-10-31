@@ -142,6 +142,18 @@ les fichiers source lus (au plus 100 manifestes en plus). Un dépôt de tête no
 installé, lu anonymement, n'est pas parcouru. Tout plafond atteint, toute lecture
 en échec hors 404 et tout module modifié non analysé sont nommés dans les
 avertissements.
+
+Le planificateur reçoit aussi les **fichiers modifiés en entier** (`fileTexts`),
+le plus modifié d'abord, sous `QA_PLAN_FILE_CHARS` (défaut 120000, `0` désactive) :
+du contexte pour la jointure qu'un hunk ne montre pas, jamais une preuve. Quand
+le message dépasse la borne d'envoi (dérivée de `QA_MODEL_CONTEXT_TOKENS`), les
+consommateurs puis les fichiers entiers, les moins modifiés d'abord, cèdent leur
+place et sont nommés dans les avertissements ; seul un diff qui déborde seul est
+refusé. `QA_VIEW_PROBE` (défaut `true`) rejoue la navigation du premier plan
+(`goto` et clics, aucune saisie) et le fait réécrire une fois avec les vues
+observées ; une réécriture refusée, ou que l'enveloppe du run ne finance plus,
+laisse le premier plan en place. `doctor` affiche ces réglages et la borne
+d'envoi sous `config.planner`.
 Un objectif qui ne lit rien de ce que le diff ajoute ou retire dans ses fichiers,
 ni sa citation, est refusé (`OBJECTIVE_UNWITNESSED`) : il passerait identiquement
 avant le changement, et le scénario non corrigé est bloqué, jamais vert. Une
@@ -267,6 +279,15 @@ appel modèle (`src/baseline-diff.ts`, champ `baselineComparison` de
 | échoue ou cible absente | passe | comportement modifié, listé ; la tête reste verte |
 | passe | passe | non discriminante ; si c'est la preuve du scénario (objectif, ou toutes ses assertions sans objectif), `blocked` (`OBJECTIVE_NOT_DISCRIMINATING`) |
 | échoue ou non exécutée | échoue ou non exécutée | non concluante, publiée, verdict de tête inchangé |
+
+Un scénario `regression` déclare un comportement inchangé : une tête verte sur
+une valeur que la base ne montre pas y est une régression
+(`BASELINE_REGRESSION`), pas un comportement modifié. Une PR titrée
+`refactor:` ou `refactor(scope):` (pas `refactor!:`) déclare la même chose pour
+tous ses scénarios : chaque écart à la base est une régression, et le rapport
+cite cette règle. `chore`, `perf` et `style` n'en relèvent pas. La règle ne fait
+que rendre rouge un scénario vert : elle ne lève aucun blocage
+(`OBJECTIVE_NOT_DISCRIMINATING` reste).
 
 Une valeur observée différente alors que l'assertion passe des deux côtés (le
 texte est comparé par inclusion) est aussi un comportement modifié. Restent

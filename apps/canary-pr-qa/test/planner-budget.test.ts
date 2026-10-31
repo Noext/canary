@@ -168,9 +168,12 @@ describe("les bornes du payload", () => {
     // Le refus dit quoi desserrer, et rien n'est présenté comme analysé.
     expect(thrown?.message).toMatch(/QA_MODEL_CONTEXT_TOKENS/);
     expect(thrown?.message).toMatch(/Nothing was truncated/);
-    // Le message nomme TOUS les leviers, allowance de fichiers comprise.
-    expect(thrown?.message).toMatch(/QA_PLAN_FILE_CHARS=\d+/);
-    expect(thrown?.message).toMatch(/lower QA_PLAN_FILE_CHARS/);
+    // Le message dit que les fichiers entiers ont déjà cédé leur place : les
+    // baisser ne desserrerait rien, seuls la fenêtre ou le diff le peuvent.
+    expect(thrown?.message).toMatch(
+      /every whole changed file \(QA_PLAN_FILE_CHARS=\d+\) and every consumer excerpt already omitted/
+    );
+    expect(thrown?.message).not.toMatch(/lower QA_PLAN_FILE_CHARS/);
   });
 
   it("compte un gros instantané de découverte", () => {
@@ -294,5 +297,72 @@ describe("les consommateurs cèdent leur place avant tout refus", () => {
     const payload = build(withConsumers(1000), pinned);
     expect(payload.pr.consumers?.[0]?.path).toBe("src/screen.tsx");
     expect(payload.pr.contextWarnings).toEqual([]);
+  });
+});
+
+describe("les fichiers entiers cèdent leur place avant tout refus", () => {
+  const pinned = config({
+    QA_MODEL_CONTEXT_TOKENS: "131072",
+    QA_PLAN_MAX_TOKENS: "8000",
+  });
+  const pinnedLimit = plannerInputBudget(pinned).limit;
+  /** Le plus modifié d'abord, comme `changedFileTexts` les rend. */
+  const files = [
+    { content: "a".repeat(40_000), path: "src/file-0.ts" },
+    { content: "b".repeat(40_000), path: "src/file-1.ts" },
+  ];
+
+  it("le défaut envoie les fichiers entiers sans approcher la borne", () => {
+    const defaults = config();
+    expect(defaults.QA_PLAN_FILE_CHARS).toBe(120_000);
+    expect(defaults.QA_VIEW_PROBE).toBe(true);
+    // 120 000 caractères de fichiers entiers pèsent moins de 7 % de la borne
+    // d'envoi de la fenêtre par défaut.
+    expect(defaults.QA_PLAN_FILE_CHARS).toBeLessThan(
+      plannerInputBudget(defaults).limit * 0.07
+    );
+    const payload = planPayload(
+      context(3, 1000),
+      preview,
+      page(400),
+      catalog,
+      defaults,
+      files
+    );
+    expect(payload.fileTexts).toEqual(files);
+    expect(payload.pr.contextWarnings).toEqual([]);
+  });
+
+  it("omet les moins modifiés d'abord, le dit, et garde la preuve intacte", () => {
+    // Le contexte seul tient ; avec les deux fichiers, il déborde ; sans le
+    // dernier, il tient de nouveau.
+    const ctx = context(2, pinnedLimit - 70_000);
+    const payload = planPayload(
+      ctx,
+      preview,
+      page(400),
+      catalog,
+      pinned,
+      files
+    );
+    expect(JSON.stringify(payload).length).toBeLessThanOrEqual(pinnedLimit);
+    expect(payload.fileTexts.map((file) => file.path)).toEqual([
+      "src/file-0.ts",
+    ]);
+    expect(payload.pr.contextWarnings).toEqual([
+      expect.stringMatching(
+        /^Whole changed file omitted: src\/file-1\.ts \(40000 characters\), the planner payload exceeded its limit by \d+ characters$/
+      ),
+    ]);
+    // Le diff et le contexte requis ne sont jamais coupés.
+    expect(payload.pr.files).toHaveLength(2);
+    expect(payload.pr.context[0]?.content).toHaveLength(pinnedLimit - 70_000);
+  });
+
+  it("refuse encore quand le diff seul déborde, fichiers entiers omis", () => {
+    const ctx = context(1, pinnedLimit);
+    expect(() =>
+      planPayload(ctx, preview, page(400), catalog, pinned, files)
+    ).toThrow(/every whole changed file .* already omitted/);
   });
 });

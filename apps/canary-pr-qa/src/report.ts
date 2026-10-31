@@ -28,11 +28,11 @@ export { settleNonRuntimeDiff } from "./approved-skips.js";
  * Juge le run contre la préversion de base avant sa publication : régression
  * rouge, preuve non discriminante bloquée, comportements modifiés listés. Le
  * runner est à sa limite d'imports : il l'atteint par le module qui rend déjà
- * cette comparaison dans le rapport, le statut et le commentaire.
+ * cette comparaison dans le rapport, le statut et le commentaire. Le titre de
+ * la PR y porte son intention : un `refactor` déclare un comportement inchangé ;
+ * ses fichiers disent quels littéraux le diff ajoute.
  */
-export function judgeAgainstBaseline(result: RunResult, config: Config): void {
-  compareWithBaseline(result, config);
-}
+export const judgeAgainstBaseline = compareWithBaseline;
 
 /**
  * La description du statut de commit. La comparaison à la base y figure en tête
@@ -134,7 +134,7 @@ export function reportMarkdown(
     "| --- | --- | --- | --- |",
     ...result.scenarios.map(
       (item) =>
-        `| ${clean(item.scenario.title)} | ${item.scenario.kind} | ${item.outcome} | ${item.assertions.filter((a) => a.passed).length}/${item.scenario.assertions.length} |`
+        `| ${clean(item.scenario.title)} | ${item.scenario.kind} | ${item.outcome}${item.assertions.some((a) => a.reloadPersistence) ? " — judged on re-entry: reload persistence not claimed" : ""} | ${item.assertions.filter((a) => a.passed).length}/${item.scenario.assertions.length} |`
     ),
     ...result.scenarios
       .filter((item) => item.error)
@@ -194,7 +194,7 @@ ${item.artifacts
       `<video controls preload="metadata" src="${escapeHtml(item.scenario.id)}/${escapeHtml(file)}"></video>`
   )
   .join("")}
-<ul>${item.assertions.map((a) => `<li>${escapeHtml(a.id)}: ${a.passed ? "PASS" : "FAIL"}${a.preMatched ? " (already satisfied before the step)" : ""} — actual: ${escapeHtml(JSON.stringify(a.actual))}</li>`).join("")}</ul>
+<ul>${item.assertions.map((a) => `<li>${escapeHtml(a.id)}: ${a.passed ? "PASS" : "FAIL"}${a.preMatched ? " (already satisfied before the step)" : ""}${a.reloadPersistence ? " (judged on re-entry: reload persistence not claimed)" : ""} — actual: ${escapeHtml(JSON.stringify(a.actual))}</li>`).join("")}</ul>
 <details><summary>Executed steps</summary><pre>${escapeHtml(JSON.stringify(item.steps, null, 2))}</pre></details></section>`
     )
     .join("");

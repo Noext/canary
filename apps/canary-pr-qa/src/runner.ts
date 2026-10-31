@@ -31,6 +31,7 @@ import {
   baselineRefusals,
   changedFileTexts,
   type DiscoveryEvidence,
+  deferredProvenanceRefusals,
   enforceObjectiveProof,
   evidenceRefusalsByScenario,
   type InvariantObservation,
@@ -47,10 +48,12 @@ import {
   provenanceRefusals,
   replannedScenarios,
   replanPayload,
+  restoreDeferredRefusals,
   stateTargetReadRefusals,
   type TargetObservation,
   targetObservations,
   unstableSelectorRefusals,
+  upgradeEchoedStateReads,
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
@@ -1293,6 +1296,11 @@ function settlePlan(
       "Requirement attribution repaired"
     );
   }
+  // Une saisie relue en `state` après un clic sur un autre élément est lue en
+  // `transition` plutôt que refusée : chaque plan exécuté passe ici.
+  for (const upgrade of upgradeEchoedStateReads(plan)) {
+    logger.info({ runId, ...upgrade }, "Echoed state read upgraded");
+  }
   const source = requirementSourceRefusal(plan, context);
   if (source) {
     throw source;
@@ -1422,10 +1430,13 @@ async function replanWithObservations(
   const discovery = { url: input.initialPage.url, aria: input.evidence };
   const revisedEvidence = validatePlanEvidence(revised, discovery);
   const evidenceRefusals = evidenceRefusalsByScenario(revisedEvidence);
+  // Avec une base, provenance et témoin restent différés comme au premier
+  // passage : sinon chaque scénario différé quittait la base, et sa régression.
   const revisedRefusals = preExecutionRefusalTable(revised, {
     catalog: input.catalog,
     config: input.config,
     context: input.context,
+    deferToBase: Boolean(input.config.QA_BASELINE_URL_TEMPLATE),
     evidence: discovery,
     policy: input.policy,
   });
@@ -1613,7 +1624,6 @@ async function executePlan(
       evidence: discovery,
     });
   }
-  publishUnverifiedPreconditions(result, context);
   const refined = config.QA_VIEW_PROBE
     ? await probeAndReplan({
         askPlanner: (views) =>
@@ -1640,6 +1650,8 @@ async function executePlan(
   if (refined) {
     result.plan = refined;
   }
+  // Publiées sur le plan qui s'exécute, réécrit par la sonde ou non.
+  publishUnverifiedPreconditions(result, context);
   const planEvidence = validatePlanEvidence(result.plan, {
     url: initialPage.url,
     aria: evidence,
@@ -1673,11 +1685,14 @@ async function executePlan(
   // est le point de contrôle UNIQUE du chemin de lecture : l'aperçu de tête et
   // la préversion de base la lisent tous les deux, donc une assertion sans
   // valeur attendue ne dépense aucune étape navigateur, dans l'un comme dans
-  // l'autre.
+  // l'autre. Avec une base, provenance et témoin y sont différés : la base les
+  // juge, `restoreDeferredRefusals` les rétablit (jamais vert).
+  const deferred = deferredProvenanceRefusals(result.plan, config, context);
   const preExecutionRefusals = preExecutionRefusalTable(result.plan, {
     catalog,
     config,
     context,
+    deferToBase: deferred.size > 0,
     evidence: { url: initialPage.url, aria: evidence },
     policy,
   });
@@ -1754,7 +1769,8 @@ async function executePlan(
   });
   // La base est un oracle indépendant : une régression devient rouge, une preuve
   // qui passe aussi sur la base n'est plus verte, le reste est publié.
-  judgeAgainstBaseline(result, config);
+  judgeAgainstBaseline(result, config, context.title, context.files);
+  restoreDeferredRefusals(result, deferred, config, context);
   result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {
     await attachReplayRuntimeResults(root, result);
@@ -1859,21 +1875,33 @@ async function runBaseline(
   if (scope) {
     scope.previewSha = basePreview.sha;
   }
+  // La base rejoue le contrat que la tête a EXÉCUTÉ, pas celui du plan final :
+  // une réécriture (après observation, sur invariant, sonde de vue) réécrit
+  // tout le plan et peut changer un scénario qu'elle ne réexécute pas. Son
+  // hash différerait des deux côtés, la comparaison resterait non concluante,
+  // et une régression que la base aurait vue resterait verte.
+  const executed = new Map(
+    result.scenarios
+      .filter((item) => item.contract !== undefined)
+      .map((item) => [item.scenario.id, item.scenario])
+  );
   try {
-    for (const scenario of plan.scenarios) {
-      // Un scénario refusé ne dépense aucune étape navigateur, base comprise.
-      // Un scénario à fixtures n'est pas rejoué : le catalogue sème
-      // l'environnement de tête, sous l'espace de noms et la clé d'idempotence
-      // de son exécution de tête.
+    for (const planned of plan.scenarios) {
+      const scenario = executed.get(planned.id) ?? planned;
+      // Un scénario refusé ne dépense aucune étape navigateur, base comprise,
+      // sauf si la tête en a joué un contrat accepté : la réécriture refusée
+      // ne retire pas sa base au contrat exécuté. Un scénario à fixtures n'est
+      // pas rejoué : le catalogue sème l'environnement de tête, sous l'espace
+      // de noms et la clé d'idempotence de son exécution de tête.
       if (
-        options.refused.has(scenario.id) ||
+        (options.refused.has(scenario.id) && !executed.has(scenario.id)) ||
         scenario.preconditions.some((item) => item.startsWith("fixture:"))
       ) {
         continue;
       }
-      // Sans modèle : aucune reprise de cible sur la base. Elle joue le plan tel
-      // qu'il est écrit, sans dépense ni clic sur un élément que le plan ne
-      // nomme pas, sur un environnement réel.
+      // Sans modèle : aucune reprise par modèle sur la base, seule la reprise
+      // par inclusion, déterministe, que la tête joue aussi : la comparaison
+      // reste valable quand les deux côtés ont joué la même substitution.
       baseline.scenarios.push(
         await executeScenario(
           scenario,

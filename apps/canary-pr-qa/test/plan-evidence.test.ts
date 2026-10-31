@@ -115,6 +115,21 @@ function observedPlan(): Plan {
   };
 }
 
+/**
+ * La même cible, lue en `state` sur la page de découverte rechargée : la page
+ * où l'assertion lit sa cible y est connue, donc une cible absente de
+ * l'instantané reste refusée. Une transition, elle, relit sa cible après une
+ * interaction, sur une page que l'instantané ne décrit plus.
+ */
+function reloadedPlan(): Plan {
+  const plan = observedPlan();
+  const scenario = plan.scenarios[0]!;
+  scenario.steps.splice(1, 1);
+  scenario.assertions[0]!.verification = "state";
+  scenario.assertions[0]!.afterStep = "load";
+  return plan;
+}
+
 /** Scénario sans interaction : la cible doit résoudre sur la page de découverte elle-même. */
 function readOnlyPlan(
   target: Plan["scenarios"][number]["assertions"][number]["target"]
@@ -554,7 +569,7 @@ describe("validation du plan contre l'instantané de découverte", () => {
     expect(visibility.refusals).toHaveLength(1);
   });
   it("refuse une cible role+nom absente de la page de découverte", () => {
-    const report = validatePlanEvidence(PlanSchema.parse(observedPlan()), {
+    const report = validatePlanEvidence(PlanSchema.parse(reloadedPlan()), {
       url: "https://preview.test/",
       aria: ARIA,
     });
@@ -562,7 +577,7 @@ describe("validation du plan contre l'instantané de découverte", () => {
     expect(report.refusals).toEqual([
       {
         scenarioId: "preview-badge-kept-across-views",
-        stepId: "go-pnl",
+        stepId: "check-heading",
         target: 'role=heading name="P&L"',
         // La page porte ce nom sous un bouton : le refus le nomme, sans
         // l'accepter à la place du titre visé.
@@ -570,6 +585,27 @@ describe("validation du plan contre l'instantané de découverte", () => {
       },
     ]);
     expect(report.inconclusive).toEqual([]);
+  });
+  it("juge la cible d'une transition à la sortie de son étape, là où elle est relue", () => {
+    // Banc f1, runs 2 et 3 : « Remettre à zéro » n'apparaît qu'après le clic
+    // sur « Caisse et Coffre ». Une transition relève `null` pour une cible
+    // encore absente à l'entrée de son étape et la relit à sa sortie : juger
+    // l'entrée refusait un plan que l'exécution accepte. Après un clic, la
+    // page n'est plus celle de la découverte : la cible n'y est pas jugeable.
+    const report = validatePlanEvidence(PlanSchema.parse(observedPlan()), {
+      url: "https://preview.test/",
+      aria: ARIA,
+    });
+    expect(report.refusals).toEqual([]);
+    expect(report.inconclusive).toEqual([
+      {
+        scenarioId: "preview-badge-kept-across-views",
+        stepId: "go-pnl",
+        target: 'role=heading name="P&L"',
+        reason:
+          "une étape antérieure a interagi avec la page ou en a changé la route",
+      },
+    ]);
   });
   it("nomme le rôle réel quand la page expose le même nom sous un autre rôle", () => {
     // Un `<input type="number">` s'annonce `spinbutton`, jamais `textbox` : le
@@ -1002,7 +1038,7 @@ describe("scénario refusé avant exécution", () => {
   it("bloque le scénario sans dépenser aucune étape navigateur", async () => {
     const f = await setup();
     const labels = stubCanary(ARIA);
-    scriptPlan(PlanSchema.parse(observedPlan()));
+    scriptPlan(PlanSchema.parse(reloadedPlan()));
     // Les fichiers modifiés arrivent maintenant en entier (voir
     // `changedFileTexts`), donc la vue partielle ne se produit plus pour eux :
     // ce test garde son sujet — l'indice sur une vue coupée — en rendant le

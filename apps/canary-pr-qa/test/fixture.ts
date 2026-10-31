@@ -250,6 +250,8 @@ export async function fixture(
      * dit que main a avancé depuis la bifurcation de la PR.
      */
     mergeBaseSha?: string;
+    /** Titre de la PR servi par `/pulls/1` (défaut : un titre `feat` implicite). */
+    title?: string;
   } = {}
 ) {
   const baseServer = options.baseApp
@@ -493,7 +495,7 @@ export async function fixture(
     if (path === "/repos/fixture/app/pulls/1") {
       prReads++;
       json(res, {
-        title: "Welcome users by name",
+        title: options.title ?? "Welcome users by name",
         body: "Save the name via the form",
         state: "open",
         changed_files:
@@ -727,6 +729,10 @@ export async function fixture(
       .map((port) => `127.0.0.1:${port}`)
       .join(","),
     QA_API_TOKEN: "fixture-api-token-123456789012345",
+    // Les plans du fixture sont scriptés envoi par envoi : la sonde de vues,
+    // active par défaut, consommerait un plan destiné à une correction ou à une
+    // réécriture. Un test qui la vise l'active (`QA_VIEW_PROBE: true`).
+    QA_VIEW_PROBE: "false",
     ...options.env,
   });
   return {

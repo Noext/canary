@@ -266,6 +266,22 @@ ne sont pas refusés à tort.
 | HH | `12176b7`, `QA_PLAN_FILE_CHARS=0` | non | **10/10** | 86 | 2 440 356 | 18 |
 | II | idem | non | 7/10 | 75 | 3 144 996 | 23 |
 
+Ces lots ne mesurent qu'une PR, la #20, et ce qu'ils mesurent est le vert. Le banc de
+33 runs (six PR de régression, trois correctes, une de documentation, la #20 trois fois)
+mesure le rappel, et il a renversé les deux défauts : `QA_PLAN_FILE_CHARS` revient à
+120 000 — chaque plan raté de r4 et r5 nomme les libellés que la jointure hors hunks lui
+cachait — et `QA_VIEW_PROBE` passe à `true` — libellés inventés de f3, cibles visibles
+seulement après un clic. Le risque de faux vert est neutre : les fichiers entiers sont du
+contexte, jamais une preuve, et le plan réécrit par la sonde repasse toutes les portes.
+Mesuré hors ligne sur les entrées enregistrées de la #20 : six fichiers sur quatorze,
+119 910 caractères, un payload de 268 868 à 393 601 caractères (environ +39 000 tokens
+d'entrée par appel au ratio mesuré de 92 483 tokens pour 299 022 caractères), loin de la
+borne d'envoi par défaut de 1 775 632 caractères. La dégradation est prévue plutôt que le
+refus : sous une fenêtre plus petite, consommateurs puis fichiers entiers cèdent leur
+place et sont nommés ; une réécriture de la sonde refusée ou que l'enveloppe du run ne
+finance plus laisse le premier plan en place. Le coût en tokens (lot BB : +91 % pour la
+sonde seule) reste à remesurer par un banc payant.
+
 Les campagnes de runs, leurs classes d'échec, leurs tokens et leurs durées vivent
 dans [`pr-qa-measurements.md`](pr-qa-measurements.md), **généré** par
 `test/measurements-report.test.ts` depuis les artefacts et comparé par la CI : une

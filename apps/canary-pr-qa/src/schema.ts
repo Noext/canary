@@ -204,8 +204,17 @@ const quote = z
   .max(QUOTE_MAX_CHARS);
 const locator = z.discriminatedUnion("by", [
   z.object({ by: z.literal("css"), value: text }).strict(),
+  // Un rôle sans `name` vaut `name: ""` : `getByRole` est toujours joué avec
+  // `exact: true` (canary.ts), donc c'est le locator même que le modèle écrit
+  // une fois corrigé — un élément de ce rôle sans nom accessible — et non un
+  // élargissement. Mesure du banc : 12 refus de schéma sur 26, un tour payé
+  // chacun, pour cette seule omission.
   z
-    .object({ by: z.literal("role"), value: text, name: z.string().max(2000) })
+    .object({
+      by: z.literal("role"),
+      value: text,
+      name: z.string().max(2000).default(""),
+    })
     .strict(),
   z.object({ by: z.literal("text"), value: text }).strict(),
   z.object({ by: z.literal("label"), value: text }).strict(),
@@ -1010,22 +1019,60 @@ function planSchema<T extends z.ZodTypeAny, A extends z.ZodTypeAny>(
         .max(100),
     })
     .strict()
-    .superRefine((plan, ctx) => {
-      const ids = plan.scenarios.map((scenario) => scenario.id);
-      if (new Set(ids).size !== ids.length) {
-        ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
-      }
-      for (const scenario of plan.scenarios) {
-        // Le générique ne transporte que le schéma d'exigence choisi par
-        // l'appelant : les règles lues ici sont celles de la forme COMMUNE, et
-        // zod v4 rend `output<T>` opaque à cette frontière. Le transtypage est
-        // donc borné à cet appel, il ne touche aucune valeur.
-        validateScenarioContract(
-          scenario as unknown as z.infer<typeof ScenarioSchema>,
-          ctx
-        );
-      }
-    });
+    .superRefine(validatePlanContract, { when: () => true });
+}
+/**
+ * Les champs que lisent les règles croisées du contrat, et eux seuls. Un plan
+ * qu'une erreur de schéma a refusé n'atteint jamais un raffinement ordinaire :
+ * zod les saute dès qu'un champ enfant échoue. Le modèle apprenait donc une
+ * classe d'erreur par tour — l'omission d'abord, puis l'`ifPresent` sans
+ * assertion au tour suivant (7 runs du banc ont brûlé leurs deux corrections
+ * ainsi). Ces formes tolérantes laissent juger chaque scénario dont la
+ * structure se lit, dans le même tour que les erreurs de schéma ; un scénario
+ * illisible n'est jugé que par le schéma, sans rien deviner.
+ */
+const contractStep = z.looseObject({
+  id: z.string(),
+  action: z.looseObject({ type: z.string() }),
+});
+const contractScenario = z.looseObject({
+  id: z.string(),
+  steps: z.array(contractStep),
+  assertions: z.array(
+    z.looseObject({
+      id: z.string(),
+      verification: z.unknown().default("state"),
+    })
+  ),
+});
+const contractPlan = z.looseObject({ scenarios: z.array(z.unknown()) });
+/**
+ * Règles croisées du plan, jouées que le schéma ait accepté le plan ou non
+ * (`when` du raffinement). Elles ne rendent jamais un plan acceptable : elles
+ * ne font qu'AJOUTER des violations, et un plan propre se lit à l'identique
+ * par ces formes tolérantes.
+ */
+function validatePlanContract(plan: unknown, ctx: z.RefinementCtx) {
+  const shape = contractPlan.safeParse(plan);
+  if (!shape.success) {
+    return;
+  }
+  const scenarios = shape.data.scenarios.flatMap((scenario) => {
+    const read = contractScenario.safeParse(scenario);
+    return read.success ? [read.data] : [];
+  });
+  const ids = scenarios.map((scenario) => scenario.id);
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: "custom", message: "Duplicate scenario ids" });
+  }
+  for (const scenario of scenarios) {
+    // Les règles lisent la forme COMMUNE du scénario ; la forme tolérante en
+    // porte tous les champs lus, et le transtypage ne touche aucune valeur.
+    validateScenarioContract(
+      scenario as unknown as z.infer<typeof ScenarioSchema>,
+      ctx
+    );
+  }
 }
 export const PlanSchema = planSchema(persistedRequirement, AssertionSchema);
 /**

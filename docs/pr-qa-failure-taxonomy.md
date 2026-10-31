@@ -84,3 +84,7 @@ préversion de base (`src/baseline-diff.ts`) et ne figurent dans aucun run du co
   cible substituée) et, pour une transition, depuis le même point de départ. Le
   scénario est `failed`, classé `failed` ; les deux valeurs observées sont dans
   `baselineComparison.regressions`.
+  Une tête verte sur une valeur que la base ne montre pas en est une aussi
+  quand le comportement est déclaré inchangé : scénario `regression`, ou tout
+  scénario d'une PR titrée `refactor:` / `refactor(scope):` (pas `refactor!:`) ;
+  le message et la comparaison citent alors la règle du `refactor`.

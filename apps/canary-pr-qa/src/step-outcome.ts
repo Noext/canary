@@ -279,6 +279,18 @@ export function stateAlreadySatisfied(input: {
   );
 }
 
+/**
+ * Ce qu'un relevé non conforme veut dire. Une valeur inchangée qui satisfait
+ * déjà l'attendu rejette la faute sur le plan : elle montre exactement ce que
+ * l'assertion demande, donc c'est la vérification choisie qui est fausse, pas la
+ * fonctionnalité. Mesuré sur le lot AM (runs 59edcd21 et 9599ccc1), où le plan
+ * exigeait une `transition` sur un libellé et sur un attribut d'état qui
+ * RESTENT à leur valeur tant que la justification manque. Le verdict reste non
+ * vert — `blocked`, statut de commit en erreur — donc rien ne passe en silence ;
+ * seul le blâme change de camp. Un changement vers une autre valeur reste
+ * `failed`, comme une valeur inchangée qui n'atteint pas l'attendu, et
+ * `persisted` garde la règle précédente.
+ */
 export function recordUnprovenAssertion(
   result: ScenarioResult,
   assertion: Assertion,

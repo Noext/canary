@@ -6,6 +6,7 @@ import { diagnose, redact } from "../src/diagnostics.js";
 import { doctor, supportSummary } from "../src/doctor.js";
 import { fetchText } from "../src/http.js";
 import { Model } from "../src/model.js";
+import { plannerInputBudget } from "../src/plan-evidence.js";
 import { Progress } from "../src/progress.js";
 import { fixture, PR_URL } from "./fixture.js";
 
@@ -181,6 +182,25 @@ describe("installation doctor and safe support summaries", () => {
       "skipped"
     );
     expect(f.modelRequests).toEqual([]);
+  });
+  it("shows the planner material and the bound that refuses it", async () => {
+    const f = await setup();
+    const defaults = loadConfig({
+      QA_API_TOKEN: "fixture-api-token-123456789012345",
+    });
+    const result = await doctor(
+      { ...f.config, QA_VIEW_PROBE: defaults.QA_VIEW_PROBE },
+      { offline: true, skipBrowser: true }
+    );
+    // Les défauts : fichiers entiers et sonde de vues actifs, sous une borne
+    // d'envoi dérivée de la fenêtre déclarée, jamais du payload.
+    expect(result.config.planner).toEqual({
+      contextTokens: 1_000_000,
+      payloadLimitChars: plannerInputBudget(defaults).limit,
+      wholeFileChars: 120_000,
+      viewProbe: true,
+      runMaxTokens: 1_000_000,
+    });
   });
   it("persists ordered action progress without snapshots or typed values", async () => {
     const f = await setup();

@@ -208,8 +208,16 @@ describe("rejeu des plans historiques sur le nouveau chemin", () => {
     // attendus égaux à un commentaire tapé puis relu dans l'historique, dont
     // l'exigence d'indice 0 concerne bien la cible, ne sont plus refusés. Les
     // 68 autres échos restent refusés : leur exigence d'indice 0 est étrangère.
-    expect(totals.refusalsIndexZero).toBe(391);
-    expect(totals.refusalsValueGuided).toBe(11);
+    // 391 avant le repli des accents de la porte : trois attendus dont un mot
+    // accentué partage un mot avec l'exigence d'indice 0 ne se coupent plus sur
+    // l'accent (« Écart » ne donne plus « cart »). Trois refus retirés, aucun
+    // ajouté : un repli ne raccourcit jamais un mot.
+    expect(totals.refusalsIndexZero).toBe(388);
+    // 11 avant ce même repli. `cite` choisit l'exigence avec des mots dont les
+    // accents sont DÉJÀ repliés : chacun de ces 11 refus était la porte qui
+    // coupait sur l'accent un mot que ce choix avait reconnu. Le refus d'une
+    // valeur inventée reste couvert par engine-invariants.test.ts.
+    expect(totals.refusalsValueGuided).toBe(0);
   });
 
   it("mesure la distance entre ces plans et une provenance vérifiable", () => {
