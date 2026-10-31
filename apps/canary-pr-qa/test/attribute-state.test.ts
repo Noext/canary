@@ -16,8 +16,16 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(close.splice(0).map((fn) => fn()));
 });
+/**
+ * Le diff servi : la ligne citée par les plans, plus la ligne qui écrit
+ * l'attribut d'état que leurs objectifs lisent. Sans elle, une présence de
+ * `[data-cash-state]` ne lirait rien que le diff produit (OBJECTIVE_UNWITNESSED)
+ * et chaque scénario serait bloqué avant la première étape.
+ */
+const STATE_PATCH =
+  "- show('Hello')\n+ show('Welcome '+name)\n+ <section data-cash-state={state}>";
 async function setup(options?: Parameters<typeof fixture>[0]) {
-  const f = await fixture(options);
+  const f = await fixture({ formPatch: STATE_PATCH, ...options });
   close.push(f.close);
   return f;
 }

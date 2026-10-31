@@ -107,6 +107,56 @@ sur les plans historiques : cela supprime ~1 100 lignes de forensique de copie (
 ni en tête n'est jamais un défaut produit ; la comparaison base/tête (`QA_BASELINE_URL_TEMPLATE`,
 déjà présente) devient la preuve d'attribution, pas la forme de l'assertion.
 
+### 3.4 bis Un objectif qui lit ce que le diff produit, et le matériel pour l'écrire
+
+La preuve d'un scénario (son objectif déclaré, à défaut toutes ses assertions) doit lire
+quelque chose que le diff produit, sans quoi elle passe identiquement avant le changement :
+elle est refusée (`OBJECTIVE_UNWITNESSED`, `src/objective-witness.ts`), d'abord dans la
+correction du planificateur, puis avant exécution — le scénario non corrigé est bloqué, jamais
+vert. Les sources sont les lignes que le diff ajoute ou retire dans les `sourceFiles` du
+scénario et la citation que l'assertion cite ; jamais les lignes de contexte, la prose
+`behavior` ni l'instantané de découverte.
+
+- Lecture positive (`visible`, `count` > 0, `url`) : une suite de mots de la cible est une
+  sous-suite contiguë d'un identifiant changé (`[data-variance-cents]` lit `varianceCents`,
+  `[data-x-state]` ne lit pas `xVarianceCents` par son seul préfixe), ou le libellé entier est
+  un littéral que le diff écrit (« CSV », `role="alert"`). Une adresse lit aussi le chemin d'un
+  fichier ajouté ; un `count` est témoin quand sa citation écrit le nombre attendu.
+- Lecture négative (`hidden`, `count` à 0) : témoin seulement d'une cible qu'une ligne
+  **retirée** écrit — une cible jamais écrite est absente sur la base comme sur la tête.
+- Lecture de valeur (`text`, `value`, …) : témoin quand elle cite une exigence (la provenance
+  juge alors son attendu) ou partage un mot avec les sources.
+
+Mesuré (`docs/pr-qa-measurements.md`) : aucun refus sur les plans verts de la PR 20, mais sur
+un diff d'interface de cette taille la moitié des noms accessibles d'une page passent en
+lecture positive. La règle refuse aussi, sans faux vert, un mot observable écrit hors des
+lignes changées (clé de traduction, pluriel, libellé d'un fichier inchangé) : le remède est
+une lecture de valeur citée.
+
+Pour que le planificateur puisse lire la valeur changée là où elle est rendue, le contexte de
+la PR porte `pr.consumers` : les déclarations des fichiers **non modifiés** qui utilisent un
+symbole exporté touché par le diff (écran, formatage, contrôles, tests qui fixent la valeur),
+trouvées en remontant le graphe d'imports à la révision de tête (`src/consumer-context.ts`,
+`src/consumer-resolution.ts` : imports relatifs, réexports, nom de paquet du workspace, alias
+`paths` de tsconfig). Deux réglages :
+
+- `QA_CONSUMER_CONTEXT_CHARS` (défaut 24 000, 0 désactive) : caractères d'excerpts, comptés
+  en JSON tels que le planificateur les reçoit, pris sur ce que `QA_CONTEXT_CHARS` laisse après
+  le contexte de dépendances. Un contexte déjà plein ne lance aucune recherche (aucune requête
+  d'arbre) ; un reste sous 1 000 caractères non plus, et l'avertissement le dit ; ce que le
+  budget coupe est nommé. Si le payload du planificateur dépasse sa borne, les consommateurs
+  en sont retirés (avertissement dans `pr.contextWarnings`) avant tout refus.
+- `QA_CONSUMER_SCAN_FILES` (défaut 400) : plafond de fichiers source lus par la recherche,
+  fichiers modifiés d'abord, tests en dernier ; un plafond atteint est nommé.
+
+Coût : une requête d'arbre, au plus 100 manifestes (les moins profonds d'abord, plafond nommé)
+et au plus `QA_CONSUMER_SCAN_FILES` fichiers source, lus par lots de 6 (`src/consumer-search.ts`).
+Un dépôt de tête non installé, lu anonymement (quota public horaire), n'est pas parcouru. Une
+lecture qui échoue hors 404 (quota, 5xx, délai), un module modifié supprimé ou non analysable
+sont nommés dans les avertissements : un échec ne ressemble jamais à « aucun consommateur ».
+Angles morts assumés : imports dynamiques calculés, autres langages, valeur transmise par HTTP
+à un client séparé, second saut (un composant qui ne reçoit la valeur qu'en prop).
+
 ### 3.5 Contrat idempotent
 
 `plan.asWritten` (ce que le modèle a écrit, hashé) et `plan.settled` (après réparation, avec la liste

@@ -160,3 +160,23 @@ isolées, et le meilleur lot n'est pas présenté comme une moyenne séparée.
 **Durées** : `startedAt`/`endedAt` sont publiés par run ci-dessus pour les lots BA à
 II, et la campagne contrôlée les enregistre aussi : 492,6 s contre 427,9 s par run,
 un écart non séparable (erreur-type 50 s).
+
+## Témoin d'objectif et matériel des consommateurs
+
+Mesuré hors ligne, sans appel modèle, avec la règle courante
+(`src/objective-witness.ts`, `src/consumer-context.ts`, `src/consumer-search.ts`).
+
+- **79 plans stockés** (681 scénarios, aucun objectif déclaré) : 0 refus `OBJECTIVE_UNWITNESSED` sous la règle de repli (toutes les assertions forment la preuve). Contrefactuel, chaque lecture de présence prise pour objectif : 93 sans témoin sur 2914, dont 92 lectures négatives (`hidden`, `count` à 0) d'une cible que la PR 20 ajoute — sur la base, cette cible n'existe pas et l'absence y passe aussi.
+- **Run `8db4a07b`** (PR 20) : 7 objectifs déclarés sur 7 scénarios, 0 refus.
+- **Run `f89a0684`** (PR 20) : 7 objectifs déclarés sur 7 scénarios, 0 refus.
+- **Run `1cc2b0a0`** (PR 20) : 7 objectifs déclarés sur 7 scénarios, 0 refus.
+- **PR 21** (plan publié vert sur « le titre de la vue d'accueil est masqué ») : 1 refus `OBJECTIVE_UNWITNESSED`.
+- **Consommateurs de la PR 21** (révision de tête, budget 24 000) : `apps/web/app/page.tsx` lignes 340–395 (7477 caractères) ; `packages/domain/src/__tests__/cash.spec.ts` lignes 79–109 (1571 caractères).
+- **Discrimination sur un grand diff** : les 77 noms accessibles de la page de découverte de la PR 21, pris pour objectif de chacun des 21 scénarios des runs 16, 15 et 11 (leurs `sourceFiles`, le diff de la PR 20). Acceptés en `visible` : 865 sur 1617 (53.5 %) ; en `hidden` : 865 sur 1617 (53.5 %).
+
+Limite : les 79 plans viennent tous de la PR 20, un grand diff d'interface ;
+le zéro refus de repli y est mesuré là où la règle accepte la majorité des
+noms d'une page en lecture positive (un mot partagé suffit) : il dit que la
+règle ne bloque pas les plans verts, pas qu'elle discrimine sur un tel diff.
+Les lectures négatives, elles, n'y sont plus témoins que d'une cible écrite
+par une ligne retirée.

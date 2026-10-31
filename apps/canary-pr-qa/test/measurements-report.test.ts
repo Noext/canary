@@ -3,14 +3,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { consumerContext } from "../src/consumer-search.js";
 import { classifyFailure, summarizeFailures } from "../src/diagnostics.js";
 import type { PrContext } from "../src/github.js";
+import { objectiveWitnessRefusals } from "../src/objective-witness.js";
 import {
   PolicySchema,
   requirementSourceRefusal,
   unwitnessedPlanRefusals,
 } from "../src/policy.js";
-import { PlanSchema } from "../src/schema.js";
+import { type Plan, PlanSchema } from "../src/schema.js";
 
 /**
  * **Le générateur des mesures**, et son test.
@@ -85,6 +87,139 @@ function refusedByGate(record: Recorded): boolean {
   );
 }
 
+/**
+ * Le témoin d'objectif (`OBJECTIVE_UNWITNESSED`) et le matériel des
+ * consommateurs, recalculés depuis les fixtures réelles : les 79 plans stockés,
+ * les plans des runs 16, 15 et 11 de la PR 20, le plan de la PR 21 et le
+ * sous-ensemble de sa révision de tête.
+ */
+const witnessFixture = JSON.parse(read("objective-witness.json.gz")) as {
+  pr21: {
+    bundle: { context: PrContext; evidence: { aria: string }; plan: Plan };
+  };
+  regression: { plan: Plan; run: string }[];
+};
+/**
+ * Discrimination : chaque nom accessible de la page de découverte de la PR 21,
+ * pris pour objectif (`visible`, puis `hidden`) de chacun des 21 scénarios des
+ * runs 16, 15 et 11, sur leurs propres `sourceFiles` et le diff de la PR 20.
+ * La part acceptée mesure ce que la règle laisse passer sur un grand diff
+ * d'interface : un resserrement ultérieur se lit sur ce chiffre.
+ */
+function witnessDiscrimination() {
+  const names = [
+    ...witnessFixture.pr21.bundle.evidence.aria.matchAll(/- (\w+) "([^"]+)"/g),
+  ].map((match) => ({ name: match[2] ?? "", value: match[1] ?? "" }));
+  const accepted = { hidden: 0, visible: 0 };
+  let trials = 0;
+  for (const run of witnessFixture.regression) {
+    const plan = PlanSchema.parse(run.plan);
+    for (const scenario of plan.scenarios) {
+      for (const target of names) {
+        trials += 1;
+        for (const kind of ["hidden", "visible"] as const) {
+          const assertions = scenario.assertions.map((assertion) =>
+            assertion.id === scenario.objective
+              ? ({
+                  afterStep: assertion.afterStep,
+                  description: assertion.description,
+                  id: assertion.id,
+                  kind,
+                  target: { by: "role", ...target },
+                  verification: assertion.verification,
+                } as Plan["scenarios"][number]["assertions"][number])
+              : assertion
+          );
+          if (
+            objectiveWitnessRefusals(
+              { ...plan, scenarios: [{ ...scenario, assertions }] },
+              context
+            ).length === 0
+          ) {
+            accepted[kind] += 1;
+          }
+        }
+      }
+    }
+  }
+  return { accepted, names: names.length, trials };
+}
+const PRESENCE_KINDS = new Set(["visible", "hidden", "count"]);
+function witnessCounts() {
+  let scenarios = 0;
+  let presence = 0;
+  let unwitnessed = 0;
+  let negative = 0;
+  let refused = 0;
+  for (const record of records) {
+    const plan = PlanSchema.parse(record.plan);
+    scenarios += plan.scenarios.length;
+    refused += objectiveWitnessRefusals(plan, context).length;
+    for (const scenario of plan.scenarios) {
+      for (const assertion of scenario.assertions) {
+        if (PRESENCE_KINDS.has(assertion.kind)) {
+          presence += 1;
+          const gap = objectiveWitnessRefusals(
+            {
+              ...plan,
+              scenarios: [{ ...scenario, objective: assertion.id }],
+            },
+            context
+          ).length;
+          unwitnessed += gap;
+          if (
+            assertion.kind === "hidden" ||
+            (assertion.kind === "count" && assertion.expected === 0)
+          ) {
+            negative += gap;
+          }
+        }
+      }
+    }
+  }
+  const regression = witnessFixture.regression.map((run) => {
+    const plan = PlanSchema.parse(run.plan);
+    return {
+      objectives: plan.scenarios.filter((item) => item.objective).length,
+      refused: objectiveWitnessRefusals(plan, context).length,
+      run: run.run.slice(0, 8),
+      scenarios: plan.scenarios.length,
+    };
+  });
+  const pr21 = objectiveWitnessRefusals(
+    PlanSchema.parse(witnessFixture.pr21.bundle.plan),
+    witnessFixture.pr21.bundle.context
+  ).length;
+  return {
+    negative,
+    presence,
+    pr21,
+    refused,
+    regression,
+    scenarios,
+    unwitnessed,
+  };
+}
+const consumerFixture = JSON.parse(read("pr21-consumers.json.gz")) as {
+  changed: { filename: string; patch?: string }[];
+  files: Record<string, string>;
+  ref: string;
+};
+const consumerFiles = new Map(Object.entries(consumerFixture.files));
+const pr21Consumers = await consumerContext({
+  budget: 24_000,
+  files: consumerFixture.changed,
+  maxFiles: 400,
+  read: {
+    file: (path) => Promise.resolve(consumerFiles.get(path)),
+    tree: () =>
+      Promise.resolve({
+        tree: [...consumerFiles.keys()].map((path) => ({ path, type: "blob" })),
+      }),
+  },
+  ref: consumerFixture.ref,
+});
+
 function duration(start?: string, end?: string): string {
   if (!(start && end)) {
     return "—";
@@ -133,6 +268,10 @@ describe("le document de mesures est généré, et ses classes viennent du code"
   });
 
   it("écrit docs/pr-qa-measurements.md à partir des artefacts", () => {
+    const witness = witnessCounts();
+    const discrimination = witnessDiscrimination();
+    const share = (count: number) =>
+      `${count} sur ${discrimination.trials} (${((100 * count) / discrimination.trials).toFixed(1)} %)`;
     const lines = [
       "# Mesures — campagnes de runs, classes d'échec et comparaison appariée",
       "",
@@ -268,6 +407,32 @@ describe("le document de mesures est généré, et ses classes viennent du code"
       "**Durées** : `startedAt`/`endedAt` sont publiés par run ci-dessus pour les lots BA à",
       "II, et la campagne contrôlée les enregistre aussi : 492,6 s contre 427,9 s par run,",
       "un écart non séparable (erreur-type 50 s).",
+      "",
+      "## Témoin d'objectif et matériel des consommateurs",
+      "",
+      "Mesuré hors ligne, sans appel modèle, avec la règle courante",
+      "(`src/objective-witness.ts`, `src/consumer-context.ts`, `src/consumer-search.ts`).",
+      "",
+      `- **79 plans stockés** (${witness.scenarios} scénarios, aucun objectif déclaré) : ${witness.refused} refus \`OBJECTIVE_UNWITNESSED\` sous la règle de repli (toutes les assertions forment la preuve). Contrefactuel, chaque lecture de présence prise pour objectif : ${witness.unwitnessed} sans témoin sur ${witness.presence}, dont ${witness.negative} lectures négatives (\`hidden\`, \`count\` à 0) d'une cible que la PR 20 ajoute — sur la base, cette cible n'existe pas et l'absence y passe aussi.`,
+      ...witness.regression.map(
+        (run) =>
+          `- **Run \`${run.run}\`** (PR 20) : ${run.objectives} objectifs déclarés sur ${run.scenarios} scénarios, ${run.refused} refus.`
+      ),
+      `- **PR 21** (plan publié vert sur « le titre de la vue d'accueil est masqué ») : ${witness.pr21} refus \`OBJECTIVE_UNWITNESSED\`.`,
+      `- **Consommateurs de la PR 21** (révision de tête, budget 24 000) : ${pr21Consumers.consumers
+        .map(
+          (item) =>
+            `\`${item.path}\` lignes ${item.excerpts.map((excerpt) => `${excerpt.startLine}–${excerpt.endLine} (${excerpt.text.length} caractères)`).join(", ")}`
+        )
+        .join(" ; ")}.`,
+      `- **Discrimination sur un grand diff** : les ${discrimination.names} noms accessibles de la page de découverte de la PR 21, pris pour objectif de chacun des 21 scénarios des runs 16, 15 et 11 (leurs \`sourceFiles\`, le diff de la PR 20). Acceptés en \`visible\` : ${share(discrimination.accepted.visible)} ; en \`hidden\` : ${share(discrimination.accepted.hidden)}.`,
+      "",
+      "Limite : les 79 plans viennent tous de la PR 20, un grand diff d'interface ;",
+      "le zéro refus de repli y est mesuré là où la règle accepte la majorité des",
+      "noms d'une page en lecture positive (un mot partagé suffit) : il dit que la",
+      "règle ne bloque pas les plans verts, pas qu'elle discrimine sur un tel diff.",
+      "Les lectures négatives, elles, n'y sont plus témoins que d'une cible écrite",
+      "par une ligne retirée.",
       ""
     );
     const document = `${lines.join("\n")}`;

@@ -1154,9 +1154,13 @@ describe("rejeu du run 20c3c29a : cibles réelles que le diff ne déclare pas", 
     const f = await fixture({
       // Le matériel que le refus de production a révélé : un seul nom déclaré,
       // « Billet de 500 € ». La liste des dénominations vit hors du diff.
+      // Les deux dernières lignes écrivent les attributs que lisent les
+      // assertions du run (`data-cash-state`, `data-cash-variance-cents`) :
+      // sans elles, leur présence ne lirait rien du diff
+      // (OBJECTIVE_UNWITNESSED) et le scénario serait bloqué avant toute étape.
       formPatch:
         // biome-ignore lint/suspicious/noTemplateCurlyInString: la ligne du patch est le gabarit de la source, non évalué ici.
-        '@@ -1,1 +1,2 @@\n+  { cents: 50_000, label: "Billet de 500 €", kind: "billet" },\n+aria-label={`Quantité · ${d.label}`}',
+        '@@ -1,1 +1,4 @@\n+  { cents: 50_000, label: "Billet de 500 €", kind: "billet" },\n+aria-label={`Quantité · ${d.label}`}\n+<section data-cash-state={closure.status}>\n+<output data-cash-variance-cents={varianceCents} />',
       plans: [
         {
           summary: "Rejeu des cibles réelles du run 20c3c29a",
