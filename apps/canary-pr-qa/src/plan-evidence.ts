@@ -9,7 +9,10 @@ import {
 } from "./canary.js";
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
-import { echoesEarlierInput, foldedWords } from "./echoed-input.js";
+import {
+  echoesEarlierInput,
+  justifiedByExpectedValue,
+} from "./echoed-input.js";
 import {
   declaredPreconditionNames,
   preconditionRefusals,
@@ -42,6 +45,9 @@ import {
   type SourceLineMaterial,
 } from "./schema.js";
 import type { ObservedTarget } from "./target-repair.js";
+
+// biome-ignore lint/performance/noBarrelFile: one re-export; the runner, at its import limit, settles the echoed state reads through the provenance gate that judges them.
+export { upgradeEchoedStateReads } from "./echoed-input.js";
 
 /**
  * Contrôle d'évidence du plan : juste après la planification, l'instantané
@@ -2524,27 +2530,6 @@ export function provenanceRefusals(plan: Plan): {
     }
   }
   return refusals;
-}
-
-/**
- * La valeur attendue est-elle justifiée par l'exigence citée ?
- *
- * Tolérante à dessein — une valeur calculée n'apparaît jamais telle quelle dans
- * le code qui la produit — mais elle exige un mot réel commun : un attendu qui
- * ne partage rien avec la ligne citée est une valeur inventée.
- */
-function justifiedByExpectedValue(
-  expected: string,
-  requirement: { behavior?: string; quote?: string }
-): boolean {
-  const source = foldedWords(
-    `${requirement.quote ?? ""} ${requirement.behavior ?? ""}`
-  );
-  const target = foldedWords(expected);
-  if (source.size === 0 || target.size === 0) {
-    return true;
-  }
-  return [...target].some((word) => source.has(word));
 }
 
 /**

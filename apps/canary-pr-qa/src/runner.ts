@@ -53,6 +53,7 @@ import {
   type TargetObservation,
   targetObservations,
   unstableSelectorRefusals,
+  upgradeEchoedStateReads,
   validatePlanEvidence,
 } from "./plan-evidence.js";
 import {
@@ -1294,6 +1295,11 @@ function settlePlan(
       },
       "Requirement attribution repaired"
     );
+  }
+  // Une saisie relue en `state` après un clic sur un autre élément est lue en
+  // `transition` plutôt que refusée : chaque plan exécuté passe ici.
+  for (const upgrade of upgradeEchoedStateReads(plan)) {
+    logger.info({ runId, ...upgrade }, "Echoed state read upgraded");
   }
   const source = requirementSourceRefusal(plan, context);
   if (source) {
