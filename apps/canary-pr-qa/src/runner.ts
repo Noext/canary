@@ -31,6 +31,7 @@ import {
   baselineRefusals,
   changedFileTexts,
   type DiscoveryEvidence,
+  deferredProvenanceRefusals,
   enforceObjectiveProof,
   evidenceRefusalsByScenario,
   type InvariantObservation,
@@ -47,6 +48,7 @@ import {
   provenanceRefusals,
   replannedScenarios,
   replanPayload,
+  restoreDeferredRefusals,
   stateTargetReadRefusals,
   type TargetObservation,
   targetObservations,
@@ -1673,11 +1675,14 @@ async function executePlan(
   // est le point de contrôle UNIQUE du chemin de lecture : l'aperçu de tête et
   // la préversion de base la lisent tous les deux, donc une assertion sans
   // valeur attendue ne dépense aucune étape navigateur, dans l'un comme dans
-  // l'autre.
+  // l'autre. Avec une base, provenance et témoin y sont différés : la base les
+  // juge, `restoreDeferredRefusals` les rétablit (jamais vert).
+  const deferred = deferredProvenanceRefusals(result.plan, config, context);
   const preExecutionRefusals = preExecutionRefusalTable(result.plan, {
     catalog,
     config,
     context,
+    deferToBase: deferred.size > 0,
     evidence: { url: initialPage.url, aria: evidence },
     policy,
   });
@@ -1755,6 +1760,7 @@ async function executePlan(
   // La base est un oracle indépendant : une régression devient rouge, une preuve
   // qui passe aussi sur la base n'est plus verte, le reste est publié.
   judgeAgainstBaseline(result, config);
+  restoreDeferredRefusals(result, deferred, config);
   result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {
     await attachReplayRuntimeResults(root, result);

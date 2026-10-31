@@ -36,6 +36,7 @@ import {
   type Locator,
   type Plan,
   type Preview,
+  type RunResult,
   type Scenario,
   type ScenarioResult,
   type SourceLineMaterial,
@@ -2549,7 +2550,8 @@ export function preExecutionFindings(
   plan: Plan,
   context: PrContext,
   policy: Policy,
-  config: Config
+  config: Config,
+  deferToBase = false
 ): { error: QaError; scenarioId: string }[] {
   const findings = planFindings(plan, sourceLineMaterial(context), {
     config,
@@ -2559,8 +2561,66 @@ export function preExecutionFindings(
   return [
     ...findings.refusals,
     ...findings.coverageRefusals,
-    ...provenanceRefusals(plan),
+    ...(deferToBase ? [] : provenanceRefusals(plan)),
   ];
+}
+
+/**
+ * Les refus que la préversion de base peut juger, par scénario. Sans
+ * `QA_BASELINE_URL_TEMPLATE`, aucun : le run est celui de main. Avec une base,
+ * un attendu que l'exigence citée ne justifie pas (provenance) et un objectif
+ * sans témoin dans le diff ne bloquent plus avant exécution : le scénario est
+ * joué des deux côtés, puis le refus est rétabli après la comparaison. Seule une
+ * régression que la base confirme (`BASELINE_REGRESSION`) le rend rouge ; il
+ * n'est jamais vert. Les autres refus du scénario restent avant exécution.
+ * Banc arpilabe : « -240,00 € » non cité était bloqué alors que la base affiche
+ * -240,00 € et la tête 240,00 €.
+ */
+export function deferredProvenanceRefusals(
+  plan: Plan,
+  config: Config,
+  context: Pick<PrContext, "files">
+): Map<string, QaError> {
+  if (!config.QA_BASELINE_URL_TEMPLATE) {
+    return new Map();
+  }
+  return new Map([
+    ...objectiveWitnessRefusals(plan, context).map(
+      (item) => [item.scenario.id, item.error] as const
+    ),
+    ...provenanceRefusals(plan).map(
+      (item) => [item.scenarioId, item.error] as const
+    ),
+  ]);
+}
+
+/**
+ * Rétablit, après la comparaison à la base, les refus différés par
+ * `deferredProvenanceRefusals`, quel que soit le verdict de la tête : passer des
+ * deux côtés, base non concluante ou échec de la seule tête, le scénario est
+ * bloqué. Seule une régression que la base confirme reste rouge ; un scénario
+ * différé n'est jamais vert. Appelé après `judgeAgainstBaseline`, avant
+ * l'agrégation du run.
+ */
+export function restoreDeferredRefusals(
+  result: RunResult,
+  deferred: ReadonlyMap<string, QaError>,
+  config: Config
+): void {
+  for (const scenario of result.scenarios) {
+    const refusal = deferred.get(scenario.scenario.id);
+    if (
+      refusal === undefined ||
+      (scenario.outcome === "failed" &&
+        scenario.diagnostic?.code === "BASELINE_REGRESSION")
+    ) {
+      continue;
+    }
+    scenario.outcome = "blocked";
+    scenario.classification = "test-defect";
+    scenario.diagnostic = diagnose(refusal, config);
+    scenario.error = scenario.diagnostic.message;
+  }
 }
 
 /**
@@ -2575,17 +2635,20 @@ export function preExecutionRefusalTable(
     catalog: TrustedCatalog;
     config: Config;
     context: PrContext;
+    /** Provenance et témoin différés à la base (`deferredProvenanceRefusals`). */
+    deferToBase?: boolean;
     evidence: DiscoveryEvidence;
     policy: Policy;
   }
 ): Map<string, QaError> {
+  const deferToBase = gate.deferToBase === true;
   return new Map([
     ...(
       [
         // En tête : un défaut plus précis du même scénario, posé ensuite, garde
         // sa place dans la table. L'objectif sans témoin bloque le scénario
         // avant toute étape : il passerait identiquement sans le changement.
-        ...objectiveWitnessRefusals(plan, gate.context),
+        ...(deferToBase ? [] : objectiveWitnessRefusals(plan, gate.context)),
         ...preconditionRefusals(plan, gate.catalog, gate.context.ref.repo),
         ...writeEvidenceRefusals(plan, gate.policy),
         ...unstableSelectorRefusals(plan),
@@ -2597,9 +2660,13 @@ export function preExecutionRefusalTable(
     ).map((item) => [item.scenario.id, item.error] as const),
     // L'ordre des marqueurs coûte le scénario, jamais le run : un plan dont une
     // assertion est impossible garde ses autres scénarios exécutables.
-    ...preExecutionFindings(plan, gate.context, gate.policy, gate.config).map(
-      (item) => [item.scenarioId, item.error] as const
-    ),
+    ...preExecutionFindings(
+      plan,
+      gate.context,
+      gate.policy,
+      gate.config,
+      deferToBase
+    ).map((item) => [item.scenarioId, item.error] as const),
   ]);
 }
 
