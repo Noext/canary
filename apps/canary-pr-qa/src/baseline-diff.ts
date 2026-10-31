@@ -1,4 +1,9 @@
-import { isDeepStrictEqual } from "node:util";
+import {
+  type Category,
+  classify,
+  declaresNoBehaviorChange,
+  REFACTOR_RULE,
+} from "./baseline-classify.js";
 import type { Config } from "./config.js";
 import { diagnose, QaError } from "./diagnostics.js";
 import type {
@@ -16,25 +21,16 @@ import type {
  *
  * - base verte, tête rouge : la PR casse ce qui marchait — régression produit ;
  * - tête verte, base rouge (ou cible absente) : comportement modifié, listé ;
- *   pour un scénario `regression`, qui le déclare inchangé, c'est une régression ;
+ *   pour un scénario `regression`, ou tout scénario d'une PR `refactor`, qui le
+ *   déclarent inchangé, c'est une régression (`src/baseline-classify.ts`) ;
  * - verte des deux côtés : l'assertion ne distingue pas la PR de la base ; si
  *   c'est la preuve du scénario, il passerait sans la PR et n'est pas prouvé ;
  * - rouge des deux côtés, base non exécutable : non concluant, publié, jamais
  *   converti en vert ou en rouge.
  */
 
-type Category = "changed" | "inconclusive" | "notDiscriminating" | "regression";
 type RecordedAssertion = ScenarioResult["assertions"][number];
 
-/**
- * Codes où la valeur satisfait déjà l'attendu et où seule la vérification échoue :
- * l'état laissé par un run antérieur l'explique aussi bien qu'un changement de
- * code, des deux côtés (environnements persistants que chaque run écrit).
- */
-const VALUE_SATISFIED = new Set([
-  "STATE_ALREADY_SATISFIED",
-  "TRANSITION_ON_INVARIANT",
-]);
 const VALUE_CHARS = 160;
 const LIST = {
   changed: "changes",
@@ -45,188 +41,10 @@ const LIST = {
 
 const short = (sha: string) => sha.slice(0, 7);
 
-/**
- * L'exécuteur compare un texte par inclusion, blancs repliés : deux textes qui ne
- * diffèrent que par leurs blancs sont la même valeur, et deux textes différents
- * peuvent satisfaire le même attendu — d'où la comparaison des valeurs, pas des
- * seuls verdicts.
- */
-function sameValue(head: unknown, base: unknown): boolean {
-  const fold = (value: unknown) =>
-    typeof value === "string" ? value.replace(/\s+/g, " ").trim() : value;
-  return isDeepStrictEqual(fold(head), fold(base));
-}
-
 function side(item: RecordedAssertion) {
   return {
     passed: item.passed,
     ...(item.actual === undefined ? {} : { actual: item.actual }),
-  };
-}
-
-/**
- * Vrai quand l'assertion a échoué sur une valeur qui satisfaisait déjà
- * l'attendu avant son étape : ce côté montre ce que le plan demande, seule la
- * preuve que l'étape l'a produit manque.
- */
-function valueSatisfied(
-  scenario: ScenarioResult,
-  item: RecordedAssertion
-): string | undefined {
-  const code = scenario.diagnostic?.code ?? "";
-  if (VALUE_SATISFIED.has(code)) {
-    return code;
-  }
-  return item.preMatched === true
-    ? "value already satisfied before the step"
-    : undefined;
-}
-
-/**
- * La cible qu'un côté a jouée à la place de celle du plan (reprise par le
- * modèle, ré-ancrage observe→act) : le hash du contrat est calculé sur le plan
- * d'origine, il ne voit pas cette substitution.
- */
-function substitutedTarget(
-  head: ScenarioResult,
-  base: ScenarioResult
-): string | undefined {
-  for (const [label, item] of [
-    ["head", head],
-    ["base", base],
-  ] as const) {
-    const step = item.steps.find((entry) => entry.repairedTarget !== undefined);
-    if (step) {
-      // La cible jouée vient de la page : elle reste dans `steps`, jamais ici.
-      return `the ${label} played a substituted target at step ${step.stepId ?? step.index}, not the planned one`;
-    }
-  }
-  return;
-}
-
-/** Les fixtures sont semées pour l'environnement de tête : la base ne rejoue pas ces scénarios. */
-function fixtureBacked(scenario: ScenarioResult["scenario"]): boolean {
-  return scenario.preconditions.some((item) => item.startsWith("fixture:"));
-}
-
-function inconclusive(reason: string): {
-  categories: Category[];
-  reason: string;
-} {
-  return { categories: ["inconclusive"], reason };
-}
-
-function headMissing(
-  head: ScenarioResult,
-  base: ScenarioResult,
-  b: RecordedAssertion | undefined
-) {
-  const code = head.diagnostic?.code ?? "";
-  // La tête s'est arrêtée avant l'assertion que la base a jouée et passée : le
-  // plan est écrit pour la tête, donc une cible renommée par la PR et une cible
-  // supprimée par erreur se ressemblent ici. Le scénario garde son verdict non
-  // vert ; la comparaison dit ce que la base a montré.
-  return b?.passed && base.outcome === "passed"
-    ? inconclusive(
-        `the head stopped before this assertion${code ? ` (${code})` : ""} while the base played the same contract and passed it: the PR may have removed or renamed what the plan uses`
-      )
-    : inconclusive("not executed on the head");
-}
-
-/** Base verte, tête rouge : régression, sauf si un état antérieur l'explique. */
-function headFailed(
-  head: ScenarioResult,
-  h: RecordedAssertion,
-  b: RecordedAssertion
-) {
-  const satisfied = valueSatisfied(head, h);
-  if (satisfied) {
-    return inconclusive(
-      `the head value already satisfied the expectation; only its verification failed on the head (${satisfied})`
-    );
-  }
-  // Une transition se juge depuis la valeur d'avant l'étape : deux points de
-  // départ différents (état laissé par un autre run, données de
-  // l'environnement) expliquent l'écart aussi bien que le code.
-  if (
-    h.verification !== "state" &&
-    h.changed !== undefined &&
-    b.changed !== undefined &&
-    !sameValue(h.baseline, b.baseline)
-  ) {
-    return inconclusive(
-      "different starting state: the value probed before the step differs between the head and the base"
-    );
-  }
-  return { categories: ["regression" as const] };
-}
-
-/** Tête verte, base rouge : changement, sauf si la base montre la même chose. */
-function baseFailed(
-  base: ScenarioResult,
-  h: RecordedAssertion,
-  b: RecordedAssertion
-) {
-  const satisfied = valueSatisfied(base, b);
-  if (satisfied) {
-    return inconclusive(
-      `the base value already satisfied the expectation; only its verification failed on the base (${satisfied})`
-    );
-  }
-  if (sameValue(h.actual, b.actual) && sameValue(h.persisted, b.persisted)) {
-    return inconclusive(
-      `the base shows the same value as the head; only its verification failed on the base (${base.diagnostic?.code ?? "unknown"})`
-    );
-  }
-  return { categories: ["changed" as const] };
-}
-
-function classify(
-  head: ScenarioResult,
-  base: ScenarioResult | undefined,
-  h: RecordedAssertion | undefined,
-  b: RecordedAssertion | undefined
-): { categories: Category[]; reason?: string } {
-  if (base === undefined) {
-    return inconclusive(
-      fixtureBacked(head.scenario)
-        ? "scenario not replayed on the base: its fixtures are seeded for the head environment only"
-        : "scenario not executed on the base"
-    );
-  }
-  if (base.contract?.hash !== head.contract?.hash) {
-    return inconclusive("the base played a different contract");
-  }
-  const substituted = substitutedTarget(head, base);
-  if (substituted) {
-    return inconclusive(substituted);
-  }
-  if (h === undefined) {
-    return headMissing(head, base, b);
-  }
-  if (b === undefined) {
-    const code = base.diagnostic?.code;
-    return inconclusive(`not executed on the base${code ? ` (${code})` : ""}`);
-  }
-  if (b.passed && !h.passed) {
-    return headFailed(head, h, b);
-  }
-  if (!h.passed) {
-    return inconclusive("fails on both the head and the base");
-  }
-  if (!b.passed) {
-    const changed = baseFailed(base, h, b);
-    // `regression` déclare un comportement inchangé : une autre valeur que la base
-    // est la régression (PR 21 : « -240,00 € » sur main, « 240,00 € » sur la PR).
-    return head.scenario.kind === "regression" &&
-      changed.categories.includes("changed")
-      ? { categories: ["changed", "regression"] }
-      : changed;
-  }
-  return {
-    categories: sameValue(h.actual, b.actual)
-      ? ["notDiscriminating"]
-      : ["changed", "notDiscriminating"],
   };
 }
 
@@ -236,10 +54,15 @@ function markRegression(
   sha: string,
   config: Config
 ) {
+  const { id, kind } = head.scenario;
+  const declared =
+    kind === "regression"
+      ? `Regression scenario ${id}: the PR changes behavior this scenario declares unchanged`
+      : `Scenario ${id}: ${REFACTOR_RULE}; if the change is intended, the PR is not a refactor`;
   const error = new QaError(
     "BASELINE_REGRESSION",
     entry.head?.passed
-      ? `Regression scenario ${head.scenario.id}: assertion ${entry.assertionId} reads a different value on the PR head than on the base commit ${short(sha)}: the PR changes behavior this scenario declares unchanged`
+      ? `${declared} (assertion ${entry.assertionId} reads a different value on the PR head than on the base commit ${short(sha)})`
       : `Assertion ${entry.assertionId} passes on the base commit ${short(sha)} and fails on the PR head: the PR breaks behavior that works on the base`,
     "Both observed values are in the base comparison of the private report and result.json (baselineComparison.regressions), never in this message. Fix the regression; if the change is intended, the plan must expect the new behavior from the diff."
   );
@@ -276,9 +99,14 @@ function markNotDiscriminating(
  * Compare la tête et la base, puis applique les deux seuls effets sur le verdict :
  * régression (rouge) et preuve qui ne distingue pas la PR (bloqué). Sans
  * `QA_BASELINE_URL_TEMPLATE`, rien ne change. Le runner recalcule l'issue du run
- * après cet appel.
+ * après cet appel. Un `title` de PR `refactor` déclare un comportement
+ * inchangé : chaque scénario y est jugé comme un scénario `regression`.
  */
-export function compareWithBaseline(result: RunResult, config: Config): void {
+export function compareWithBaseline(
+  result: RunResult,
+  config: Config,
+  title?: string
+): void {
   const baseline = result.baseline;
   if (baseline === undefined) {
     return;
@@ -299,11 +127,13 @@ export function compareWithBaseline(result: RunResult, config: Config): void {
   const bases = new Map(
     baseline.scenarios.map((item) => [item.scenario.id, item])
   );
+  const refactor = declaresNoBehaviorChange(title);
   for (const head of result.scenarios) {
     const { regression, undiscriminated } = diffScenario(
       head,
       bases.get(head.scenario.id),
-      comparison
+      comparison,
+      refactor || head.scenario.kind === "regression"
     );
     if (regression) {
       markRegression(head, regression, baseline.sha, config);
@@ -328,7 +158,8 @@ export function compareWithBaseline(result: RunResult, config: Config): void {
 function diffScenario(
   head: ScenarioResult,
   base: ScenarioResult | undefined,
-  comparison: BaselineComparison
+  comparison: BaselineComparison,
+  unchanged: boolean
 ) {
   const undiscriminated = new Set<string>();
   let regression: BaselineAssertionDiff | undefined;
@@ -338,7 +169,7 @@ function diffScenario(
     if (h === undefined && b === undefined) {
       continue;
     }
-    const { categories, reason } = classify(head, base, h, b);
+    const { categories, reason } = classify(head, base, h, b, unchanged);
     const entry: BaselineAssertionDiff = {
       scenarioId: head.scenario.id,
       assertionId: planned.id,

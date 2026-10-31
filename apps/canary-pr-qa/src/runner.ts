@@ -1759,7 +1759,7 @@ async function executePlan(
   });
   // La base est un oracle indépendant : une régression devient rouge, une preuve
   // qui passe aussi sur la base n'est plus verte, le reste est publié.
-  judgeAgainstBaseline(result, config);
+  judgeAgainstBaseline(result, config, context.title);
   restoreDeferredRefusals(result, deferred, config);
   result.outcome = aggregate(result.scenarios);
   if (config.QA_REPLAY_BUNDLE) {

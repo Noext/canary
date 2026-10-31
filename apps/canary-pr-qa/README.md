@@ -268,6 +268,15 @@ appel modèle (`src/baseline-diff.ts`, champ `baselineComparison` de
 | passe | passe | non discriminante ; si c'est la preuve du scénario (objectif, ou toutes ses assertions sans objectif), `blocked` (`OBJECTIVE_NOT_DISCRIMINATING`) |
 | échoue ou non exécutée | échoue ou non exécutée | non concluante, publiée, verdict de tête inchangé |
 
+Un scénario `regression` déclare un comportement inchangé : une tête verte sur
+une valeur que la base ne montre pas y est une régression
+(`BASELINE_REGRESSION`), pas un comportement modifié. Une PR titrée
+`refactor:` ou `refactor(scope):` (pas `refactor!:`) déclare la même chose pour
+tous ses scénarios : chaque écart à la base est une régression, et le rapport
+cite cette règle. `chore`, `perf` et `style` n'en relèvent pas. La règle ne fait
+que rendre rouge un scénario vert : elle ne lève aucun blocage
+(`OBJECTIVE_NOT_DISCRIMINATING` reste).
+
 Une valeur observée différente alors que l'assertion passe des deux côtés (le
 texte est comparé par inclusion) est aussi un comportement modifié. Restent
 **non concluants**, publiés et sans effet sur le verdict, les cas où un état

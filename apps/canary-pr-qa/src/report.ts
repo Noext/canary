@@ -28,11 +28,10 @@ export { settleNonRuntimeDiff } from "./approved-skips.js";
  * Juge le run contre la préversion de base avant sa publication : régression
  * rouge, preuve non discriminante bloquée, comportements modifiés listés. Le
  * runner est à sa limite d'imports : il l'atteint par le module qui rend déjà
- * cette comparaison dans le rapport, le statut et le commentaire.
+ * cette comparaison dans le rapport, le statut et le commentaire. Le titre de
+ * la PR y porte son intention : un `refactor` déclare un comportement inchangé.
  */
-export function judgeAgainstBaseline(result: RunResult, config: Config): void {
-  compareWithBaseline(result, config);
-}
+export const judgeAgainstBaseline = compareWithBaseline;
 
 /**
  * La description du statut de commit. La comparaison à la base y figure en tête
