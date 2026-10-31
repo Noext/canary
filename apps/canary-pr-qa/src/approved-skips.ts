@@ -178,5 +178,5 @@ export function nonRuntimeStatus(result: RunResult): string | undefined {
     return;
   }
   const files = result.coverage.skipped.length;
-  return `QA skipped: ${files}/${files} changed files are documentation or tests; no browser scenario run`;
+  return `QA passed: no runtime change, ${files}/${files} changed files are documentation or tests`;
 }

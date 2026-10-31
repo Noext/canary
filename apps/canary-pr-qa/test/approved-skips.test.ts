@@ -6,12 +6,17 @@ import {
   settleNonRuntimeDiff,
 } from "../src/approved-skips.js";
 import { Canary } from "../src/canary.js";
+import { commitStatus } from "../src/commit-status.js";
 import { type PrContext, parsePrUrl } from "../src/github.js";
 import { PolicySchema } from "../src/policy.js";
-import { statusDescription } from "../src/report.js";
 import { runQa } from "../src/runner.js";
 import type { Plan, RunResult } from "../src/schema.js";
 import { BASE_SHA, fixture, PR_URL, plan } from "./fixture.js";
+
+const statusDescription = (result: Parameters<typeof commitStatus>[0]) =>
+  commitStatus(result).description;
+const commitVerdict = (result: Parameters<typeof commitStatus>[0]) =>
+  commitStatus(result).state;
 
 /**
  * Une PR dont chaque fichier changé est documentation ou test n'a rien de
@@ -106,7 +111,7 @@ it("settles a documentation and test diff as skipped, approved reasons first", (
     },
   });
   expect(statusDescription(result)).toBe(
-    "QA skipped: 3/3 changed files are documentation or tests; no browser scenario run"
+    "QA passed: no runtime change, 3/3 changed files are documentation or tests"
   );
 });
 
@@ -189,12 +194,48 @@ it("accepts a rename between two documentation paths", () => {
 });
 
 it.each([
-  "stale",
-  "blocked",
-] as const)("keeps the generic status text once the run turns %s", (outcome) => {
+  ["stale", "QA stale: 0/0 scenarios", "error"],
+  ["blocked", "QA not proven: 0/0 scenarios", "failure"],
+] as const)("keeps the generic status text once the run turns %s", (outcome, text, state) => {
   const { result } = settle([changed("docs/guide.md")]);
   result.outcome = outcome;
-  expect(statusDescription(result)).toBe(`QA ${outcome}: 0/0 scenarios`);
+  expect(statusDescription(result)).toBe(text);
+  expect(commitVerdict(result)).toBe(state);
+});
+
+it("fails a run that is not fully proven and names why, never a neutral state", () => {
+  const { result } = settle([changed("src/form.tsx")]);
+  result.outcome = "blocked";
+  const scenario = (outcome: string, code?: string) =>
+    ({
+      outcome,
+      ...(code ? { diagnostic: { code, message: code } } : {}),
+    }) as unknown as (typeof result.scenarios)[number];
+  result.scenarios = [
+    scenario("passed"),
+    scenario("blocked", "OBJECTIVE_NOT_DISCRIMINATING"),
+    scenario("blocked", "OBJECTIVE_NOT_DISCRIMINATING"),
+    scenario("blocked", "TARGET_NOT_FOUND"),
+  ];
+  expect(commitVerdict(result)).toBe("failure");
+  expect(statusDescription(result)).toBe(
+    "QA not proven: 1/4 scenarios · 2 OBJECTIVE_NOT_DISCRIMINATING, 1 TARGET_NOT_FOUND"
+  );
+  result.scenarios = [];
+  result.diagnostic = {
+    code: "MODEL_OUTPUT_INCOMPLETE",
+    message: "x",
+    hint: "x",
+  };
+  expect(statusDescription(result)).toBe(
+    "QA not proven: 0/0 scenarios · MODEL_OUTPUT_INCOMPLETE"
+  );
+  result.outcome = "skipped";
+  expect(commitVerdict(result)).toBe("failure");
+  result.outcome = "passed";
+  expect(commitVerdict(result)).toBe("success");
+  result.outcome = "failed";
+  expect(commitVerdict(result)).toBe("failure");
 });
 
 const closers: (() => Promise<void>)[] = [];
@@ -237,12 +278,12 @@ it("ends a documentation and test PR skipped without any model call or browser s
   expect(result.preview).toBeUndefined();
   expect(result.coverage?.gate).toBe(NON_RUNTIME_GATE);
   const statuses = f.outgoing.filter((request) => request.payload.state);
-  // `skipped` ne signifie jamais réussite : le statut n'est pas vert, mais il
-  // dit pourquoi aucun scénario n'a été joué.
+  // Rien d'exécutable n'a changé : le verdict binaire est vert, et dit pourquoi
+  // aucun scénario n'a été joué.
   expect(statuses.at(-1)?.payload).toMatchObject({
-    state: "error",
+    state: "success",
     description:
-      "QA skipped: 2/2 changed files are documentation or tests; no browser scenario run",
+      "QA passed: no runtime change, 2/2 changed files are documentation or tests",
   });
   const report = await readFile(
     join(f.dataDir, result.id, "report.md"),

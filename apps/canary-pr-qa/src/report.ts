@@ -1,12 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLogger } from "@usecanary/logger";
-import { nonRuntimeStatus } from "./approved-skips.js";
-import {
-  compareWithBaseline,
-  comparisonSections,
-  comparisonStatusNote,
-} from "./baseline-diff.js";
+import { compareWithBaseline, comparisonSections } from "./baseline-diff.js";
 import { resolvedTargetName } from "./canary.js";
 import type { Config } from "./config.js";
 import {
@@ -21,8 +16,9 @@ import { effectiveModelConfig, PLANNER_DIR } from "./planner-record.js";
 import type { Policy } from "./policy.js";
 import type { Plan, RunResult } from "./schema.js";
 
-// biome-ignore lint/performance/noBarrelFile: one re-export; the runner, at its import limit, reaches the documentation-and-tests verdict through the module that reports it.
+// biome-ignore lint/performance/noBarrelFile: the runner, at its import limit, reaches the documentation-and-tests verdict and the binary commit verdict through the module that reports them.
 export { settleNonRuntimeDiff } from "./approved-skips.js";
+export { commitStatus } from "./commit-status.js";
 
 /**
  * Juge le run contre la préversion de base avant sa publication : régression
@@ -33,22 +29,6 @@ export { settleNonRuntimeDiff } from "./approved-skips.js";
  * ses fichiers disent quels littéraux le diff ajoute.
  */
 export const judgeAgainstBaseline = compareWithBaseline;
-
-/**
- * La description du statut de commit. La comparaison à la base y figure en tête
- * de ce que GitHub tronque (140 caractères) : un comportement modifié par la PR
- * ne peut pas passer inaperçu sous un statut vert. Un diff de documentation et
- * de tests seuls le dit plutôt qu'un « 0/0 scenarios » muet.
- */
-export function statusDescription(result: RunResult): string {
-  const nonRuntime = nonRuntimeStatus(result);
-  if (nonRuntime) {
-    return nonRuntime;
-  }
-  const passed = result.scenarios.filter((s) => s.outcome === "passed").length;
-  const note = comparisonStatusNote(result);
-  return `QA ${result.outcome}: ${passed}/${result.scenarios.length} scenarios${note ? ` · ${note}` : ""}`;
-}
 
 export async function writeJson(path: string, data: unknown) {
   const temp = `${path}.tmp`;

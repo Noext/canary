@@ -90,13 +90,13 @@ import { resolvePreview, verifyPreviewUrl } from "./preview.js";
 import { Progress } from "./progress.js";
 import {
   attachReplayRuntimeResults,
+  commitStatus,
   judgeAgainstBaseline,
   reportMarkdown,
   savePlannerInputs,
   saveReplayBundle,
   saveReport,
   settleNonRuntimeDiff,
-  statusDescription,
 } from "./report.js";
 import { checkBudget, type RunScope, runScope } from "./run-scope.js";
 import {
@@ -1963,15 +1963,6 @@ async function recheck(
     result.error = "Preview deployment changed during QA; run again.";
   }
 }
-function statusFor(outcome: Outcome): "success" | "failure" | "error" {
-  if (outcome === "passed") {
-    return "success";
-  }
-  if (outcome === "failed") {
-    return "failure";
-  }
-  return "error";
-}
 async function publish(
   result: RunResult,
   context: PrContext,
@@ -1988,9 +1979,9 @@ async function publish(
   let commentAttempted = false;
   try {
     await runScope.getStore()?.verifyOwnership?.();
-    const verdict = statusFor(result.outcome);
-    await github.status(context, verdict, statusDescription(result), reportUrl);
-    publication.commitStatus = verdict;
+    const verdict = commitStatus(result);
+    await github.status(context, verdict.state, verdict.description, reportUrl);
+    publication.commitStatus = verdict.state;
     await runScope.getStore()?.verifyOwnership?.();
     commentAttempted = true;
     const commentUrl = await github.comment(

@@ -57,10 +57,11 @@ it("skips a docs-only PR with zero model requests, approved or not", async () =>
   ]);
   expect(
     f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
-      .description
-  ).toBe(
-    "QA skipped: 3/3 changed files are documentation or tests; no browser scenario run"
-  );
+  ).toMatchObject({
+    state: "success",
+    description:
+      "QA passed: no runtime change, 3/3 changed files are documentation or tests",
+  });
   expect(
     await readFile(join(f.dataDir, result.id, "report.md"), "utf8")
   ).toContain(`- Not browser-tested: \`docs/guide.md\` — ${DOCS_REASON}`);

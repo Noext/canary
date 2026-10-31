@@ -181,7 +181,7 @@ it("blocks only the scenario that interacts without change evidence", async () =
   expect(refused.assertions).toEqual([]);
   expect(
     f.outgoing.filter((request) => request.payload.state).at(-1)?.payload
-  ).toMatchObject({ state: "error" });
+  ).toMatchObject({ state: "failure" });
   expect(plannerMessages(f)).toHaveLength(2);
   expect(plannerFeedback(f)).toEqual([expect.stringContaining("switch-view")]);
   expect(plannerFeedback(f)[0]).toContain("transition or persisted assertion");
